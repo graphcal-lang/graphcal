@@ -953,6 +953,11 @@ impl DagRegistry {
         std::iter::once(self.root.dag_id()).chain(self.other_dags.keys())
     }
 
+    /// Iterate mutably over DAG bodies while preserving their registry keys.
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut DagTIR> {
+        std::iter::once(&mut self.root).chain(self.other_dags.values_mut())
+    }
+
     /// Iterate over DAG bodies.
     pub fn values(&self) -> impl Iterator<Item = &DagTIR> {
         std::iter::once(&self.root).chain(self.other_dags.values())

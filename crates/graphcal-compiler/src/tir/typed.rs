@@ -2081,8 +2081,10 @@ use ops::{unify_nat_poly_form, unify_resolved_type};
 // ---------------------------------------------------------------------------
 mod specialization;
 mod type_expr;
-pub(crate) use specialization::install_semantic_presentation_facts;
 pub use specialization::instantiate_semantic_edges;
+pub(crate) use specialization::{
+    install_semantic_plot_projection_facts, install_semantic_presentation_facts,
+};
 pub use type_expr::resolve_hir_type_expr;
 use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
 

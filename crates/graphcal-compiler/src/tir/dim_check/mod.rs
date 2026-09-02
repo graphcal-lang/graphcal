@@ -952,6 +952,24 @@ fn validate_expected_fail(
     }
 }
 
+fn install_presentation_facts(
+    tir: &mut crate::tir::typed::TIR,
+    facts: HashMap<crate::dag_id::DagId, crate::tir::presentation::DagPresentationFacts>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for (dag_id, facts) in facts {
+        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+        dag.semantic.presentation = facts;
+    }
+    Ok(())
+}
+
 /// Check dimensions for all declarations in a file.
 ///
 /// For each const/param/node, infers the dimension of the RHS expression
@@ -1054,19 +1072,12 @@ pub fn check_dimensions_tir_with_cancellation(
     cancellation.checkpoint()?;
     let presentation_facts =
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
-    for (dag_id, facts) in presentation_facts {
-        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        dag.semantic.presentation = facts;
-    }
+    install_presentation_facts(tir, presentation_facts, src)?;
     crate::tir::typed::install_semantic_presentation_facts(tir, src)?;
-
-    Ok(())
+    let semantic_presentation_facts =
+        presentation::collect_semantic_presentation_facts(tir, src, cancellation)?;
+    install_presentation_facts(tir, semantic_presentation_facts, src)?;
+    crate::tir::typed::install_semantic_plot_projection_facts(tir, src)
 }
 
 /// Canonical nominal identity whose use in a parameter default is queried at
@@ -1086,7 +1097,9 @@ pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOv
 /// HIR records each possible nominal override before substituting an include
 /// instance. Once a source module has been checked, its canonical dependency
 /// summary distinguishes a true dependency on the replaced nominal from an
-/// unrelated use of the replacement type or index itself.
+/// unrelated use of the replacement type or index itself. The refinement is
+/// applied to every materialized semantic instance, not only the entry DAG,
+/// because each instance owns its own executable reconciliation facts.
 pub fn reconcile_external_override_dependencies<S>(
     tir: &mut crate::tir::typed::TIR,
     summary: &OverrideDependencySummary,
@@ -1094,30 +1107,31 @@ pub fn reconcile_external_override_dependencies<S>(
 ) where
     S: std::hash::BuildHasher,
 {
-    tir.root_mut()
-        .semantic
-        .override_reconciliations
-        .retain(|_, reconciliations| {
-            reconciliations.retain_mut(|reconciliation| {
-                if !complete_owners.contains(reconciliation.source_decl.owner()) {
-                    return true;
-                }
-                let dependencies = summary.get(&reconciliation.source_decl);
-                reconciliation.targets.retain(|target| {
-                    let source = match target {
-                        crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
-                            NominalOverrideIdentity::Index(source.clone())
-                        }
-                        crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
-                            NominalOverrideIdentity::Type(source.clone())
-                        }
-                    };
-                    dependencies.is_some_and(|dependencies| dependencies.contains(&source))
+    for dag in tir.dags.values_mut() {
+        dag.semantic
+            .override_reconciliations
+            .retain(|_, reconciliations| {
+                reconciliations.retain_mut(|reconciliation| {
+                    if !complete_owners.contains(reconciliation.source_decl.owner()) {
+                        return true;
+                    }
+                    let dependencies = summary.get(&reconciliation.source_decl);
+                    reconciliation.targets.retain(|target| {
+                        let source = match target {
+                            crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
+                                NominalOverrideIdentity::Index(source.clone())
+                            }
+                            crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
+                                NominalOverrideIdentity::Type(source.clone())
+                            }
+                        };
+                        dependencies.is_some_and(|dependencies| dependencies.contains(&source))
+                    });
+                    !reconciliation.targets.is_empty()
                 });
-                !reconciliation.targets.is_empty()
+                !reconciliations.is_empty()
             });
-            !reconciliations.is_empty()
-        });
+    }
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default

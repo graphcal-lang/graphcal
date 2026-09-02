@@ -61,6 +61,102 @@ fn root_instance_name(
     )
 }
 
+#[derive(Clone, Copy)]
+enum OutputExposure {
+    Surface,
+    Debug,
+}
+
+#[derive(Default)]
+struct RuntimeResultValueAssembly {
+    identities: HashMap<ScopedName, RuntimeDeclKey>,
+    all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    output_surface: std::collections::HashSet<ScopedName>,
+}
+
+struct AssembledRuntimeResultValues {
+    consts: Vec<(ScopedName, Result<Value, NodeError>)>,
+    params: Vec<(ScopedName, Result<Value, NodeError>)>,
+    nodes: Vec<(ScopedName, Result<Value, NodeError>)>,
+    all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    output_surface: std::collections::HashSet<ScopedName>,
+}
+
+impl RuntimeResultValueAssembly {
+    fn insert(
+        &mut self,
+        key: RuntimeDeclKey,
+        name: ScopedName,
+        result: Result<Value, NodeError>,
+        decl_type: DeclType,
+        exposure: OutputExposure,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        if matches!(exposure, OutputExposure::Surface) {
+            self.output_surface.insert(name.clone());
+        }
+        match self.identities.get(&name) {
+            Some(existing) if existing == &key => return Ok(()),
+            Some(existing) => {
+                return Err(GraphcalError::internal_error(
+                    format!(
+                        "runtime output name `{name}` identifies both `{existing}` and `{key}`"
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ));
+            }
+            None => {}
+        }
+        self.identities.insert(name.clone(), key);
+        self.all.push((name, result, decl_type));
+        Ok(())
+    }
+
+    fn finish(self) -> AssembledRuntimeResultValues {
+        let category = |expected| {
+            self.all
+                .iter()
+                .filter(|(_, _, decl_type)| *decl_type == expected)
+                .map(|(name, result, _)| (name.clone(), result.clone()))
+                .collect()
+        };
+        AssembledRuntimeResultValues {
+            consts: category(DeclType::Const),
+            params: category(DeclType::Param),
+            nodes: category(DeclType::Node),
+            all: self.all,
+            output_surface: self.output_surface,
+        }
+    }
+}
+
+fn project_runtime_value(
+    runtime: &RuntimeValue,
+    declared_type: &DeclaredType,
+    presentation: &graphcal_compiler::tir::presentation::PresentationProvenance,
+    presentation_instance: Option<&crate::runtime_presentation::PresentationInstance>,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+) -> Result<Result<Value, NodeError>, GraphcalError> {
+    let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
+    if let Err(error) =
+        attach_presentation(&mut value, presentation, presentation_instance, ctx, values)
+    {
+        return match error {
+            error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
+                Err(error)
+            }
+            error => Ok(Err(eval_failed_node_error(&error))),
+        };
+    }
+    Ok(validate_display_projection(&value)
+        .map(|()| value)
+        .map_err(|error| NodeError::EvalFailed {
+            message: error.to_string(),
+        }))
+}
+
 pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
     pub(super) values: RuntimeValueMap,
@@ -400,29 +496,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        let mut value = EvaluatedValue::new(runtime, declared_type).project(tir, src)?;
-        // Authored display metadata either applies successfully or makes this
-        // declaration fail; structural projection failures remain X001.
-        if let Err(error) = attach_presentation(
-            &mut value,
+        project_runtime_value(
+            runtime,
+            declared_type,
             presentation,
             presentation_instances.get(&runtime_key),
             &ctx,
             &values,
-        ) {
-            return match error {
-                error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
-                    Err(error)
-                }
-                error => Ok(Err(eval_failed_node_error(&error))),
-            };
-        }
-        match validate_display_projection(&value) {
-            Ok(()) => Ok(Ok(value)),
-            Err(error) => Ok(Err(NodeError::EvalFailed {
-                message: error.to_string(),
-            })),
-        }
+        )
     };
 
     let make_result = |name: &ScopedName| -> Result<Result<Value, NodeError>, GraphcalError> {
@@ -444,74 +525,41 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         )
     };
 
-    let mut consts = tir
-        .root()
-        .consts()
-        .iter()
-        .map(|entry| {
-            let key = local_key(&entry.name)?;
-            let runtime =
-                plan.const_values
-                    .get(&key)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!("checked constant `{key}` has no runtime value"),
-                        src: src.clone(),
-                        span: entry.span.into(),
-                    })?;
-            make_value(&entry.name, runtime).map(|value| (entry.name.clone(), value))
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let mut params = tir
-        .root()
-        .params()
-        .iter()
-        .map(|entry| make_result(&entry.name).map(|value| (entry.name.clone(), value)))
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let mut nodes = tir
-        .root()
-        .nodes()
-        .iter()
-        .map(|entry| make_result(&entry.name).map(|value| (entry.name.clone(), value)))
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let mut result_values = RuntimeResultValueAssembly::default();
+    for (name, category) in tir.root().source_order() {
+        let decl_type = match category {
+            DeclCategory::Const => DeclType::Const,
+            DeclCategory::Param => DeclType::Param,
+            DeclCategory::Node => DeclType::Node,
+            DeclCategory::Assert
+            | DeclCategory::Plot
+            | DeclCategory::Figure
+            | DeclCategory::Layer => continue,
+        };
+        let key = local_key(name)?;
+        let value = match decl_type {
+            DeclType::Const => plan.const_values.get(&key).map_or_else(
+                || {
+                    Err(GraphcalError::internal_error(
+                        format!("checked source-order constant `{key}` has no runtime value"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    ))
+                },
+                |runtime| make_value(name, runtime),
+            )?,
+            DeclType::Param | DeclType::Node => make_result(name)?,
+        };
+        result_values.insert(
+            key,
+            name.clone(),
+            value,
+            decl_type,
+            OutputExposure::Surface,
+            src,
+        )?;
+    }
     cancellation.checkpoint()?;
-
-    let mut all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
-        .root()
-        .source_order()
-        .iter()
-        .filter_map(|(name, category)| {
-            let decl_type = match category {
-                DeclCategory::Const => DeclType::Const,
-                DeclCategory::Param => DeclType::Param,
-                DeclCategory::Node => DeclType::Node,
-                DeclCategory::Assert
-                | DeclCategory::Plot
-                | DeclCategory::Figure
-                | DeclCategory::Layer => return None,
-            };
-            Some((name, decl_type))
-        })
-        .map(|(name, decl_type)| match decl_type {
-            DeclType::Const => {
-                let key = local_key(name)?;
-                plan.const_values.get(&key).map_or_else(
-                    || {
-                        Err(GraphcalError::internal_error(
-                            format!("checked source-order constant `{key}` has no runtime value"),
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        ))
-                    },
-                    |runtime| {
-                        make_value(name, runtime).map(|value| (name.clone(), value, decl_type))
-                    },
-                )
-            }
-            DeclType::Param | DeclType::Node => {
-                make_result(name).map(|value| (name.clone(), value, decl_type))
-            }
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
 
     let debug_scope_counts = tir.root().semantic_instances().iter().fold(
         HashMap::<ModuleAliasName, usize>::new(),
@@ -537,6 +585,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
+        let instance_src = plan
+            .checked_execution_facts
+            .for_dag(instance_dag.dag_id())
+            .map_or(
+                src,
+                crate::execution_facts::CheckedDagExecutionFacts::source,
+            );
         for projection in &record.output_projections {
             if tir
                 .root()
@@ -583,32 +638,34 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     )
                 })?;
                 let declared_type = tir.runtime_declared_type(&declaration, src)?;
-                let mut value = EvaluatedValue::new(runtime, &declared_type).project(tir, src)?;
-                let presentation =
-                    graphcal_compiler::tir::presentation::PresentationProvenance::None;
-                match attach_presentation(
-                    &mut value,
-                    &presentation,
+                let presentation = instance_dag
+                    .declaration_presentation(&declaration)
+                    .ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "checked presentation facts are missing for instance declaration `{declaration}`"
+                            ),
+                            instance_src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                project_runtime_value(
+                    runtime,
+                    &declared_type,
+                    presentation,
                     presentation_instances.get(&key),
-                    &ctx.for_decl(&declaration),
+                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration),
                     &values,
-                ) {
-                    Ok(()) => {
-                        validate_display_projection(&value)
-                            .map(|()| value)
-                            .map_err(|error| NodeError::EvalFailed {
-                                message: error.to_string(),
-                            })
-                    }
-                    Err(error) => Err(eval_failed_node_error(&error)),
-                }
+                )?
             };
-            match decl_type {
-                DeclType::Const => consts.push((projection.exposed_name.clone(), value.clone())),
-                DeclType::Param => params.push((projection.exposed_name.clone(), value.clone())),
-                DeclType::Node => nodes.push((projection.exposed_name.clone(), value.clone())),
-            }
-            all.push((projection.exposed_name.clone(), value, decl_type));
+            result_values.insert(
+                key,
+                projection.exposed_name.clone(),
+                value,
+                decl_type,
+                OutputExposure::Surface,
+                src,
+            )?;
         }
         for (name, category) in instance_dag.source_order() {
             let decl_type = match category {
@@ -634,11 +691,25 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     )
                 })?;
                 let declared_type = tir.runtime_declared_type(&declaration, src)?;
-                EvaluatedValue::new(runtime, &declared_type)
-                    .project(tir, src)
-                    .map_err(|error| NodeError::EvalFailed {
-                        message: error.to_string(),
-                    })
+                let presentation = instance_dag
+                    .declaration_presentation(&declaration)
+                    .ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "checked presentation facts are missing for instance declaration `{declaration}`"
+                            ),
+                            instance_src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                project_runtime_value(
+                    runtime,
+                    &declared_type,
+                    presentation,
+                    presentation_instances.get(&key),
+                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration),
+                    &values,
+                )?
             };
             let debug_scope = if debug_scope_counts
                 .get(&record.debug_scope)
@@ -649,14 +720,24 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 record.debug_scope.clone()
             };
             let debug_name = ScopedName::qualified(debug_scope, name.member().clone());
-            all.push((debug_name, value, decl_type));
+            result_values.insert(
+                key,
+                debug_name,
+                value,
+                decl_type,
+                OutputExposure::Debug,
+                src,
+            )?;
         }
     }
     cancellation.checkpoint()?;
-    // A directly evaluated DAG is its own entry surface. Project evaluation
-    // replaces this set with include-aware classification after assembling the
-    // root result.
-    let output_surface = all.iter().map(|(name, _, _)| name.clone()).collect();
+    let AssembledRuntimeResultValues {
+        consts,
+        params,
+        nodes,
+        all,
+        output_surface,
+    } = result_values.finish();
 
     // Evaluate assertions in source order, applying expected_fail inversion.
     // An assertion whose body references a failed declaration reports the

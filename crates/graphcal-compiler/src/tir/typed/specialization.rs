@@ -1,6 +1,6 @@
 //! Checked-DAG specialization for semantic include instances.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -18,15 +18,15 @@ use crate::ir::instance::{
 use crate::nat::NatPolyForm;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
-use crate::syntax::ast::EncodingChannel;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::type_name::ResolvedStructTypeName;
 use crate::tir::presentation::{
-    IndexedPresentation, LeafPresentation, PlotChannelPresentation, PresentationCallKey,
-    PresentationIndexSubstitution, PresentationLocalBinder, PresentationMatchArm,
-    PresentationMatchPattern, PresentationProvenance, PresentationSelection, UnitPresentation,
+    DagPresentationFacts, IndexedPresentation, LeafPresentation, PlotChannelPresentation,
+    PresentationCallKey, PresentationIndexSubstitution, PresentationLocalBinder,
+    PresentationMatchArm, PresentationMatchPattern, PresentationProvenance, PresentationSelection,
+    UnitPresentation,
 };
 
 fn dimension_substitution<'a>(
@@ -612,11 +612,71 @@ fn extend_binding_constructor_refs(
     result
 }
 
-fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
+fn resolve_instance_override_target(
+    target: &crate::ir::override_reconciliation::PendingOverrideTarget,
+    substitution: &StaticSubstitution,
+    src: &NamedSource<Arc<String>>,
+    include_span: crate::syntax::span::Span,
+) -> Result<super::ResolvedOverrideTarget, GraphcalError> {
     use crate::ir::override_reconciliation::PendingOverrideTarget;
-    use crate::registry::declared_type::IndexTypeRef;
-    use crate::registry::types::IndexBindingTarget;
 
+    match target {
+        PendingOverrideTarget::Index {
+            overridden,
+            source_owner,
+            ..
+        } => {
+            let source = ResolvedIndexName::from_def(source_owner.clone(), overridden.clone());
+            let replacement = substitution.indexes.get(&source).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic override reconciliation for index `{source}` has no canonical Static substitution"
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(include_span),
+                )
+            })?;
+            Ok(super::ResolvedOverrideTarget::Index {
+                overridden: overridden.clone(),
+                source,
+                replacement: match replacement {
+                    InstanceIndexBindingTarget::Declared(name) => {
+                        IndexTypeRef::from_resolved(name.clone())
+                    }
+                    InstanceIndexBindingTarget::Finite(index) => {
+                        IndexTypeRef::from_finite_index(*index)
+                    }
+                },
+            })
+        }
+        PendingOverrideTarget::Type {
+            overridden,
+            source_owner,
+            ..
+        } => {
+            let source = ResolvedStructTypeName::from_def(source_owner.clone(), overridden.clone());
+            let replacement = substitution.types.get(&source).cloned().ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic override reconciliation for type `{source}` has no canonical Static substitution"
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(include_span),
+                )
+            })?;
+            Ok(super::ResolvedOverrideTarget::Type {
+                overridden: overridden.clone(),
+                source,
+                replacement,
+            })
+        }
+    }
+}
+
+fn install_override_reconciliations(
+    instance: &mut DagTIR,
+    edge: &HirInstanceRecord,
+) -> Result<(), GraphcalError> {
     let owner = edge.instance.id.owner();
     instance.semantic.override_reconciliations = edge
         .override_reconciliations
@@ -630,59 +690,28 @@ fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRec
                     let targets = pending
                         .targets
                         .iter()
-                        .map(|target| match target {
-                            PendingOverrideTarget::Index {
-                                overridden,
-                                source_owner,
-                                replacement,
-                                replacement_owner,
-                            } => super::ResolvedOverrideTarget::Index {
-                                overridden: overridden.clone(),
-                                source: crate::syntax::index_name::ResolvedIndexName::from_def(
-                                    source_owner.clone(),
-                                    overridden.clone(),
-                                ),
-                                replacement: match replacement {
-                                    IndexBindingTarget::Declared(name) => IndexTypeRef::with_owner(
-                                        replacement_owner.clone(),
-                                        name.clone(),
-                                    ),
-                                    IndexBindingTarget::Finite(index) => {
-                                        IndexTypeRef::from_finite_index(*index)
-                                    }
-                                },
-                            },
-                            PendingOverrideTarget::Type {
-                                overridden,
-                                source_owner,
-                                replacement,
-                                replacement_owner,
-                            } => super::ResolvedOverrideTarget::Type {
-                                overridden: overridden.clone(),
-                                source: crate::syntax::type_name::ResolvedStructTypeName::from_def(
-                                    source_owner.clone(),
-                                    overridden.clone(),
-                                ),
-                                replacement:
-                                    crate::syntax::type_name::ResolvedStructTypeName::from_def(
-                                        replacement_owner.clone(),
-                                        replacement.clone(),
-                                    ),
-                            },
+                        .map(|target| {
+                            resolve_instance_override_target(
+                                target,
+                                &edge.instance.specialization.substitution,
+                                &pending.src,
+                                pending.include_span,
+                            )
                         })
-                        .collect();
-                    super::OverrideReconciliation {
+                        .collect::<Result<_, GraphcalError>>()?;
+                    Ok(super::OverrideReconciliation {
                         source_decl: pending.source_decl.clone(),
                         orphan_decl: pending.orphan_decl.clone(),
                         targets,
                         src: pending.src.clone(),
                         include_span: pending.include_span,
-                    }
+                    })
                 })
-                .collect();
-            (instance_port, reconciliations)
+                .collect::<Result<_, GraphcalError>>()?;
+            Ok((instance_port, reconciliations))
         })
-        .collect();
+        .collect::<Result<_, GraphcalError>>()?;
+    Ok(())
 }
 
 fn specialize_expected_fail(
@@ -978,7 +1007,7 @@ fn specialize_instance_semantics(
         .iter()
         .map(|(target, bounds)| (local_instance_decl(target, owner), bounds.clone()))
         .collect();
-    install_override_reconciliations(instance, edge);
+    install_override_reconciliations(instance, edge)?;
     instance.declaration_index = super::DagDeclarationIndex::default();
     instance.index_declaration_records().map_err(|error| {
         GraphcalError::internal_error(
@@ -1015,19 +1044,10 @@ fn clone_checked_instance(
     Ok(instance)
 }
 
-type PlotPresentationFacts =
-    HashMap<ResolvedDeclName, HashMap<EncodingChannel, PlotChannelPresentation>>;
-
-type ProjectedPlotPresentation = (
-    crate::dag_id::DagId,
-    ResolvedDeclName,
-    HashMap<EncodingChannel, PlotChannelPresentation>,
-);
-
 fn specialize_instance_presentation_facts(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<(crate::dag_id::DagId, PlotPresentationFacts)>, GraphcalError> {
+) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
     tir.dags
         .iter()
         .filter_map(|(owner, dag)| {
@@ -1046,7 +1066,28 @@ fn specialize_instance_presentation_facts(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            let facts = template
+            let declarations = template
+                .semantic
+                .presentation
+                .declarations
+                .iter()
+                .map(|(declaration, presentation)| {
+                    specialize_presentation(
+                        presentation,
+                        &specialization.substitution,
+                        tir,
+                        src,
+                        runtime_owner_rebases,
+                    )
+                    .map(|presentation| {
+                        (
+                            rebase_runtime_decl(declaration, runtime_owner_rebases),
+                            presentation,
+                        )
+                    })
+                })
+                .collect::<Result<_, GraphcalError>>()?;
+            let plot_channels = template
                 .semantic
                 .presentation
                 .plot_channels
@@ -1065,60 +1106,126 @@ fn specialize_instance_presentation_facts(
                             .map(|channel| (*encoding, channel))
                         })
                         .collect::<Result<_, _>>()
-                        .map(|channels| (local_instance_decl(plot, owner), channels))
+                        .map(|channels| {
+                            (rebase_runtime_decl(plot, runtime_owner_rebases), channels)
+                        })
                 })
                 .collect::<Result<_, GraphcalError>>()?;
-            Ok((owner.clone(), facts))
+            Ok((
+                owner.clone(),
+                DagPresentationFacts {
+                    declarations,
+                    plot_channels,
+                },
+            ))
         })
         .collect()
 }
 
-fn collect_projected_plot_facts(
-    tir: &TIR,
+fn install_plot_projections_for_dag(
+    tir: &mut TIR,
+    parent: &crate::dag_id::DagId,
+    visiting: &mut HashSet<crate::dag_id::DagId>,
+    complete: &mut HashSet<crate::dag_id::DagId>,
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ProjectedPlotPresentation>, GraphcalError> {
-    tir.dags
+) -> Result<(), GraphcalError> {
+    if complete.contains(parent) {
+        return Ok(());
+    }
+    if !visiting.insert(parent.clone()) {
+        return Err(GraphcalError::internal_error(
+            format!("semantic plot projection cycle reached `{parent}`"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        ));
+    }
+    let projections = tir
+        .dags
+        .get(parent)
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("semantic plot projection parent `{parent}` is unavailable"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?
+        .semantic_instances()
         .iter()
-        .flat_map(|(parent, dag)| {
-            dag.semantic_instances().iter().flat_map(move |edge| {
-                edge.plot_projections.iter().map(move |projection| {
-                    (
-                        parent.clone(),
-                        edge.instance.id.owner().clone(),
-                        ResolvedDeclName::from_def(
-                            edge.instance.id.owner().clone(),
-                            projection.target.to_unowned_def_name(),
-                        ),
-                    )
-                })
+        .flat_map(|edge| {
+            edge.plot_projections.iter().map(|projection| {
+                let instance_owner = edge.instance.id.owner().clone();
+                let target = ResolvedDeclName::from_def(
+                    instance_owner.clone(),
+                    projection.target.to_unowned_def_name(),
+                );
+                let exposed = ResolvedDeclName::from_def(
+                    parent.clone(),
+                    projection.exposed_name.member().clone(),
+                );
+                (instance_owner, target, exposed)
             })
         })
-        .map(|(parent, instance_owner, target)| {
-            let channels = tir
-                .dags
-                .get(&instance_owner)
-                .and_then(|instance| instance.plot_channel_presentations(&target))
-                .cloned()
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!(
-                            "semantic plot projection `{target}` has no checked presentation facts"
-                        ),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
-            Ok((parent, target, channels))
-        })
-        .collect()
+        .collect::<Vec<_>>();
+    for (instance_owner, target, exposed) in projections {
+        install_plot_projections_for_dag(tir, &instance_owner, visiting, complete, src)?;
+        let channels = tir
+            .dags
+            .get(&instance_owner)
+            .and_then(|instance| instance.plot_channel_presentations(&target))
+            .cloned()
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic plot projection `{target}` has no checked presentation facts"
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        let dag = tir.dags.get_mut(parent).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("semantic plot projection parent `{parent}` is unavailable"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+        dag.semantic
+            .presentation
+            .plot_channels
+            .insert(target, channels.clone());
+        dag.semantic
+            .presentation
+            .plot_channels
+            .insert(exposed, channels);
+    }
+    visiting.remove(parent);
+    complete.insert(parent.clone());
+    Ok(())
 }
 
-/// Specialize checked plot presentation facts and project requested plots.
+fn dag_identity_snapshot(tir: &TIR) -> Vec<crate::dag_id::DagId> {
+    tir.dags.keys().cloned().collect()
+}
+
+/// Copy requested instance plots into their semantic parents from leaves upward.
+pub fn install_semantic_plot_projection_facts(
+    tir: &mut TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    // Projection installation mutates the registry, so traversal owns a stable
+    // identity snapshot rather than holding an iterator borrow across mutation.
+    let dag_ids = dag_identity_snapshot(tir);
+    let mut visiting = HashSet::new();
+    let mut complete = HashSet::new();
+    dag_ids.into_iter().try_for_each(|dag_id| {
+        install_plot_projections_for_dag(tir, &dag_id, &mut visiting, &mut complete, src)
+    })
+}
+
+/// Bootstrap semantic instances with specialized checked presentation facts.
 ///
-/// Same-file inline templates receive their checked presentation facts only
-/// after semantic instances have been materialized. Installing these facts as
-/// a separate post-check step keeps instance construction independent of DAG
-/// declaration order while preserving canonical plot and Static identities.
+/// The dimension checker subsequently recomputes concrete provenance from each
+/// instance body while retaining these already-checked plot shapes.
 pub fn install_semantic_presentation_facts(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
@@ -1131,22 +1238,9 @@ pub fn install_semantic_presentation_facts(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        instance.semantic.presentation.plot_channels = facts;
+        instance.semantic.presentation = facts;
     }
-    for (parent, target, channels) in collect_projected_plot_facts(tir, src)? {
-        let dag = tir.dags.get_mut(&parent).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("semantic plot projection parent `{parent}` is unavailable"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        dag.semantic
-            .presentation
-            .plot_channels
-            .insert(target, channels);
-    }
-    Ok(())
+    install_semantic_plot_projection_facts(tir, src)
 }
 
 fn install_semantic_projection_bindings(

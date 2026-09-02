@@ -36,6 +36,7 @@ pub fn checked_expression_presentation(
         cancellation,
         memo: HashMap::new(),
         visiting: HashSet::new(),
+        recompute_semantic_instances: false,
     };
     let dag_id = tir
         .dag_containing_declaration(owner)
@@ -56,6 +57,7 @@ pub(super) fn collect_presentation_facts(
         cancellation,
         memo: HashMap::new(),
         visiting: HashSet::new(),
+        recompute_semantic_instances: false,
     };
     tir.local_dags()
         .filter(|(_, dag)| !dag.is_semantic_instance())
@@ -76,12 +78,96 @@ pub(super) fn collect_presentation_facts(
         .collect()
 }
 
+/// Recompute presentation provenance from each concrete semantic instance body.
+///
+/// Static template specialization supplies the already-checked plot shapes;
+/// declaration and plot provenance comes from the concrete body so include-site
+/// value bindings, rather than the template defaults they replace, remain the
+/// source of display semantics.
+pub(super) fn collect_semantic_presentation_facts(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<HashMap<crate::dag_id::DagId, DagPresentationFacts>, GraphcalError> {
+    let dag_ids = tir
+        .local_dags()
+        .filter(|(_, dag)| dag.is_semantic_instance())
+        .map(|(dag_id, _)| dag_id.clone())
+        .collect::<Vec<_>>();
+    let checked_shapes = dag_ids
+        .iter()
+        .map(|dag_id| {
+            let dag = tir.dag_registry().get(dag_id).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("semantic presentation DAG `{dag_id}` is unavailable"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            let shapes = dag
+                .plots()
+                .iter()
+                .map(|entry| {
+                    let body_src = entry.body_src.resolve(src);
+                    let plot = dag.require_bound_decl_identity(
+                        &entry.name,
+                        body_src,
+                        DiagnosticAnchor::WholeFile,
+                    )?;
+                    let channels = dag.plot_channel_presentations(&plot).ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "specialized plot shapes are missing for semantic plot `{plot}`"
+                            ),
+                            body_src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                    Ok((
+                        plot,
+                        channels
+                            .iter()
+                            .map(|(channel, presentation)| (*channel, presentation.shape().clone()))
+                            .collect(),
+                    ))
+                })
+                .collect::<Result<super::plot::CheckedPlotChannelShapes, GraphcalError>>()?;
+            Ok((dag_id.clone(), shapes))
+        })
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+    let mut resolver = PresentationResolver {
+        tir,
+        fallback_src: src,
+        cancellation,
+        memo: HashMap::new(),
+        visiting: HashSet::new(),
+        recompute_semantic_instances: true,
+    };
+    dag_ids
+        .into_iter()
+        .map(|dag_id| {
+            cancellation.checkpoint()?;
+            let shapes = checked_shapes.get(&dag_id).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("checked semantic plot shapes are missing for `{dag_id}`"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            resolver
+                .facts_for_dag(&dag_id, shapes)
+                .map(|facts| (dag_id, facts))
+        })
+        .collect()
+}
+
 struct PresentationResolver<'a> {
     tir: &'a crate::tir::typed::TIR,
     fallback_src: &'a NamedSource<Arc<String>>,
     cancellation: &'a crate::cancellation::CancellationToken,
     memo: HashMap<ResolvedDeclName, PresentationProvenance>,
     visiting: HashSet<ResolvedDeclName>,
+    recompute_semantic_instances: bool,
 }
 
 impl PresentationResolver<'_> {
@@ -182,6 +268,18 @@ impl PresentationResolver<'_> {
             })
     }
 
+    fn referenced_declaration(
+        &mut self,
+        dag_id: &crate::dag_id::DagId,
+        target: &ResolvedDeclName,
+        span: Span,
+    ) -> Result<PresentationProvenance, GraphcalError> {
+        let runtime_target = self
+            .dag(dag_id, DiagnosticAnchor::Source(span))?
+            .runtime_decl_identity(target);
+        self.declaration(&runtime_target)
+    }
+
     fn declaration(
         &mut self,
         key: &ResolvedDeclName,
@@ -193,7 +291,9 @@ impl PresentationResolver<'_> {
         let (checked, body, dag_id) = {
             let dag = self.declaration_dag(key)?;
             (
-                dag.declaration_presentation(key).cloned(),
+                (!self.recompute_semantic_instances || !dag.is_semantic_instance())
+                    .then(|| dag.declaration_presentation(key).cloned())
+                    .flatten(),
                 declaration_body(dag, key, self.fallback_src),
                 dag.dag_id().clone(),
             )
@@ -250,9 +350,13 @@ impl PresentationResolver<'_> {
             ExprKind::DisplayTimezone { timezone, .. } => Ok(PresentationProvenance::Leaf(
                 LeafPresentation::Timezone(timezone.clone()),
             )),
-            ExprKind::GraphRef(target) => self.declaration(&target.value),
+            ExprKind::GraphRef(target) => {
+                self.referenced_declaration(dag_id, &target.value, target.span)
+            }
             ExprKind::ConstRef(target) => match &target.value {
-                hir::ConstRef::Decl(target) => self.declaration(target),
+                hir::ConstRef::Decl(declaration) => {
+                    self.referenced_declaration(dag_id, declaration, target.span)
+                }
                 hir::ConstRef::Builtin(_)
                 | hir::ConstRef::Constructor(_)
                 | hir::ConstRef::GenericNatParam(_) => Ok(PresentationProvenance::None),
