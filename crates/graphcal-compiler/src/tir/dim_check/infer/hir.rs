@@ -21,7 +21,7 @@ use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{IndexCardinality, SemanticRegistry, TypeGenericConstraint};
+use crate::registry::types::{FormattingRegistry, IndexCardinality, TypeGenericConstraint};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
@@ -505,7 +505,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -528,7 +528,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -553,7 +553,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_materialized_shapes_and_can
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -583,7 +583,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_nominal_dependencies_and_ca
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -614,7 +614,7 @@ fn infer_hir_type(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -647,7 +647,7 @@ fn infer_hir_type_inner(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1070,7 +1070,7 @@ fn infer_hir_const_ref(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match &target.value {
@@ -1145,7 +1145,7 @@ fn infer_arg(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1171,7 +1171,7 @@ fn infer_hir_linear_algebra_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1202,7 +1202,7 @@ fn infer_hir_linear_algebra_call(
         .collect::<Result<Vec<_>, _>>()?;
 
     infer_linear_algebra_type(function, &argument_types, |index| {
-        super::concrete_cardinality_for_inferred(index, Some(dag), registry)
+        super::concrete_cardinality_for_inferred(index, tir)
     })
     .map_err(|error| match error {
         LinearAlgebraTypeError::WrongArity { expected, found } => GraphcalError::WrongArity {
@@ -1281,7 +1281,7 @@ fn infer_hir_fn_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1390,11 +1390,13 @@ fn infer_hir_fn_call(
             if kind != AggregationFn::Product || dimension.is_dimensionless() {
                 return Ok(InferredType::Quantity(dimension));
             }
-            let cardinality = super::concrete_cardinality_for_inferred(index, Some(dag), registry)
-                .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
-                    function: kind.builtin_name(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
+            let cardinality =
+                super::concrete_cardinality_for_inferred(index, tir).ok_or_else(|| {
+                    GraphcalError::AggregationCardinalityUnknown {
+                        function: kind.builtin_name(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
                 })?;
             let exponent =
                 i32::try_from(cardinality).map_err(|_| GraphcalError::DimensionOverflow {
@@ -1551,7 +1553,7 @@ fn infer_hir_complex_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1651,7 +1653,7 @@ fn infer_extern_fn_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1912,7 +1914,7 @@ fn infer_hir_builtin_fn(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -1969,7 +1971,7 @@ fn infer_hir_type_conversion(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2058,14 +2060,13 @@ fn infer_hir_type_conversion(
                     span: args[0].span.into(),
                 });
             }
-            let index_def =
-                super::index_def_for_inferred(index, Some(dag), registry).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: index.name(),
-                        src: src.clone(),
-                        span: args[0].span.into(),
-                    }
-                })?;
+            let index_def = super::index_def_for_inferred(index, tir).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: index.name(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                }
+            })?;
             match &index_def.kind {
                 crate::registry::types::IndexKind::Coordinate(data) => {
                     Ok(InferredType::Quantity(data.dimension.clone()))
@@ -2097,7 +2098,7 @@ fn infer_hir_timescale_conversion(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2142,7 +2143,7 @@ fn infer_hir_datetime_constructor(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2273,7 +2274,7 @@ fn infer_hir_datetime_unary(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     result: InferredType,
@@ -2319,7 +2320,7 @@ fn infer_hir_if(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2366,7 +2367,7 @@ fn infer_hir_unary(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2431,7 +2432,7 @@ fn infer_hir_binop(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2565,7 +2566,7 @@ fn infer_hir_key_form(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2586,12 +2587,13 @@ fn infer_hir_key_form(
     let (index_identity, finite_form) = match axis {
         hir::expr::ForBindingIndex::Named(index) => {
             let identity = InferredIndex::from_resolved(index.value.clone());
-            let idx_def = super::index_def_for_inferred(&identity, Some(dag), registry)
-                .ok_or_else(|| GraphcalError::UnknownIndex {
+            let idx_def = super::index_def_for_inferred(&identity, tir).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
                     name: identity.name(),
                     src: src.clone(),
                     span: index.span.into(),
-                })?;
+                }
+            })?;
             let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
             (identity, finite_form)
         }
@@ -2679,7 +2681,7 @@ fn infer_hir_key_form(
             Ok(InferredType::Key(index_identity))
         }
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
-            let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry);
+            let idx_def = super::index_def_for_inferred(&index_identity, tir);
             let dimension = match idx_def.map(|def| &def.kind) {
                 Some(crate::registry::types::IndexKind::Coordinate(data)) => data.dimension.clone(),
                 Some(crate::registry::types::IndexKind::RequiredCoordinate { dimension }) => {
@@ -2721,7 +2723,7 @@ fn infer_hir_for_comp(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2732,13 +2734,13 @@ fn infer_hir_for_comp(
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                super::index_def_for_inferred(&index_identity, Some(dag), registry).ok_or_else(
-                    || GraphcalError::UnknownIndex {
+                super::index_def_for_inferred(&index_identity, tir).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
                         name: index_identity.name(),
                         src: src.clone(),
                         span: index.span.into(),
-                    },
-                )?;
+                    }
+                })?;
                 InferredType::Key(index_identity)
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
@@ -2858,7 +2860,7 @@ fn infer_hir_index_access(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2914,7 +2916,7 @@ fn infer_hir_index_access(
                     InferredType::Key(key_index) => {
                         let axis_form = finite_axis_form(
                             &index,
-                            super::index_def_for_inferred(&index, Some(dag), registry),
+                            super::index_def_for_inferred(&index, tir),
                             src,
                             local.span,
                         )?;
@@ -2967,7 +2969,7 @@ fn infer_hir_index_access(
                 )?;
                 let index_form = finite_axis_form(
                     &index,
-                    super::index_def_for_inferred(&index, Some(dag), registry),
+                    super::index_def_for_inferred(&index, tir),
                     src,
                     index_expr.span,
                 )?;
@@ -3100,7 +3102,7 @@ fn infer_hir_convert(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -3156,7 +3158,7 @@ fn infer_hir_display_timezone(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -3408,7 +3410,7 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
     type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
-    _registry: &SemanticRegistry,
+    _registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<InferredType, GraphcalError> {
@@ -3464,7 +3466,7 @@ impl<'a> ConcreteStructApplication<'a> {
 struct ConcreteObligationContext<'a> {
     dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
-    registry: &'a SemanticRegistry,
+    registry: &'a FormattingRegistry,
     builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
     src: &'a NamedSource<Arc<String>>,
     span: Span,
@@ -3475,7 +3477,7 @@ pub(in crate::tir::dim_check) fn validate_concrete_type_obligations(
     inferred: &InferredType,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -3712,7 +3714,7 @@ fn infer_hir_field_access(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -3793,7 +3795,7 @@ fn infer_hir_generic_type_arg(
     type_expr: &hir::TypeExpr,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredType, GraphcalError> {
@@ -3886,7 +3888,7 @@ fn infer_hir_sorted_generic_arg(
     arg: &hir::GenericArg,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredGenericArg, GraphcalError> {
@@ -4014,7 +4016,7 @@ fn infer_hir_constructor_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -4173,7 +4175,7 @@ pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Vec<crate::registry::declared_type::DeclaredGenericArg>, GraphcalError> {
@@ -4201,7 +4203,7 @@ fn resolve_applied_generic_args(
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
     substitutions: Option<&ConcreteGenericSubstitutions>,
@@ -4430,7 +4432,7 @@ fn infer_hir_map_literal(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -4471,14 +4473,13 @@ fn infer_hir_map_literal(
     let mut axes = Vec::with_capacity(arity);
     for key in &first_entry.keys {
         let index = inferred_index_for_hir_map_key(key, src)?;
-        let idx_def =
-            super::index_def_for_inferred(&index, Some(dag), registry).ok_or_else(|| {
-                GraphcalError::UnknownIndex {
-                    name: index.name(),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                }
-            })?;
+        let idx_def = super::index_def_for_inferred(&index, tir).ok_or_else(|| {
+            GraphcalError::UnknownIndex {
+                name: index.name(),
+                src: src.clone(),
+                span: expr.span.into(),
+            }
+        })?;
         if idx_def.is_coordinate() {
             return Err(GraphcalError::EvalError {
                 message: format!(
@@ -4628,8 +4629,8 @@ fn infer_hir_map_literal(
         src,
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label = super::index_def_for_inferred(index, Some(dag), registry)
-            .is_some_and(|def| !def.is_coordinate());
+        let inner_is_label =
+            super::index_def_for_inferred(index, tir).is_some_and(|def| !def.is_coordinate());
         if inner_is_label {
             return Err(GraphcalError::EvalError {
                 message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
@@ -4681,7 +4682,7 @@ fn infer_hir_scan(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -4763,7 +4764,7 @@ fn infer_hir_unfold(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -4779,16 +4780,13 @@ fn infer_hir_unfold(
         src,
     )?;
     let index = InferredIndex::from_resolved(axis.value.clone());
-    let idx_def = dag
-        .semantic
-        .collection_refs
-        .index_defs
-        .get(&axis.value)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("missing resolved unfold axis `{}`", axis.value),
-            src: src.clone(),
-            span: axis.span.into(),
-        })?;
+    let idx_def =
+        tir.declared_index_def(&axis.value)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("missing resolved unfold axis `{}`", axis.value),
+                src: src.clone(),
+                span: axis.span.into(),
+            })?;
     match &idx_def.kind {
         crate::registry::types::IndexKind::Coordinate(_)
         | crate::registry::types::IndexKind::RequiredCoordinate { .. } => {}
@@ -4841,7 +4839,7 @@ fn constructor_field_type(
     type_def: &NominalTypeDef,
     scrutinee_type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if !variant
@@ -4880,7 +4878,7 @@ fn infer_hir_match(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -4907,11 +4905,13 @@ fn infer_hir_match(
                     span: scrutinee.span.into(),
                 });
             }
-            let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_identity.name(),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
+            let index_def =
+                super::index_def_for_inferred(index_identity, tir).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
+                        name: index_identity.name(),
+                        src: src.clone(),
+                        span: scrutinee.span.into(),
+                    }
                 })?;
             let variants = match &index_def.kind {
                 crate::registry::types::IndexKind::Named { variants } => variants.clone(),
@@ -5150,7 +5150,7 @@ fn infer_hir_match(
 fn hir_arm_types_match(
     arm_types: &[InferredType],
     arms: &[hir::expr::MatchArm],
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     expr: &hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
@@ -5373,7 +5373,7 @@ fn infer_hir_dag_call(
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {

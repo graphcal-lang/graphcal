@@ -142,6 +142,67 @@ pub enum RegistryBuildError {
     MissingBaseDimensionName { context: String, id: BaseDimId },
 }
 
+/// Dimension formatting data retained after semantic name resolution.
+///
+/// Named dimensions are display aliases only: this type deliberately exposes
+/// no source-name lookup or AST resolution API.
+#[derive(Debug, Clone)]
+pub struct DimensionFormattingRegistry {
+    base_dim_names: BTreeMap<BaseDimId, String>,
+    base_dim_symbols: BTreeMap<BaseDimId, String>,
+    display_aliases: HashMap<DimName, Dimension>,
+}
+
+impl DimensionFormattingRegistry {
+    /// Get base dimension names used by diagnostics and display adapters.
+    #[must_use]
+    pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_names
+    }
+
+    /// Get default base-unit symbols used by runtime display adapters.
+    #[must_use]
+    pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
+        &self.base_dim_symbols
+    }
+
+    /// Format a dimension without providing any semantic name-resolution API.
+    #[must_use]
+    pub fn format_dimension(&self, dim: &Dimension) -> String {
+        format_dimension_preferring_alias_after_validation(
+            &self.display_aliases,
+            &self.base_dim_names,
+            dim,
+        )
+    }
+
+    /// Format user-defined base dimensions with their canonical owner.
+    #[must_use]
+    #[expect(
+        clippy::unreachable,
+        reason = "RegistryBuilder validates complete base-dimension metadata before construction"
+    )]
+    pub(crate) fn format_dimension_owner_qualified(&self, dim: &Dimension) -> String {
+        let names = self
+            .base_dim_names
+            .iter()
+            .map(|(id, name)| {
+                let display = match id {
+                    BaseDimId::Prelude(_) => name.clone(),
+                    BaseDimId::UserDefined(resolved) => resolved.to_string(),
+                };
+                (id.clone(), display)
+            })
+            .collect();
+        match dim.try_format_with(&names) {
+            Ok(formatted) => formatted,
+            Err(err) => unreachable!(
+                "validated registry lost owner-qualified base dimension metadata: {err}"
+            ),
+        }
+    }
+}
+
 /// Dimension registry: maps dimension names to `Dimension` values and tracks
 /// base dimension metadata (ID assignment, names, default unit symbols).
 #[derive(Debug, Clone)]
@@ -155,6 +216,14 @@ pub struct DimensionRegistry {
 }
 
 impl DimensionRegistry {
+    pub(crate) fn into_formatting(self) -> DimensionFormattingRegistry {
+        DimensionFormattingRegistry {
+            base_dim_names: self.base_dim_names,
+            base_dim_symbols: self.base_dim_symbols,
+            display_aliases: self.dimensions,
+        }
+    }
+
     /// Look up a dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
@@ -199,35 +268,6 @@ impl DimensionRegistry {
             &self.base_dim_names,
             dim,
         )
-    }
-
-    /// Format user-defined base dimensions with their canonical owner.
-    ///
-    /// This diagnostic-only form disambiguates distinct imported dimensions
-    /// that intentionally share one leaf spelling.
-    #[must_use]
-    #[expect(
-        clippy::unreachable,
-        reason = "RegistryBuilder validates complete base-dimension metadata before construction"
-    )]
-    pub(crate) fn format_dimension_owner_qualified(&self, dim: &Dimension) -> String {
-        let names = self
-            .base_dim_names
-            .iter()
-            .map(|(id, name)| {
-                let display = match id {
-                    BaseDimId::Prelude(_) => name.clone(),
-                    BaseDimId::UserDefined(resolved) => resolved.to_string(),
-                };
-                (id.clone(), display)
-            })
-            .collect();
-        match dim.try_format_with(&names) {
-            Ok(formatted) => formatted,
-            Err(err) => unreachable!(
-                "validated registry lost owner-qualified base dimension metadata: {err}"
-            ),
-        }
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.

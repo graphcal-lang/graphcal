@@ -166,6 +166,69 @@ impl DagTIR {
     }
 }
 
+/// A HIR DAG whose complete declaration signature has been resolved once.
+///
+/// Owning the HIR body prevents a signature from being paired with another DAG
+/// between the signature and body passes of project TIR construction.
+#[derive(Debug)]
+pub struct SignatureResolvedHirDag {
+    hir: HirDag,
+    resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+    declared_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+}
+
+impl SignatureResolvedHirDag {
+    /// Borrow the canonical DAG identity.
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        self.hir.dag_id()
+    }
+
+    /// Borrow HIR while project import interfaces are assembled.
+    #[must_use]
+    pub const fn hir(&self) -> &HirDag {
+        &self.hir
+    }
+
+    /// Borrow the concrete declaration interface produced by the signature pass.
+    #[must_use]
+    pub const fn declared_types(
+        &self,
+    ) -> &HashMap<ScopedName, crate::registry::declared_type::DeclaredType> {
+        &self.declared_types
+    }
+}
+
+/// Resolve one HIR DAG's complete declaration signature before checking bodies.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when a declaration annotation cannot be
+/// resolved to a concrete declared type.
+pub fn resolve_hir_signature_with_modules_and_cancellation(
+    hir: HirDag,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<SignatureResolvedHirDag, GraphcalError> {
+    cancellation.checkpoint()?;
+    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
+    let resolved_decl_types =
+        resolve_declared_type_exprs(&hir.consts, &hir.params, &hir.nodes, src, ctx, cancellation)?;
+    let declared_types = resolved_decl_types
+        .iter()
+        .map(|(name, resolved)| {
+            resolved_to_declared_type(resolved, src).map(|ty| (name.clone(), ty))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(SignatureResolvedHirDag {
+        hir,
+        resolved_decl_types,
+        declared_types,
+    })
+}
+
 /// Resolve all canonical HIR type annotations in an `HirDag` against the
 /// authoritative project type store.
 ///
@@ -249,12 +312,46 @@ pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
 where
     S: std::hash::BuildHasher,
 {
+    let signed = resolve_hir_signature_with_modules_and_cancellation(
+        hir,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )?;
+    type_resolve_signed_builder_with_imported_bindings_and_cancellation(
+        signed,
+        imported_bindings,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )
+}
+
+/// Resolve a signature-complete root HIR module's bodies and assemble TIR.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when an imported interface is inconsistent or
+/// body semantic resolution fails.
+pub fn type_resolve_signed_builder_with_imported_bindings_and_cancellation<S>(
+    signed: SignatureResolvedHirDag,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<TirBuilder, GraphcalError>
+where
+    S: std::hash::BuildHasher,
+{
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let dag_id = hir.dag_id().clone();
+    let dag_id = signed.dag_id().clone();
     let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
-    type_resolve_impl(hir, imported_bindings, src, ctx, cancellation)
+    type_resolve_impl(signed, imported_bindings, src, ctx, cancellation)
 }
 
 fn validate_checked_imported_bindings<S>(
@@ -316,13 +413,18 @@ fn finalize_hir_dag(
 }
 
 fn type_resolve_impl(
-    ir: HirDag,
+    signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
+    let SignatureResolvedHirDag {
+        hir: ir,
+        resolved_decl_types,
+        declared_types: _,
+    } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
@@ -334,6 +436,7 @@ fn type_resolve_impl(
         module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
+        resolved_decl_types,
         cancellation,
     )?
     .with_body(
@@ -359,7 +462,7 @@ fn type_resolve_impl(
         cancellation,
     )?;
     Ok(TirBuilder::new(
-        ir.registry,
+        ir.registry.into_formatting(),
         module_ctx.types.clone(),
         root_dag,
         ir.extern_functions,
@@ -422,22 +525,61 @@ pub fn type_resolve_single_with_imported_bindings_and_cancellation<S>(
 where
     S: std::hash::BuildHasher,
 {
+    let signed = resolve_hir_signature_with_modules_and_cancellation(
+        hir,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )?;
+    type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        signed,
+        imported_bindings,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )
+}
+
+/// Resolve a signature-complete non-root HIR module's bodies.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when an imported interface is inconsistent or
+/// body semantic resolution fails.
+pub fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
+    signed: SignatureResolvedHirDag,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<DagTIR, GraphcalError>
+where
+    S: std::hash::BuildHasher,
+{
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let dag_id = hir.dag_id().clone();
+    let dag_id = signed.dag_id().clone();
     let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
-    type_resolve_single_impl(hir, imported_bindings, src, ctx, cancellation)
+    type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
 }
 
 fn type_resolve_single_impl(
-    ir: HirDag,
+    signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     cancellation.checkpoint()?;
+    let SignatureResolvedHirDag {
+        hir: ir,
+        resolved_decl_types,
+        declared_types: _,
+    } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
@@ -449,6 +591,7 @@ fn type_resolve_single_impl(
         module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
+        resolved_decl_types,
         cancellation,
     )?
     .with_body(
@@ -474,30 +617,6 @@ fn type_resolve_single_impl(
         cancellation,
     )?;
     Ok(dag)
-}
-
-/// Resolve the declared value interface of one HIR module without checking its bodies.
-///
-/// This is used while checking a whole project so same-file inline DAG imports
-/// can receive real declared types without placeholders or a partially built
-/// TIR.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when a declaration annotation cannot be
-/// resolved to a concrete declared type.
-pub fn resolve_hir_declared_types_with_modules_and_cancellation(
-    hir: &HirDag,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError> {
-    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
-    resolve_declared_type_exprs(&hir.consts, &hir.params, &hir.nodes, src, ctx, cancellation)?
-        .into_iter()
-        .map(|(name, resolved)| resolved_to_declared_type(&resolved, src).map(|ty| (name, ty)))
-        .collect()
 }
 
 fn resolve_declared_type_exprs(
@@ -545,29 +664,14 @@ fn type_resolve_dag(
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+    resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
-    cancellation.checkpoint()?;
-    let resolved_decl_types =
-        resolve_declared_type_exprs(&consts, &params, &nodes, src, module_ctx, cancellation)?;
-
     cancellation.checkpoint()?;
     let domain_bounds = take_declaration_domain_bounds(&mut consts, &mut params, &mut nodes, src);
     cancellation.checkpoint()?;
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
-    cancellation.checkpoint()?;
-    let collection_refs = collect_resolved_collection_refs(
-        &consts,
-        &params,
-        &nodes,
-        asserts,
-        &domain_bounds,
-        &resolved_decl_types,
-        imported_bindings,
-        module_ctx,
-        src,
-    )?;
     cancellation.checkpoint()?;
     let constructor_refs = collect_resolved_constructor_refs(
         &consts,
@@ -592,7 +696,6 @@ fn type_resolve_dag(
         domain_bounds,
         dynamic_unit_scales: HashMap::new(),
         dependencies,
-        collection_refs,
         constructor_refs,
         override_reconciliations,
         bindable_nominals,
@@ -1190,25 +1293,17 @@ fn take_declaration_domain_bounds(
         .collect()
 }
 
-/// Collect semantic index/constructor definitions reached only from dynamic
-/// unit scale expressions.
+/// Collect constructor definitions reached only from dynamic unit scales.
 fn collect_dynamic_unit_refs(
     ctx: ModuleTypeContext<'_>,
     semantic: &mut DagSemanticBody,
 ) -> Result<(), GraphcalError> {
-    let DagSemanticBody {
-        dynamic_unit_scales,
-        collection_refs,
-        constructor_refs,
-        ..
-    } = semantic;
-    for entry in dynamic_unit_scales.values() {
-        collect_resolved_collection_refs_from_expr(&entry.expr, ctx, &entry.src, collection_refs)?;
+    for entry in semantic.dynamic_unit_scales.values() {
         collect_resolved_constructor_refs_from_expr(
             &entry.expr,
             ctx,
             &entry.src,
-            constructor_refs,
+            &mut semantic.constructor_refs,
         )?;
     }
     Ok(())
@@ -1226,10 +1321,8 @@ fn collect_plot_refs(
 ) -> Result<(), GraphcalError> {
     let collect = |expr: &hir::Expr,
                    expr_src: &NamedSource<Arc<String>>,
-                   collection_refs: &mut ResolvedCollectionRefs,
                    constructor_refs: &mut ResolvedConstructorRefs|
      -> Result<(), GraphcalError> {
-        collect_resolved_collection_refs_from_expr(expr, ctx, expr_src, collection_refs)?;
         collect_resolved_constructor_refs_from_expr(expr, ctx, expr_src, constructor_refs)
     };
 
@@ -1237,20 +1330,10 @@ fn collect_plot_refs(
         let body = &entry.body;
         let body_src = entry.body_src.resolve(src);
         for (_, expr) in &body.encodings {
-            collect(
-                expr,
-                body_src,
-                &mut semantic.collection_refs,
-                &mut semantic.constructor_refs,
-            )?;
+            collect(expr, body_src, &mut semantic.constructor_refs)?;
         }
         for field in body.mark_properties.iter().chain(&body.properties) {
-            collect(
-                &field.value,
-                body_src,
-                &mut semantic.collection_refs,
-                &mut semantic.constructor_refs,
-            )?;
+            collect(&field.value, body_src, &mut semantic.constructor_refs)?;
         }
     }
 
@@ -1261,12 +1344,7 @@ fn collect_plot_refs(
     {
         let body_src = body_src.resolve(src);
         for field in fields {
-            collect(
-                &field.value,
-                body_src,
-                &mut semantic.collection_refs,
-                &mut semantic.constructor_refs,
-            )?;
+            collect(&field.value, body_src, &mut semantic.constructor_refs)?;
         }
     }
 
@@ -1727,8 +1805,7 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_resolved_collection_refs,
-    collect_resolved_collection_refs_from_expr, collect_resolved_constructor_refs,
+    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs,
     collect_resolved_constructor_refs_from_expr, collect_resolved_dag_dependencies,
     collect_resolved_decl_bindings, resolve_expected_fail_keys,
 };

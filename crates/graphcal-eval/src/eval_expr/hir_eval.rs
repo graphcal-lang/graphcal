@@ -1836,10 +1836,7 @@ fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
-    if let Some(finite_index) = index_ref.finite_index() {
-        return ctx.registry.indexes.get_finite_index(finite_index);
-    }
-    ctx.tir.declared_index_def(index_ref.declared_resolved()?)
+    ctx.tir.index_def(index_ref)
 }
 
 fn ensure_index_ref_matches_resolved(

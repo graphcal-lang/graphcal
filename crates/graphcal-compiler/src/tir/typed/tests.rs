@@ -2,15 +2,15 @@ use super::*;
 use crate::dimension::{BaseDimId, Rational};
 use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{RegistryBuilder, SemanticRegistry};
+use crate::registry::types::{FormattingRegistry, RegistryBuilder};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::parser::Parser;
 use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 
-fn make_registry() -> SemanticRegistry {
+fn make_registry() -> FormattingRegistry {
     let mut b = RegistryBuilder::new();
     load_prelude(&mut b).unwrap();
-    b.try_build().unwrap().into_semantic()
+    b.try_build().unwrap().into_semantic().into_formatting()
 }
 
 fn make_src() -> NamedSource<Arc<String>> {
@@ -330,6 +330,32 @@ fn dag_type_indexes_share_the_project_store_definition_handle() {
 }
 
 #[test]
+fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
+    let tir =
+        parse_and_type_resolve("index Axis = { A, B };\nparam values: Dimensionless[Fin(3)];\n")
+            .unwrap();
+    let declared =
+        crate::registry::declared_type::IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
+            tir.root_dag_id().clone(),
+            crate::syntax::index_name::IndexName::expect_valid("Axis"),
+        ));
+    let finite = crate::registry::declared_type::IndexTypeRef::from_finite_index(
+        crate::registry::types::FiniteIndex::try_from_u64(3).unwrap(),
+    );
+
+    assert!(matches!(
+        &tir.index_def(&declared).unwrap().kind,
+        crate::registry::types::IndexKind::Named { variants } if variants.len() == 2
+    ));
+    assert_eq!(
+        tir.index_def(&finite)
+            .and_then(crate::registry::types::IndexDef::concrete_cardinality)
+            .map(crate::registry::types::IndexCardinality::get),
+        Some(3)
+    );
+}
+
+#[test]
 fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let source = "pub index Axis = { A };\npub type Item { Item(value: Dimensionless) }\n";
     let raw_file = Parser::new(source).parse_file().unwrap();
@@ -533,12 +559,21 @@ fn parse_and_type_resolve_builder(source: &str) -> Result<TirBuilder, GraphcalEr
     project_types
         .insert_local_hir(&ir)
         .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
-    let mut builder = type_resolve_builder_with_modules_and_cancellation(
+    let cancellation = crate::cancellation::CancellationToken::unbounded();
+    let signed = resolve_hir_signature_with_modules_and_cancellation(
         ir,
         &src,
         &resolver,
         &project_types,
-        &crate::cancellation::CancellationToken::unbounded(),
+        &cancellation,
+    )?;
+    let mut builder = type_resolve_signed_builder_with_imported_bindings_and_cancellation(
+        signed,
+        HashMap::new(),
+        &src,
+        &resolver,
+        &project_types,
+        &cancellation,
     )?;
     compile_inline_dag_bodies_test(
         &mut builder,

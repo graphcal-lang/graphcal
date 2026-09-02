@@ -26,7 +26,7 @@ use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::format::format_unit_terms_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
-use graphcal_compiler::registry::types::{IndexKind, SemanticRegistry, UnitScale};
+use graphcal_compiler::registry::types::{FormattingRegistry, IndexKind, UnitScale};
 use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
@@ -2491,7 +2491,7 @@ fn format_constraints(constraints: &[ResolvedDomainBound]) -> String {
 fn format_type_with_constraints(
     resolved: &ResolvedTypeExpr,
     constraints: &[ResolvedDomainBound],
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
 ) -> String {
     let constraint_str = format_constraints(constraints);
     if let ResolvedTypeExpr::Indexed { base, indexes } = resolved {

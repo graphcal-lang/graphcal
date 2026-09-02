@@ -8,7 +8,7 @@ use crate::syntax::type_name::StructTypeNameNamespace;
 
 use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{DimensionRegistry, FiniteIndex, FiniteIndexError};
+use crate::registry::types::{DimensionFormattingRegistry, FiniteIndex, FiniteIndexError};
 
 /// A type-level reference to a named compiler entity.
 ///
@@ -337,7 +337,7 @@ enum DiagnosticNameQualification {
 }
 
 impl DiagnosticNameQualification {
-    fn dimension(self, dimension: &Dimension, dims: &DimensionRegistry) -> String {
+    fn dimension(self, dimension: &Dimension, dims: &DimensionFormattingRegistry) -> String {
         match self {
             Self::Leaf => dims.format_dimension(dimension),
             Self::OwnerQualified => dims.format_dimension_owner_qualified(dimension),
@@ -362,7 +362,7 @@ impl DiagnosticNameQualification {
 impl DeclaredGenericArg {
     fn format(
         &self,
-        dims: &DimensionRegistry,
+        dims: &DimensionFormattingRegistry,
         qualification: DiagnosticNameQualification,
     ) -> String {
         match self {
@@ -404,7 +404,7 @@ pub enum DeclaredType {
 impl DeclaredType {
     /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
     #[must_use]
-    pub fn format(&self, dims: &DimensionRegistry) -> String {
+    pub fn format(&self, dims: &DimensionFormattingRegistry) -> String {
         self.format_with(dims, DiagnosticNameQualification::Leaf)
     }
 
@@ -413,13 +413,13 @@ impl DeclaredType {
     /// Used only when two unequal semantic types would otherwise render with
     /// the same leaf-only diagnostic spelling.
     #[must_use]
-    pub(crate) fn format_owner_qualified(&self, dims: &DimensionRegistry) -> String {
+    pub(crate) fn format_owner_qualified(&self, dims: &DimensionFormattingRegistry) -> String {
         self.format_with(dims, DiagnosticNameQualification::OwnerQualified)
     }
 
     fn format_with(
         &self,
-        dims: &DimensionRegistry,
+        dims: &DimensionFormattingRegistry,
         qualification: DiagnosticNameQualification,
     ) -> String {
         match self {

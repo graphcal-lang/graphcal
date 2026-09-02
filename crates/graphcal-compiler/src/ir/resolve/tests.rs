@@ -60,7 +60,12 @@ fn source_level_min_i32_dimension_exponent_formats_exactly() {
          pub dim Mixed = Y * Huge^2;\n",
     )
     .unwrap();
-    let mixed = tir.registry.dimensions.get_dimension("Mixed").unwrap();
+    let mixed = tir
+        .dimension(&crate::syntax::dimension::ResolvedDimName::from_def(
+            tir.root_dag_id().clone(),
+            crate::syntax::dimension::DimName::expect_valid("Mixed"),
+        ))
+        .unwrap();
 
     assert_eq!(
         mixed

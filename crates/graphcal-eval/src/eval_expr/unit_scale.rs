@@ -44,7 +44,7 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.
 ///
-/// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
+/// Static unit definitions come from the TIR's canonical project type store.
 /// For dynamic units, the unit's strictly validated HIR scale expression in
 /// the current concrete DAG instance is evaluated against the current `values`,
 /// then multiplied by the base unit's static scale. Dynamic scale expressions
