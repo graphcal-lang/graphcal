@@ -701,7 +701,7 @@ fn infer_hir_type_inner(
             ))
         }
         hir::ExprKind::GraphRef(target) => {
-            infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
+            infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, tir, src)?
         }
         hir::ExprKind::ConstRef(target) => infer_hir_const_ref(
             target,
@@ -1011,6 +1011,7 @@ fn infer_resolved_decl_ref_type(
     span: Span,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let local_name = ScopedName::local(target.to_unowned_def_name());
@@ -1030,6 +1031,17 @@ fn infer_resolved_decl_ref_type(
         if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
             return Ok(inferred);
         }
+    }
+
+    if let Some(target_dag) = tir.dag_containing_declaration(target)
+        && let Some(inferred) = infer_bound_decl_type(
+            &local_name,
+            &target_dag.build_declared_types(src)?,
+            target_dag,
+            src,
+        )?
+    {
+        return Ok(inferred);
     }
 
     Err(GraphcalError::UnknownGraphRef {
@@ -1075,7 +1087,7 @@ fn infer_hir_const_ref(
 ) -> Result<InferredType, GraphcalError> {
     match &target.value {
         ConstRef::Decl(resolved) => {
-            infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, src)
+            infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, tir, src)
         }
         ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
         ConstRef::Constructor(constructor) => {
@@ -3509,7 +3521,9 @@ fn validate_concrete_type_obligations_inner(
                     validate_concrete_type_obligations_inner(type_arg, ctx, stack)?;
                 }
             }
-            let type_def = struct_type_def_for_inferred(type_name, Some(ctx.dag), ctx.registry)
+            let type_def = ctx
+                .tir
+                .struct_type_def(type_name.resolved())
                 .ok_or_else(|| GraphcalError::UnknownStructType {
                     name: type_name.to_string(),
                     src: ctx.src.clone(),

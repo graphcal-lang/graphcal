@@ -6,6 +6,7 @@ formal:
 # Compare production Rust with the reviewed finite Lean oracle matrices.
 formal-conformance: formal
     GRAPHCAL_REQUIRED_BINDABILITY_ORACLE="$(pwd)/formal/.lake/build/bin/required-bindability-oracle" cargo test --package graphcal-compiler --lib required_bindability_matches_lean_oracle -- --ignored
+    GRAPHCAL_TEMPLATE_CLOSURE_ORACLE="$(pwd)/formal/.lake/build/bin/template-closure-oracle" cargo test --package graphcal-compiler --lib template_closure_matches_lean_oracle -- --ignored
     GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-eval --test namespace_formal_conformance -- --ignored
     GRAPHCAL_EXTERNAL_SURFACE_ORACLE="$(pwd)/formal/.lake/build/bin/external-surface-oracle" cargo test --package graphcal-compiler --lib external_surface_matches_lean_oracle -- --ignored
 

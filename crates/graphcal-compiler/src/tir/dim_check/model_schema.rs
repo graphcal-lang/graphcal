@@ -149,6 +149,10 @@ impl<'tir> ValidatedModelType<'tir> {
             .iter()
             .map(InferredGenericArg::from)
             .collect::<Vec<_>>();
+        let metadata_dag = self
+            .tir
+            .dag_with_type_metadata(self.identity.resolved())
+            .unwrap_or_else(|| self.tir.root());
         self.definition
             .constructors
             .iter()
@@ -163,7 +167,7 @@ impl<'tir> ValidatedModelType<'tir> {
                             field.name(),
                             self.definition.type_def,
                             &inferred_args,
-                            self.tir.root(),
+                            metadata_dag,
                             &self.tir.registry,
                             self.definition.type_def.source(),
                             field.type_annotation().span,
@@ -249,9 +253,12 @@ fn validate_application_obligations(
         super::InferredStructType::from_ref(identity.clone()),
         inferred_args,
     );
+    let metadata_dag = tir
+        .dag_with_type_metadata(identity.resolved())
+        .unwrap_or_else(|| tir.root());
     super::infer::hir::validate_concrete_type_obligations(
         &inferred_application,
-        tir.root(),
+        metadata_dag,
         tir,
         &tir.registry,
         crate::registry::builtins::builtin_functions(),
@@ -284,15 +291,11 @@ fn validate_nominal_signature<'tir>(
     identity: &StructTypeRef,
     generic_args: &[DeclaredGenericArg],
 ) -> Result<&'tir NominalTypeDef, ConcreteModelTypeError> {
-    let type_def = tir
-        .root()
-        .semantic
-        .type_defs
-        .struct_types
-        .get(identity.resolved())
-        .ok_or_else(|| ConcreteModelTypeError::UnknownType {
+    let type_def = tir.struct_type_def(identity.resolved()).ok_or_else(|| {
+        ConcreteModelTypeError::UnknownType {
             identity: identity.clone(),
-        })?;
+        }
+    })?;
     if generic_args.len() != type_def.generic_params().len() {
         return Err(ConcreteModelTypeError::GenericArityMismatch {
             identity: identity.clone(),

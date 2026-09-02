@@ -311,15 +311,6 @@ impl ExpectedFailKeyPart<NamePath> {
             span,
         }
     }
-
-    /// The parsed index path, when this segment targets a named axis.
-    #[must_use]
-    pub(crate) const fn index_path(&self) -> Option<&NamePath> {
-        match self {
-            Self::Named { index, .. } => Some(index),
-            Self::FinitePosition { .. } => None,
-        }
-    }
 }
 
 impl ExpectedFailKeyPart<IndexTypeRef> {
@@ -414,7 +405,7 @@ pub type ResolvedExpectedFailKey = ExpectedFailKey<IndexTypeRef>;
 pub type ResolvedExpectedFail = ExpectedFail<IndexTypeRef>;
 
 /// Describes how an assertion is expected to fail.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedFail<I = IndexTypeRef> {
     /// The entire assertion is expected to fail: `#[expected_fail]`.
     All,
@@ -571,8 +562,6 @@ pub(crate) struct CollectedFile {
     pub(crate) layers: Vec<CollectedLayerEntry>,
     /// All declaration names in source order with their category.
     pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
-    /// Set of all assert names (for checking `@assert_name` errors).
-    pub(crate) assert_names: HashSet<DeclName>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,

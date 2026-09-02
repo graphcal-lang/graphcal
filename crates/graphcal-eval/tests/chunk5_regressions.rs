@@ -299,6 +299,38 @@ node unreachable: Dimensionless = count(@giant::values);
 }
 
 #[test]
+fn optional_index_rebinding_revalidates_materialized_shape() {
+    let error = compile_and_eval(
+        r"
+index BigRow = range(0.0, 999999.0, step: 1.0);
+index BigColumn = range(0.0, 999999.0, step: 1.0);
+dag grid {
+    pub(bind) index Row = range(0.0, 0.0, step: 1.0);
+    pub(bind) index Column = range(0.0, 0.0, step: 1.0);
+    pub node values: Dimensionless[Row, Column] =
+        for row: Row, column: Column { 1.0 };
+}
+include grid(index Row: BigRow, index Column: BigColumn) as giant;
+node unreachable: Dimensionless = count(@giant::values);
+",
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            graphcal_eval::eval::CompileError::Eval(
+                graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+                    maximum: 1_000_000,
+                    ..
+                }
+            )
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
 fn cubic_kernel_work_is_rejected_before_the_kernel_runs() {
     let result = compile_and_eval(
         r"

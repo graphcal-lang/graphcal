@@ -141,7 +141,8 @@ fn eval_hir_expr_inner(
                 .map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::GraphRef(target) => {
-            let key = RuntimeDeclKey::resolved(target.value.clone());
+            let runtime_target = ctx.current_dag.runtime_decl_identity(&target.value);
+            let key = RuntimeDeclKey::resolved(runtime_target);
             let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
             let presentation = presentation_instance_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
@@ -154,7 +155,7 @@ fn eval_hir_expr_inner(
             let presentation = match &target.value {
                 ConstRef::Decl(target) => presentation_instance_for(
                     presentation_values,
-                    &RuntimeDeclKey::resolved(target.clone()),
+                    &RuntimeDeclKey::resolved(ctx.current_dag.runtime_decl_identity(target)),
                 ),
                 ConstRef::Builtin(_) | ConstRef::Constructor(_) | ConstRef::GenericNatParam(_) => {
                     PresentationInstance::None
@@ -316,8 +317,9 @@ fn resolve_hir_graph_ref<'a>(
     values: &'a RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<&'a RuntimeValue, GraphcalError> {
+    let runtime_target = ctx.current_dag.runtime_decl_identity(target);
     values
-        .get(&RuntimeDeclKey::resolved(target.clone()))
+        .get(&RuntimeDeclKey::resolved(runtime_target))
         .ok_or_else(|| {
             ctx.eval_error(
                 format!("undefined graph reference `@{target}`"),
@@ -389,7 +391,9 @@ fn eval_hir_const_ref(
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
         ConstRef::Decl(resolved) => values
-            .get(&RuntimeDeclKey::resolved(resolved.clone()))
+            .get(&RuntimeDeclKey::resolved(
+                ctx.current_dag.runtime_decl_identity(resolved),
+            ))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
         ConstRef::Constructor(constructor) => {
@@ -423,7 +427,8 @@ fn eval_hir_nullary_constructor(
     Ok(RuntimeValue::Struct {
         type_name: StructTypeRef::with_display_leaf(
             StructTypeName::from_atom(target.variant.name().atom().clone()),
-            target.owning_type.clone(),
+            ctx.current_dag
+                .runtime_struct_type_identity(&target.owning_type),
         ),
         generic_args,
         fields: IndexMap::new(),
@@ -1823,7 +1828,8 @@ fn eval_hir_constructor_call(
         RuntimeValue::Struct {
             type_name: StructTypeRef::with_display_leaf(
                 StructTypeName::from_atom(target.variant.name().atom().clone()),
-                target.owning_type.clone(),
+                ctx.current_dag
+                    .runtime_struct_type_identity(&target.owning_type),
             ),
             generic_args: concrete_generic_args,
             fields: field_map,
@@ -2087,15 +2093,51 @@ fn eval_hir_for_comp(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    if let Some(owner) = &ctx.current_decl {
-        ctx.current_dag
-            .materialized_shape(owner, span)
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!("materialized expression in `{owner}` has no checked shape fact"),
-                    span,
-                )
-            })?;
+    if let Some(owner) = &ctx.current_decl
+        && ctx.current_dag.materialized_shape(owner, span).is_none()
+    {
+        if !ctx.current_dag.is_semantic_instance() {
+            return Err(ctx.internal_error(
+                format!("materialized expression in `{owner}` has no checked shape fact"),
+                span,
+            ));
+        }
+        let total = bindings.iter().try_fold(1_usize, |total, binding| {
+            let cardinality = match &binding.index {
+                hir::expr::ForBindingIndex::Named(index) => {
+                    let index = ctx.current_dag.runtime_index_type_ref(&index.value);
+                    index_def_for_ref(&index, ctx)
+                        .and_then(IndexDef::concrete_cardinality)
+                        .map(graphcal_compiler::registry::types::IndexCardinality::get)
+                        .ok_or_else(|| {
+                            ctx.internal_error(
+                                format!("semantic instance index `{index}` is not concrete"),
+                                span,
+                            )
+                        })?
+                }
+                hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
+                    usize::try_from(eval_hir_nat_expr(cardinality, ctx)?).map_err(|_| {
+                        ctx.eval_error("finite index cardinality is too large", span)
+                    })?
+                }
+            };
+            total
+                .checked_mul(cardinality)
+                .filter(|total| {
+                    *total <= graphcal_compiler::tir::materialized_shape::MAX_EAGER_CARDINALITY
+                })
+                .ok_or_else(|| {
+                    ctx.eval_error(
+                        format!(
+                            "materialized shape exceeds limit {}",
+                            graphcal_compiler::tir::materialized_shape::MAX_EAGER_CARDINALITY
+                        ),
+                        span,
+                    )
+                })
+        })?;
+        let _ = total;
     }
     eval_hir_for_comp_bindings(
         bindings,
@@ -2118,7 +2160,7 @@ fn eval_hir_for_comp_bindings(
     let binding = &bindings[0];
     let (idx_name, error_span, dynamic_finite_index) = match &binding.index {
         hir::expr::ForBindingIndex::Named(index) => (
-            IndexTypeRef::from_resolved(index.value.clone()),
+            ctx.current_dag.runtime_index_type_ref(&index.value),
             index.span,
             None,
         ),
@@ -2246,7 +2288,7 @@ fn eval_hir_index_access(
             )?);
             let presentation = presentation_instance_for(
                 presentation_values,
-                &RuntimeDeclKey::resolved(target.value.clone()),
+                &RuntimeDeclKey::resolved(ctx.current_dag.runtime_decl_identity(&target.value)),
             );
             (value, presentation)
         }
@@ -2673,7 +2715,13 @@ fn eval_hir_dag_call(
         ));
     }
 
-    let mut dag_values = dag_facts.const_values.as_ref().clone();
+    let call_dags = crate::exec_plan::semantic_runtime_dags_from(ctx.tir, dag_tir);
+    let mut dag_values = call_dags
+        .iter()
+        .filter_map(|dag| checked.for_dag(dag.dag_id()))
+        .flat_map(|facts| facts.const_values.iter())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<RuntimeValueMap>();
     let mut dag_presentations = PresentationInstanceMap::new();
     for binding in args {
         let key = super::dag_decl_runtime_key(&binding.target.value);
@@ -2681,60 +2729,121 @@ fn eval_hir_dag_call(
         check_called_dag_domain_constraint(&key, &value, dag_facts, &binding.value, ctx)?;
         dag_values.insert(key, value);
     }
-    seed_inline_dag_imported_values(
-        dag_tir,
-        &mut dag_values,
-        &mut dag_presentations,
-        caller_values,
-        caller_presentations,
-        ctx,
-    );
+    for called_dag in &call_dags {
+        let mut available_values = caller_values.clone();
+        available_values.extend(dag_values.clone());
+        seed_inline_dag_imported_values(
+            called_dag,
+            &mut dag_values,
+            &mut dag_presentations,
+            &available_values,
+            caller_presentations,
+            ctx,
+        );
+    }
 
-    let dag_ctx = EvalContext {
-        cancellation: ctx.cancellation.clone(),
-        work_budget: ctx.work_budget.clone(),
-        builtin_fns: ctx.builtin_fns,
-        registry: ctx.registry,
-        src: dag_facts.source(),
-        tir: ctx.tir,
-        current_dag: dag_tir,
-        current_decl: None,
-        root_values: ctx.root_values,
-        root_presentation_instances: ctx.root_presentation_instances,
-        checked_execution_facts: ctx.checked_execution_facts,
-        presentation_calls: ctx.presentation_calls,
-        struct_field_constraints: ctx.struct_field_constraints,
-        generic_nat_bindings: ctx.generic_nat_bindings,
-        host_fns: ctx.host_fns,
-    };
     let empty_hir_locals = HirLocalValueMap::root();
-
-    for key in dag_facts.topo_order.iter() {
+    let schedule =
+        crate::exec_plan::combined_runtime_order_for(ctx.tir, dag_tir, dag_facts.source())?;
+    for key in &schedule {
         if dag_values.contains_key(key) {
             continue;
         }
-        let hir_expr = dag_tir.runtime_expr(key.as_resolved()).ok_or_else(|| {
+        let scheduled_dag = call_dags
+            .iter()
+            .copied()
+            .find(|dag| dag.runtime_expr(key.as_resolved()).is_some())
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!("DAG schedule references missing value declaration `{key}`"),
+                    output.span,
+                )
+            })?;
+        let scheduled_facts = checked.for_dag(scheduled_dag.dag_id()).ok_or_else(|| {
             ctx.internal_error(
-                format!("DAG schedule references missing value declaration `{key}`"),
+                format!(
+                    "DAG `{}` has no checked execution facts",
+                    scheduled_dag.dag_id()
+                ),
                 output.span,
             )
         })?;
+        let hir_expr = scheduled_dag
+            .runtime_expr(key.as_resolved())
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!("DAG schedule references missing value declaration `{key}`"),
+                    output.span,
+                )
+            })?;
+        let scheduled_ctx = EvalContext {
+            cancellation: ctx.cancellation.clone(),
+            work_budget: ctx.work_budget.clone(),
+            builtin_fns: ctx.builtin_fns,
+            registry: ctx.registry,
+            src: scheduled_facts.source(),
+            tir: ctx.tir,
+            current_dag: scheduled_dag,
+            current_decl: None,
+            root_values: ctx.root_values,
+            root_presentation_instances: ctx.root_presentation_instances,
+            checked_execution_facts: ctx.checked_execution_facts,
+            presentation_calls: ctx.presentation_calls,
+            struct_field_constraints: ctx.struct_field_constraints,
+            generic_nat_bindings: ctx.generic_nat_bindings,
+            host_fns: ctx.host_fns,
+        };
         let evaluated = eval_hir_expr_evaluated(
             hir_expr,
             &dag_values,
             Some(&dag_presentations),
             &empty_hir_locals,
-            &dag_ctx.for_decl(key.as_resolved()),
+            &scheduled_ctx.for_decl(key.as_resolved()),
         )?;
         let (value, presentation) = evaluated.into_parts();
-        check_called_dag_domain_constraint(key, &value, dag_facts, hir_expr, &dag_ctx)?;
+        check_called_dag_domain_constraint(key, &value, scheduled_facts, hir_expr, &scheduled_ctx)?;
         dag_values.insert(key.clone(), value);
         if !presentation.is_none() {
             dag_presentations.insert(key.clone(), presentation);
         }
     }
 
-    check_inline_dag_asserts(dag_tir, &dag_values, &dag_ctx, target, output.span, ctx)?;
+    for called_dag in &call_dags {
+        let called_facts = checked.for_dag(called_dag.dag_id()).ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "DAG `{}` has no checked execution facts",
+                    called_dag.dag_id()
+                ),
+                output.span,
+            )
+        })?;
+        let called_ctx = EvalContext {
+            cancellation: ctx.cancellation.clone(),
+            work_budget: ctx.work_budget.clone(),
+            builtin_fns: ctx.builtin_fns,
+            registry: ctx.registry,
+            src: called_facts.source(),
+            tir: ctx.tir,
+            current_dag: called_dag,
+            current_decl: None,
+            root_values: ctx.root_values,
+            root_presentation_instances: ctx.root_presentation_instances,
+            checked_execution_facts: ctx.checked_execution_facts,
+            presentation_calls: ctx.presentation_calls,
+            struct_field_constraints: ctx.struct_field_constraints,
+            generic_nat_bindings: ctx.generic_nat_bindings,
+            host_fns: ctx.host_fns,
+        };
+        check_inline_dag_asserts(
+            called_dag,
+            &dag_values,
+            &called_ctx,
+            target,
+            output.span,
+            ctx,
+        )?;
+    }
 
     let output_key = super::dag_decl_runtime_key(&output.value);
     let output_value = dag_values.get(&output_key).cloned().ok_or_else(|| {

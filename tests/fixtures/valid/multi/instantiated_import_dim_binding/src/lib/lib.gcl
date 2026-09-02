@@ -1,4 +1,5 @@
-// lib.gcl -- library with a rebindable dimension
+// lib.gcl -- library with a bindable dimension used parametrically
 pub(bind) dim Speed = Length / Time;
 
-pub const node v: Speed = 10.0 m/s;
+param value: Speed;
+pub node v: Speed = @value;

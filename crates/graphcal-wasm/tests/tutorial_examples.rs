@@ -87,12 +87,12 @@ fn multi_file_example_exposes_expected_surface() -> Result<(), Box<dyn Error>> {
         names,
         [
             "g0",
-            "dry_mass",
-            "fuel_mass",
-            "isp",
             "v_exhaust",
             "mass_ratio",
             "delta_v",
+            "dry_mass",
+            "fuel_mass",
+            "isp",
         ]
     );
     Ok(())

@@ -2249,6 +2249,31 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    /// A template body observes the concrete default of an optional Static port.
+    ///
+    /// Templates are checked once with every `pub(bind)` Static port rigid.
+    /// Parameter defaults are exempt because V005 reconciles them at include
+    /// sites; executable bodies and sinks must remain valid for every binding.
+    #[error(
+        "{body_kind} `{body_name}` depends on the default of `pub(bind) {port_kind} {port_name}`"
+    )]
+    #[diagnostic(
+        code(graphcal::V007),
+        help(
+            "pass the required value through a `param`, or make `{port_name}` non-bindable when its concrete definition is part of the template contract"
+        )
+    )]
+    TemplateBodyDependsOnStaticDefault {
+        body_kind: DeclarationKind,
+        body_name: NameAtom,
+        port_kind: crate::static_interface::StaticInputKind,
+        port_name: NameAtom,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("uses the bindable port's default definition")]
+        span: SourceSpan,
+    },
+
     #[error("unknown dag `{name}`")]
     #[diagnostic(
         code(graphcal::G002),
@@ -2519,6 +2544,7 @@ impl GraphcalError {
             | Self::PubIndexVariantLiteral { src, .. }
             | Self::IncludeMustReconcileOverride { src, .. }
             | Self::GenericsLeakage { src, .. }
+            | Self::TemplateBodyDependsOnStaticDefault { src, .. }
             | Self::UnknownDag { src, .. }
             | Self::UnknownDagParam { src, .. }
             | Self::MissingDagBindings { src, .. }

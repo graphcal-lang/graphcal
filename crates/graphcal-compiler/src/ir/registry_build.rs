@@ -7,9 +7,7 @@ use miette::NamedSource;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, Expr, ExprKind, File, IndexDeclKind, PlotDecl, TypeExpr,
-};
+use crate::desugar::desugared_ast::{DeclKind, Expr, ExprKind, File, IndexDeclKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::dimension_registry::DimensionResolveError;
@@ -19,7 +17,7 @@ use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, RegistryBuilder, UnitScale,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, UnitName, UnitRef};
+use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -655,68 +653,6 @@ fn register_unit_decl(
     };
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
     Ok(dynamic_unit_scale)
-}
-
-pub(super) fn expr_uses_local_units(expr: &Expr, unit_names: &HashSet<UnitName>) -> bool {
-    struct LocalUnitUseVisitor<'a> {
-        unit_names: &'a HashSet<UnitName>,
-        found: bool,
-    }
-
-    impl ExprVisitor<crate::syntax::phase::Desugared> for LocalUnitUseVisitor<'_> {
-        type Error = std::convert::Infallible;
-
-        fn visit_expr(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-            if self.found {
-                return Ok(());
-            }
-            let unit = match &expr.kind {
-                ExprKind::QuantityLiteral { unit, .. } => Some(unit),
-                ExprKind::Convert { target, .. } => Some(target),
-                _ => None,
-            };
-            self.found = unit.is_some_and(|unit| {
-                unit.terms.iter().any(|term| {
-                    !term.name.value.is_qualified()
-                        && self.unit_names.contains(term.name.value.name())
-                })
-            });
-            self.dispatch(expr)
-        }
-    }
-
-    let mut visitor = LocalUnitUseVisitor {
-        unit_names,
-        found: false,
-    };
-    let Ok(()) = visitor.visit_expr(expr);
-    visitor.found
-}
-
-pub(super) fn assert_body_uses_local_units(
-    body: &AssertBody,
-    unit_names: &HashSet<UnitName>,
-) -> bool {
-    match body {
-        AssertBody::Expr(expr) => expr_uses_local_units(expr, unit_names),
-        AssertBody::Tolerance {
-            actual,
-            expected,
-            tolerance,
-            ..
-        } => [actual, expected, tolerance]
-            .into_iter()
-            .any(|expr| expr_uses_local_units(expr, unit_names)),
-    }
-}
-
-pub(super) fn plot_uses_local_units(decl: &PlotDecl, unit_names: &HashSet<UnitName>) -> bool {
-    decl.encodings
-        .iter()
-        .map(|encoding| &encoding.value)
-        .chain(decl.mark.properties.iter().map(|property| &property.value))
-        .chain(decl.properties.iter().map(|property| &property.value))
-        .any(|expr| expr_uses_local_units(expr, unit_names))
 }
 
 fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {

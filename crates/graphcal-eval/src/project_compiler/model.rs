@@ -211,6 +211,7 @@ pub(super) struct IncludeInstanceRequest {
     pub(super) dim_bindings: DepToImporter<DimName>,
     pub(super) selective_names: Option<Vec<ImportAlias>>,
     pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
+    pub(super) runtime_unit_names: HashSet<UnitName>,
     pub(super) assertion_aliases: HashMap<DeclName, DeclName>,
     pub(super) surface_outputs: Vec<ScopedName>,
     pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,

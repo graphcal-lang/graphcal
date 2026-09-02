@@ -176,6 +176,22 @@ impl DimensionFormattingRegistry {
         )
     }
 
+    /// Add diagnostic formatting for one synthetic rigid template dimension.
+    pub(crate) fn register_rigid_dimension(
+        &mut self,
+        name: &crate::syntax::dimension::ResolvedDimName,
+    ) {
+        let base = BaseDimId::UserDefined(name.clone());
+        self.base_dim_names
+            .insert(base.clone(), name.as_str().to_string());
+        self.base_dim_symbols
+            .insert(base.clone(), name.as_str().to_string());
+        self.display_aliases.insert(
+            crate::syntax::dimension::DimName::from_atom(name.atom().clone()),
+            Dimension::base(base),
+        );
+    }
+
     /// Format user-defined base dimensions with their canonical owner.
     #[must_use]
     #[expect(

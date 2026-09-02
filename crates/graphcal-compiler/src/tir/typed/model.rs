@@ -10,7 +10,7 @@ use crate::hir;
 use crate::hir::{NominalConstructor, NominalTypeDef};
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::nat::NatPolyForm;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{
@@ -523,7 +523,7 @@ impl ProjectTypeStore {
         }
     }
 
-    fn insert_unit_definition(
+    pub(super) fn insert_unit_definition(
         &mut self,
         identity: ResolvedUnitName,
         info: &UnitInfo,
@@ -726,6 +726,16 @@ impl ProjectTypeStore {
             }
         }
         Ok(())
+    }
+
+    #[must_use]
+    pub(crate) fn with_rigid_dimension(&self, name: &ResolvedDimName) -> Self {
+        let mut rigid = self.clone();
+        rigid.dimensions.insert(
+            name.clone(),
+            Dimension::base(crate::dimension::BaseDimId::UserDefined(name.clone())),
+        );
+        rigid
     }
 
     #[must_use]
@@ -1075,6 +1085,27 @@ pub struct ResolvedTypeDefs {
 }
 
 impl ResolvedTypeDefs {
+    pub(crate) fn extend_from(&mut self, other: &Self) {
+        self.struct_types.extend(
+            other
+                .struct_types
+                .iter()
+                .map(|(name, definition)| (name.clone(), Arc::clone(definition))),
+        );
+        self.fields.extend(
+            other
+                .fields
+                .iter()
+                .map(|(key, semantics)| (key.clone(), semantics.clone())),
+        );
+        self.generic_defaults.extend(
+            other
+                .generic_defaults
+                .iter()
+                .map(|(key, default)| (key.clone(), default.clone())),
+        );
+    }
+
     /// Insert one field's type and bounds as an atomic semantic fact.
     pub(crate) fn insert_field(
         &mut self,
@@ -1425,6 +1456,10 @@ pub struct TIR {
 }
 
 impl TIR {
+    pub(super) fn insert_materialized_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
+        self.dags.insert(dag)
+    }
+
     /// Borrow the root DAG. Root presence is guaranteed by [`DagRegistry`].
     #[must_use]
     pub const fn root(&self) -> &DagTIR {
@@ -1486,6 +1521,59 @@ impl TIR {
         })
     }
 
+    /// Resolve the checked declared type of one runtime declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal diagnostic if the declaration is absent or its
+    /// already-checked HIR annotation cannot be projected into a declared type.
+    pub fn runtime_declared_type(
+        &self,
+        declaration: &ResolvedDeclName,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<DeclaredType, GraphcalError> {
+        let dag = self
+            .dag_containing_declaration(declaration)
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("runtime declaration `{declaration}` is absent from checked TIR"),
+                    src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        let (name, annotation) = dag
+            .consts()
+            .iter()
+            .map(|entry| (&entry.name, &entry.type_ann))
+            .chain(
+                dag.params()
+                    .iter()
+                    .map(|entry| (&entry.name, &entry.type_ann)),
+            )
+            .chain(
+                dag.nodes()
+                    .iter()
+                    .map(|entry| (&entry.name, &entry.type_ann)),
+            )
+            .find(|(name, _)| dag.bound_decl_identity(name) == Some(declaration))
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("runtime declaration `{declaration}` has no checked annotation"),
+                    src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        let resolved = match dag.resolved_decl_types.get(name) {
+            Some(resolved) => resolved.clone(),
+            None => super::type_expr::resolve_hir_type_expr_with_project_types(
+                &annotation.type_expr,
+                src,
+                &self.project_types,
+            )?,
+        };
+        super::ops::resolved_to_declared_type(&resolved, src)
+    }
+
     /// Borrow resolved extern function signatures.
     #[must_use]
     pub const fn extern_functions(
@@ -1525,6 +1613,18 @@ impl TIR {
     #[must_use]
     pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&NominalTypeDef> {
         self.project_types.get_struct_type(name)
+    }
+
+    /// Find the checked DAG carrying resolved field metadata for a nominal type.
+    #[must_use]
+    pub(crate) fn dag_with_type_metadata(&self, name: &ResolvedStructTypeName) -> Option<&DagTIR> {
+        self.dags.iter().find_map(|(_, dag)| {
+            dag.semantic
+                .type_defs
+                .struct_types
+                .contains_key(name)
+                .then_some(dag)
+        })
     }
 
     /// Iterate every canonical nominal definition in the project type store.
@@ -1657,11 +1757,15 @@ pub struct DagTIR {
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
+    pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) instances: Vec<crate::ir::instance::InstanceRecord>,
+    pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
+    pub(crate) semantic_specialization: Option<crate::ir::instance::StaticSpecializationId>,
+    pub(crate) runtime_owner_rebases: HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }
 
@@ -1750,6 +1854,93 @@ impl DagTIR {
     #[must_use]
     pub fn instances(&self) -> &[crate::ir::instance::InstanceRecord] {
         &self.instances
+    }
+
+    /// Semantic include edges authored directly by this DAG.
+    #[must_use]
+    pub fn semantic_instances(&self) -> &[crate::ir::instance::HirInstanceRecord] {
+        &self.semantic_instances
+    }
+
+    /// Map a template-owned body reference into this concrete instance.
+    #[must_use]
+    pub fn runtime_decl_identity(&self, target: &ResolvedDeclName) -> ResolvedDeclName {
+        self.runtime_owner_rebases.get(target.owner()).map_or_else(
+            || match &self.semantic_specialization {
+                Some(specialization) if target.owner() == &specialization.template => {
+                    ResolvedDeclName::from_def(self.dag_id.clone(), target.to_unowned_def_name())
+                }
+                Some(_) | None => target.clone(),
+            },
+            |owner| ResolvedDeclName::from_def(owner.clone(), target.to_unowned_def_name()),
+        )
+    }
+
+    /// Map a template-owned unit reference into this concrete instance.
+    #[must_use]
+    pub fn runtime_unit_identity(
+        &self,
+        target: &crate::syntax::dimension::ResolvedUnitName,
+    ) -> crate::syntax::dimension::ResolvedUnitName {
+        self.runtime_owner_rebases.get(target.owner()).map_or_else(
+            || match &self.semantic_specialization {
+                Some(specialization) if target.owner() == &specialization.template => {
+                    crate::syntax::dimension::ResolvedUnitName::from_def(
+                        self.dag_id.clone(),
+                        target.to_unowned_def_name(),
+                    )
+                }
+                Some(_) | None => target.clone(),
+            },
+            |owner| {
+                crate::syntax::dimension::ResolvedUnitName::from_def(
+                    owner.clone(),
+                    target.to_unowned_def_name(),
+                )
+            },
+        )
+    }
+
+    /// Apply this instance's Static nominal-type substitution.
+    #[must_use]
+    pub fn runtime_struct_type_identity(
+        &self,
+        source: &ResolvedStructTypeName,
+    ) -> ResolvedStructTypeName {
+        self.semantic_specialization
+            .as_ref()
+            .and_then(|specialization| specialization.substitution.types.get(source))
+            .cloned()
+            .unwrap_or_else(|| source.clone())
+    }
+
+    /// Apply this instance's Static index substitution to a runtime axis.
+    #[must_use]
+    pub fn runtime_index_type_ref(&self, source: &ResolvedIndexName) -> IndexTypeRef {
+        let target = self
+            .semantic_specialization
+            .as_ref()
+            .and_then(|specialization| specialization.substitution.indexes.get(source));
+        match target {
+            Some(crate::ir::instance::InstanceIndexBindingTarget::Declared(target)) => {
+                IndexTypeRef::from_resolved(target.clone())
+            }
+            Some(crate::ir::instance::InstanceIndexBindingTarget::Finite(target)) => {
+                IndexTypeRef::from_finite_index(*target)
+            }
+            None => IndexTypeRef::from_resolved(source.clone()),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_semantic_instance(&self) -> bool {
+        self.semantic_specialization.is_some()
+    }
+
+    /// Typed Static interface authored directly in this reusable DAG.
+    #[must_use]
+    pub fn static_ports(&self) -> &[crate::hir::StaticPort] {
+        &self.static_ports
     }
 
     /// Value ports that callers may project from this DAG.

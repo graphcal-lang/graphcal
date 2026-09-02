@@ -42,7 +42,7 @@ pub use crate::syntax::module_name::ScopedName;
 pub(crate) use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
-use names::parse_expected_fail_args;
+pub use names::parse_expected_fail_args;
 
 fn register_value_namespace_name(
     value_names: &mut HashMap<ScopedName, Span>,
@@ -1143,7 +1143,6 @@ pub(crate) fn resolve_with_imported_values(
         figures: local.figures,
         layers: local.layers,
         source_order: local.source_order,
-        assert_names: all_assert_names,
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
         hidden_plots: validated.hidden_plots,

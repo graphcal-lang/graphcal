@@ -235,6 +235,7 @@ pub(super) fn check_hir_file(
     tir.replace_project_type_store(project_types.clone());
     lowering::merge_dep_dag_tirs(&mut tir, &hir.module_map, module_artifacts, file_src)?;
     let mut tir = tir.finish();
+    graphcal_compiler::tir::typed::instantiate_semantic_edges(&mut tir, file_src)?;
     reconcile_checked_dependency_overrides(&mut tir, module_artifacts);
     graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
         &mut tir,

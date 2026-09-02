@@ -247,7 +247,9 @@ fn project_runtime_value(
                     runtime,
                     declared_type,
                     format!(
-                        "runtime nominal identity `{type_name}` or its generic arguments do not match the checked type"
+                        "runtime nominal identity `{:?}` or its generic arguments do not match checked identity `{:?}`",
+                        type_name.resolved(),
+                        declared_identity.resolved()
                     ),
                     tir,
                     src,

@@ -3,3 +3,4 @@
 import Graphcal.Static.ExternalSurface
 import Graphcal.Static.NamespaceResolution
 import Graphcal.Static.RequiredBindability
+import Graphcal.Static.TemplateClosure

@@ -151,6 +151,13 @@ jobs:
           cargo test --package graphcal-compiler --lib
           required_bindability_matches_lean_oracle -- --ignored
 
+      - name: Compare Rust V007 with the exhaustive Lean oracle
+        env:
+          GRAPHCAL_TEMPLATE_CLOSURE_ORACLE: ${{ github.workspace }}/formal/.lake/build/bin/template-closure-oracle
+        run: >-
+          cargo test --package graphcal-compiler --lib
+          template_closure_matches_lean_oracle -- --ignored
+
   qa-corpus:
     runs-on: ubuntu-latest
     timeout-minutes: 30

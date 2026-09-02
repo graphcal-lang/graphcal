@@ -446,11 +446,13 @@ fn type_resolve_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.static_ports,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
         imported_bindings,
         ir.instances,
+        ir.semantic_instances,
         module_ctx,
         src,
     )?;
@@ -601,11 +603,13 @@ fn type_resolve_single_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.static_ports,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
         imported_bindings,
         ir.instances,
+        ir.semantic_instances,
         module_ctx,
         src,
     )?;
@@ -1887,11 +1891,13 @@ impl DagTIRSeed {
         layers: Vec<crate::ir::lower::LayerEntry>,
         included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
+        static_ports: Vec<crate::hir::StaticPort>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
         instances: Vec<crate::ir::instance::InstanceRecord>,
+        semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
@@ -1936,6 +1942,12 @@ impl DagTIRSeed {
         collect_dynamic_unit_refs(module_ctx, &mut semantic)?;
         collect_plot_refs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
+        let mut instances = instances;
+        instances.extend(
+            semantic_instances
+                .iter()
+                .map(|record| record.instance.clone()),
+        );
         let mut dag = DagTIR {
             dag_id: self.dag_id,
             consts: self.consts,
@@ -1949,11 +1961,15 @@ impl DagTIRSeed {
             declaration_index: DagDeclarationIndex::default(),
             semantic,
             source_order,
+            static_ports,
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
             imported_bindings,
             instances,
+            semantic_instances,
+            semantic_specialization: None,
+            runtime_owner_rebases: HashMap::new(),
             projectable_outputs: std::collections::HashSet::new(),
         };
         dag.index_declaration_records().map_err(|error| match error {
@@ -1978,6 +1994,81 @@ impl DagTIRSeed {
     }
 }
 
+/// Build a temporary TIR view in which one optional dimension port is rigid.
+///
+/// The ordinary checked TIR retains default-resolved signatures for parameter
+/// default reconciliation. This view re-resolves source-authored declaration
+/// signatures against an opaque base identity so Option A can verify executable
+/// bodies without mutating the authoritative result.
+pub(crate) fn rigid_dimension_view(
+    tir: &TIR,
+    dag_id: &crate::dag_id::DagId,
+    dimension: &ResolvedDimName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<TIR, GraphcalError> {
+    let rigid_types = tir.project_types.with_rigid_dimension(dimension);
+    let dag = tir.dags.get(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("template DAG `{dag_id}` is unavailable for rigid checking"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let resolved = dag
+        .consts
+        .iter()
+        .map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        })
+        .chain(dag.params.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        }))
+        .chain(dag.nodes.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        }))
+        .filter(|(_, _, _, owner)| *owner == dag_id)
+        .map(|(name, annotation, type_src, _)| {
+            type_expr::resolve_hir_type_expr_with_project_types(
+                &annotation.type_expr,
+                type_src.resolve(src),
+                &rigid_types,
+            )
+            .map(|resolved| (name.clone(), resolved))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+
+    let mut rigid = tir.clone();
+    rigid.project_types = rigid_types;
+    rigid
+        .registry
+        .dimensions
+        .register_rigid_dimension(dimension);
+    let rigid_dag = rigid.dags.get_mut(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("template DAG `{dag_id}` disappeared while installing rigid signatures"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    rigid_dag.resolved_decl_types.extend(resolved);
+    Ok(rigid)
+}
+
 // ---------------------------------------------------------------------------
 mod ops;
 pub use ops::resolved_to_declared_type;
@@ -1988,7 +2079,10 @@ pub(crate) use ops::{
 use ops::{unify_nat_poly_form, unify_resolved_type};
 
 // ---------------------------------------------------------------------------
+mod specialization;
 mod type_expr;
+pub(crate) use specialization::install_semantic_presentation_facts;
+pub use specialization::instantiate_semantic_edges;
 pub use type_expr::resolve_hir_type_expr;
 use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
 
