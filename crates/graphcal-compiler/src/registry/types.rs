@@ -17,7 +17,9 @@ use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use super::time_zone::TimeZoneRegistry;
 
 pub use super::dag::DagRegistry;
-pub use super::dimension_registry::{DimensionRegistry, RegistryBuildError};
+pub use super::dimension_registry::{
+    DimensionFormattingRegistry, DimensionRegistry, RegistryBuildError,
+};
 pub use super::index::{
     CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory,
     IndexBindingContract, IndexBindingContractError, IndexBindingTarget, IndexCardinality,
@@ -77,6 +79,29 @@ pub struct SemanticRegistry {
     pub units: UnitRegistry,
     pub indexes: IndexRegistry,
     /// Reproducible IANA timezone lookup backed by the bundled, pinned tzdb.
+    pub time_zones: TimeZoneRegistry,
+}
+
+impl SemanticRegistry {
+    /// Discard all source-name lookup services at the TIR boundary.
+    #[must_use]
+    pub fn into_formatting(self) -> FormattingRegistry {
+        FormattingRegistry {
+            dimensions: self.dimensions.into_formatting(),
+            time_zones: self.time_zones,
+        }
+    }
+}
+
+/// Post-resolution services retained by checked TIR and evaluation.
+///
+/// This registry exposes only dimension formatting and reproducible timezone
+/// validation. Canonical semantic lookups live exclusively in
+/// [`crate::tir::typed::ProjectTypeStore`].
+#[derive(Debug, Clone)]
+pub struct FormattingRegistry {
+    pub dimensions: DimensionFormattingRegistry,
+    /// Reproducible timezone parsing/validation data used at input boundaries.
     pub time_zones: TimeZoneRegistry,
 }
 

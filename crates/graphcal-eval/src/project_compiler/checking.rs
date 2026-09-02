@@ -85,30 +85,70 @@ fn checked_imported_values(
         .collect()
 }
 
-fn local_declared_interfaces(
-    hir: &HirFile,
+struct ResolvedFileSignatures {
+    root: graphcal_compiler::tir::typed::SignatureResolvedHirDag,
+    inline: Vec<graphcal_compiler::tir::typed::SignatureResolvedHirDag>,
+    interfaces: HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
+}
+
+/// Resolve every local declaration signature before any body is consumed.
+fn resolve_file_signatures(
+    root: graphcal_compiler::ir::lower::HirDag,
+    inline: Vec<graphcal_compiler::ir::lower::HirDag>,
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<
-    HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
-    CompileError,
-> {
-    std::iter::once(&hir.root)
-        .chain(&hir.inline_dags)
+) -> Result<ResolvedFileSignatures, CompileError> {
+    let root = graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+        root,
+        file_src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )?;
+    let inline = inline
+        .into_iter()
         .map(|dag| {
-            graphcal_compiler::tir::typed::resolve_hir_declared_types_with_modules_and_cancellation(
+            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
                 dag,
                 file_src,
                 module_resolver,
                 project_types,
                 cancellation,
             )
-            .map(|types| (dag.dag_id().clone(), types))
             .map_err(CompileError::from)
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let interfaces = std::iter::once(&root)
+        .chain(&inline)
+        .map(|signed| (signed.dag_id().clone(), signed.declared_types().clone()))
+        .collect();
+    Ok(ResolvedFileSignatures {
+        root,
+        inline,
+        interfaces,
+    })
+}
+
+fn reconcile_checked_dependency_overrides(
+    tir: &mut graphcal_compiler::tir::typed::TIR,
+    module_artifacts: &ModuleArtifactStore,
+) {
+    let dependencies = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.override_dependencies.iter())
+        .map(|(declaration, dependencies)| (declaration.clone(), dependencies.clone()))
+        .collect();
+    let checked_owners: HashSet<graphcal_compiler::dag_id::DagId> = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.declared_types_by_dag.keys().cloned())
+        .collect();
+    graphcal_compiler::tir::dim_check::reconcile_external_override_dependencies(
+        tir,
+        &dependencies,
+        &checked_owners,
+    );
 }
 
 /// Check one physical file's root and inline-DAG HIR modules.
@@ -128,12 +168,30 @@ pub(super) fn check_hir_file(
     let file_src = &hir.source;
     let source_declarations = hir.root.source_declarations().to_vec();
     let entry_external_surface = hir.root.external_surface.clone();
-    let local_interfaces =
-        local_declared_interfaces(&hir, file_src, module_resolver, project_types, cancellation)?;
-    let root_bindings =
-        resolve_imported_bindings(&hir.root, &local_interfaces, module_artifacts, file_src)?;
-    let mut tir = graphcal_compiler::tir::typed::type_resolve_builder_with_imported_bindings_and_cancellation(
+
+    // Pass 1 gives same-file inline DAG imports complete checked interfaces.
+    let ResolvedFileSignatures {
+        root: signed_root,
+        inline: signed_inline,
+        interfaces: local_interfaces,
+    } = resolve_file_signatures(
         hir.root,
+        hir.inline_dags,
+        file_src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )?;
+
+    // Pass 2 resolves bodies using exactly the signatures retained above.
+    let root_bindings = resolve_imported_bindings(
+        signed_root.hir(),
+        &local_interfaces,
+        module_artifacts,
+        file_src,
+    )?;
+    let mut tir = graphcal_compiler::tir::typed::type_resolve_signed_builder_with_imported_bindings_and_cancellation(
+        signed_root,
         root_bindings,
         file_src,
         module_resolver,
@@ -153,12 +211,12 @@ pub(super) fn check_hir_file(
         .into());
     }
 
-    for dag in hir.inline_dags {
+    for signed in signed_inline {
         cancellation.checkpoint()?;
         let imported_bindings =
-            resolve_imported_bindings(&dag, &local_interfaces, module_artifacts, file_src)?;
-        let checked = graphcal_compiler::tir::typed::type_resolve_single_with_imported_bindings_and_cancellation(
-            dag,
+            resolve_imported_bindings(signed.hir(), &local_interfaces, module_artifacts, file_src)?;
+        let checked = graphcal_compiler::tir::typed::type_resolve_signed_single_with_imported_bindings_and_cancellation(
+            signed,
             imported_bindings,
             file_src,
             module_resolver,
@@ -177,20 +235,7 @@ pub(super) fn check_hir_file(
     tir.replace_project_type_store(project_types.clone());
     lowering::merge_dep_dag_tirs(&mut tir, &hir.module_map, module_artifacts, file_src)?;
     let mut tir = tir.finish();
-    let override_dependencies = module_artifacts
-        .values()
-        .flat_map(|artifact| artifact.override_dependencies.iter())
-        .map(|(declaration, dependencies)| (declaration.clone(), dependencies.clone()))
-        .collect();
-    let checked_owners: HashSet<graphcal_compiler::dag_id::DagId> = module_artifacts
-        .values()
-        .flat_map(|artifact| artifact.declared_types_by_dag.keys().cloned())
-        .collect();
-    graphcal_compiler::tir::dim_check::reconcile_external_override_dependencies(
-        &mut tir,
-        &override_dependencies,
-        &checked_owners,
-    );
+    reconcile_checked_dependency_overrides(&mut tir, module_artifacts);
     graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
         &mut tir,
         file_src,

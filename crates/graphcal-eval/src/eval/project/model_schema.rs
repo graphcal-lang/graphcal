@@ -518,8 +518,5 @@ pub(super) fn index_def_for_ref<'tir>(
     index: &IndexTypeRef,
     tir: &'tir graphcal_compiler::tir::typed::TIR,
 ) -> Option<&'tir IndexDef> {
-    index.finite_index().map_or_else(
-        || tir.declared_index_def(index.declared_resolved()?),
-        |finite| tir.registry().indexes.get_finite_index(finite),
-    )
+    tir.index_def(index)
 }

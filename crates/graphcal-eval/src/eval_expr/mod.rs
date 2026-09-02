@@ -22,7 +22,7 @@ use graphcal_compiler::hir::{NominalField, NominalTypeDef};
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::SemanticRegistry;
+use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
@@ -48,7 +48,7 @@ pub struct EvalContext<'a> {
     pub cancellation: graphcal_compiler::cancellation::CancellationToken,
     pub(super) work_budget: work_budget::WorkBudget,
     pub builtin_fns: &'a BuiltinFunctions,
-    pub registry: &'a SemanticRegistry,
+    pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     /// The enclosing file's full TIR.
     ///

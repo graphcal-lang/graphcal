@@ -5,7 +5,7 @@ use miette::NamedSource;
 use crate::dimension::Dimension;
 use crate::hir::NominalTypeDef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::SemanticRegistry;
+use crate::registry::types::FormattingRegistry;
 
 use super::{DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType};
 use crate::registry::declared_type::DeclaredGenericArg;
@@ -197,7 +197,7 @@ fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex
 }
 
 /// Format a declared type for display in diagnostics.
-pub(super) fn format_declared_type(dt: &DeclaredType, registry: &SemanticRegistry) -> String {
+pub(super) fn format_declared_type(dt: &DeclaredType, registry: &FormattingRegistry) -> String {
     dt.format(&registry.dimensions)
 }
 
@@ -209,7 +209,7 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &SemanticRegistr
 pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    _registry: &'a SemanticRegistry,
+    _registry: &'a FormattingRegistry,
 ) -> Option<&'a NominalTypeDef> {
     dag.map(|dag| &dag.semantic.type_defs)
         .and_then(|defs| defs.struct_types.get(ty.resolved()))
@@ -218,7 +218,7 @@ pub(super) fn struct_type_def_for_inferred<'a>(
 
 /// Format an inferred type for display in diagnostics.
 #[must_use]
-pub fn format_inferred_type(it: &InferredType, registry: &SemanticRegistry) -> String {
+pub fn format_inferred_type(it: &InferredType, registry: &FormattingRegistry) -> String {
     DeclaredType::from(it).format(&registry.dimensions)
 }
 
@@ -227,7 +227,7 @@ pub fn format_inferred_type(it: &InferredType, registry: &SemanticRegistry) -> S
 pub(super) fn format_distinct_inferred_types(
     expected: &InferredType,
     found: &InferredType,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
 ) -> (String, String) {
     let expected_type = DeclaredType::from(expected);
     let found_type = DeclaredType::from(found);
@@ -310,7 +310,7 @@ impl From<&DeclaredType> for InferredType {
 
 pub fn expect_quantity(
     inferred: &InferredType,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {

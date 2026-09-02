@@ -417,11 +417,6 @@ impl PreparedProject {
             &self.tir.registry().time_zones,
         )
         .with_prelude(&prelude);
-        let context = if owner == self.tir.root_dag_id() {
-            context.with_unit_registry(&self.tir.registry().units)
-        } else {
-            context
-        };
         let (hir, diagnostics) = graphcal_compiler::hir::lower_expr_tolerant(expr, context);
         if let Some(error) = diagnostics.first() {
             return Err(CompileError::Eval(

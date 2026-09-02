@@ -16,7 +16,7 @@ use crate::function_signature::{
     DimMonomial, DimMonomialEvalError, FunctionSignature, ScalarValueKind, ValueKind,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::types::SemanticRegistry;
+use crate::registry::types::FormattingRegistry;
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnName;
 use crate::syntax::span::{Span, Spanned};
@@ -33,7 +33,7 @@ pub(super) fn infer_fn_dim(
     sig: &FunctionSignature,
     args: &[Spanned<Dimension>],
     call_span: Span,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
     if args.len() != sig.arity() {
@@ -99,7 +99,7 @@ pub(super) fn check_quantity_param(
     monomial: &DimMonomial,
     arg_dim: &Dimension,
     bindings: &mut HashMap<DimVarName, Dimension>,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     arg_span: Span,
 ) -> Result<(), GraphcalError> {
@@ -214,7 +214,11 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = RegistryBuilder::new().try_build().unwrap().into_semantic();
+        let registry = RegistryBuilder::new()
+            .try_build()
+            .unwrap()
+            .into_semantic()
+            .into_formatting();
         let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
         let argument_span = Span::new(7, 3);
         let variable = DimVarName::expect_valid("D");
@@ -253,7 +257,11 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = RegistryBuilder::new().try_build().unwrap().into_semantic();
+        let registry = RegistryBuilder::new()
+            .try_build()
+            .unwrap()
+            .into_semantic()
+            .into_formatting();
         let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));
         let call_span = Span::new(0, 3);
 

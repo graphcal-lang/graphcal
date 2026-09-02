@@ -18,7 +18,7 @@ use crate::syntax::type_name::StructTypeName;
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::SemanticRegistry;
+use crate::registry::types::FormattingRegistry;
 use crate::tir::typed::{FiniteIndexIdentity, NatPolyForm};
 
 pub(crate) use helpers::{expect_quantity, format_inferred_type};
@@ -285,7 +285,7 @@ struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
-    registry: &'a SemanticRegistry,
+    registry: &'a FormattingRegistry,
     builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
     src: &'a NamedSource<Arc<String>>,
 }
@@ -781,7 +781,7 @@ fn broadcast_operand_element<'a>(
     actual_type: &InferredType,
     operand_type: &'a InferredType,
     operand_span: crate::syntax::span::Span,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'a InferredType, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
@@ -972,11 +972,10 @@ pub fn check_dimensions_tir_with_cancellation(
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
 
-    // Dim-check the file's own DAGs (root + inline children) against the
-    // file's shared registry. Dep DAGs merged in by `merge_dep_dag_tirs`
-    // were already dim-checked in their own file's pipeline, against
-    // their own registry — re-checking them here against the importer's
-    // registry would fail on types renamed by include bindings.
+    // Dim-check the file's own DAGs (root + inline children). Dependency DAGs
+    // merged by `merge_dep_dag_tirs` were already checked in their defining
+    // file's pipeline; the project-wide type store makes them safe to inspect
+    // here without making a redundant second check authoritative.
     let checked_dag_facts = tir
         .local_dags()
         .map(|(dag_id, dag)| {
@@ -1382,7 +1381,7 @@ pub fn check_external_value_expr_type(
 fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &crate::registry::types::SemanticRegistry,
+    registry: &crate::registry::types::FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1568,7 +1567,7 @@ fn check_one_bound(
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
@@ -1729,7 +1728,7 @@ fn field_constraint_definition_dag<'a>(
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1877,7 +1876,7 @@ fn check_deferred_generic_quantity_bound(
     resolved_target: &crate::tir::typed::ResolvedTypeExpr,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
 ) -> Result<(), GraphcalError> {
     if inferred.quantity_dimension().is_some() || matches!(inferred, InferredType::Int) {
         return Ok(());
@@ -1900,7 +1899,7 @@ fn check_one_bound_with_display_name(
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
-    registry: &SemanticRegistry,
+    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match expected {

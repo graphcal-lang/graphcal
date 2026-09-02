@@ -564,14 +564,7 @@ fn presentation_index_binding(
     use graphcal_compiler::registry::types::IndexKind;
     use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
-    let definition = index.finite_index().map_or_else(
-        || {
-            index
-                .declared_resolved()
-                .and_then(|resolved| ctx.tir.declared_index_def(resolved))
-        },
-        |finite| ctx.registry.indexes.get_finite_index(finite),
-    );
+    let definition = ctx.tir.index_def(index);
     let definition = definition.ok_or_else(|| {
         presentation_error(
             ctx,
