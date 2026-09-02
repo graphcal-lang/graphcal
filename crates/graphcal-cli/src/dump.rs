@@ -10,10 +10,7 @@ use thiserror::Error;
 
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseError, Parser};
-use graphcal_eval::eval::{
-    CompileError, ParameterBindingRow, PreparedProject, ProjectCompiler,
-    check_project_with_host_fns,
-};
+use graphcal_eval::eval::{CompileError, ParameterBindingRow, PreparedProject, ProjectCompiler};
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
 
@@ -180,7 +177,7 @@ fn run_modules(args: &FileArgs) -> Result<DumpStatus, DumpError> {
 fn run_hir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let project = load_project(&args.file, args.root.as_deref(), &fs)?;
-    let hir = ProjectCompiler::new(&project)?.lower()?;
+    let hir = ProjectCompiler::new(&project).lower()?;
     write_debug(&hir)?;
     Ok(DumpStatus::Success)
 }
@@ -189,7 +186,7 @@ fn run_tir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let (project, host_fns) =
         crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
-    let checked = check_project_with_host_fns(&project, &host_fns)?;
+    let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
     write_debug(checked.tir())?;
     Ok(DumpStatus::Success)
 }
@@ -229,8 +226,9 @@ fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
 fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, DumpError> {
     let fs = build_rooted_filesystem(file, root)?;
     let (project, host_fns) = crate::load_project_with_plugins(file, root, &fs)?;
-    let checked = check_project_with_host_fns(&project, &host_fns)?;
-    Ok(checked.prepare_with_host_fns(&host_fns)?)
+    Ok(ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .prepare()?)
 }
 
 fn parse_bindings(

@@ -43,9 +43,7 @@ use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::NameAtom;
-use graphcal_eval::eval::{
-    CheckedProject, CompileError, EvalResult, Value, check_project_with_host_fns_and_cancellation,
-};
+use graphcal_eval::eval::{CheckedProject, CompileError, EvalResult, ProjectCompiler, Value};
 use graphcal_eval::loader::LoadedProject;
 
 /// A definition from an imported file, for cross-file go-to-definition and hover.
@@ -1312,7 +1310,11 @@ fn run_analysis_with_cancellation(
     cancellation.checkpoint()?;
 
     // Stage 2: Compile TIR from the project.
-    match check_project_with_host_fns_and_cancellation(&project, &host_fns, cancellation) {
+    match ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .cancellation(cancellation)
+        .check()
+    {
         Ok(checked) => {
             cancellation.checkpoint()?;
             let tir = checked.tir();

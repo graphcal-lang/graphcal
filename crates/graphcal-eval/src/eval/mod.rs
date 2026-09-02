@@ -12,11 +12,7 @@ pub(crate) mod runtime;
 mod tests;
 pub(crate) mod types;
 
-pub use crate::project_compiler::{
-    CheckedProject, HirProject, ProjectCompiler, check_project, check_project_with_host_fns,
-    check_project_with_host_fns_and_cancellation, check_project_with_host_metadata,
-    check_project_with_host_metadata_and_cancellation,
-};
+pub use crate::project_compiler::{CheckedProject, HirProject, ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use crate::project_compiler::{compile_to_tir, compile_to_tir_project};
 pub use graphcal_compiler::registry::format::format_number;
@@ -27,11 +23,8 @@ pub use project::{
     ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
     ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
     PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
-    TenaxV2RowOutcome, compile_and_eval_from_project,
-    compile_and_eval_from_project_with_cancellation, compile_and_eval_from_project_with_host_fns,
-    compile_and_eval_from_project_with_host_fns_and_cancellation, compile_and_eval_project,
-    prepare_from_project, prepare_from_project_with_host_fns,
-    prepare_from_project_with_host_fns_and_cancellation,
+    TenaxV2RowOutcome, compile_and_eval_from_project, compile_and_eval_project,
+    prepare_from_project,
 };
 
 pub use runtime::RuntimeEvaluation;

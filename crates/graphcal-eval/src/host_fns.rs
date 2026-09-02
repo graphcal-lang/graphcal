@@ -614,12 +614,10 @@ node bad_array: Dimensionless[Axis] = test::non_finite_array(@values);
 node bad_record: QuantityResult = test::non_finite_record();
 "#;
         let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let result = crate::eval::compile_and_eval_from_project_with_host_fns(
-            &project,
-            &HashMap::new(),
-            &registry,
-        )
-        .unwrap();
+        let result = crate::eval::ProjectCompiler::new(&project)
+            .host_fns(&registry)
+            .eval(&HashMap::new())
+            .unwrap();
         let outcome = |name: &str| {
             result
                 .nodes
@@ -676,12 +674,10 @@ node invalid_scalar: Int = test::fractional_scalar();
 node invalid_record: IntResult = test::fractional_record();
 "#;
         let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let result = crate::eval::compile_and_eval_from_project_with_host_fns(
-            &project,
-            &HashMap::new(),
-            &registry,
-        )
-        .unwrap();
+        let result = crate::eval::ProjectCompiler::new(&project)
+            .host_fns(&registry)
+            .eval(&HashMap::new())
+            .unwrap();
 
         for name in ["invalid_scalar", "invalid_record"] {
             let error = result

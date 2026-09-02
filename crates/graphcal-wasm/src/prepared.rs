@@ -15,7 +15,7 @@
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
     ModelIndexKind, ModelValueSchema, ParameterDomain, ParameterPort, PreparedProject,
-    prepare_from_project_with_host_fns,
+    ProjectCompiler,
 };
 use graphcal_eval::host_fns::demo_registry;
 use graphcal_eval::loader::load_project;
@@ -85,7 +85,10 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
         };
     }
 
-    match prepare_from_project_with_host_fns(&loaded, &demo_registry()) {
+    match ProjectCompiler::new(&loaded)
+        .host_fns(&demo_registry())
+        .prepare()
+    {
         Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared })),
         Err(error) => PrepareOutcome::CompileError {
             diagnostics: vec![compile_error_view(&error, &project)],
