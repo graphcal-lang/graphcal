@@ -3,6 +3,6 @@ type MyWidget {
     MyWidget(size: Length),
 }
 
-include lib.lib(type Widget: MyWidget)::{ origin_size };
+include lib.lib(type Widget: MyWidget, value: MyWidget(size: 1.0 m))::{ origin };
 
-node result: Length = @origin_size;
+node result: Length = @origin.size;

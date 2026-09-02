@@ -153,7 +153,8 @@ impl PreludeTypeScope {
         )
     }
 
-    pub(crate) fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
+    #[must_use]
+    pub fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
         let atom = path.as_bare()?;
         self.dimensions
             .contains(atom.as_str())

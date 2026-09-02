@@ -160,6 +160,35 @@ impl<'a> EvalContext<'a> {
         }
     }
 
+    /// Borrow this environment in a checked DAG with no enclosing declaration.
+    #[must_use]
+    pub fn for_dag<'b>(
+        &'b self,
+        dag: &'b DagTIR,
+        src: &'b NamedSource<Arc<String>>,
+    ) -> EvalContext<'b>
+    where
+        'a: 'b,
+    {
+        EvalContext {
+            cancellation: self.cancellation.clone(),
+            work_budget: self.work_budget.clone(),
+            builtin_fns: self.builtin_fns,
+            registry: self.registry,
+            src,
+            tir: self.tir,
+            current_dag: dag,
+            current_decl: None,
+            root_values: self.root_values,
+            root_presentation_instances: self.root_presentation_instances,
+            checked_execution_facts: self.checked_execution_facts,
+            presentation_calls: self.presentation_calls,
+            struct_field_constraints: self.struct_field_constraints,
+            generic_nat_bindings: self.generic_nat_bindings,
+            host_fns: self.host_fns,
+        }
+    }
+
     /// Borrow this environment in a canonical declaration's checked DAG/source.
     #[must_use]
     pub fn for_checked_decl<'b>(

@@ -183,15 +183,16 @@ fn local_owner(
     dag: &crate::tir::typed::DagTIR,
     name: &crate::syntax::module_name::ScopedName,
     src: &NamedSource<Arc<String>>,
-    span: Span,
+    span: Option<Span>,
 ) -> Result<Option<ResolvedDeclName>, GraphcalError> {
-    let owner = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(span))?;
+    let anchor = span.map_or(DiagnosticAnchor::WholeFile, DiagnosticAnchor::Source);
+    let owner = dag.require_bound_decl_identity(name, src, anchor)?;
     Ok((owner.owner() == dag.dag_id()).then_some(owner))
 }
 
 fn rigid_dimension_error(
     ctx: &DimCheckContext<'_>,
-    body: TemplateBodyIdentity,
+    body: &TemplateBodyIdentity,
     port: &crate::hir::StaticPort,
     span: Span,
     result: Result<(), GraphcalError>,
@@ -199,8 +200,232 @@ fn rigid_dimension_error(
     match result {
         Ok(()) => Ok(()),
         Err(error @ GraphcalError::Cancelled(_)) => Err(error),
-        Err(_) => emit_violation(ctx, &body, port, span),
+        Err(_) => emit_violation(ctx, body, port, span),
     }
+}
+
+fn check_rigid_plot_field(
+    ctx: &DimCheckContext<'_>,
+    owner: &ResolvedDeclName,
+    body: &TemplateBodyIdentity,
+    port: &crate::hir::StaticPort,
+    field: &crate::ir::lower::LoweredPlotField,
+) -> Result<(), GraphcalError> {
+    let (property, expected) = match &field.property {
+        crate::ir::lower::LoweredPlotProperty::Mark(property) => {
+            (property.name(), property.value_type())
+        }
+        crate::ir::lower::LoweredPlotProperty::Plot(property) => {
+            (property.name(), property.value_type())
+        }
+        crate::ir::lower::LoweredPlotProperty::Composition(property) => {
+            (property.name(), property.value_type())
+        }
+        crate::ir::lower::LoweredPlotProperty::Unknown(property) => {
+            return Err(GraphcalError::internal_error(
+                format!("unchecked plot property `{property}` reached rigid validation"),
+                ctx.src,
+                DiagnosticAnchor::Source(field.name_span),
+            ));
+        }
+    };
+    rigid_dimension_error(
+        ctx,
+        body,
+        port,
+        field.value.span,
+        super::plot::check_property_value(ctx, owner, property, expected, field),
+    )
+}
+
+fn check_rigid_value_bodies(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+) -> Result<(), GraphcalError> {
+    for (kind, name, annotation_span, body_span, body_src) in ctx
+        .dag
+        .consts
+        .iter()
+        .map(|entry| {
+            (
+                DeclarationKind::ConstNode,
+                &entry.name,
+                entry.type_ann.span,
+                entry.expr.span,
+                entry.body_src.resolve(ctx.src),
+            )
+        })
+        .chain(ctx.dag.nodes.iter().map(|entry| {
+            (
+                DeclarationKind::Node,
+                &entry.name,
+                entry.type_ann.span,
+                entry.expr.span,
+                entry.body_src.resolve(ctx.src),
+            )
+        }))
+    {
+        let Some(_) = local_owner(ctx.dag, name, body_src, Some(annotation_span))? else {
+            continue;
+        };
+        let body_ctx = ctx.for_body(body_src);
+        let body = TemplateBodyIdentity {
+            kind,
+            name: name.member().atom().clone(),
+        };
+        rigid_dimension_error(
+            &body_ctx,
+            &body,
+            port,
+            body_span,
+            check_decl_expr_type(&body_ctx, name, &annotation_span, body_src),
+        )?;
+    }
+    Ok(())
+}
+
+fn check_rigid_assertion_bodies(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+) -> Result<(), GraphcalError> {
+    for entry in &ctx.dag.asserts {
+        let body_src = entry.body_src.resolve(ctx.src);
+        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, Some(entry.span))? else {
+            continue;
+        };
+        let body_ctx = ctx.for_body(body_src);
+        let assertion = body_ctx.hir_assert_body(&entry.name, entry.span)?;
+        let body = TemplateBodyIdentity {
+            kind: DeclarationKind::Assert,
+            name: entry.name.member().atom().clone(),
+        };
+        rigid_dimension_error(
+            &body_ctx,
+            &body,
+            port,
+            entry.span,
+            check_hir_assert_body(&body_ctx, &owner, assertion, entry.span).map(|_| ()),
+        )?;
+    }
+    Ok(())
+}
+
+fn check_rigid_plot_bodies(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+) -> Result<(), GraphcalError> {
+    for entry in &ctx.dag.plots {
+        let body_src = entry.body_src.resolve(ctx.src);
+        let body_ctx = ctx.for_body(body_src);
+        let body_span = entry
+            .body
+            .encodings
+            .first()
+            .map(|(_, expr)| expr.span)
+            .or_else(|| {
+                entry
+                    .body
+                    .mark_properties
+                    .first()
+                    .map(|field| field.value.span)
+            })
+            .or_else(|| entry.body.properties.first().map(|field| field.value.span));
+        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, body_span)? else {
+            continue;
+        };
+        let body = TemplateBodyIdentity {
+            kind: DeclarationKind::Plot,
+            name: entry.name.member().atom().clone(),
+        };
+        for (_, expression) in &entry.body.encodings {
+            rigid_dimension_error(
+                &body_ctx,
+                &body,
+                port,
+                expression.span,
+                infer_operand(&body_ctx, Some(&owner), expression).map(|_| ()),
+            )?;
+        }
+        for field in entry
+            .body
+            .mark_properties
+            .iter()
+            .chain(&entry.body.properties)
+        {
+            check_rigid_plot_field(&body_ctx, &owner, &body, port, field)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_rigid_composition_bodies(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+) -> Result<(), GraphcalError> {
+    for (kind, name, fields, body_src) in ctx
+        .dag
+        .figures
+        .iter()
+        .map(|entry| {
+            (
+                DeclarationKind::Figure,
+                &entry.name,
+                entry.fields.as_slice(),
+                entry.body_src.resolve(ctx.src),
+            )
+        })
+        .chain(ctx.dag.layers.iter().map(|entry| {
+            (
+                DeclarationKind::Layer,
+                &entry.name,
+                entry.fields.as_slice(),
+                entry.body_src.resolve(ctx.src),
+            )
+        }))
+    {
+        let Some(owner) = local_owner(
+            ctx.dag,
+            name,
+            body_src,
+            fields.first().map(|field| field.value.span),
+        )?
+        else {
+            continue;
+        };
+        let body_ctx = ctx.for_body(body_src);
+        let body = TemplateBodyIdentity {
+            kind,
+            name: name.member().atom().clone(),
+        };
+        for field in fields {
+            check_rigid_plot_field(&body_ctx, &owner, &body, port, field)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_rigid_unit_bodies(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+) -> Result<(), GraphcalError> {
+    for entry in ctx.dag.semantic.dynamic_unit_scales.values() {
+        if entry.unit.owner() != ctx.dag.dag_id() {
+            continue;
+        }
+        let body_ctx = ctx.for_body(&entry.src);
+        let body = TemplateBodyIdentity {
+            kind: DeclarationKind::Unit,
+            name: entry.unit.atom().clone(),
+        };
+        rigid_dimension_error(
+            &body_ctx,
+            &body,
+            port,
+            entry.expr.span,
+            super::check_dynamic_unit_scale_type(&body_ctx, entry),
+        )?;
+    }
+    Ok(())
 }
 
 fn check_rigid_dimension_port(
@@ -229,65 +454,11 @@ fn check_rigid_dimension_port(
         builtin_fns: ctx.builtin_fns,
         src: ctx.src,
     };
-
-    for (kind, name, annotation_span, body_span, body_src) in rigid_dag
-        .consts
-        .iter()
-        .map(|entry| {
-            (
-                DeclarationKind::ConstNode,
-                &entry.name,
-                entry.type_ann.span,
-                entry.expr.span,
-                entry.body_src.resolve(ctx.src),
-            )
-        })
-        .chain(rigid_dag.nodes.iter().map(|entry| {
-            (
-                DeclarationKind::Node,
-                &entry.name,
-                entry.type_ann.span,
-                entry.expr.span,
-                entry.body_src.resolve(ctx.src),
-            )
-        }))
-    {
-        let Some(_) = local_owner(rigid_dag, name, body_src, annotation_span)? else {
-            continue;
-        };
-        let body_ctx = rigid_ctx.for_body(body_src);
-        rigid_dimension_error(
-            &body_ctx,
-            TemplateBodyIdentity {
-                kind,
-                name: name.member().atom().clone(),
-            },
-            port,
-            body_span,
-            check_decl_expr_type(&body_ctx, name, &annotation_span, body_src),
-        )?;
-    }
-
-    for entry in &rigid_dag.asserts {
-        let body_src = entry.body_src.resolve(ctx.src);
-        let Some(owner) = local_owner(rigid_dag, &entry.name, body_src, entry.span)? else {
-            continue;
-        };
-        let body_ctx = rigid_ctx.for_body(body_src);
-        let body = body_ctx.hir_assert_body(&entry.name, entry.span)?;
-        rigid_dimension_error(
-            &body_ctx,
-            TemplateBodyIdentity {
-                kind: DeclarationKind::Assert,
-                name: entry.name.member().atom().clone(),
-            },
-            port,
-            entry.span,
-            check_hir_assert_body(&body_ctx, &owner, body, entry.span).map(|_| ()),
-        )?;
-    }
-
-    Ok(())
+    check_rigid_value_bodies(&rigid_ctx, port)?;
+    check_rigid_assertion_bodies(&rigid_ctx, port)?;
+    check_rigid_plot_bodies(&rigid_ctx, port)?;
+    check_rigid_composition_bodies(&rigid_ctx, port)?;
+    check_rigid_unit_bodies(&rigid_ctx, port)
 }
 
 fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
@@ -304,9 +475,7 @@ fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError
         .try_for_each(|(port, identity)| check_rigid_dimension_port(ctx, port, identity))
 }
 
-/// Validate every source-authored executable body in one reusable DAG.
-pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    check_rigid_dimensions(ctx)?;
+fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for (kind, name, expr, body_src, span) in ctx
         .dag
         .consts
@@ -331,25 +500,24 @@ pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(
         }))
     {
         ctx.checkpoint()?;
-        let Some(owner) = local_owner(ctx.dag, name, body_src, span)? else {
+        let Some(owner) = local_owner(ctx.dag, name, body_src, Some(span))? else {
             continue;
         };
         let body_ctx = ctx.for_body(body_src);
-        check_expr(
-            &body_ctx,
-            Some(&owner),
-            &TemplateBodyIdentity {
-                kind,
-                name: name.member().atom().clone(),
-            },
-            expr,
-        )?;
+        let identity = TemplateBodyIdentity {
+            kind,
+            name: name.member().atom().clone(),
+        };
+        check_expr(&body_ctx, Some(&owner), &identity, expr)?;
     }
+    Ok(())
+}
 
+fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.asserts {
         ctx.checkpoint()?;
         let body_src = entry.body_src.resolve(ctx.src);
-        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, entry.span)? else {
+        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, Some(entry.span))? else {
             continue;
         };
         let body_ctx = ctx.for_body(body_src);
@@ -370,10 +538,27 @@ pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(
             }
         }
     }
+    Ok(())
+}
 
+fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.plots {
         let body_src = entry.body_src.resolve(ctx.src);
-        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, Span::new(0, 0))? else {
+        let body_span = entry
+            .body
+            .encodings
+            .iter()
+            .map(|(_, expr)| expr.span)
+            .chain(
+                entry
+                    .body
+                    .mark_properties
+                    .iter()
+                    .map(|field| field.value.span),
+            )
+            .chain(entry.body.properties.iter().map(|field| field.value.span))
+            .next();
+        let Some(owner) = local_owner(ctx.dag, &entry.name, body_src, body_span)? else {
             continue;
         };
         let body_ctx = ctx.for_body(body_src);
@@ -392,8 +577,11 @@ pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(
             check_expr(&body_ctx, Some(&owner), &identity, expr)?;
         }
     }
+    Ok(())
+}
 
-    for (kind, entry_name, fields, body_src, span) in ctx
+fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    for (kind, name, fields, body_src, span) in ctx
         .dag
         .figures
         .iter()
@@ -403,7 +591,11 @@ pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(
                 &entry.name,
                 entry.fields.as_slice(),
                 entry.body_src.resolve(ctx.src),
-                Span::new(0, 0),
+                entry
+                    .fields
+                    .first()
+                    .map(|field| field.value.span)
+                    .or_else(|| entry.plot_names.first().map(|plot| plot.span)),
             )
         })
         .chain(ctx.dag.layers.iter().map(|entry| {
@@ -412,38 +604,50 @@ pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(
                 &entry.name,
                 entry.fields.as_slice(),
                 entry.body_src.resolve(ctx.src),
-                Span::new(0, 0),
+                entry
+                    .fields
+                    .first()
+                    .map(|field| field.value.span)
+                    .or_else(|| entry.plot_names.first().map(|plot| plot.span)),
             )
         }))
     {
-        let Some(owner) = local_owner(ctx.dag, entry_name, body_src, span)? else {
+        let Some(owner) = local_owner(ctx.dag, name, body_src, span)? else {
             continue;
         };
         let body_ctx = ctx.for_body(body_src);
         let identity = TemplateBodyIdentity {
             kind,
-            name: entry_name.member().atom().clone(),
+            name: name.member().atom().clone(),
         };
         for field in fields {
             check_expr(&body_ctx, Some(&owner), &identity, &field.value)?;
         }
     }
+    Ok(())
+}
 
+fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in ctx.dag.semantic.dynamic_unit_scales.values() {
         if entry.unit.owner() != ctx.dag.dag_id() {
             continue;
         }
         let body_ctx = ctx.for_body(&entry.src);
-        check_expr(
-            &body_ctx,
-            None,
-            &TemplateBodyIdentity {
-                kind: DeclarationKind::Unit,
-                name: entry.unit.atom().clone(),
-            },
-            &entry.expr,
-        )?;
+        let identity = TemplateBodyIdentity {
+            kind: DeclarationKind::Unit,
+            name: entry.unit.atom().clone(),
+        };
+        check_expr(&body_ctx, None, &identity, &entry.expr)?;
     }
-
     Ok(())
+}
+
+/// Validate every source-authored executable body in one reusable DAG.
+pub(super) fn check_template_body_closure(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    check_rigid_dimensions(ctx)?;
+    check_template_value_bodies(ctx)?;
+    check_template_assertion_bodies(ctx)?;
+    check_template_plot_bodies(ctx)?;
+    check_template_composition_bodies(ctx)?;
+    check_template_unit_bodies(ctx)
 }

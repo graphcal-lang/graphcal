@@ -5971,8 +5971,19 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
     assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
     assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
     assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
-    assert!(stdout.contains("\"n6\" -> \"n14\";"));
-    assert!(stdout.contains("\"n13\" -> \"n14\";"));
+    let total = dot_statement_id_for_label(&stdout, "total_dv\\n");
+    let instance_outputs = stdout
+        .lines()
+        .filter(|line| line.contains("label=\"delta_v\\n"))
+        .filter_map(|line| line.split('"').nth(1))
+        .collect::<Vec<_>>();
+    assert_eq!(instance_outputs.len(), 2, "{stdout}");
+    for output in instance_outputs {
+        assert!(
+            stdout.contains(&format!("\"{output}\" -> \"{total}\";")),
+            "each instance output should feed the root result:\n{stdout}"
+        );
+    }
     assert!(!stdout.contains("lhead="));
     assert!(!stdout.contains("ltail="));
     assert!(!stdout.contains("::"));
@@ -5994,7 +6005,9 @@ fn graph_max_depth_collapses_included_dag_internals() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\"s1\" [label=\"7 values hidden\""));
     assert!(stdout.contains("\"s2\" [label=\"7 values hidden\""));
-    assert!(stdout.contains("\"s1\" -> \"n14\";"));
+    let total = dot_statement_id_for_label(&stdout, "total_dv\\n");
+    assert!(stdout.contains(&format!("\"s1\" -> \"{total}\";")));
+    assert!(stdout.contains(&format!("\"s2\" -> \"{total}\";")));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
 }
 

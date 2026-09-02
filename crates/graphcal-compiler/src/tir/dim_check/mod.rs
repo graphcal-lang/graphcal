@@ -292,11 +292,10 @@ struct DimCheckContext<'a> {
 }
 
 impl<'a> DimCheckContext<'a> {
-    /// Re-anchor diagnostics on `body_src`, the source a particular
-    /// declaration's spans index into (#868). A declaration merged in from an
-    /// instantiated dependency keeps that dependency file's offsets, so its
-    /// checks must render against the dependency source rather than the
-    /// importer's ambient `src`.
+    /// Re-anchor diagnostics on the source whose bytes a declaration body
+    /// indexes. Canonical template DAGs are checked against their definition
+    /// source; semantic instances reuse those checked bodies without
+    /// reinterpreting spans in the importer.
     const fn for_body(self, body_src: &'a NamedSource<Arc<String>>) -> Self {
         Self {
             src: body_src,
@@ -433,6 +432,15 @@ fn check_decl_expr_type(
                 src: body_ctx.src.clone(),
                 span: (*type_ann_span).into(),
             })?;
+    if body_ctx
+        .dag
+        .semantic_instances()
+        .iter()
+        .flat_map(|instance| &instance.output_projections)
+        .any(|projection| &projection.exposed_name == name)
+    {
+        return Ok(());
+    }
     let owner = body_ctx.dag.require_bound_decl_identity(
         name,
         body_ctx.src,
@@ -468,47 +476,56 @@ fn check_decl_expr_type(
 
 /// Require every runtime unit factor to be one scalar Dimensionless quantity.
 fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for entry in ctx.dag.semantic.dynamic_unit_scales.values() {
-        ctx.checkpoint()?;
-        if entry.declared_dimension != entry.base_unit_dimension {
-            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
-                name: entry.spelling.name().clone(),
-                declared: ctx
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.declared_dimension),
-                definition: ctx
-                    .registry
-                    .dimensions
-                    .format_dimension(&entry.base_unit_dimension),
-                src: entry.src.clone(),
-                span: entry.span.into(),
-            });
-        }
-        let entry_ctx = ctx.for_body(&entry.src);
-        let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
-            &entry.expr,
-            None,
-            entry_ctx.declared_types,
-            entry_ctx.dag,
-            entry_ctx.tir,
-            entry_ctx.registry,
-            entry_ctx.builtin_fns,
-            entry_ctx.src,
-            entry_ctx.cancellation,
-            entry_ctx.materialized_shapes.clone(),
-        )?;
-        if !matches!(
-            &inferred,
-            InferredType::Quantity(dimension) if dimension.is_dimensionless()
-        ) {
-            return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
-                name: entry.spelling.clone(),
-                found: format_inferred_type(&inferred, entry_ctx.registry),
-                src: entry.src.clone(),
-                span: entry.expr.span.into(),
-            });
-        }
+    ctx.dag
+        .semantic
+        .dynamic_unit_scales
+        .values()
+        .try_for_each(|entry| check_dynamic_unit_scale_type(ctx, entry))
+}
+
+fn check_dynamic_unit_scale_type(
+    ctx: &DimCheckContext<'_>,
+    entry: &crate::ir::lower::DynamicUnitScaleEntry,
+) -> Result<(), GraphcalError> {
+    ctx.checkpoint()?;
+    if entry.declared_dimension != entry.base_unit_dimension {
+        return Err(GraphcalError::UnitDefinitionDimensionMismatch {
+            name: entry.spelling.name().clone(),
+            declared: ctx
+                .registry
+                .dimensions
+                .format_dimension(&entry.declared_dimension),
+            definition: ctx
+                .registry
+                .dimensions
+                .format_dimension(&entry.base_unit_dimension),
+            src: entry.src.clone(),
+            span: entry.span.into(),
+        });
+    }
+    let entry_ctx = ctx.for_body(&entry.src);
+    let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+        &entry.expr,
+        None,
+        entry_ctx.declared_types,
+        entry_ctx.dag,
+        entry_ctx.tir,
+        entry_ctx.registry,
+        entry_ctx.builtin_fns,
+        entry_ctx.src,
+        entry_ctx.cancellation,
+        entry_ctx.materialized_shapes.clone(),
+    )?;
+    if !matches!(
+        &inferred,
+        InferredType::Quantity(dimension) if dimension.is_dimensionless()
+    ) {
+        return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
+            name: entry.spelling.clone(),
+            found: format_inferred_type(&inferred, entry_ctx.registry),
+            src: entry.src.clone(),
+            span: entry.expr.span.into(),
+        });
     }
     Ok(())
 }
@@ -973,12 +990,31 @@ pub fn check_dimensions_tir_with_cancellation(
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
 
-    // Dim-check the file's own DAGs (root + inline children). Dependency DAGs
-    // merged by `merge_dep_dag_tirs` were already checked in their defining
-    // file's pipeline; the project-wide type store makes them safe to inspect
-    // here without making a redundant second check authoritative.
+    // Check each canonical source body once. Semantic instances reuse a body
+    // already proven closed over rigid Static ports, so only their signatures
+    // and value-binding conformance are specialized at the include site.
+    for (_, dag) in tir
+        .local_dags()
+        .filter(|(_, dag)| dag.is_semantic_instance())
+    {
+        cancellation.checkpoint()?;
+        let declared_types = dag.build_declared_types(src)?;
+        let collector = infer::hir::MaterializedShapeCollector::default();
+        let ctx = DimCheckContext {
+            cancellation,
+            materialized_shapes: &collector,
+            declared_types: &declared_types,
+            dag,
+            tir,
+            registry: &tir.registry,
+            builtin_fns,
+            src,
+        };
+        check_param_defaults(&ctx)?;
+    }
     let checked_dag_facts = tir
         .local_dags()
+        .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(dag_id, dag)| {
             cancellation.checkpoint()?;
             let collector = infer::hir::MaterializedShapeCollector::default();
@@ -1028,6 +1064,7 @@ pub fn check_dimensions_tir_with_cancellation(
         })?;
         dag.semantic.presentation = facts;
     }
+    crate::tir::typed::install_semantic_presentation_facts(tir, src)?;
 
     Ok(())
 }
@@ -1377,6 +1414,21 @@ pub fn check_external_value_expr_type(
     }
 }
 
+fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    for entry in &ctx.dag.params {
+        ctx.checkpoint()?;
+        let annotation_src = entry.type_src.resolve(ctx.src);
+        let annotation_ctx = ctx.for_body(annotation_src);
+        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        let Some(default) = entry.default.as_ref() else {
+            continue;
+        };
+        let body_ctx = ctx.for_body(default.src.resolve(ctx.src));
+        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
+    }
+    Ok(())
+}
+
 /// Dim-check a single [`DagTIR`] against the file's shared registry and
 /// the full flat dag map.
 fn check_dimensions_dag(
@@ -1401,8 +1453,8 @@ fn check_dimensions_dag(
         src,
     };
 
-    // Declarations merged in from instantiated dependencies keep the
-    // dependency file's spans, so each is checked against its own source (#868).
+    // Each canonical source declaration is checked against the provenance
+    // carried by its own annotation and body.
     for entry in &dag.consts {
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
@@ -1419,17 +1471,7 @@ fn check_dimensions_dag(
         let body_ctx = ctx.for_body(entry.body_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
-    for entry in &dag.params {
-        ctx.checkpoint()?;
-        let annotation_src = entry.type_src.resolve(src);
-        let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
-        let Some(default) = entry.default.as_ref() else {
-            continue;
-        };
-        let body_ctx = ctx.for_body(default.src.resolve(src));
-        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
-    }
+    check_param_defaults(&ctx)?;
 
     ctx.checkpoint()?;
     validate_hir_concrete_type_obligations(&ctx)?;
@@ -1513,8 +1555,7 @@ enum ExpectedBound {
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     let dag = ctx.dag;
-    // A merged dependency declaration's domain bounds keep the dependency
-    // file's spans, so they are checked against that body's source (#868).
+    // Domain bounds are checked against their declaration's source provenance.
     let decl_iter = dag
         .consts
         .iter()

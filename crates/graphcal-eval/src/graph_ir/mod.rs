@@ -275,6 +275,9 @@ fn project_cluster_provenance(
     let mut output_names = BTreeMap::<DagId, HashSet<DeclName>>::new();
 
     for dag in local_dags {
+        if dag.is_semantic_instance() {
+            continue;
+        }
         let dag_id = dag.dag_id().clone();
         let parent = (dag.dag_id() != tir.root_dag_id())
             .then(|| dag.dag_id().parent())

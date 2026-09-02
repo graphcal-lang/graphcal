@@ -48,6 +48,20 @@ struct DepDeclIndex {
     other: HashMap<DeclName, DeclarationKind>,
 }
 
+fn public_dynamic_units(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+) -> HashSet<UnitName> {
+    declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::Unit(unit) if unit.visibility.is_public() && !unit.constness.is_const() => {
+                Some(unit.name.value.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
     pub(in crate::project_compiler) dag_def: &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
     pub(in crate::project_compiler) dag_id: &'a graphcal_compiler::dag_id::DagId,
@@ -1254,6 +1268,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         dim_bindings,
         selective_names,
         unit_projection_aliases,
+        runtime_unit_names: public_dynamic_units(&dep_loaded.ast().declarations),
         assertion_aliases,
         surface_outputs,
         requested_plots,
@@ -1522,6 +1537,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
         dim_bindings,
         selective_names,
         unit_projection_aliases,
+        runtime_unit_names: public_dynamic_units(&dag_body.declarations),
         assertion_aliases,
         surface_outputs,
         requested_plots,

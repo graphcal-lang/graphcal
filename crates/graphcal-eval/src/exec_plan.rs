@@ -1,6 +1,6 @@
 //! Runtime execution-plan selection from retained checked facts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -76,6 +76,126 @@ pub fn compile_with_cancellation(
     compile_checked_with_cancellation(tir, &facts, src, cancellation)
 }
 
+pub fn semantic_runtime_dags_from<'a>(
+    tir: &'a TIR,
+    root: &'a graphcal_compiler::tir::typed::DagTIR,
+) -> Vec<&'a graphcal_compiler::tir::typed::DagTIR> {
+    let mut owners = vec![root.dag_id().clone()];
+    let mut visited = HashSet::from([root.dag_id().clone()]);
+    let mut cursor = 0;
+    while let Some(owner) = owners.get(cursor).cloned() {
+        cursor = cursor.saturating_add(1);
+        let Some(dag) = tir.dag_registry().get(&owner) else {
+            continue;
+        };
+        for edge in dag.semantic_instances() {
+            let child = edge.instance.id.owner().clone();
+            if visited.insert(child.clone()) {
+                owners.push(child);
+            }
+        }
+    }
+    let mut instances = owners
+        .into_iter()
+        .skip(1)
+        .filter_map(|owner| tir.dag_registry().get(&owner))
+        .collect::<Vec<_>>();
+    instances.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
+    std::iter::once(root).chain(instances).collect()
+}
+
+fn semantic_runtime_dags(tir: &TIR) -> Vec<&graphcal_compiler::tir::typed::DagTIR> {
+    semantic_runtime_dags_from(tir, tir.root())
+}
+
+pub fn combined_runtime_order_for(
+    tir: &TIR,
+    root: &graphcal_compiler::tir::typed::DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
+    let dags = semantic_runtime_dags_from(tir, root);
+    let candidates = dags
+        .iter()
+        .flat_map(|dag| {
+            dag.source_order()
+                .iter()
+                .filter(|(_, category)| {
+                    matches!(
+                        category,
+                        graphcal_compiler::ir::resolve::DeclCategory::Param
+                            | graphcal_compiler::ir::resolve::DeclCategory::Node
+                    )
+                })
+                .map(|(name, _)| {
+                    dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
+                        .map(RuntimeDeclKey::resolved)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let candidate_set = candidates.iter().cloned().collect::<HashSet<_>>();
+    let mut indegree = candidates
+        .iter()
+        .cloned()
+        .map(|candidate| (candidate, 0_usize))
+        .collect::<HashMap<_, _>>();
+    let mut dependents: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>> = HashMap::new();
+    for dag in dags {
+        for (declaration, dependencies) in &dag.semantic().dependencies.runtime_deps {
+            let declaration = RuntimeDeclKey::resolved(dag.runtime_decl_identity(declaration));
+            if !candidate_set.contains(&declaration) {
+                continue;
+            }
+            for dependency in dependencies {
+                let dependency = RuntimeDeclKey::resolved(dag.runtime_decl_identity(dependency));
+                if candidate_set.contains(&dependency) {
+                    let count = indegree.entry(declaration.clone()).or_default();
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            "combined runtime dependency count overflowed",
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                    dependents
+                        .entry(dependency)
+                        .or_default()
+                        .push(declaration.clone());
+                }
+            }
+        }
+    }
+    let mut ready = candidates
+        .iter()
+        .filter(|candidate| indegree.get(*candidate) == Some(&0))
+        .cloned()
+        .collect::<VecDeque<_>>();
+    let mut order = Vec::with_capacity(candidates.len());
+    while let Some(declaration) = ready.pop_front() {
+        order.push(declaration.clone());
+        for dependent in dependents.get(&declaration).into_iter().flatten() {
+            let count = indegree.get_mut(dependent).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("combined runtime dependency `{dependent}` has no schedule entry"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                ready.push_back(dependent.clone());
+            }
+        }
+    }
+    if order.len() != candidates.len() {
+        return Err(GraphcalError::internal_error(
+            "semantic instance runtime dependencies are cyclic",
+            src,
+            DiagnosticAnchor::WholeFile,
+        ));
+    }
+    Ok(order)
+}
+
 /// Build a runtime schedule from facts retained by the checked project.
 pub fn compile_checked_with_cancellation(
     tir: &TIR,
@@ -95,54 +215,79 @@ pub fn compile_checked_with_cancellation(
         )
     })?;
     debug_assert_eq!(&root_facts.dag_id, tir.root_dag_id());
+    let semantic_dags = semantic_runtime_dags(tir);
+    let has_instances = semantic_dags.len() > 1;
+    let const_values = if has_instances {
+        Arc::new(
+            semantic_dags
+                .iter()
+                .filter_map(|dag| facts.for_dag(dag.dag_id()))
+                .flat_map(|facts| facts.const_values.iter())
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        )
+    } else {
+        Arc::clone(&root_facts.const_values)
+    };
+    let domain_constraints = if has_instances {
+        Arc::new(
+            semantic_dags
+                .iter()
+                .filter_map(|dag| facts.for_dag(dag.dag_id()))
+                .flat_map(|facts| facts.domain_constraints.iter())
+                .map(|(key, constraint)| (key.clone(), constraint.clone()))
+                .collect(),
+        )
+    } else {
+        Arc::clone(&root_facts.domain_constraints)
+    };
+    let topo_order = if has_instances {
+        combined_runtime_order_for(tir, tir.root(), src)?
+    } else {
+        root_facts.topo_order.as_ref().clone()
+    };
 
     Ok(ExecPlan {
-        const_values: Arc::clone(&root_facts.const_values),
-        imported_values: tir
-            .root()
-            .imported_bindings()
-            .values()
-            .filter_map(|binding| {
-                binding.value().map(|value| {
-                    (
-                        RuntimeDeclKey::resolved(binding.target().clone()),
-                        value.clone(),
-                    )
+        const_values,
+        imported_values: semantic_dags
+            .iter()
+            .flat_map(|dag| {
+                dag.imported_bindings().values().filter_map(|binding| {
+                    binding.value().map(|value| {
+                        (
+                            RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
+                            value.clone(),
+                        )
+                    })
                 })
             })
             .collect(),
-        topo_order: root_facts.topo_order.as_ref().clone(),
-        assumes_map: tir
-            .root()
-            .assumes_map()
+        topo_order,
+        assumes_map: semantic_dags
             .iter()
-            .map(|(name, assumers)| {
-                let key = tir.root().require_bound_decl_identity(
-                    name,
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )?;
+            .flat_map(|dag| dag.assumes_map().iter().map(move |entry| (*dag, entry)))
+            .map(|(dag, (name, assumers))| {
+                let key =
+                    dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)?;
                 let assumers = assumers
                     .iter()
                     .map(|assumer| {
-                        tir.root()
-                            .require_bound_decl_identity(assumer, src, DiagnosticAnchor::WholeFile)
+                        dag.require_bound_decl_identity(assumer, src, DiagnosticAnchor::WholeFile)
                             .map(RuntimeDeclKey::resolved)
                     })
                     .collect::<Result<Vec<_>, GraphcalError>>()?;
                 Ok((RuntimeDeclKey::resolved(key), assumers))
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
-        expected_fail: tir
-            .root()
-            .expected_fail_entries()
-            .map(|(name, expected)| {
-                tir.root()
-                    .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
+        expected_fail: semantic_dags
+            .iter()
+            .flat_map(|dag| dag.expected_fail_entries().map(move |entry| (*dag, entry)))
+            .map(|(dag, (name, expected))| {
+                dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
                     .map(|key| (RuntimeDeclKey::resolved(key), expected.clone()))
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
-        domain_constraints: Arc::clone(&root_facts.domain_constraints),
+        domain_constraints,
         struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
         checked_execution_facts: facts.clone(),
     })

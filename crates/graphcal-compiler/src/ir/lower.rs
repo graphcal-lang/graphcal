@@ -26,8 +26,8 @@ use crate::registry::error::GraphcalError;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{Registry, RegistryBuilder, SemanticRegistry};
-use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{ResolvedUnitName, UnitRef};
+use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::dimension::{ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::{Span, Spanned};
 
@@ -35,8 +35,8 @@ use crate::syntax::span::{Span, Spanned};
 use super::extern_fns::resolve_extern_struct_return;
 pub use super::extern_fns::{ExternFunctionEntry, ExternStructResult};
 pub use super::include::{
-    specialize_type_definition, substitute_dim_expr_names, substitute_type_expr_indexes,
-    substitute_type_expr_nominal_names,
+    IncludeOverrideReconciliations, SemanticInstanceInput, specialize_type_definition,
+    substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
 };
 pub use super::registry_build::{SelectedDeclarations, register_selected_declarations};
 use super::registry_build::{
@@ -106,17 +106,10 @@ pub struct LoweredPlotField {
     pub value: crate::hir::CheckedExpr,
 }
 
-/// Where a merged declaration body's spans index into (#868).
+/// Source provenance for a declaration body's spans.
 ///
-/// A declaration written in the file being compiled spans into that file's
-/// own [`NamedSource`], which every lowering/type stage already threads as its
-/// ambient `src` — those entries carry `BodySource::own`. An instantiated
-/// `include` merges a dependency's declaration bodies into the importer's IR
-/// (`merge_dependency`); those bodies keep the *dependency's* byte offsets, so
-/// they carry `BodySource::dependency` naming the dependency file. Rendering
-/// a diagnostic for such a body against the importer's source produces an
-/// out-of-bounds (or simply wrong) label; `BodySource::resolve` hands back
-/// the correct source to anchor against.
+/// Semantic include instances retain independently checked template bodies,
+/// so ordinary entries resolve against the ambient source for their DAG.
 #[derive(Debug, Clone, Default)]
 pub struct BodySource(Option<NamedSource<Arc<String>>>);
 
@@ -124,15 +117,8 @@ impl BodySource {
     /// The declaration belongs to the file being compiled; its span indexes
     /// into the ambient `src` threaded through the pipeline.
     #[must_use]
-    pub(super) const fn own() -> Self {
+    pub(crate) const fn own() -> Self {
         Self(None)
-    }
-
-    /// The declaration was merged from a dependency body whose spans index
-    /// into `src`.
-    #[must_use]
-    pub(super) const fn dependency(src: NamedSource<Arc<String>>) -> Self {
-        Self(Some(src))
     }
 
     /// Resolve the source the span should render against, falling back to the
@@ -143,21 +129,6 @@ impl BodySource {
         default: &'a NamedSource<Arc<String>>,
     ) -> &'a NamedSource<Arc<String>> {
         self.0.as_ref().unwrap_or(default)
-    }
-
-    /// Carry an already-merged provenance forward, or attribute a still-native
-    /// body to `dep_src` as it crosses one merge boundary (#868).
-    ///
-    /// A dependency's own declarations carry [`BodySource::own`] until they are
-    /// merged, at which point their spans become foreign to the importer and
-    /// must name `dep_src`. A body already tagged with a deeper dependency
-    /// source (a transitively-merged include) keeps that attribution.
-    #[must_use]
-    pub(super) fn or_dependency(self, dep_src: &NamedSource<Arc<String>>) -> Self {
-        match self.0 {
-            Some(_) => self,
-            None => Self::dependency(dep_src.clone()),
-        }
     }
 }
 
@@ -503,8 +474,10 @@ pub struct HirDag {
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,
-    /// Explicit typed template-instance graph assembled by include elaboration.
+    /// Legacy instance records whose declarations were syntactically merged.
     pub(crate) instances: Vec<InstanceRecord>,
+    /// Semantic instance edges with importer-context value bindings.
+    pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
 }
 
 impl HirDag {
@@ -1110,11 +1083,6 @@ fn build_ir_from_resolved(
             .collect(),
         source_declarations: collect_source_declarations(ast),
         static_ports: collect_static_ports(ast, dag_id),
-        assert_names: resolved
-            .assert_names
-            .into_iter()
-            .map(ScopedName::from)
-            .collect(),
         assumes_map: resolved
             .assumes_map
             .into_iter()
@@ -1153,6 +1121,7 @@ fn build_ir_from_resolved(
             })
             .collect(),
         instances: Vec::new(),
+        semantic_instances: Vec::new(),
     };
 
     Ok((builder, unfrozen))
@@ -1184,14 +1153,13 @@ pub struct UnfrozenIR {
     /// Direct source declarations are immutable provenance. Include merging
     /// extends `source_order` but never this entry-interface subset.
     pub(super) source_declarations: Vec<crate::hir::SourceDeclaration>,
-    /// Static interface provenance is not extended by include merging.
+    /// Static interface provenance is authored only by this DAG template.
     pub(super) static_ports: Vec<crate::hir::StaticPort>,
-    pub(super) assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     pub(super) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     // Key-lookup only, order irrelevant. Each value retains authored scope/source.
     pub(super) expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
-    // Dynamic unit scales declared by this body or merged includes.
+    // Dynamic unit scales declared by this source body.
     pub(super) dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
     // Source-visible projected units mapped to concrete instance identities.
     pub(super) unit_bindings: HashMap<UnitRef, ResolvedUnitName>,
@@ -1203,16 +1171,32 @@ pub struct UnfrozenIR {
     /// Plugin-import declarations, awaiting signature resolution against the
     /// frozen registry in [`UnfrozenIR::freeze`].
     pub(super) plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
-    /// Explicit typed template-instance graph assembled by include elaboration.
+    /// Legacy instance records whose declarations are syntactically merged.
     pub(super) instances: Vec<InstanceRecord>,
+    /// Semantic instance edges awaiting importer-context HIR lowering.
+    pub(super) semantic_instances: Vec<UnfrozenSemanticInstance>,
+}
+
+/// One semantic include edge before importer-context value expressions become HIR.
+#[derive(Debug, Clone)]
+pub struct UnfrozenSemanticInstance {
+    pub(crate) instance: InstanceRecord,
+    pub(crate) debug_scope: crate::syntax::module_name::ModuleAliasName,
+    pub(crate) value_bindings: HashMap<ResolvedDeclName, Expr>,
+    pub(crate) runtime_unit_names: HashSet<UnitName>,
+    pub(crate) output_projections: Vec<crate::ir::instance::InstanceValueProjection>,
+    pub(crate) assertion_projections: Vec<crate::ir::instance::InstanceAssertionProjection>,
+    pub(crate) plot_projections: Vec<crate::ir::instance::InstancePlotProjection>,
+    pub(crate) override_reconciliations: HashMap<
+        ResolvedDeclName,
+        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
+    >,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::registry::types;
-    use crate::syntax::decl_name::ResolvedDeclName;
-    use crate::syntax::module_name::ModuleAliasName;
     use crate::syntax::names::{NameAtom, NamePath};
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::ConstructorName;
@@ -1522,82 +1506,5 @@ mod tests {
         .unwrap();
         let names: Vec<String> = ir.source_order.iter().map(|(n, _)| n.to_string()).collect();
         assert_eq!(names, vec!["b", "a", "z"]);
-    }
-
-    #[test]
-    fn merge_dependency_scopes_qualified_import_binding_without_changing_target() {
-        let dep_source = "node out: Dimensionless = 2.0;";
-        let dep_src = make_src(dep_source);
-        let raw_file = Parser::new(dep_source).parse_file().unwrap();
-        let dep_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let qualified = ScopedName::qualified(
-            ModuleAliasName::expect_valid("mission"),
-            DeclName::expect_valid("C"),
-        );
-        let canonical = ResolvedDeclName::from_def(
-            crate::dag_id::DagId::root_in_package("producer", "config"),
-            DeclName::expect_valid("C"),
-        );
-        let imported_names = ImportedValueNames {
-            const_names: vec![(qualified.clone(), Span::new(0, 0))],
-            ..ImportedValueNames::default()
-        };
-        let (_dep_builder, dep_unfrozen) = lower_to_builder_with_imported_bindings(
-            &dep_file,
-            &dep_src,
-            &imported_names,
-            HashMap::from([(
-                qualified.clone(),
-                HirImportedBinding::new(canonical.clone()),
-            )]),
-            &crate::dag_id::DagId::root_in_package("test", "dep"),
-            None,
-        )
-        .unwrap();
-
-        let importer_source = "node anchor: Dimensionless = 1.0;";
-        let importer_src = make_src(importer_source);
-        let raw_importer = Parser::new(importer_source).parse_file().unwrap();
-        let importer_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_importer);
-        let (_importer_builder, mut unfrozen) = lower_to_builder_with_imported_bindings(
-            &importer_file,
-            &importer_src,
-            &ImportedValueNames::default(),
-            HashMap::new(),
-            &crate::dag_id::DagId::root_in_package("test", "main"),
-            None,
-        )
-        .unwrap();
-
-        let dep_names: HashSet<DeclName> = dep_unfrozen
-            .source_order
-            .iter()
-            .map(|(n, _)| n.member().clone())
-            .collect();
-        let instance = ModuleAliasName::expect_valid("inst");
-        unfrozen
-            .merge_dependency(
-                dep_unfrozen,
-                &instance,
-                &HashMap::new(),
-                &dep_names,
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &crate::dag_id::DagId::root_in_package("test", "dep"),
-                &crate::dag_id::DagId::root_in_package("test", "main"),
-                Span::new(0, 0),
-                &importer_src,
-                &dep_src,
-            )
-            .unwrap();
-
-        let lexical = qualified.within_scope(&instance);
-        let binding = &unfrozen.imported_bindings[&lexical];
-        assert_eq!(binding.target(), &canonical);
-        assert!(!unfrozen.imported_bindings.contains_key(&qualified));
     }
 }

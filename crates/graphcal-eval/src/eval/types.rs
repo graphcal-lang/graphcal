@@ -861,42 +861,44 @@ impl EvalResult {
             .filter(move |(name, result, _)| self.should_output(name, result, view))
     }
 
+    fn output_category(
+        &self,
+        view: EvalOutputView,
+        decl_type: DeclType,
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+        self.all.iter().filter_map(move |(name, result, kind)| {
+            (*kind == decl_type && self.should_output(name, result, view)).then_some((name, result))
+        })
+    }
+
     /// Iterate over const values selected by `view` in source order.
     pub fn output_consts(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
-        self.consts
-            .iter()
-            .filter(move |(name, result)| self.should_output(name, result, view))
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+        self.output_category(view, DeclType::Const)
     }
 
     /// Iterate over param values selected by `view` in source order.
     pub fn output_params(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
-        self.params
-            .iter()
-            .filter(move |(name, result)| self.should_output(name, result, view))
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+        self.output_category(view, DeclType::Param)
     }
 
     /// Iterate over node values selected by `view` in source order.
     pub fn output_nodes(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
-        self.nodes
-            .iter()
-            .filter(move |(name, result)| self.should_output(name, result, view))
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+        self.output_category(view, DeclType::Node)
     }
 
     /// Returns `true` if any const/param/node/plot evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.consts.iter().any(|(_, r)| r.is_err())
-            || self.params.iter().any(|(_, r)| r.is_err())
-            || self.nodes.iter().any(|(_, r)| r.is_err())
+        self.all.iter().any(|(_, result, _)| result.is_err())
             || !self.plot_errors.is_empty()
             || self.assertions.iter().any(|(_, r, _)| {
                 matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })

@@ -10,7 +10,7 @@ use miette::NamedSource;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
@@ -45,6 +45,22 @@ pub(super) struct EvalLoopResult {
 /// Keeping values, contained node errors, and the display-aware root result in
 /// one artifact makes the evaluator's direct output available to debugging
 /// consumers without running the evaluator a second time.
+fn root_instance_name(
+    root: &graphcal_compiler::dag_id::DagId,
+    parent: &graphcal_compiler::dag_id::DagId,
+    exposed: &ScopedName,
+) -> ScopedName {
+    let parent_path = parent
+        .segments()
+        .iter()
+        .skip(root.segments().len())
+        .map(|segment| ModuleAliasName::expect_valid(segment.as_ref().to_owned()));
+    ScopedName::qualified_path(
+        parent_path.chain(exposed.qualifier().iter().cloned()),
+        exposed.member().clone(),
+    )
+}
+
 pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
     pub(super) values: RuntimeValueMap,
@@ -144,11 +160,18 @@ pub(super) fn run_eval_loop_with_bindings(
             continue;
         }
 
-        // Check if any local runtime dependency has failed. Module-aware TIRs
-        // carry canonical dependency identities; use those when present so a
-        // qualified imported dependency with the same leaf as a local failure
-        // cannot be mistaken for the local declaration.
-        let failed_deps = failed_runtime_dependencies(tir.root(), name, &errors);
+        let current_dag = tir
+            .dag_containing_declaration(name.as_resolved())
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("TIR runtime declaration owner is missing for `{name}`"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        // Check canonical dependencies in the declaration's source or semantic
+        // instance DAG rather than assuming every runtime body belongs to root.
+        let failed_deps = failed_runtime_dependencies(current_dag, name, &errors);
 
         if !failed_deps.is_empty() {
             errors.insert(name.clone(), NodeError::DependencyFailed { failed_deps });
@@ -162,7 +185,7 @@ pub(super) fn run_eval_loop_with_bindings(
             registry: tir.registry(),
             src,
             tir,
-            current_dag: tir.root(),
+            current_dag,
             current_decl: Some(name.as_resolved().clone()),
             root_values: Some(&values),
             root_presentation_instances: Some(&presentation_instances),
@@ -173,8 +196,7 @@ pub(super) fn run_eval_loop_with_bindings(
             host_fns: Some(host_fns),
         };
 
-        let result = tir
-            .root()
+        let result = current_dag
             .runtime_expr(name.as_resolved())
             .ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -259,7 +281,9 @@ fn failed_runtime_dependencies(
         Some(dependencies) => dependencies
             .iter()
             .filter(|dependency| {
-                errors.contains_key(&RuntimeDeclKey::resolved((*dependency).clone()))
+                errors.contains_key(&RuntimeDeclKey::resolved(
+                    dag.runtime_decl_identity(dependency),
+                ))
             })
             .map(|dependency| DeclName::from_atom(dependency.atom().clone()))
             .collect(),
@@ -420,7 +444,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         )
     };
 
-    let consts = tir
+    let mut consts = tir
         .root()
         .consts()
         .iter()
@@ -437,13 +461,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             make_value(&entry.name, runtime).map(|value| (entry.name.clone(), value))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let params = tir
+    let mut params = tir
         .root()
         .params()
         .iter()
         .map(|entry| make_result(&entry.name).map(|value| (entry.name.clone(), value)))
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let nodes = tir
+    let mut nodes = tir
         .root()
         .nodes()
         .iter()
@@ -451,7 +475,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     cancellation.checkpoint()?;
 
-    let all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
+    let mut all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
         .root()
         .source_order()
         .iter()
@@ -488,6 +512,146 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             }
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
+
+    let debug_scope_counts = tir.root().semantic_instances().iter().fold(
+        HashMap::<ModuleAliasName, usize>::new(),
+        |mut counts, record| {
+            counts
+                .entry(record.debug_scope.clone())
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1);
+            counts
+        },
+    );
+    for record in tir.root().semantic_instances() {
+        let instance_dag = tir
+            .dag_registry()
+            .get(record.instance.id.owner())
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic instance `{}` is absent from checked TIR",
+                        record.instance.id.owner()
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        for projection in &record.output_projections {
+            if tir
+                .root()
+                .source_order()
+                .iter()
+                .any(|(name, _)| name == &projection.exposed_name)
+            {
+                continue;
+            }
+            let declaration = instance_dag.runtime_decl_identity(&projection.target);
+            let key = RuntimeDeclKey::resolved(declaration.clone());
+            let decl_type = instance_dag
+                .source_order()
+                .iter()
+                .find_map(|(name, category)| {
+                    (instance_dag.bound_decl_identity(name) == Some(&declaration)).then_some(
+                        match category {
+                            DeclCategory::Const => Some(DeclType::Const),
+                            DeclCategory::Param => Some(DeclType::Param),
+                            DeclCategory::Node => Some(DeclType::Node),
+                            DeclCategory::Assert
+                            | DeclCategory::Plot
+                            | DeclCategory::Figure
+                            | DeclCategory::Layer => None,
+                        },
+                    )
+                })
+                .flatten()
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("projected declaration `{declaration}` is not a runtime value"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+            let value = if let Some(error) = errors.get(&key) {
+                Err(error.clone())
+            } else {
+                let runtime = values.get(&key).ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("projected declaration `{declaration}` has no runtime value"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+                let declared_type = tir.runtime_declared_type(&declaration, src)?;
+                let mut value = EvaluatedValue::new(runtime, &declared_type).project(tir, src)?;
+                let presentation =
+                    graphcal_compiler::tir::presentation::PresentationProvenance::None;
+                match attach_presentation(
+                    &mut value,
+                    &presentation,
+                    presentation_instances.get(&key),
+                    &ctx.for_decl(&declaration),
+                    &values,
+                ) {
+                    Ok(()) => {
+                        validate_display_projection(&value)
+                            .map(|()| value)
+                            .map_err(|error| NodeError::EvalFailed {
+                                message: error.to_string(),
+                            })
+                    }
+                    Err(error) => Err(eval_failed_node_error(&error)),
+                }
+            };
+            match decl_type {
+                DeclType::Const => consts.push((projection.exposed_name.clone(), value.clone())),
+                DeclType::Param => params.push((projection.exposed_name.clone(), value.clone())),
+                DeclType::Node => nodes.push((projection.exposed_name.clone(), value.clone())),
+            }
+            all.push((projection.exposed_name.clone(), value, decl_type));
+        }
+        for (name, category) in instance_dag.source_order() {
+            let decl_type = match category {
+                DeclCategory::Const => DeclType::Const,
+                DeclCategory::Param => DeclType::Param,
+                DeclCategory::Node => DeclType::Node,
+                DeclCategory::Assert
+                | DeclCategory::Plot
+                | DeclCategory::Figure
+                | DeclCategory::Layer => continue,
+            };
+            let declaration =
+                instance_dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)?;
+            let key = RuntimeDeclKey::resolved(declaration.clone());
+            let value = if let Some(error) = errors.get(&key) {
+                Err(error.clone())
+            } else {
+                let runtime = values.get(&key).ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("instance declaration `{declaration}` has no runtime value"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+                let declared_type = tir.runtime_declared_type(&declaration, src)?;
+                EvaluatedValue::new(runtime, &declared_type)
+                    .project(tir, src)
+                    .map_err(|error| NodeError::EvalFailed {
+                        message: error.to_string(),
+                    })
+            };
+            let debug_scope = if debug_scope_counts
+                .get(&record.debug_scope)
+                .is_some_and(|count| *count > 1)
+            {
+                ModuleAliasName::expect_valid(record.instance.id.owner().name())
+            } else {
+                record.debug_scope.clone()
+            };
+            let debug_name = ScopedName::qualified(debug_scope, name.member().clone());
+            all.push((debug_name, value, decl_type));
+        }
+    }
     cancellation.checkpoint()?;
     // A directly evaluated DAG is its own entry surface. Project evaluation
     // replaces this set with include-aware classification after assembling the
@@ -498,7 +662,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // An assertion whose body references a failed declaration reports the
     // dependency failure (with its root cause) instead of evaluating over a
     // value map where the failed name is simply absent (#814).
-    let assertions: Vec<(ScopedName, AssertResult, Span)> = tir
+    let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
         .asserts()
         .iter()
@@ -527,13 +691,72 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             Ok((entry.name.clone(), assert_result, entry.span))
         })
         .collect::<Result<_, GraphcalError>>()?;
+    let mut semantic_parents = tir
+        .local_dags()
+        .map(|(_, dag)| dag)
+        .filter(|dag| dag.dag_id() == tir.root_dag_id() || dag.is_semantic_instance())
+        .collect::<Vec<_>>();
+    semantic_parents.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
+    for parent_dag in semantic_parents {
+        for record in parent_dag.semantic_instances() {
+            let instance_dag = tir
+                .dag_registry()
+                .get(record.instance.id.owner())
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!(
+                            "semantic instance `{}` is absent from checked TIR",
+                            record.instance.id.owner()
+                        ),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+            for projection in &record.assertion_projections {
+                let owner = instance_dag.runtime_decl_identity(&projection.target);
+                let entry = instance_dag
+                    .asserts()
+                    .iter()
+                    .find(|entry| instance_dag.bound_decl_identity(&entry.name) == Some(&owner))
+                    .ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "projected assertion `{owner}` is absent from semantic instance"
+                            ),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })?;
+                let expected = projection.expected_fail.as_ref().or_else(|| {
+                    plan.expected_fail
+                        .get(&RuntimeDeclKey::resolved(owner.clone()))
+                });
+                let result = evaluate_assert_with_expected_fail(
+                    &entry.body,
+                    expected,
+                    &values,
+                    &empty_hir_locals,
+                    &ctx.for_checked_decl(instance_dag, src, &owner),
+                );
+                assertions.push((
+                    root_instance_name(
+                        tir.root_dag_id(),
+                        parent_dag.dag_id(),
+                        &projection.exposed_name,
+                    ),
+                    result,
+                    entry.span,
+                ));
+            }
+        }
+    }
     cancellation.checkpoint()?;
 
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
     // plot that cannot be rendered is reported, never silently dropped
     // (#842).
     let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
-    let plots = tir
+    let mut plots = tir
         .root()
         .plots()
         .iter()
@@ -561,6 +784,59 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             }
             Ok(plots)
         })?;
+    for record in tir.root().semantic_instances() {
+        let outer_instance = tir
+            .dag_registry()
+            .get(record.instance.id.owner())
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic instance `{}` is absent from checked TIR",
+                        record.instance.id.owner()
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        for projection in &record.plot_projections {
+            let owner = outer_instance.runtime_decl_identity(&projection.target);
+            let plot_dag = tir
+                .dag_registry()
+                .get(owner.owner())
+                .unwrap_or(outer_instance);
+            let entry = plot_dag
+                .plots()
+                .iter()
+                .find(|entry| entry.name.member().as_str() == owner.atom().as_str())
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("projected plot `{owner}` is absent from semantic instance"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+            match evaluate_plot(
+                entry,
+                &values,
+                &presentation_instances,
+                &errors,
+                &ctx.for_checked_decl(plot_dag, src, &owner),
+            ) {
+                Ok(mut plot) => {
+                    plot.name = projection.exposed_name.clone();
+                    plot.displayed = !projection.hidden;
+                    plots.push(plot);
+                }
+                Err(PlotEvaluationError::Render(message)) => {
+                    plot_errors.push(super::types::PlotError {
+                        name: projection.exposed_name.clone(),
+                        message,
+                    });
+                }
+                Err(PlotEvaluationError::Fatal(error)) => return Err(error),
+            }
+        }
+    }
     cancellation.checkpoint()?;
 
     // Evaluate figure declarations; a failing field reports the figure
@@ -660,12 +936,39 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .flatten()
         .collect();
     cancellation.checkpoint()?;
-    let source_names_by_key = tir
+    let mut source_names_by_key = tir
         .root()
         .source_order()
         .iter()
         .map(|(name, _)| local_key(name).map(|key| (key, name.clone())))
         .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+    for record in tir.root().semantic_instances() {
+        let instance_dag = tir
+            .dag_registry()
+            .get(record.instance.id.owner())
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic instance `{}` is absent from checked TIR",
+                        record.instance.id.owner()
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        for projection in &record.output_projections {
+            source_names_by_key.insert(
+                RuntimeDeclKey::resolved(instance_dag.runtime_decl_identity(&projection.target)),
+                projection.exposed_name.clone(),
+            );
+        }
+        for projection in &record.assertion_projections {
+            source_names_by_key.insert(
+                RuntimeDeclKey::resolved(instance_dag.runtime_decl_identity(&projection.target)),
+                projection.exposed_name.clone(),
+            );
+        }
+    }
     let assumes_map = plan
         .assumes_map
         .iter()

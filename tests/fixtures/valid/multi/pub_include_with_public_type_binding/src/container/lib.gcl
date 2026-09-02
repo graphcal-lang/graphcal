@@ -1,4 +1,4 @@
-// container.gcl -- same library as the V006 negative fixture.
+// container.gcl -- exposes a bindable type through a parametric value body.
 pub(bind) type Element {
     Element(size: Length),
 }
@@ -7,4 +7,5 @@ pub type Wrapper<T: Type = Element> {
     Wrapper(value: T),
 }
 
-pub const node origin: Element = Element(size: 1.0 m);
+param value: Element;
+pub node origin: Element = @value;

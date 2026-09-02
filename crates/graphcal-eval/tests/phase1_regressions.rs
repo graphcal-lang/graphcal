@@ -668,6 +668,56 @@ pub node out: D = @a;
 }
 
 #[test]
+fn template_body_checks_dimension_defaults_in_sinks_and_runtime_units() {
+    let cases = [
+        (
+            r"
+pub(bind) dim D = Length / Length;
+param size: D = 1.0;
+plot chart = {
+    mark: line,
+    encode: { x: 1.0 },
+    width: @size,
+};
+",
+            "chart",
+        ),
+        (
+            r"
+pub(bind) dim D = Length / Length;
+param size: D = 1.0;
+plot chart = { mark: line, encode: { x: 1.0 } };
+layer combined = { plots: [chart], width: @size };
+",
+            "combined",
+        ),
+        (
+            r"
+pub(bind) dim D = Length / Length;
+param factor: D = 1.0;
+unit scaled: Length = (@factor) m;
+",
+            "scaled",
+        ),
+    ];
+
+    for (source, expected_body) in cases {
+        let error = compile_graphcal_error(source);
+        assert!(
+            matches!(
+                error,
+                GraphcalError::TemplateBodyDependsOnStaticDefault {
+                    ref body_name,
+                    port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
+                    ..
+                } if body_name.as_str() == expected_body
+            ),
+            "unexpected error for `{expected_body}`: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn explicitly_rebinding_the_dependent_param_reconciles_type_override() {
     let result = compile_reconciliation_project(
         r"

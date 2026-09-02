@@ -10,7 +10,7 @@ use crate::ir::static_interface::{StaticInputKind, StaticRole};
 
 /// Semantic context in which a Static dependency occurs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum StaticUseContext {
+pub(super) enum StaticUseContext {
     /// A parameter default, protected by V005 reconciliation.
     #[cfg_attr(
         not(test),
@@ -26,7 +26,7 @@ pub(crate) enum StaticUseContext {
 
 /// Whether an operation is parametric or observes a concrete Static default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum StaticDependency {
+pub(super) enum StaticDependency {
     /// The operation remains valid for every admissible binding.
     #[cfg_attr(
         not(test),
@@ -42,21 +42,21 @@ pub(crate) enum StaticDependency {
 
 /// One complete input to the pure template-closure rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct TemplateClosureCheck {
-    pub(crate) kind: StaticInputKind,
-    pub(crate) role: StaticRole,
-    pub(crate) context: StaticUseContext,
-    pub(crate) dependency: StaticDependency,
+pub(super) struct TemplateClosureCheck {
+    pub(super) kind: StaticInputKind,
+    pub(super) role: StaticRole,
+    pub(super) context: StaticUseContext,
+    pub(super) dependency: StaticDependency,
 }
 
 /// Typed semantic reason for rejecting a template body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TemplateClosureViolation {
-    pub(crate) kind: StaticInputKind,
+pub(super) struct TemplateClosureViolation {
+    pub(super) kind: StaticInputKind,
 }
 
 /// Validate one dependency without consulting syntax or diagnostic prose.
-pub(crate) const fn validate(check: TemplateClosureCheck) -> Result<(), TemplateClosureViolation> {
+pub(super) const fn validate(check: TemplateClosureCheck) -> Result<(), TemplateClosureViolation> {
     if matches!(check.role, StaticRole::OptionalInput)
         && matches!(check.context, StaticUseContext::TemplateBody)
         && matches!(check.dependency, StaticDependency::DefaultDefinition)

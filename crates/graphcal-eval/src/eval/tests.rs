@@ -1243,15 +1243,21 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
     let leaf_template = loaded_file_dag_id(&project, "leaf.gcl");
     let outer_owners = tir
         .root()
-        .instances()
+        .semantic_instances()
         .iter()
-        .filter(|record| record.id.template() == &middle_template)
-        .map(|record| record.id.owner().clone())
+        .filter(|record| record.instance.id.template() == &middle_template)
+        .map(|record| record.instance.id.owner().clone())
         .collect::<HashSet<_>>();
     let nested = tir
         .root()
-        .instances()
+        .semantic_instances()
         .iter()
+        .flat_map(|outer| {
+            tir.dag_registry()
+                .get(outer.instance.id.owner())
+                .expect("materialized outer instance")
+                .instances()
+        })
         .filter(|record| record.id.template() == &leaf_template)
         .collect::<Vec<_>>();
 
@@ -4000,6 +4006,68 @@ fn nested_instantiated_file_include_reexports_requested_plot() {
 }
 
 #[test]
+fn requested_plot_specializes_its_required_index_axis() {
+    let result = compile_and_eval(
+        "index Axis = { One, Two };\n\
+         node input: Dimensionless[Axis] = { Axis#One: 1.0, Axis#Two: 2.0 };\n\
+         dag chart {\n\
+             pub(bind) index Item;\n\
+             param input: Dimensionless[Item];\n\
+             pub plot output = {\n\
+                 mark: line,\n\
+                 encode: { x: @input, y: @input },\n\
+             };\n\
+         }\n\
+         include chart(index Item: Axis, input: @input)::{ output };\n",
+    )
+    .unwrap();
+
+    let plot = result.plots.first().expect("requested plot must render");
+    assert_eq!(plot.name.to_string(), "output");
+    let (_, values) = plot.encodings.first().expect("plot must contain x data");
+    let super::types::PlotFieldValue::Numbers(values) = values else {
+        panic!("expected numeric plot data, got {values:?}");
+    };
+    assert_eq!(values.as_slice(), [1.0, 2.0]);
+}
+
+#[test]
+fn requested_plot_keeps_instance_owned_dynamic_unit_presentation() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/demo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("fx.gcl"),
+        "pub base dim Money;\n\
+         pub base unit USD: Money;\n\
+         param rate: Dimensionless = 2.0;\n\
+         pub unit EUR: Money = (@rate) USD;\n\
+         param amount: Money = 3.0 EUR;\n\
+         pub plot chart = { mark: bar, encode: { x: 1.0, y: @amount } };\n",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    std::fs::write(&root, "include demo.fx()::{ chart };\n").unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let plot = result.plots.first().expect("requested plot must render");
+    let (_, values) = plot
+        .encodings
+        .iter()
+        .find(|(channel, _)| *channel == graphcal_compiler::syntax::ast::EncodingChannel::Y)
+        .expect("plot must contain y data");
+    let super::types::PlotFieldValue::Numbers(values) = values else {
+        panic!("expected numeric plot data, got {values:?}");
+    };
+    assert_eq!(values.as_slice(), [3.0]);
+}
+
+#[test]
 fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.upper(x: -1.0) as upper;\n\
@@ -6139,25 +6207,23 @@ fn project_include_overrides_index_with_param_binding_ok() {
 }
 
 #[test]
-fn merged_dependency_body_error_renders_against_dependency_source() {
-    // #868: a dimension mismatch introduced by an instantiated include's
-    // dimension rebinding lives in the *dependency* body, which keeps the
-    // dependency file's byte offsets. The D002 diagnostic must render against
-    // the dependency source (`lib.gcl`) with an in-bounds span — before the
-    // fix it was rendered against the importer (`main.gcl`), yielding an
-    // out-of-bounds label.
+fn template_closure_error_renders_against_dependency_source() {
+    // Option A checks reusable bodies with bindable Static ports rigid. The
+    // V007 diagnostic belongs to the dependency body and must retain that
+    // file's source and an in-bounds span.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/invalid/multi/merged_dep_body_dim_mismatch/src/lib/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation {
-            declared,
-            inferred,
+        Err(CompileError::Eval(GraphcalError::TemplateBodyDependsOnStaticDefault {
+            body_name,
+            port_name,
             src,
             span,
+            ..
         })) => {
-            assert_eq!(declared, "Mass");
-            assert_eq!(inferred, "Velocity");
+            assert_eq!(body_name.as_str(), "v");
+            assert_eq!(port_name.as_str(), "Speed");
             assert!(
                 src.name().ends_with("lib.gcl"),
                 "diagnostic must name the dependency file, got `{}`",
@@ -6173,7 +6239,7 @@ fn merged_dependency_body_error_renders_against_dependency_source() {
                 src.name(),
             );
         }
-        other => panic!("expected D002 against the dependency source, got {other:?}"),
+        other => panic!("expected V007 against the dependency source, got {other:?}"),
     }
 }
 
@@ -7400,11 +7466,10 @@ fn eval_overrides_reject_included_implementation_params() {
 
 #[test]
 fn eval_include_dep_with_aliased_module_import() {
-    // End-to-end coverage for including a dep that itself imports another
-    // module under an alias (`import lib as mission;` + `@mission::C`).
-    // The merge must keep the dep's qualified imported-value keys intact
-    // (see `merge_dependency_keeps_qualified_imported_value_keys` in
-    // graphcal-compiler for the unit-level regression test).
+    // End-to-end coverage for including a template that itself imports another
+    // module under an alias (`import lib as mission;` + `@mission::C`). The
+    // checked semantic instance must retain the template's canonical imported
+    // value target.
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/collide");
     std::fs::create_dir_all(&root_dir).unwrap();
@@ -7440,8 +7505,8 @@ fn eval_include_dep_with_aliased_module_import() {
 #[test]
 fn eval_inline_dag_include_cross_file_self_import() {
     // Cross-file `include` of a DAG whose body has `import <self>::{...}`
-    // (resolved against the dag's parent file). The parent's value must
-    // flow through `merge_dependency` into the importer's IR for eval.
+    // (resolved against the DAG's parent file). The checked instance must keep
+    // that canonical parent import available during evaluation.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
         "../../tests/fixtures/valid/inline_dag_include_cross_file_self_import/src/lib/main.gcl",
     );

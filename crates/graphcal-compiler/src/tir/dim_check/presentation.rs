@@ -58,6 +58,7 @@ pub(super) fn collect_presentation_facts(
         visiting: HashSet::new(),
     };
     tir.local_dags()
+        .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(dag_id, _)| dag_id.clone())
         .map(|dag_id| {
             cancellation.checkpoint()?;
@@ -283,7 +284,9 @@ impl PresentationResolver<'_> {
                             src: src.clone(),
                             span: callee.span.into(),
                         })?;
-                    StructTypeRef::from_resolved(target.owning_type.clone())
+                    StructTypeRef::from_resolved(
+                        dag.runtime_struct_type_identity(&target.owning_type),
+                    )
                 };
                 let fields = fields
                     .iter()
@@ -306,8 +309,9 @@ impl PresentationResolver<'_> {
             }
             ExprKind::ForComp { bindings, body } => {
                 let body = self.expression(owner, dag_id, body, src)?;
+                let dag = self.dag(dag_id, DiagnosticAnchor::Source(expr.span))?;
                 bindings.iter().rev().try_fold(body, |inner, binding| {
-                    presentation_index(&binding.index, src).map(|index| {
+                    presentation_index(&binding.index, dag, src).map(|index| {
                         PresentationProvenance::uniform_index_for_local(
                             index,
                             PresentationLocalBinder::new(owner.clone(), binding.local.id),
@@ -384,7 +388,9 @@ impl PresentationResolver<'_> {
                                             span: constructor.span.into(),
                                         })?;
                                     (
-                                        StructTypeRef::from_resolved(target.owning_type.clone()),
+                                        StructTypeRef::from_resolved(
+                                            dag.runtime_struct_type_identity(&target.owning_type),
+                                        ),
                                         target.variant.name(),
                                     )
                                 };
@@ -531,12 +537,11 @@ fn declaration_body(
 
 fn presentation_index(
     index: &hir::expr::ForBindingIndex,
+    dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<IndexTypeRef, GraphcalError> {
     match index {
-        hir::expr::ForBindingIndex::Named(index) => {
-            Ok(IndexTypeRef::from_resolved(index.value.clone()))
-        }
+        hir::expr::ForBindingIndex::Named(index) => Ok(dag.runtime_index_type_ref(&index.value)),
         hir::expr::ForBindingIndex::Finite { cardinality, span } => {
             let form = infer::hir::hir_nat_to_linear_form(cardinality).map_err(|error| {
                 GraphcalError::EvalError {

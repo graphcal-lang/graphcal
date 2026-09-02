@@ -1,7 +1,7 @@
-// lib.gcl -- library with a bindable type
+// lib.gcl -- library with a bindable type used parametrically
 pub(bind) type Widget {
     Widget(size: Length),
 }
 
-pub const node origin: Widget = Widget(size: 1.0 m);
-pub const node origin_size: Length = @origin.size;
+param value: Widget;
+pub node origin: Widget = @value;

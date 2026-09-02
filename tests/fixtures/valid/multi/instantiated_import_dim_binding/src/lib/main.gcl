@@ -1,4 +1,4 @@
 // main.gcl -- rebinds the lib's Speed dimension to Velocity
-include lib.lib(dim Speed: Velocity)::{ v };
+include lib.lib(dim Speed: Velocity, value: 10.0 m/s)::{ v };
 
 node result: Velocity = @v;

@@ -203,14 +203,6 @@ impl IdentPath {
         }
     }
 
-    /// Mutably return the selected identifier only for a local path.
-    pub(crate) const fn as_bare_mut(&mut self) -> Option<&mut Ident> {
-        match &self.owner {
-            None => Some(&mut self.member),
-            Some(_) => None,
-        }
-    }
-
     /// Consume this path and return its identifier when local.
     pub(crate) fn into_bare(self) -> Result<Ident, Self> {
         if self.is_bare() {

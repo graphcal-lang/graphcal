@@ -32,103 +32,136 @@ pub(super) fn check_plot_properties_dag(
     check_plot_references(ctx, dag)?;
     let mut channel_types = HashMap::new();
     for entry in &dag.plots {
-        let body = &entry.body;
-        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
-        let owner = dag.require_bound_decl_identity(
-            &entry.name,
-            entry_ctx.src,
-            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-        )?;
-        let types = check_plot_encodings(&entry_ctx, &owner, body)?;
-        channel_types.insert(owner.clone(), types);
-        for field in &body.mark_properties {
-            let LoweredPlotProperty::Mark(prop) = &field.property else {
-                return Err(invalid_property(
-                    &entry_ctx,
-                    field,
-                    "a mark block",
-                    &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
-                ));
-            };
-            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
-        }
-        for field in &body.properties {
-            let LoweredPlotProperty::Plot(prop) = &field.property else {
-                return Err(invalid_property(
-                    &entry_ctx,
-                    field,
-                    "a plot declaration",
-                    &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
-                ));
-            };
-            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
-        }
+        let (owner, types) = check_plot_entry(ctx, dag, entry)?;
+        channel_types.insert(owner, types);
     }
-    for entry in &dag.figures {
-        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
-        let owner = dag.require_bound_decl_identity(
-            &entry.name,
-            entry_ctx.src,
-            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-        )?;
-        for field in &entry.fields {
-            let LoweredPlotProperty::Composition(prop) = &field.property else {
-                return Err(invalid_property(
-                    &entry_ctx,
-                    field,
-                    "a figure declaration",
-                    &format!(
-                        "{}; figures render as side-by-side concatenation, so sizes belong on \
-                         the constituent plots or layers",
-                        valid_names(
-                            CompositionProperty::ALL
-                                .iter()
-                                .filter(|p| p.applies_to_figure())
-                                .map(|p| p.name()),
-                        )
-                    ),
-                ));
-            };
-            if !prop.applies_to_figure() {
-                return Err(invalid_property(
-                    &entry_ctx,
-                    field,
-                    "a figure declaration",
-                    &format!(
-                        "{}; figures render as side-by-side concatenation, so sizes belong on \
-                         the constituent plots or layers",
-                        valid_names(
-                            CompositionProperty::ALL
-                                .iter()
-                                .filter(|p| p.applies_to_figure())
-                                .map(|p| p.name()),
-                        )
-                    ),
-                ));
-            }
-            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
-        }
-    }
-    for entry in &dag.layers {
-        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
-        let owner = dag.require_bound_decl_identity(
-            &entry.name,
-            entry_ctx.src,
-            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-        )?;
-        for field in &entry.fields {
-            let LoweredPlotProperty::Composition(prop) = &field.property else {
-                return Err(invalid_property(
-                    &entry_ctx,
-                    field,
-                    "a layer declaration",
-                    &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
-                ));
-            };
-            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
-        }
-    }
+    dag.figures
+        .iter()
+        .try_for_each(|entry| check_figure_entry(ctx, dag, entry))?;
+    dag.layers
+        .iter()
+        .try_for_each(|entry| check_layer_entry(ctx, dag, entry))?;
     Ok(channel_types)
+}
+
+pub(super) fn check_plot_entry(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    entry: &crate::ir::lower::PlotEntry,
+) -> Result<
+    (
+        crate::syntax::decl_name::ResolvedDeclName,
+        HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
+    ),
+    GraphcalError,
+> {
+    let body = &entry.body;
+    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+    let owner = dag.require_bound_decl_identity(
+        &entry.name,
+        entry_ctx.src,
+        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+    )?;
+    let types = check_plot_encodings(&entry_ctx, &owner, body)?;
+    for field in &body.mark_properties {
+        let LoweredPlotProperty::Mark(prop) = &field.property else {
+            return Err(invalid_property(
+                &entry_ctx,
+                field,
+                "a mark block",
+                &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
+            ));
+        };
+        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+    }
+    for field in &body.properties {
+        let LoweredPlotProperty::Plot(prop) = &field.property else {
+            return Err(invalid_property(
+                &entry_ctx,
+                field,
+                "a plot declaration",
+                &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
+            ));
+        };
+        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+    }
+    Ok((owner, types))
+}
+
+pub(super) fn check_figure_entry(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    entry: &crate::ir::lower::FigureEntry,
+) -> Result<(), GraphcalError> {
+    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+    let owner = dag.require_bound_decl_identity(
+        &entry.name,
+        entry_ctx.src,
+        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+    )?;
+    for field in &entry.fields {
+        let LoweredPlotProperty::Composition(prop) = &field.property else {
+            return Err(invalid_property(
+                &entry_ctx,
+                field,
+                "a figure declaration",
+                &format!(
+                    "{}; figures render as side-by-side concatenation, so sizes belong on \
+                     the constituent plots or layers",
+                    valid_names(
+                        CompositionProperty::ALL
+                            .iter()
+                            .filter(|p| p.applies_to_figure())
+                            .map(|p| p.name()),
+                    )
+                ),
+            ));
+        };
+        if !prop.applies_to_figure() {
+            return Err(invalid_property(
+                &entry_ctx,
+                field,
+                "a figure declaration",
+                &format!(
+                    "{}; figures render as side-by-side concatenation, so sizes belong on \
+                     the constituent plots or layers",
+                    valid_names(
+                        CompositionProperty::ALL
+                            .iter()
+                            .filter(|p| p.applies_to_figure())
+                            .map(|p| p.name()),
+                    )
+                ),
+            ));
+        }
+        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+    }
+    Ok(())
+}
+
+pub(super) fn check_layer_entry(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    entry: &crate::ir::lower::LayerEntry,
+) -> Result<(), GraphcalError> {
+    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+    let owner = dag.require_bound_decl_identity(
+        &entry.name,
+        entry_ctx.src,
+        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+    )?;
+    for field in &entry.fields {
+        let LoweredPlotProperty::Composition(prop) = &field.property else {
+            return Err(invalid_property(
+                &entry_ctx,
+                field,
+                "a layer declaration",
+                &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
+            ));
+        };
+        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+    }
+    Ok(())
 }
 
 /// Validate the `plots:` lists of figure/layer declarations (#843):
@@ -312,7 +345,7 @@ fn invalid_property(
 }
 
 /// Check one property value against its expected type.
-fn check_property_value(
+pub(super) fn check_property_value(
     ctx: &DimCheckContext<'_>,
     owner: &crate::syntax::decl_name::ResolvedDeclName,
     property: &'static str,

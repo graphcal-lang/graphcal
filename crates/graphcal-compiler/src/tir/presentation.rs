@@ -228,6 +228,12 @@ impl PresentationCallKey {
         Self { owner, span }
     }
 
+    /// Declaration whose body owns this call site.
+    #[must_use]
+    pub const fn owner(&self) -> &ResolvedDeclName {
+        &self.owner
+    }
+
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span

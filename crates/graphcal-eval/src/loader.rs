@@ -14,7 +14,6 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
@@ -1326,26 +1325,6 @@ impl LoadedProject {
             }
         }
 
-        for dag_id in &self.load_order {
-            let loaded = &self.files[dag_id];
-            link_include_instance_indexes(
-                &mut resolver,
-                &loaded.dag_id,
-                &loaded.ast.declarations,
-                &loaded.resolved_imports,
-                &self.files,
-            )?;
-            for inline in &loaded.inline_dags {
-                link_include_instance_indexes(
-                    &mut resolver,
-                    &inline.dag_id,
-                    inline.body(loaded),
-                    &inline.resolved_imports,
-                    &self.files,
-                )?;
-            }
-        }
-
         Ok(resolver)
     }
 }
@@ -1500,52 +1479,9 @@ fn inherit_include_instance_scopes(
     Ok(())
 }
 
-/// Make each configured include's own indexes resolvable by their bare names
-/// inside the importing module.
-///
-/// The synthetic include modules created by [`add_include_instance_modules`]
-/// already hold the dependency's index declarations. This pass copies those
-/// indexes into the importer's symbol table (skipping any the include binds or
-/// overrides) so the inlined dependency bodies — `for s: Step`, `T[Step]`,
-/// `Step#A` — resolve against the importer's merged registry. See
-/// [`graphcal_compiler::syntax::module_resolve::ModuleResolver::inline_instantiated_include_indexes`].
-fn link_include_instance_indexes(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &impl ResolvedModuleLookup,
-    files: &HashMap<DagId, LoadedFile>,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for decl in declarations {
-        let DeclKind::Include(include) = &decl.kind else {
-            continue;
-        };
-        let instance_scope = include_instance_scope(include);
-        let prefix = instance_scope.merge_scope_name();
-        let Some(source) =
-            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
-        else {
-            continue;
-        };
-        let synthetic = owner.instance_child(prefix.as_str());
-        if resolver.modules().get(&synthetic).is_none() {
-            // The synthetic module is only present when the include target
-            // resolved to declarations; skip silently otherwise (a missing
-            // target is already reported elsewhere).
-            continue;
-        }
-        if let Some(bound_indexes) = include_index_bindings(include) {
-            resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound_indexes)?;
-        }
-        link_nested_include_instance_indexes(resolver, source.target(), &synthetic, files)?;
-    }
-    Ok(())
-}
-
 struct NestedIncludeInstance {
     source: DagId,
     instance: DagId,
-    index_bindings: Option<HashSet<IndexName>>,
 }
 
 fn nested_include_instances(
@@ -1565,7 +1501,6 @@ fn nested_include_instances(
                 Some(NestedIncludeInstance {
                     source,
                     instance: instance.instance_child(instance_scope.merge_scope_name().as_str()),
-                    index_bindings: include_index_bindings(include),
                 })
             })
             .collect()
@@ -1617,35 +1552,6 @@ fn inherit_nested_include_instance_scopes(
     Ok(())
 }
 
-fn link_nested_include_instance_indexes(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    source: &DagId,
-    instance: &DagId,
-    files: &HashMap<DagId, LoadedFile>,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    let mut pending = nested_include_instances(source, instance, files)
-        .into_iter()
-        .rev()
-        .map(|child| (instance.clone(), child))
-        .collect::<Vec<_>>();
-    while let Some((parent_instance, child)) = pending.pop() {
-        if let Some(bound_indexes) = &child.index_bindings {
-            resolver.inline_instantiated_include_indexes(
-                &parent_instance,
-                &child.instance,
-                bound_indexes,
-            )?;
-        }
-        pending.extend(
-            nested_include_instances(&child.source, &child.instance, files)
-                .into_iter()
-                .rev()
-                .map(|grandchild| (child.instance.clone(), grandchild)),
-        );
-    }
-    Ok(())
-}
-
 fn resolved_module_target_from(
     source: &DagId,
     path: &ModulePath,
@@ -1671,16 +1577,6 @@ fn resolved_module_target_from(
 
 fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> IncludeInstanceScope {
     include.instance_scope()
-}
-
-fn include_index_bindings<P: Phase>(include: &IncludeDecl<P>) -> Option<HashSet<IndexName>> {
-    (!include.param_bindings.is_empty()).then(|| {
-        include
-            .param_bindings
-            .iter()
-            .map(|binding| IndexName::from_atom(binding.name.name.clone()))
-            .collect()
-    })
 }
 
 fn module_declarations<'a>(

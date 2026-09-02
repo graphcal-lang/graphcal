@@ -1,7 +1,7 @@
 // main.gcl -- selectively re-exports `origin` with Element bound to a `pub`
-// local type → compiles. Positive companion to the V006 fixture.
+// local type; the template body treats Element parametrically.
 pub type Inner {
     Inner(size: Length),
 }
 
-include container.lib(type Element: Inner)::{ pub origin, pub Wrapper };
+include container.lib(type Element: Inner, value: Inner(size: 1.0 m))::{ pub origin, pub Wrapper };

@@ -38,7 +38,7 @@ impl StaticPortIdentity {
     }
 
     #[must_use]
-    pub fn name(&self) -> &crate::syntax::names::NameAtom {
+    pub const fn name(&self) -> &crate::syntax::names::NameAtom {
         match self {
             Self::Type(name) => name.atom(),
             Self::Dimension(name) => name.atom(),
