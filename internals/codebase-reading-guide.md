@@ -349,23 +349,27 @@ and presentation facts before evaluation.
 In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
 source aliases to canonical identities; the store is the authoritative lookup
-for owner-qualified dimensions, units, indexes, nominal types, and
-constructors. Value-declaration bodies, type annotations, and domain bounds
-arrive already lowered to HIR. TIR resolves canonical HIR type references
-against the store without re-reading source paths; declaration bounds move into
-checked semantic storage without another lowering pass. Before TIR
-construction, each `HirImportedBinding` is replaced by
-an atomic checked `ImportedBinding` carrying the same canonical target, its
-resolved declared type, and an optional dependency constant value. TIR validates
-that no lexical key or canonical target changed across the boundary. Checked
-DAG body construction then consumes each HIR module.
+for owner-qualified dimensions, units, declared and structural finite indexes,
+nominal types, and constructors. Value-declaration bodies, type annotations,
+and domain bounds arrive already lowered to HIR.
+
+TIR construction is explicitly two-pass within each physical file. The first
+pass consumes every root and inline `HirDag` into a `SignatureResolvedHirDag`,
+which owns both the HIR body and its one resolved declaration interface. Once
+all local interfaces exist, the second pass attaches each checked
+`ImportedBinding` and resolves bodies from those exact signature values. A
+signature therefore cannot be paired with another body, and declaration type
+expressions are not resolved again during body construction. TIR validates that
+no lexical key or canonical import target changed across the boundary;
+declaration bounds then move into checked semantic storage without another
+lowering pass.
 
 The TIR is not flat:
 
 ```text
 TIR
-  registry                 // root frontend/formatting artifact
-  project_type_store       // canonical owner-qualified definitions
+  registry: FormattingRegistry  // diagnostics + timezone validation only
+  project_type_store            // canonical owner-qualified definitions
   root_dag_id
   dags: HashMap<DagId, DagTIR>
   module_aliases
@@ -386,8 +390,6 @@ side map clones bodies.
 `DagSemanticBody` contains derived facts only:
 
 - `semantic.dependencies`: owner-qualified declaration dependency maps.
-- `semantic.collection_refs`: shared handles to canonical indexes used by
-  map/table/index/match inference.
 - `semantic.constructor_refs`: canonical constructor-call and constructor-match
   metadata backed by shared project-store type handles.
 - `semantic.type_defs`: resolved field/default semantics plus shared handles to
@@ -397,6 +399,11 @@ side map clones bodies.
   `ResolvedName<Decl>` identities. Unknown-name diagnostics use
   `DeclarationIdentityLookup::DiagnosticProbe`; they never synthesize a
   resolved identity from the current DAG owner.
+
+Collection and index semantics call `TIR::index_def`, which resolves both
+owner-qualified declared indexes and concrete `Fin(N)` identities through the
+project type store. `DagSemanticBody` has no duplicate per-DAG index-definition
+cache or expression walk.
 
 Dimensions are exact exponent maps:
 
@@ -886,20 +893,26 @@ formatting, manifest parsing, and time scales.
 
 `tir/typed.rs` also defines `ProjectTypeStore`, the authoritative
 owner-qualified semantic store used during module-aware TIR resolution. It keys
-dimensions, units, indexes, nominal types, and constructors by `ResolvedName`.
-The project compiler creates it once, installs the synthetic Graphcal prelude,
-and adds only native definitions from each resolver module. Imported spellings
-remain resolver bindings; they are not copied into the store under importer
-owners. The leaf-keyed `Registry` remains confined to frontend declaration
-construction, finite-index support, time zones, and formatting metadata.
+dimensions, units, declared indexes, nominal types, and constructors by
+`ResolvedName`, and keys structural finite indexes by typed `FiniteIndex`
+identity. The project compiler creates it once, installs the synthetic Graphcal
+prelude, and adds only native definitions from each resolver module. Imported
+spellings remain resolver bindings; they are not copied into the store under
+importer owners.
+
+The leaf-keyed `Registry` is confined to frontend declaration construction and
+HIR lowering. At the TIR boundary, `SemanticRegistry::into_formatting` discards
+dimension-name resolution, units, and index lookup. Checked TIR retains only a
+`FormattingRegistry` with dimension display metadata and reproducible timezone
+validation; semantic consumers must use `ProjectTypeStore`.
 
 ### 3.7 TIR and `DagTIR`
 
-`TIR` wraps one file-scoped registry and all DAGs reachable from that file.
+`TIR` wraps post-resolution formatting services and all DAGs reachable from one file.
 
 ```text
 TIR
-  registry: Registry                 // frontend/formatting boundary
+  registry: FormattingRegistry       // display + timezone boundary
   project_type_store: ProjectTypeStore
   root_dag_id: DagId
   dags: HashMap<DagId, DagTIR>
@@ -1067,10 +1080,13 @@ or builtin, while a missing required-port substitution is an internal error.
 `ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
 module into `HirProject` using HIR-only dependency interfaces. HIR import
 bindings contain canonical targets but cannot express checked types or values.
-Checking then builds one `ProjectTypeStore` from the complete HIR project,
-attaches checked imported interfaces, consumes each HIR body into TIR, and runs
-all mandatory checks. Dependency aliases never become importer-owned semantic
-definitions. Each `HirDag` also retains an ordered typed record of parameter,
+Checking then builds one `ProjectTypeStore` from the complete HIR project. For
+each physical file it resolves every root/inline declaration signature first,
+then attaches checked imported interfaces and consumes the same
+`SignatureResolvedHirDag` values into TIR bodies. Dependency aliases never
+become importer-owned semantic definitions, and the checker never reconstructs
+a local interface in a separate prepass. Each `HirDag` also retains an ordered
+typed record of parameter,
 node, and index declarations authored directly in that DAG, excluding merged
 include declarations. Checking attaches declared types, runtime keys, defaults,
 visibility, and required-index facts to that record. A successful
