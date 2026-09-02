@@ -2,9 +2,10 @@
 
 This Lake package contains the machine-checked normative specifications used by Graphcal's verification-guided development workflow.
 
-The package currently contains three specification slices:
+The package currently contains four specification slices:
 
 - [`Graphcal/Static/RequiredBindability.lean`](Graphcal/Static/RequiredBindability.lean) formalizes validation rule V002: required indexes, types, and dimensions must be bindable, while parameters are inherently bindable input ports.
+- [`Graphcal/Static/TemplateClosure.lean`](Graphcal/Static/TemplateClosure.lean) formalizes validation rule V007: template bodies may use Static input ports parametrically, but may not depend on an optional `pub(bind)` port's concrete default; parameter defaults remain exempt under V005 reconciliation.
 - [`Graphcal/Static/NamespaceResolution.lean`](Graphcal/Static/NamespaceResolution.lean) formalizes the Static, Term, and Unit namespace kernel.
   It models typed collision slots, owner-scoped index labels, structured DAG paths, `::` member selection, `#` label selection, capability checks, no-shadowing, canonical alias targets, and call resolution independent of argument shape.
 - [`Graphcal/Static/ExternalSurface.lean`](Graphcal/Static/ExternalSurface.lean) formalizes import capability and include projection after namespace/visibility resolution.
@@ -55,15 +56,16 @@ just formal-conformance
 ```
 
 `just formal` checks the Lean library and rejects proof placeholders or custom axioms.
-`just formal-conformance` runs three differential checks:
+`just formal-conformance` runs four differential checks:
 
 - the required-bindability oracle's complete 20-case matrix against Graphcal's parser, desugaring, and V002 production pass;
+- the template-closure oracle's complete 36-case matrix against the production V007 semantic core;
 - the namespace-resolution oracle's 72 reviewed scenarios against the production single-file and project pipeline;
 - the external-surface oracle's 55 import, typed Static binding, effective projection-identity, constructor-owner, and DAG-blueprint states against Rust's shared semantic core.
 
 The namespace matrix covers visible and `::` member lookups for every Static/Term/Unit occupancy, duplicate slots, every DAG-input selector/target category pair, and owner-qualified labels. The external-surface matrix exhaustively combines fixed, optional-input, and required-input roles with dependency, target-role, and exact-category choices, then checks constructor owner rebinding and non-projectable DAG blueprints explicitly.
 
-The namespace and external-surface oracles are emitted by [`Graphcal/Static/NamespaceResolutionOracle.lean`](Graphcal/Static/NamespaceResolutionOracle.lean) and [`Graphcal/Static/ExternalSurfaceOracle.lean`](Graphcal/Static/ExternalSurfaceOracle.lean). They evaluate the proven executable references; Rust independently renders or classifies each typed scenario, so production acceptance cannot silently diverge from the Lean model.
+The template-closure, namespace, and external-surface oracles are emitted by [`Graphcal/Static/TemplateClosureOracle.lean`](Graphcal/Static/TemplateClosureOracle.lean), [`Graphcal/Static/NamespaceResolutionOracle.lean`](Graphcal/Static/NamespaceResolutionOracle.lean), and [`Graphcal/Static/ExternalSurfaceOracle.lean`](Graphcal/Static/ExternalSurfaceOracle.lean). They evaluate the proven executable references; Rust independently renders or classifies each typed scenario, so production acceptance cannot silently diverge from the Lean model.
 
 The checked-in `lean-toolchain` pins the Lean version.
 The package intentionally has no third-party Lean dependencies for these specification slices.

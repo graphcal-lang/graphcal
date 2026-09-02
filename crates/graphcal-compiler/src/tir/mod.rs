@@ -4,4 +4,5 @@
 pub mod dim_check;
 pub mod materialized_shape;
 pub mod presentation;
+pub(crate) mod template_closure;
 pub mod typed;
