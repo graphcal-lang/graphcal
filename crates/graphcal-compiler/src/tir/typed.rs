@@ -446,6 +446,7 @@ fn type_resolve_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.static_ports,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -601,6 +602,7 @@ fn type_resolve_single_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.static_ports,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -1887,6 +1889,7 @@ impl DagTIRSeed {
         layers: Vec<crate::ir::lower::LayerEntry>,
         included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
+        static_ports: Vec<crate::hir::StaticPort>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
@@ -1949,6 +1952,7 @@ impl DagTIRSeed {
             declaration_index: DagDeclarationIndex::default(),
             semantic,
             source_order,
+            static_ports,
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
@@ -1976,6 +1980,81 @@ impl DagTIRSeed {
         })?;
         Ok(dag)
     }
+}
+
+/// Build a temporary TIR view in which one optional dimension port is rigid.
+///
+/// The ordinary checked TIR retains default-resolved signatures for parameter
+/// default reconciliation. This view re-resolves source-authored declaration
+/// signatures against an opaque base identity so Option A can verify executable
+/// bodies without mutating the authoritative result.
+pub(crate) fn rigid_dimension_view(
+    tir: &TIR,
+    dag_id: &crate::dag_id::DagId,
+    dimension: &ResolvedDimName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<TIR, GraphcalError> {
+    let rigid_types = tir.project_types.with_rigid_dimension(dimension);
+    let dag = tir.dags.get(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("template DAG `{dag_id}` is unavailable for rigid checking"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let resolved = dag
+        .consts
+        .iter()
+        .map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        })
+        .chain(dag.params.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        }))
+        .chain(dag.nodes.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_src,
+                &entry.declaration_owner,
+            )
+        }))
+        .filter(|(_, _, _, owner)| *owner == dag_id)
+        .map(|(name, annotation, type_src, _)| {
+            type_expr::resolve_hir_type_expr_with_project_types(
+                &annotation.type_expr,
+                type_src.resolve(src),
+                &rigid_types,
+            )
+            .map(|resolved| (name.clone(), resolved))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+
+    let mut rigid = tir.clone();
+    rigid.project_types = rigid_types;
+    rigid
+        .registry
+        .dimensions
+        .register_rigid_dimension(dimension);
+    let rigid_dag = rigid.dags.get_mut(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("template DAG `{dag_id}` disappeared while installing rigid signatures"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    rigid_dag.resolved_decl_types.extend(resolved);
+    Ok(rigid)
 }
 
 // ---------------------------------------------------------------------------

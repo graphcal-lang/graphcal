@@ -524,6 +524,7 @@ impl UnfrozenIR {
             included_plots: self.included_plots,
             source_order: self.source_order,
             source_declarations: self.source_declarations,
+            static_ports: self.static_ports,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             dynamic_unit_scales,

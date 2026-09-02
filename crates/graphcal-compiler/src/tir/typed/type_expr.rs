@@ -68,11 +68,15 @@ pub fn resolve_hir_type_expr(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let ctx = HirTypeResolutionContext {
-        src,
-        project_types: module_ctx.types,
-    };
-    resolve_hir_type_expr_inner(type_ann, ctx)
+    resolve_hir_type_expr_with_project_types(type_ann, src, module_ctx.types)
+}
+
+pub(super) fn resolve_hir_type_expr_with_project_types(
+    type_ann: &hir::TypeExpr,
+    src: &NamedSource<Arc<String>>,
+    project_types: &ProjectTypeStore,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    resolve_hir_type_expr_inner(type_ann, HirTypeResolutionContext { src, project_types })
 }
 
 fn resolve_hir_type_expr_inner(

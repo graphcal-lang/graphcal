@@ -22,6 +22,7 @@ pub mod plot_shape;
 pub mod registry;
 pub(crate) mod source_line;
 pub mod stack;
+pub mod static_interface;
 pub mod syntax;
 pub mod text_position;
 pub mod tir;

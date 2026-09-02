@@ -484,6 +484,8 @@ pub struct HirDag {
     /// Runtime-interface-relevant declarations authored directly in this DAG,
     /// excluding declarations merged from includes.
     pub(super) source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Typed Static ports authored directly in this reusable DAG.
+    pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Expected-fail metadata keyed by assertion name, retaining its authored scope and source.
@@ -536,6 +538,12 @@ impl HirDag {
     #[must_use]
     pub fn source_declarations(&self) -> &[crate::hir::SourceDeclaration] {
         &self.source_declarations
+    }
+
+    /// Typed Static interface authored directly in this DAG.
+    #[must_use]
+    pub fn static_ports(&self) -> &[crate::hir::StaticPort] {
+        &self.static_ports
     }
 }
 
@@ -640,6 +648,47 @@ fn single_module_resolver(
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     add_module_with_dags(&mut resolver, dag_id, &ast.declarations, src)?;
     Ok(resolver)
+}
+
+fn collect_static_ports(ast: &File, owner: &crate::dag_id::DagId) -> Vec<crate::hir::StaticPort> {
+    ast.declarations
+        .iter()
+        .filter_map(|declaration| {
+            let interface = crate::static_interface::static_interface(&declaration.kind)?;
+            let identity = match &declaration.kind {
+                DeclKind::Type(type_decl) => crate::hir::StaticPortIdentity::Type(
+                    crate::syntax::type_name::ResolvedStructTypeName::from_def(
+                        owner.clone(),
+                        type_decl.name.value.clone(),
+                    ),
+                ),
+                DeclKind::BaseDimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
+                    crate::syntax::dimension::ResolvedDimName::from_def(
+                        owner.clone(),
+                        dimension.name.value.clone(),
+                    ),
+                ),
+                DeclKind::Dimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
+                    crate::syntax::dimension::ResolvedDimName::from_def(
+                        owner.clone(),
+                        dimension.name.value.clone(),
+                    ),
+                ),
+                DeclKind::Index(index) => crate::hir::StaticPortIdentity::Index(
+                    crate::syntax::index_name::ResolvedIndexName::from_def(
+                        owner.clone(),
+                        index.name.value.clone(),
+                    ),
+                ),
+                _ => return None,
+            };
+            Some(crate::hir::StaticPort {
+                identity,
+                role: interface.role(),
+                span: declaration.span,
+            })
+        })
+        .collect()
 }
 
 fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration> {
@@ -1060,6 +1109,7 @@ fn build_ir_from_resolved(
             .map(|(name, cat)| (ScopedName::from(name), cat))
             .collect(),
         source_declarations: collect_source_declarations(ast),
+        static_ports: collect_static_ports(ast, dag_id),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -1134,6 +1184,8 @@ pub struct UnfrozenIR {
     /// Direct source declarations are immutable provenance. Include merging
     /// extends `source_order` but never this entry-interface subset.
     pub(super) source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Static interface provenance is not extended by include merging.
+    pub(super) static_ports: Vec<crate::hir::StaticPort>,
     pub(super) assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     pub(super) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,

@@ -449,7 +449,7 @@ pub(bind) type Record { Record(x: Dimensionless) }
 param record: Record = Record(x: 1.0);
 param existing: Existing = MakeExisting(x: 3.0);
 param extracted: Dimensionless = @existing.x;
-pub node out: Dimensionless = @record.x + @extracted;
+pub node out: Dimensionless = @extracted;
 ",
         r"
 import reconcile.replacement::{ type Other as Existing, Other as MakeExisting };
@@ -524,7 +524,7 @@ pub(bind) type Record { Record(x: Dimensionless) }
 pub type Wrapper<T: Type> { Wrapper(value: T) }
 param record: Record = Record(x: 1.0);
 param wrapped: Wrapper<Record> = Wrapper<Record>(value: @record);
-pub node out: Dimensionless = @record.x;
+pub node out: Dimensionless = 1.0;
 ";
     let main = r"
 type Other { Other(x: Dimensionless) }
@@ -613,6 +613,58 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
             && overridden_kind == "type"
             && orphan_decl == "extracted"
     ));
+}
+
+#[test]
+fn template_body_rejects_defaulted_bindable_type_structure() {
+    for source in [
+        r"
+pub(bind) type Record { Record(x: Dimensionless) }
+param record: Record;
+pub node out: Dimensionless = @record.x;
+",
+        r"
+pub(bind) type Element { Element }
+pub const node origin: Element = Element;
+",
+    ] {
+        assert!(matches!(
+            compile_graphcal_error(source),
+            GraphcalError::TemplateBodyDependsOnStaticDefault {
+                port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn template_body_checks_defaulted_bindable_dimensions_as_rigid() {
+    assert!(matches!(
+        compile_graphcal_error(
+            r"
+pub(bind) dim D = Length;
+param a: Length = 1.0 m;
+pub node out: D = @a;
+",
+        ),
+        GraphcalError::TemplateBodyDependsOnStaticDefault {
+            port_kind: graphcal_compiler::static_interface::StaticInputKind::Dimension,
+            ..
+        }
+    ));
+
+    let result = compile_and_eval(
+        r"
+pub(bind) dim D = Length;
+param a: D = 1.0 m;
+pub node out: D = @a;
+",
+    );
+    assert!(
+        result.is_ok(),
+        "a body that uses the dimension port parametrically was rejected: {result:?}"
+    );
 }
 
 #[test]

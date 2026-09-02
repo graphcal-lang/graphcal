@@ -729,6 +729,16 @@ impl ProjectTypeStore {
     }
 
     #[must_use]
+    pub(crate) fn with_rigid_dimension(&self, name: &ResolvedDimName) -> Self {
+        let mut rigid = self.clone();
+        rigid.dimensions.insert(
+            name.clone(),
+            Dimension::base(crate::dimension::BaseDimId::UserDefined(name.clone())),
+        );
+        rigid
+    }
+
+    #[must_use]
     pub(crate) fn get_dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
         self.dimensions.get(name)
     }
@@ -1657,6 +1667,7 @@ pub struct DagTIR {
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
+    pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
@@ -1750,6 +1761,12 @@ impl DagTIR {
     #[must_use]
     pub fn instances(&self) -> &[crate::ir::instance::InstanceRecord] {
         &self.instances
+    }
+
+    /// Typed Static interface authored directly in this reusable DAG.
+    #[must_use]
+    pub fn static_ports(&self) -> &[crate::hir::StaticPort] {
+        &self.static_ports
     }
 
     /// Value ports that callers may project from this DAG.

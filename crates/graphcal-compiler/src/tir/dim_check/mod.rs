@@ -37,6 +37,7 @@ mod infer;
 mod model_schema;
 mod plot;
 mod presentation;
+mod template_closure;
 
 pub use presentation::checked_expression_presentation;
 
@@ -1481,6 +1482,9 @@ fn check_dimensions_dag(
     check_domain_constraint_targets_dag(dag, src)?;
     ctx.checkpoint()?;
     check_domain_constraint_dimensions_dag(&ctx)?;
+
+    ctx.checkpoint()?;
+    template_closure::check_template_body_closure(&ctx)?;
 
     Ok(plot_shapes)
 }

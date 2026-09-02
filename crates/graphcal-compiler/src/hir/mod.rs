@@ -45,7 +45,7 @@ pub use nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
     NominalTypeKind, NominalTypeRegistry,
 };
-pub use source_interface::SourceDeclaration;
+pub use source_interface::{SourceDeclaration, StaticPort, StaticPortIdentity};
 pub use types::{
     BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound, GenericArg,
     GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, TypeExpr, TypeExprKind,

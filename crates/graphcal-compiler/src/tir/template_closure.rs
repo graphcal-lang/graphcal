@@ -12,6 +12,13 @@ use crate::ir::static_interface::{StaticInputKind, StaticRole};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StaticUseContext {
     /// A parameter default, protected by V005 reconciliation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the production checker only validates executable bodies"
+        )
+    )]
     ParameterDefault,
     /// A node, const, sink, or runtime-unit body.
     TemplateBody,
@@ -21,6 +28,13 @@ pub(crate) enum StaticUseContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StaticDependency {
     /// The operation remains valid for every admissible binding.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "accepted states are exercised by the formal oracle"
+        )
+    )]
     Abstract,
     /// The operation needs the optional port's concrete default definition.
     DefaultDefinition,
