@@ -1,0 +1,85 @@
+name: Build Renovate report engine
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - crates/graphcal-compiler/Cargo.toml
+      - crates/graphcal-compiler/src/**
+      - crates/graphcal-eval/Cargo.toml
+      - crates/graphcal-eval/src/**
+      - crates/graphcal-io/Cargo.toml
+      - crates/graphcal-io/src/**
+      - crates/graphcal-package/Cargo.toml
+      - crates/graphcal-package/src/**
+      - crates/graphcal-report/Cargo.toml
+      - crates/graphcal-report/src/**
+      - crates/graphcal-wasm/Cargo.toml
+      - crates/graphcal-wasm/src/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: renovate-report-engine-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    if: >-
+      github.event.pull_request.user.login == 'renovate[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        with:
+          tool: wasm-pack@0.15.0
+
+      - name: Regenerate embedded report engine
+        id: regenerate
+        run: |
+          rm -rf target/wasm-report/pkg
+          wasm-pack build crates/graphcal-wasm \
+            --target no-modules \
+            --out-dir ../../target/wasm-report/pkg \
+            --profile wasm-release \
+            --no-typescript \
+            --no-pack
+          rm -f target/wasm-report/pkg/.gitignore
+          cp target/wasm-report/pkg/graphcal_wasm.js \
+            target/wasm-report/pkg/graphcal_wasm_bg.wasm \
+            crates/graphcal-cli/assets/report-engine/
+          GRAPHCAL_UPDATE_REPORT_ENGINE=1 cargo check -p graphcal
+
+          if git diff --quiet -- crates/graphcal-cli/assets/report-engine; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload regenerated engine
+        if: steps.regenerate.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: report-engine
+          path: |
+            crates/graphcal-cli/assets/report-engine/graphcal_wasm.js
+            crates/graphcal-cli/assets/report-engine/graphcal_wasm_bg.wasm
+            crates/graphcal-cli/assets/report-engine/source-tree.digest
+          if-no-files-found: error
+          retention-days: 1

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Graphcal has no persistent services or wake-time authentication to repair.
+# Toolchains and dependency caches are restored directly from the orb snapshot.

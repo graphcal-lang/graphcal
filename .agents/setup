@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+step() {
+  local label=$1
+  shift
+  printf '\n==> %s\n' "$label"
+  time "$@"
+}
+
+install_system_prerequisites() {
+  local -a packages=()
+  command -v cc >/dev/null || packages+=(build-essential)
+  command -v curl >/dev/null || packages+=(curl)
+  command -v git >/dev/null || packages+=(git)
+  command -v pkg-config >/dev/null || packages+=(pkg-config)
+  if command -v python3 >/dev/null; then
+    python3 -m pip --version >/dev/null 2>&1 || packages+=(python3-pip)
+  else
+    packages+=(python3 python3-pip)
+  fi
+
+  if ((${#packages[@]} == 0)); then
+    echo "System prerequisites already installed"
+    return
+  fi
+
+  local -a apt=(apt-get)
+  if ((EUID != 0)); then
+    apt=(sudo apt-get)
+  fi
+  "${apt[@]}" update
+  "${apt[@]}" install -y --no-install-recommends "${packages[@]}"
+}
+
+ensure_login_path() {
+  local marker="# graphcal orb toolchains"
+  if ! grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >>"$HOME/.bash_profile" <<'EOF'
+
+# graphcal orb toolchains
+export PATH="$HOME/.cargo/bin:$HOME/.elan/bin:$HOME/.local/bin:$PATH"
+EOF
+  fi
+  export PATH="$HOME/.cargo/bin:$HOME/.elan/bin:$HOME/.local/bin:$PATH"
+}
+
+install_archive_binary() (
+  local name=$1
+  local expected_version=$2
+  local version_command=$3
+  local url=$4
+  local checksum=$5
+  local archive_binary=$6
+
+  if command -v "$name" >/dev/null && [[ "$(eval "$version_command")" == "$expected_version" ]]; then
+    echo "$name $expected_version already installed"
+    return
+  fi
+
+  local temporary
+  temporary=$(mktemp -d)
+  trap 'rm -rf "$temporary"' EXIT
+  curl --fail --location --silent --show-error "$url" -o "$temporary/archive.tar.gz"
+  echo "$checksum  $temporary/archive.tar.gz" | sha256sum --check --status
+  tar -xzf "$temporary/archive.tar.gz" -C "$temporary"
+  install -D -m 0755 "$temporary/$archive_binary" "$HOME/.local/bin/$name"
+)
+
+install_rust() {
+  if [[ ! -x "$HOME/.cargo/bin/rustup" ]]; then
+    curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+      https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+  fi
+
+  rustup toolchain install --no-self-update
+  rustup target add wasm32-unknown-unknown
+}
+
+install_lean() {
+  install_archive_binary \
+    elan-init 4.2.4 'elan-init --version | awk "{print \$2}"' \
+    https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz \
+    42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63 \
+    elan-init
+
+  if [[ ! -x "$HOME/.elan/bin/elan" ]]; then
+    elan-init -y --no-modify-path --default-toolchain none
+  fi
+
+  local lean_toolchain
+  lean_toolchain=$(<formal/lean-toolchain)
+  if ! elan toolchain list | grep -Fqx "$lean_toolchain"; then
+    elan toolchain install "$lean_toolchain"
+  fi
+}
+
+install_python_tools() {
+  if python3 -c 'import importlib.metadata; raise SystemExit(importlib.metadata.version("zensical") != "0.0.52")' 2>/dev/null; then
+    echo "zensical 0.0.52 already installed"
+  else
+    python3 -m pip install --user --disable-pip-version-check zensical==0.0.52
+  fi
+}
+
+step "Install system prerequisites" install_system_prerequisites
+ensure_login_path
+step "Install the pinned Rust toolchain" install_rust
+step "Install just" install_archive_binary \
+  just 1.42.4 'just --version | awk "{print \$2}"' \
+  https://github.com/casey/just/releases/download/1.42.4/just-1.42.4-x86_64-unknown-linux-musl.tar.gz \
+  678efc1cfbd5fa5a88375daa7e2f3864a049d6d63a0296df925a2ae5f516cb56 \
+  just
+step "Install wasm-pack" install_archive_binary \
+  wasm-pack 0.15.0 'wasm-pack --version | awk "{print \$2}"' \
+  https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
+  c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a \
+  wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack
+step "Install the pinned Lean toolchain" install_lean
+step "Install documentation tools" install_python_tools
+step "Fetch workspace dependencies" cargo fetch --locked
+step "Fetch fuzzing dependencies" cargo fetch --locked --manifest-path fuzz/Cargo.toml
+
+echo
+echo "Graphcal orb setup complete"
