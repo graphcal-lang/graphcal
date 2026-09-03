@@ -962,7 +962,7 @@ fn describe_func_type(ty: &wasmi::FuncType) -> String {
 
 fn plugin_module_error(error: &wasmi::Error) -> PluginLoadError {
     match error.kind() {
-        wasmi::errors::ErrorKind::Limits(limit) => {
+        wasmi::errors::ErrorKind::UserLimits(limit) => {
             PluginLoadError::ModuleLimit(module_limit_error(limit))
         }
         _ => PluginLoadError::InvalidModule {
