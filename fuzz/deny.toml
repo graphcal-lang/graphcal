@@ -27,6 +27,7 @@ ignore = true
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true
 highlight = "simplest-path"
 
 [sources]
