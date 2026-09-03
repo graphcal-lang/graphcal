@@ -208,14 +208,14 @@ let wasm_bindgen = (function(exports) {
                 const ret = result;
                 return ret;
             },
-            __wbg_isArray_264dd3fb3df7f1a4: function() { return handleError(function (arg0) {
-                const ret = Array.isArray(arg0);
-                return ret;
-            }, arguments); },
             __wbg_isArray_6339f732981044bf: function(arg0) {
                 const ret = Array.isArray(arg0);
                 return ret;
             },
+            __wbg_isArray_b34fbcfe67c5ade1: function() { return handleError(function (arg0) {
+                const ret = Array.isArray(arg0);
+                return ret;
+            }, arguments); },
             __wbg_is_86be747e88e872fb: function(arg0, arg1) {
                 const ret = Object.is(arg0, arg1);
                 return ret;
