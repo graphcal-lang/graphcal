@@ -62,7 +62,7 @@ toml = "1.1.2"
 tower-lsp = "0.20"
 unicode-width = "0.2.2"
 walkdir = "2.5.0"
-wasmi = "1.1.0"
+wasmi = "2.0.0"
 wat = "1.252.0"
 
 [workspace.lints.clippy]
