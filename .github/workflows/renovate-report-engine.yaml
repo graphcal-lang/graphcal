@@ -64,7 +64,30 @@ jobs:
           cp target/wasm-report/pkg/graphcal_wasm.js \
             target/wasm-report/pkg/graphcal_wasm_bg.wasm \
             crates/graphcal-cli/assets/report-engine/
-          GRAPHCAL_UPDATE_REPORT_ENGINE=1 cargo check -p graphcal
+
+          # The fingerprint lives in the CLI build script, but a Renovate
+          # update may legitimately make an unrelated native dependency fail
+          # to compile. `--keep-going` still runs the independent build script;
+          # deleting the old digest lets us prove that it completed.
+          digest=crates/graphcal-cli/assets/report-engine/source-tree.digest
+          rm -f "$digest"
+          set +e
+          GRAPHCAL_UPDATE_REPORT_ENGINE=1 cargo check -p graphcal --keep-going
+          cargo_status=$?
+          set -e
+
+          if [[ ! -f "$digest" ]]; then
+            echo "report-engine fingerprint was not regenerated" >&2
+            exit 1
+          fi
+          digest_value=$(<"$digest")
+          if [[ ! "$digest_value" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "report-engine fingerprint is not a SHA-256 digest" >&2
+            exit 1
+          fi
+          if ((cargo_status != 0)); then
+            echo "::warning::Native cargo check failed after the report-engine fingerprint was regenerated; regular CI will report the incompatibility"
+          fi
 
           if git diff --quiet -- crates/graphcal-cli/assets/report-engine; then
             echo "changed=false" >>"$GITHUB_OUTPUT"
