@@ -2684,41 +2684,28 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let dag_tir = ctx.tir.dag_registry().get(&target.value).ok_or_else(|| {
-        ctx.internal_error(
-            format!(
-                "dag `{}` has no compiled TIR (should have been caught by dim-check)",
-                target.value
-            ),
-            target.span,
-        )
-    })?;
     let checked = ctx.checked_execution_facts.ok_or_else(|| {
         ctx.internal_error(
             "runtime DAG call has no checked execution-fact store",
             target.span,
         )
     })?;
-    let dag_facts = checked.for_dag(&target.value).ok_or_else(|| {
-        ctx.internal_error(
-            format!("dag `{}` has no checked execution facts", target.value),
-            target.span,
-        )
-    })?;
-    if dag_facts.dag_id != target.value {
-        return Err(ctx.internal_error(
-            format!(
-                "checked execution facts for `{}` were paired with DAG `{}`",
-                dag_facts.dag_id, target.value
-            ),
-            target.span,
-        ));
-    }
+    let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, &target.value)
+        .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
+    let dag_tir = scope.dag();
+    let dag_facts = scope.facts();
 
-    let call_dags = crate::exec_plan::semantic_runtime_dags_from(ctx.tir, dag_tir);
-    let mut dag_values = call_dags
+    let call_dags = crate::exec_plan::semantic_runtime_dags_from(ctx.tir, dag_tir, ctx.src)?;
+    let call_facts = call_dags
         .iter()
-        .filter_map(|dag| checked.for_dag(dag.dag_id()))
+        .map(|dag| {
+            crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, dag.dag_id())
+                .map(crate::execution_scope::CheckedExecutionScope::facts)
+                .map_err(|error| ctx.internal_error(error.to_string(), target.span))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut dag_values = call_facts
+        .iter()
         .flat_map(|facts| facts.const_values.iter())
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<RuntimeValueMap>();

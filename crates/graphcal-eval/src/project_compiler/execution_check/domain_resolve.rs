@@ -13,17 +13,14 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
+use super::visible_values_with_imports;
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
-use crate::execution_facts::{CheckedDagExecutionFacts, RuntimeValueMap};
-
-#[cfg(test)]
-use super::known_const_values;
-use super::visible_values_with_imports;
+use crate::execution_facts::RuntimeValueMap;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
@@ -413,9 +410,16 @@ pub(super) fn resolve_struct_field_constraints(
     )
 }
 
+/// Evaluated constants whose field constraints are still being resolved.
+/// This is deliberately not an executable/checked DAG artifact.
+pub(super) struct DagConstScope<'a> {
+    pub values: &'a RuntimeValueMap,
+    pub source: &'a NamedSource<Arc<String>>,
+}
+
 struct FieldConstraintResolutionContext<'a> {
     tir: &'a TIR,
-    dag_facts: &'a HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
+    const_scopes: &'a HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>>,
     all_const_values: &'a RuntimeValueMap,
     builtin_fns: &'a graphcal_compiler::registry::builtins::BuiltinFunctions,
     fallback_src: &'a NamedSource<Arc<String>>,
@@ -471,16 +475,16 @@ fn resolve_application_field_constraints(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    let facts = ctx.dag_facts.get(dag_id).ok_or_else(|| {
+    let constants = ctx.const_scopes.get(dag_id).ok_or_else(|| {
         GraphcalError::internal_error(
-            format!("type owner `{dag_id}` has no checked execution facts"),
+            format!("type owner `{dag_id}` has no evaluated constant scope"),
             ctx.fallback_src,
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let owner_src = facts.source();
+    let owner_src = constants.source;
     let visible_const_values =
-        visible_values_with_imports(dag, &facts.const_values, ctx.all_const_values);
+        visible_values_with_imports(dag, constants.values, ctx.all_const_values);
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
@@ -575,7 +579,7 @@ fn collect_field_constraint_applications(
 
 pub(super) fn resolve_struct_field_constraints_for_dags(
     tir: &TIR,
-    dag_facts: &HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
+    const_scopes: &HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'_>>,
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -584,7 +588,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     let builtin_fns = builtin_functions();
     let context = FieldConstraintResolutionContext {
         tir,
-        dag_facts,
+        const_scopes,
         all_const_values,
         builtin_fns,
         fallback_src: src,
@@ -605,30 +609,34 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
-    let dag_facts = tir
+    let empty = RuntimeValueMap::new();
+    let const_scopes = tir
         .dag_registry()
         .keys()
         .map(|dag_id| {
             let values = if dag_id == tir.root_dag_id() {
-                const_values.clone()
+                const_values
             } else {
-                RuntimeValueMap::new()
+                &empty
             };
             (
                 dag_id.clone(),
-                Arc::new(CheckedDagExecutionFacts {
-                    dag_id: dag_id.clone(),
-                    source: src.clone(),
-                    const_values: Arc::new(values),
-                    topo_order: Arc::new(Vec::new()),
-                    domain_constraints: Arc::new(HashMap::new()),
-                }),
+                DagConstScope {
+                    values,
+                    source: src,
+                },
             )
         })
         .collect::<HashMap<_, _>>();
-    let all_const_values = known_const_values(tir, &dag_facts);
-    resolve_struct_field_constraints_for_dags(tir, &dag_facts, &all_const_values, src, cancellation)
-        .map(|grouped| grouped.into_values().flatten().collect())
+    let all_const_values = visible_values_with_imports(tir.root(), const_values, &empty);
+    resolve_struct_field_constraints_for_dags(
+        tir,
+        &const_scopes,
+        &all_const_values,
+        src,
+        cancellation,
+    )
+    .map(|grouped| grouped.into_values().flatten().collect())
 }
 
 pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
@@ -643,20 +651,25 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
             src,
             DiagnosticAnchor::Source(entry.span),
         )?);
-        if let Some(value) = const_values.get(&key) {
-            let owning_type = dag
-                .resolved_decl_types()
-                .get(&entry.name)
-                .and_then(struct_type_ref_from_resolved_type);
-            check_const_struct_field_constraints(
-                value,
-                entry.name.member().as_str(),
-                entry.span,
-                owning_type.as_ref(),
-                field_constraints,
+        let value = const_values.get(&key).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked constant `{key}` has no evaluated value"),
                 src,
-            )?;
-        }
+                DiagnosticAnchor::Source(entry.span),
+            )
+        })?;
+        let owning_type = dag
+            .resolved_decl_types()
+            .get(&entry.name)
+            .and_then(struct_type_ref_from_resolved_type);
+        check_const_struct_field_constraints(
+            value,
+            entry.name.member().as_str(),
+            entry.span,
+            owning_type.as_ref(),
+            field_constraints,
+            src,
+        )?;
     }
     Ok(())
 }
