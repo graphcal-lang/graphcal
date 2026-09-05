@@ -415,6 +415,7 @@ fn eval_hir_nullary_constructor(
 ) -> Result<RuntimeValue, GraphcalError> {
     let target = constructor_target(ctx, constructor)
         .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorResolution);
     let generic_args = graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
         ctx.tir,
         ctx.current_dag,
@@ -1781,6 +1782,7 @@ fn eval_hir_constructor_call(
     })?;
     let constructor_name = target.variant.name();
     let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorResolution);
     let concrete_generic_args =
         graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
             ctx.tir,

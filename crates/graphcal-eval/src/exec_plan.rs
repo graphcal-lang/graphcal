@@ -115,6 +115,7 @@ pub fn combined_runtime_order_for(
     root: &graphcal_compiler::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     let dags = semantic_runtime_dags_from(tir, root, src)?;
     let candidates = dags
         .iter()
@@ -206,6 +207,7 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     validate_execution_facts(tir, facts, src, cancellation)?;
     let root_scope = checked_scope(tir, facts, tir.root_dag_id(), src)?;
     let root_facts = root_scope.facts();

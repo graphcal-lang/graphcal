@@ -63,6 +63,76 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn pipeline_cost_baseline_observes_preparation_and_repeated_call_work() {
+    let source = r"
+type Packet { Packet(value: Length), }
+dag worker {
+    param x: Length;
+    pub node out: Length = if @x > 0.0 m { @x -> km } else { 0.0 m -> m };
+}
+node first: Length = @worker(x: 1000.0 m)::out;
+node other_output: Length = @worker(x: 2000.0 m)::out;
+node packet: Packet = Packet(value: @first);
+";
+    let project = crate::loader::LoadedProject::from_source(source, "metrics.gcl").unwrap();
+    let (prepared, preparation) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let row = prepared.binding_builder().finish().unwrap();
+    let (first, first_counts) =
+        crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+    let (second, second_counts) =
+        crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+    assert!(!first.has_errors(), "{first:?}");
+    assert!(!second.has_errors(), "{second:?}");
+    assert_eq!(
+        first_counts, second_counts,
+        "prepared evaluation costs should be stable"
+    );
+    assert_eq!(
+        preparation.dag_body_copies, 0,
+        "single-file fixture has no ordinary imports"
+    );
+    assert!(preparation.plan_constructions > 0, "{preparation:?}");
+    // These positive counts deliberately document the pre-B/C/D baseline,
+    // not a desirable runtime contract. Migrations must change them to zero.
+    assert!(first_counts.plan_constructions > 0, "{first_counts:?}");
+    assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
+    assert!(
+        first_counts.presentation_evaluations > 0,
+        "{first_counts:?}"
+    );
+    eprintln!("preparation: {preparation:?}; repeated evaluation: {first_counts:?}");
+}
+
+#[test]
+fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("a.gcl", "pub node output: Dimensionless = 1.0;"),
+            (
+                "b.gcl",
+                "import pipeline.a as a; pub node output: Dimensionless = 2.0;",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.b as b; node output: Dimensionless = 3.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let (prepared, counts) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let row = prepared.binding_builder().finish().unwrap();
+    assert!(!prepared.evaluate(&row).unwrap().has_errors());
+    assert!(
+        counts.dag_body_copies > 0,
+        "ordinary-import copying baseline: {counts:?}"
+    );
+    eprintln!("three-module chain preparation: {counts:?}");
+}
+
+#[test]
 fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let source = "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node x: Bounded = Bounded(value: 2.0);";
     let tir = compile_to_tir(source, "capabilities.gcl").unwrap();

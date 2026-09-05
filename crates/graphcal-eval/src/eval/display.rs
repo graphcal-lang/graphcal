@@ -428,6 +428,7 @@ fn evaluate_index_substitution(
             })?
         }
         graphcal_compiler::hir::expr::IndexArg::Expr(expr) => {
+            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
             eval_hir_expr(expr, values, locals, ctx)?
         }
     };
@@ -629,6 +630,7 @@ fn select_presentation<'a>(
         } => {
             let owner_ctx = checked_owner_context(ctx, defining_dag, owner, condition.span)?;
             let owner_locals = locals.hir_locals_for(owner);
+            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
             match eval_hir_expr(condition, values, &owner_locals, &owner_ctx)? {
                 RuntimeValue::Bool(true) => Ok(then_presentation),
                 RuntimeValue::Bool(false) => Ok(else_presentation),
@@ -650,6 +652,7 @@ fn select_presentation<'a>(
         } => {
             let owner_ctx = checked_owner_context(ctx, defining_dag, owner, scrutinee.span)?;
             let owner_locals = locals.hir_locals_for(owner);
+            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
             let scrutinee_value = eval_hir_expr(scrutinee, values, &owner_locals, &owner_ctx)?;
             arms.iter()
                 .find(|arm| presentation_pattern_matches(&arm.pattern, &scrutinee_value))
