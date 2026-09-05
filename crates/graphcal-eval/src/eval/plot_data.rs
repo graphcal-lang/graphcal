@@ -628,6 +628,7 @@ mod tests {
         let err = channel_data_from_runtime(&RuntimeValue::struct_with_owner(
             DagId::root_in_package("test", "main"),
             graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Vec2"),
+            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid("Vec2"),
             IndexMap::new(),
         ))
         .unwrap_err();

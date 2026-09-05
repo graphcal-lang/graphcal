@@ -65,7 +65,7 @@ fn write_pipeline_project(
 #[test]
 fn numeric_regressions_retain_small_final_values() {
     let result = compile_and_eval(
-        r#"
+        r"
 node matrix: Dimensionless[Fin(4), Fin(4)] = table[Fin(4), Fin(4)] {
     1.0e-200, 0.0, 0.0, 0.0;
     0.0, 1.0e-200, 0.0, 0.0;
@@ -78,12 +78,15 @@ node average: Dimensionless = mean(@samples);
 node quotient: Complex<Dimensionless> = complex(5.0e-324, 0.0) / complex(0.5, 0.5);
 node real_part: Dimensionless = re(@quotient);
 node imaginary_part: Dimensionless = im(@quotient);
-"#,
+",
     )
     .unwrap();
     assert!(!result.has_errors(), "{result:?}");
     assert!((find_value(&result, "determinant") - 1.0).abs() <= 4.0 * f64::EPSILON);
-    assert_eq!(find_value(&result, "average"), 1.0e-100 / 3.0);
+    assert_eq!(
+        find_value(&result, "average").to_bits(),
+        (1.0e-100_f64 / 3.0).to_bits()
+    );
     assert_eq!(find_value(&result, "real_part").to_bits(), 1);
     assert_eq!(
         find_value(&result, "imaginary_part").to_bits(),
@@ -4042,7 +4045,7 @@ fn plot_only_finite_axes_do_not_require_unrelated_declarations() {
     ] {
         let source = format!(
             "{prefix}{}",
-            r#"
+            r"
 param divisor: Dimensionless = 1.0;
 plot curve = {
     mark: line,
@@ -4051,7 +4054,7 @@ plot curve = {
         y: for i: Fin(2) { 1.0 / @divisor },
     },
 };
-"#
+"
         );
         let result = compile_and_eval(&source).unwrap();
         assert!(!result.has_errors(), "{result:?}");
@@ -4971,9 +4974,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action"))
             .unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Pick"),
-                b_owner,
+            type_name: b_owner,
+            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
+                "Pick",
             ),
             generic_args: Vec::new(),
             fields,
@@ -5038,9 +5041,9 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")).unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
-                b_owner,
+            type_name: b_owner,
+            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
+                "Item",
             ),
             generic_args: Vec::new(),
             fields,

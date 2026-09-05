@@ -54,16 +54,17 @@ impl ExternFunctionEntry {
         self.plugin == other.plugin
             && self.name == other.name
             && self.signature == other.signature
-            && self.result_struct.as_ref().map(|result| &result.resolved)
-                == other.result_struct.as_ref().map(|result| &result.resolved)
+            && self.result_struct == other.result_struct
     }
 }
 
 /// The record type a struct-returning extern function was declared with.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternStructResult {
     /// Canonical identity of the record type named at the declaration site.
     pub resolved: crate::syntax::type_name::ResolvedStructTypeName,
+    /// Checked record constructor; invocation need not recover it from a type spelling.
+    pub constructor: crate::syntax::type_name::ConstructorName,
 }
 
 /// Resolve every `import plugin` block's declared signatures against the
@@ -108,9 +109,7 @@ pub(super) fn resolve_plugin_imports(
                     // A struct return is nominal at the declaration site:
                     // two aliases must also agree on WHICH record type the
                     // shared shape produces.
-                    let existing_struct = existing.result_struct.as_ref().map(|s| &s.resolved);
-                    let entry_struct = entry.result_struct.as_ref().map(|s| &s.resolved);
-                    if existing_struct != entry_struct {
+                    if existing.result_struct != entry.result_struct {
                         return Err(GraphcalError::InvalidExternSignature {
                             message: format!(
                                 "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
@@ -406,6 +405,7 @@ pub(super) fn resolve_extern_struct_return(
         ValueKind::Struct(shape),
         Some(ExternStructResult {
             resolved: resolved_type,
+            constructor: crate::syntax::type_name::ConstructorName::from_atom(leaf.atom().clone()),
         }),
     ))
 }

@@ -9,9 +9,8 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
 use indexmap::IndexMap;
 use miette::NamedSource;
@@ -425,11 +424,10 @@ fn eval_hir_nullary_constructor(
         span,
     )?;
     Ok(RuntimeValue::Struct {
-        type_name: StructTypeRef::with_display_leaf(
-            StructTypeName::from_atom(target.variant.name().atom().clone()),
-            ctx.current_dag
-                .runtime_struct_type_identity(&target.owning_type),
-        ),
+        type_name: ctx
+            .current_dag
+            .runtime_struct_type_identity(&target.owning_type),
+        constructor: target.variant.name(),
         generic_args,
         fields: IndexMap::new(),
     })
@@ -1644,8 +1642,6 @@ fn eval_hir_extern_fn(
             }
         }
         ValidatedHostResult::Struct(fields) => {
-            use graphcal_compiler::registry::declared_type::StructTypeRef;
-
             let Some(result_struct) = &function.result_struct else {
                 return Err(ctx.internal_error(
                     format!(
@@ -1668,7 +1664,8 @@ fn eval_hir_extern_fn(
                 })
                 .collect::<indexmap::IndexMap<_, _>>();
             Ok(RuntimeValue::Struct {
-                type_name: StructTypeRef::from_resolved(result_struct.resolved.clone()),
+                type_name: result_struct.resolved.clone(),
+                constructor: result_struct.constructor.clone(),
                 generic_args: Vec::new(),
                 fields,
             })
@@ -1717,22 +1714,25 @@ fn eval_hir_field_access(
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
         RuntimeValue::Struct {
-            type_name, fields, ..
+            type_name,
+            constructor,
+            fields,
+            ..
         } => {
             if let Some(type_def) = runtime_struct_type_def(&type_name, ctx) {
-                let constructor_fields = constructor_fields_for_runtime_struct(
-                    type_def, &type_name,
-                )
-                .ok_or_else(|| {
-                    ctx.eval_error(
-                        format!(
-                            "constructor `{}` is not a member of struct `{}`",
-                            type_name.name(),
-                            type_def.name()
-                        ),
-                        inner_span,
-                    )
-                })?;
+                let constructor_fields =
+                    constructor_fields_for_runtime_struct(type_def, &constructor).ok_or_else(
+                        || {
+                            ctx.eval_error(
+                                format!(
+                                    "constructor `{}` is not a member of struct `{}`",
+                                    constructor,
+                                    type_def.name()
+                                ),
+                                inner_span,
+                            )
+                        },
+                    )?;
                 if !constructor_fields
                     .iter()
                     .any(|field_def| field_def.name() == &field.value)
@@ -1826,11 +1826,10 @@ fn eval_hir_constructor_call(
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Struct {
-            type_name: StructTypeRef::with_display_leaf(
-                StructTypeName::from_atom(target.variant.name().atom().clone()),
-                ctx.current_dag
-                    .runtime_struct_type_identity(&target.owning_type),
-            ),
+            type_name: ctx
+                .current_dag
+                .runtime_struct_type_identity(&target.owning_type),
+            constructor: constructor_name,
             generic_args: concrete_generic_args,
             fields: field_map,
         },
@@ -2320,9 +2319,6 @@ fn eval_hir_index_access(
                         }
                         IndexEntryKey::named(variant.clone())
                     }
-                    RuntimeValue::Struct { type_name, .. } => {
-                        IndexEntryKey::named(IndexVariantName::expect_valid(type_name.as_str()))
-                    }
                     RuntimeValue::CoordinateLabel {
                         index_name: label_index,
                         position,
@@ -2540,14 +2536,6 @@ fn eval_hir_unfold(
     ))
 }
 
-fn runtime_struct_matches_resolved_constructor(
-    scrutinee_type: &StructTypeRef,
-    target: &ResolvedConstructorTarget,
-) -> bool {
-    scrutinee_type.name().as_str() == target.variant.name().as_str()
-        && scrutinee_type.resolved() == &target.owning_type
-}
-
 fn eval_hir_match(
     span: Span,
     scrutinee: &hir::Expr,
@@ -2585,6 +2573,7 @@ fn eval_hir_match(
         }
         RuntimeValue::Struct {
             type_name,
+            constructor: value_constructor,
             fields: scrutinee_fields,
             ..
         } => {
@@ -2593,7 +2582,11 @@ fn eval_hir_match(
                 .find(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::Constructor { constructor, .. } => {
                         constructor_target(ctx, &constructor.value).is_some_and(|target| {
-                            runtime_struct_matches_resolved_constructor(type_name, target)
+                            *value_constructor == target.variant.name()
+                                && *type_name
+                                    == ctx
+                                        .current_dag
+                                        .runtime_struct_type_identity(&target.owning_type)
                         })
                     }
                     hir::expr::MatchPattern::IndexLabel { .. } => false,

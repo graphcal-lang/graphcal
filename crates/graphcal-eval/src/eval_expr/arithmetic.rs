@@ -1,6 +1,5 @@
 use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::exact_rational::ExactRational;
-use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::span::Span;
 
 use graphcal_compiler::registry::error::GraphcalError;
@@ -12,8 +11,27 @@ use super::EvalContext;
 // Helper functions
 // ---------------------------------------------------------------------------
 
-fn struct_value_constructor_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
-    lhs.matches_ref(rhs) && lhs.name().atom() == rhs.name().atom()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use graphcal_compiler::dag_id::DagId;
+    use graphcal_compiler::syntax::type_name::{ConstructorName, StructTypeName};
+
+    #[test]
+    fn nominal_equality_compares_owner_and_constructor_independently() {
+        let value = |module, constructor| {
+            RuntimeValue::struct_with_owner(
+                DagId::root_in_package("test", module),
+                StructTypeName::expect_valid("Phase"),
+                ConstructorName::expect_valid(constructor),
+                indexmap::IndexMap::new(),
+            )
+        };
+        let idle = value("main", "Idle");
+        assert!(semantic_value_equals(&idle, &value("main", "Idle")));
+        assert!(!semantic_value_equals(&idle, &value("main", "Running")));
+        assert!(!semantic_value_equals(&idle, &value("other", "Idle")));
+    }
 }
 
 fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
@@ -42,15 +60,18 @@ fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
         ),
         RuntimeValue::Struct {
             type_name: lhs_type,
+            constructor: lhs_constructor,
             generic_args: lhs_args,
             fields: lhs_fields,
         } => match rhs {
             RuntimeValue::Struct {
                 type_name: rhs_type,
+                constructor: rhs_constructor,
                 generic_args: rhs_args,
                 fields: rhs_fields,
             } => {
-                struct_value_constructor_refs_equal(lhs_type, rhs_type)
+                lhs_type == rhs_type
+                    && lhs_constructor == rhs_constructor
                     && lhs_args == rhs_args
                     && lhs_fields.len() == rhs_fields.len()
                     && lhs_fields.iter().all(|(field, lhs_value)| {

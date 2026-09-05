@@ -301,6 +301,10 @@ impl LuDecomposition {
         Ok(solution)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "multiplication of arbitrary-precision rationals cannot overflow"
+    )]
     fn determinant(&self, control: &mut KernelCheckpoint<'_>) -> Result<f64, LuError> {
         // LU itself is binary64. Accumulate its finite pivots exactly so an
         // intermediate product cannot erase or overflow a representable result.
@@ -533,8 +537,14 @@ mod tests {
             assert!((determinant(&matrix, 4).unwrap() - 1.0).abs() <= 4.0 * f64::EPSILON);
         }
         let tiny = f64::from_bits(1);
-        assert_eq!(determinant(&[tiny, 0.0, 0.0, 1.0], 2).unwrap(), tiny);
-        assert_eq!(determinant(&[0.0, tiny, 1.0, 0.0], 2).unwrap(), -tiny);
+        assert_eq!(
+            determinant(&[tiny, 0.0, 0.0, 1.0], 2).unwrap().to_bits(),
+            tiny.to_bits()
+        );
+        assert_eq!(
+            determinant(&[0.0, tiny, 1.0, 0.0], 2).unwrap().to_bits(),
+            (-tiny).to_bits()
+        );
         assert!(matches!(
             determinant(&[tiny, 0.0, 0.0, 0.25], 2),
             Err(LuError::DeterminantUnderflow)

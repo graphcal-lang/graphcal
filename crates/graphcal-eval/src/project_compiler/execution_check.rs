@@ -112,6 +112,35 @@ fn initialized_const_pool<'a>(
     })
 }
 
+fn provisional_const_scopes<'a>(
+    inherited: &'a CheckedExecutionFacts,
+    const_pools: &'a HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
+    src: &'a NamedSource<Arc<String>>,
+) -> HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>> {
+    inherited
+        .by_dag
+        .iter()
+        .map(|(id, facts)| {
+            (
+                id.clone(),
+                DagConstScope {
+                    values: &facts.const_values,
+                    source: facts.source(),
+                },
+            )
+        })
+        .chain(const_pools.iter().map(|(id, values)| {
+            (
+                id.clone(),
+                DagConstScope {
+                    values,
+                    source: src,
+                },
+            )
+        }))
+        .collect()
+}
+
 fn check_dag_execution_facts(
     tir: &TIR,
     inherited: &CheckedExecutionFacts,
@@ -162,27 +191,7 @@ fn check_dag_execution_facts(
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints or schedules.
-    let const_scopes = dag_facts
-        .iter()
-        .map(|(id, facts)| {
-            (
-                id.clone(),
-                DagConstScope {
-                    values: &facts.const_values,
-                    source: facts.source(),
-                },
-            )
-        })
-        .chain(const_pools.iter().map(|(id, values)| {
-            (
-                id.clone(),
-                DagConstScope {
-                    values,
-                    source: src,
-                },
-            )
-        }))
-        .collect();
+    let const_scopes = provisional_const_scopes(inherited, &const_pools, src);
     cancellation.checkpoint()?;
     let field_constraints = resolve_struct_field_constraints_for_dags(
         tir,

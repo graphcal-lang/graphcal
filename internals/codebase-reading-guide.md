@@ -89,9 +89,13 @@ Read the pipeline as a sequence of practical questions:
    dependency DAGs. The dependency graph is derived from the HIR bodies. This
    is the checked program representation used to prepare execution.
 7. **ExecPlan: what exact work should runtime evaluation do?**
-   `ExecPlan` evaluates compile-time constants, sorts runtime declarations, and
-   stores runtime-ready maps. The evaluator should not need to rebuild registries,
-   re-resolve names, or recompute dependency order.
+   Project checking evaluates constants and retains per-DAG schedules and
+   constraints, publishing execution facts only after mandatory checks finish.
+   Preparation validates body/fact ownership and coverage before selecting the
+   entry plan. `CheckedExecutionScope` pairs a selected DAG with its own facts;
+   it is not a substitute for completing static checks. Inline calls still
+   combine schedules at runtime; eliminating that repeated work remains a
+   separate planning refactor.
 
 Some names in this pipeline can sound misleading if read too literally:
 
@@ -459,19 +463,28 @@ static checking consumes that same value to produce `CheckedProject`.
 
 ## 2. Workspace Map
 
-The workspace contains seven Rust crates:
+The workspace contains fifteen Rust crates:
 
 ```text
-graphcal-cli       binary/library: CLI shell
-graphcal-lsp       binary/library: Language Server Protocol
-graphcal-eval      evaluation, project orchestration, loader
-graphcal-compiler  syntax, HIR, registry, IR, TIR
-graphcal-fmt       formatter
-graphcal-io        filesystem abstraction
-graphcal-package   pure package manifest/lockfile domain model
+graphcal-cli           binary/library: CLI shell
+graphcal-lsp           binary/library: Language Server Protocol
+graphcal-eval          evaluation, project orchestration, loader
+graphcal-compiler      syntax, HIR, registry, IR, TIR
+graphcal-fmt           formatter
+graphcal-io            filesystem abstraction
+graphcal-package       pure package manifest/lockfile domain model
+graphcal-report        report rendering and browser assets
+graphcal-wasm          browser/Wasm project adapter
+graphcal-tenax         Tenax model adapter
+graphcal-plugin-abi    plugin signatures, manifests, and wire contract
+graphcal-plugin-macros plugin authoring proc-macros
+graphcal-plugin        plugin authoring SDK
+graphcal-plugin-host   plugin acquisition and Wasm execution adapter
+graphcal-test-support  shared testing utilities
 ```
 
-The important dependency direction is:
+Some principal production dependencies are shown below (not an exhaustive
+Cargo graph). `A -> B` means that A consumes B:
 
 ```text
 graphcal-cli
@@ -483,6 +496,7 @@ graphcal-cli
 graphcal-eval
   -> graphcal-compiler
   -> graphcal-io
+  -> graphcal-package
 
 graphcal-lsp
   -> graphcal-eval
@@ -563,6 +577,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
 | `execution_facts.rs`              | Per-DAG checked constants, constraints, schedules, and source   |
+| `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
 | `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
@@ -1430,34 +1445,35 @@ slices of the generated order.
 4. `crates/graphcal-eval/src/lib.rs`
 5. `crates/graphcal-eval/src/domain_check.rs`
 6. `crates/graphcal-eval/src/execution_facts.rs`
-7. `crates/graphcal-eval/src/runtime_presentation.rs`
-8. `crates/graphcal-eval/src/eval/bindings.rs`
-9. `crates/graphcal-eval/src/import_surface.rs`
-10. `crates/graphcal-eval/src/package_cache.rs`
-11. `crates/graphcal-eval/src/project_compiler/template.rs`
-12. `crates/graphcal-report/src/lib.rs`
-13. `crates/graphcal-report/src/escape.rs`
-14. `crates/graphcal-report/src/vega_assets.rs`
-15. `crates/graphcal-report/src/report_hydrate.rs`
-16. `crates/graphcal-test-support/src/lib.rs`
-17. `crates/graphcal-test-support/src/project.rs`
-18. `crates/graphcal-test-support/src/bytes.rs`
-19. `crates/graphcal-fmt/src/lib.rs`
-20. `crates/graphcal-fmt/src/format/type_expr.rs`
-21. `crates/graphcal-fmt/src/format/expr.rs`
-22. `crates/graphcal-fmt/src/format/decl.rs`
-23. `crates/graphcal-fmt/src/format/mod.rs`
-24. `crates/graphcal-lsp/src/lib.rs`
-25. `crates/graphcal-lsp/src/convert.rs`
-26. `crates/graphcal-lsp/src/cursor_context.rs`
-27. `crates/graphcal-lsp/src/symbol_identity.rs`
-28. `crates/graphcal-lsp/src/nominal_type_index.rs`
-29. `crates/graphcal-lsp/src/symbol_table.rs`
-30. `crates/graphcal-lsp/src/project_symbols.rs`
-31. `crates/graphcal-lsp/src/formatting.rs`
-32. `crates/graphcal-lsp/src/workspace_revision.rs`
-33. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
-34. `crates/graphcal-cli/src/lib.rs`
+7. `crates/graphcal-eval/src/execution_scope.rs`
+8. `crates/graphcal-eval/src/runtime_presentation.rs`
+9. `crates/graphcal-eval/src/eval/bindings.rs`
+10. `crates/graphcal-eval/src/import_surface.rs`
+11. `crates/graphcal-eval/src/package_cache.rs`
+12. `crates/graphcal-eval/src/project_compiler/template.rs`
+13. `crates/graphcal-report/src/lib.rs`
+14. `crates/graphcal-report/src/escape.rs`
+15. `crates/graphcal-report/src/vega_assets.rs`
+16. `crates/graphcal-report/src/report_hydrate.rs`
+17. `crates/graphcal-test-support/src/lib.rs`
+18. `crates/graphcal-test-support/src/project.rs`
+19. `crates/graphcal-test-support/src/bytes.rs`
+20. `crates/graphcal-fmt/src/lib.rs`
+21. `crates/graphcal-fmt/src/format/type_expr.rs`
+22. `crates/graphcal-fmt/src/format/expr.rs`
+23. `crates/graphcal-fmt/src/format/decl.rs`
+24. `crates/graphcal-fmt/src/format/mod.rs`
+25. `crates/graphcal-lsp/src/lib.rs`
+26. `crates/graphcal-lsp/src/convert.rs`
+27. `crates/graphcal-lsp/src/cursor_context.rs`
+28. `crates/graphcal-lsp/src/symbol_identity.rs`
+29. `crates/graphcal-lsp/src/nominal_type_index.rs`
+30. `crates/graphcal-lsp/src/symbol_table.rs`
+31. `crates/graphcal-lsp/src/project_symbols.rs`
+32. `crates/graphcal-lsp/src/formatting.rs`
+33. `crates/graphcal-lsp/src/workspace_revision.rs`
+34. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+35. `crates/graphcal-cli/src/lib.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 

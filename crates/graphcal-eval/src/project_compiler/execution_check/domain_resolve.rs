@@ -720,18 +720,18 @@ fn check_const_struct_field_constraints(
     match value {
         RuntimeValue::Struct {
             type_name,
+            constructor,
             generic_args,
             fields,
         } => {
-            let runtime_owning_type = StructTypeRef::from_resolved(type_name.resolved().clone());
+            let runtime_owning_type = StructTypeRef::from_resolved(type_name.clone());
             let effective_owning_type = owning_type.or(Some(&runtime_owning_type));
-            let constructor = ConstructorName::from_atom(type_name.name().atom().clone());
             for (field_name, field_value) in fields {
                 if let Some(constraint) = find_struct_field_constraint(
                     field_constraints,
                     effective_owning_type,
                     generic_args,
-                    &constructor,
+                    constructor,
                     field_name,
                 ) && let Err(violation) =
                     crate::domain_check::check_domain_constraint(field_value, constraint)

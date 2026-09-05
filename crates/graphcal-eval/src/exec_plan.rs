@@ -496,33 +496,27 @@ mod tests {
         ] {
             let mut corrupted = checked.clone();
             let dags = Arc::make_mut(&mut corrupted.by_dag);
+            let facts = Arc::make_mut(dags.get_mut(tir.root_dag_id()).unwrap());
             match damage {
                 Damage::MissingDag => {
                     dags.remove(tir.root_dag_id()).unwrap();
                 }
-                other => {
-                    let facts = Arc::make_mut(dags.get_mut(tir.root_dag_id()).unwrap());
-                    match other {
-                        Damage::WrongOwner => {
-                            facts.dag_id =
-                                graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-                                    std::path::Path::new("other.gcl"),
-                                )
-                                .unwrap()
-                        }
-                        Damage::MissingConstant => Arc::make_mut(&mut facts.const_values).clear(),
-                        Damage::MissingScheduleEntry => {
-                            Arc::make_mut(&mut facts.topo_order).pop().unwrap();
-                        }
-                        Damage::DuplicateScheduleEntry => {
-                            let key = facts.topo_order[0].clone();
-                            Arc::make_mut(&mut facts.topo_order).push(key);
-                        }
-                        Damage::MissingConstraint => {
-                            Arc::make_mut(&mut facts.domain_constraints).clear()
-                        }
-                        Damage::MissingDag => unreachable!(),
-                    }
+                Damage::WrongOwner => {
+                    facts.dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
+                        std::path::Path::new("other.gcl"),
+                    )
+                    .unwrap();
+                }
+                Damage::MissingConstant => Arc::make_mut(&mut facts.const_values).clear(),
+                Damage::MissingScheduleEntry => {
+                    Arc::make_mut(&mut facts.topo_order).pop().unwrap();
+                }
+                Damage::DuplicateScheduleEntry => {
+                    let key = facts.topo_order[0].clone();
+                    Arc::make_mut(&mut facts.topo_order).push(key);
+                }
+                Damage::MissingConstraint => {
+                    Arc::make_mut(&mut facts.domain_constraints).clear();
                 }
             }
             let error = compile_checked_with_cancellation(&tir, &corrupted, &src, &cancellation)

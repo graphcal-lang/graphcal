@@ -8,7 +8,7 @@ use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts};
 
 /// Failure to select an execution scope from retained project artifacts.
 #[derive(Debug, Error)]
-pub(crate) enum ExecutionScopeError {
+pub enum ExecutionScopeError {
     #[error("DAG `{0}` has no compiled body")]
     MissingBody(DagId),
     #[error("DAG `{0}` has no checked execution facts")]
@@ -20,9 +20,9 @@ pub(crate) enum ExecutionScopeError {
 /// A canonical body paired with its own facts from the same selected stores.
 ///
 /// This checks scope identity, not source type correctness. The enclosing
-/// CheckedProject remains responsible for completing mandatory static checks.
+/// `CheckedProject` remains responsible for completing mandatory static checks.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CheckedExecutionScope<'a> {
+pub struct CheckedExecutionScope<'a> {
     dag: &'a DagTIR,
     facts: &'a CheckedDagExecutionFacts,
 }

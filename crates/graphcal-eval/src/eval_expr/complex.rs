@@ -180,6 +180,10 @@ fn complex_binary(
 /// Divide the exact binary input components and round each final component once.
 /// A common floating scale is insufficient: a product or partial quotient can
 /// underflow before a small divisor restores the final value's exponent.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "arbitrary-precision rationals cannot overflow; rejecting a zero divisor makes its exact squared norm positive"
+)]
 fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
     if rhs.re() == 0.0 && rhs.im() == 0.0 {
         return Err(ComplexEvalError::DivisionByZero);
@@ -278,8 +282,8 @@ mod tests {
             assert_eq!(quotient.im().to_bits(), (-sign * tiny).to_bits());
         }
         let quotient = divide(ComplexValue::new(tiny, tiny), ComplexValue::new(0.5, 0.5)).unwrap();
-        assert_eq!(quotient.re(), 2.0 * tiny);
-        assert_eq!(quotient.im(), 0.0);
+        assert_eq!(quotient.re().to_bits(), (2.0 * tiny).to_bits());
+        assert_eq!(quotient.im().to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]
