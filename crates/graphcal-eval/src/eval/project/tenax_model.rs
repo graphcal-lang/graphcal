@@ -291,23 +291,17 @@ impl PreparedProject {
         }
 
         let empty_locals = HirLocalValueMap::root();
-        let ctx = EvalContext {
-            cancellation,
-            work_budget: crate::eval_expr::fresh_work_budget(),
+        let ctx = EvalContext::checked(
+            &self.tir,
+            &self.plan.checked_execution_facts,
+            self.tir.root_dag_id(),
+            &self.source,
             builtin_fns,
-            registry: self.tir.registry(),
-            src: &self.source,
-            tir: &self.tir,
-            current_dag: self.tir.root(),
-            current_decl: None,
-            root_values: Some(&values),
-            root_presentation_instances: None,
-            checked_execution_facts: Some(&self.plan.checked_execution_facts),
-            presentation_calls: None,
-            struct_field_constraints: Some(&self.plan.struct_field_constraints),
-            generic_nat_bindings: None,
-            host_fns: Some(&self.host_fns),
-        };
+            &self.host_fns,
+            cancellation,
+        )
+        .map_err(CompileError::from)?
+        .with_roots(&values, None);
         for assertion in self.tir.root().asserts() {
             let owner = self
                 .tir

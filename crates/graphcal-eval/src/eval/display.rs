@@ -709,10 +709,10 @@ where
         )
     })?;
     let source = ctx
-        .checked_execution_facts
+        .checked_execution_facts()
         .and_then(|facts| facts.for_dag(defining_dag))
         .map_or(ctx.src, |facts| facts.source());
-    Ok(ctx.for_checked_decl(dag, source, owner))
+    ctx.for_checked_decl(dag, source, owner)
 }
 
 /// Resolve a checked unit expression in its defining declaration environment.

@@ -1409,7 +1409,7 @@ fn eval_hir_extern_fn(
     };
     use crate::host_fns::{HostArray, HostFnValue};
 
-    let Some(registry) = ctx.host_fns else {
+    let Some(registry) = ctx.host_fns() else {
         return Err(ctx.eval_error(
             format!("extern function `{ext}` cannot be evaluated in this context (no host function registry)"),
             expr.span,
@@ -1801,7 +1801,7 @@ fn eval_hir_constructor_call(
             ctx,
         )?;
         let (val, presentation) = evaluated.into_parts();
-        if let Some(field_constraints) = ctx.struct_field_constraints
+        if let Some(field_constraints) = ctx.struct_field_constraints()
             && let Some(constraint) = find_struct_field_constraint(
                 field_constraints,
                 Some(&owning_type),
@@ -2661,7 +2661,7 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let checked = ctx.checked_execution_facts.ok_or_else(|| {
+    let checked = ctx.checked_execution_facts().ok_or_else(|| {
         ctx.internal_error(
             "runtime DAG call has no checked execution-fact store",
             target.span,
@@ -2740,23 +2740,7 @@ fn eval_hir_dag_call(
                     output.span,
                 )
             })?;
-        let scheduled_ctx = EvalContext {
-            cancellation: ctx.cancellation.clone(),
-            work_budget: ctx.work_budget.clone(),
-            builtin_fns: ctx.builtin_fns,
-            registry: ctx.registry,
-            src: scheduled_facts.source(),
-            tir: ctx.tir,
-            current_dag: scheduled_dag,
-            current_decl: None,
-            root_values: ctx.root_values,
-            root_presentation_instances: ctx.root_presentation_instances,
-            checked_execution_facts: ctx.checked_execution_facts,
-            presentation_calls: ctx.presentation_calls,
-            struct_field_constraints: ctx.struct_field_constraints,
-            generic_nat_bindings: ctx.generic_nat_bindings,
-            host_fns: ctx.host_fns,
-        };
+        let scheduled_ctx = ctx.for_dag(scheduled_dag, scheduled_facts.source())?;
         let evaluated = eval_hir_expr_evaluated(
             hir_expr,
             &dag_values,
@@ -2782,23 +2766,7 @@ fn eval_hir_dag_call(
                 output.span,
             )
         })?;
-        let called_ctx = EvalContext {
-            cancellation: ctx.cancellation.clone(),
-            work_budget: ctx.work_budget.clone(),
-            builtin_fns: ctx.builtin_fns,
-            registry: ctx.registry,
-            src: called_facts.source(),
-            tir: ctx.tir,
-            current_dag: called_dag,
-            current_decl: None,
-            root_values: ctx.root_values,
-            root_presentation_instances: ctx.root_presentation_instances,
-            checked_execution_facts: ctx.checked_execution_facts,
-            presentation_calls: ctx.presentation_calls,
-            struct_field_constraints: ctx.struct_field_constraints,
-            generic_nat_bindings: ctx.generic_nat_bindings,
-            host_fns: ctx.host_fns,
-        };
+        let called_ctx = ctx.for_dag(called_dag, called_facts.source())?;
         check_inline_dag_asserts(
             called_dag,
             &dag_values,

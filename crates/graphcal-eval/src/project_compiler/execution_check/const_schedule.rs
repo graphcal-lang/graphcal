@@ -83,23 +83,15 @@ pub(super) fn eval_const_pools_for_dags(
         let key = &graph[index];
         let (dag_id, name, _) = &declaration_by_key[key];
         let dag = &tir.dag_registry()[dag_id];
-        let ctx = EvalContext {
-            cancellation: cancellation.clone(),
-            work_budget: crate::eval_expr::fresh_work_budget(),
-            builtin_fns,
-            registry: tir.registry(),
-            src,
+        let ctx = EvalContext::provisional_constants(
             tir,
-            current_dag: dag,
-            current_decl: Some(key.clone()),
-            root_values: Some(&visible_values),
-            root_presentation_instances: None,
-            checked_execution_facts: None,
-            presentation_calls: None,
-            struct_field_constraints: None,
-            generic_nat_bindings: None,
-            host_fns: None,
-        };
+            dag.dag_id(),
+            src,
+            builtin_fns,
+            cancellation.clone(),
+        )?
+        .with_roots(&visible_values, None)
+        .for_decl(key);
         let hir_expr = dag.const_expr(key).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("constant schedule references missing declaration `{name}`"),

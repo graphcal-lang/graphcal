@@ -67,7 +67,7 @@ fn resolve_dynamic_unit_scale(
                 span,
             )
         })?;
-    let scale_ctx = ctx.for_dag(unit_dag, &scale_hir.src);
+    let scale_ctx = ctx.for_dag(unit_dag, &scale_hir.src)?;
     if scale_hir.declared_dimension != scale_hir.base_unit_dimension {
         return Err(scale_ctx.eval_error(
             format!(

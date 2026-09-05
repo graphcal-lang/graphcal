@@ -42,23 +42,14 @@ pub(super) fn resolve_domain_constraints_for_dag(
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(dag, const_values, all_const_values);
 
-    let ctx = EvalContext {
-        cancellation: cancellation.clone(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
-        src,
+    let ctx = EvalContext::provisional_constants(
         tir,
-        current_dag: dag,
-        current_decl: None,
-        root_values: Some(&visible_const_values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: None,
-        host_fns: None,
-    };
+        dag.dag_id(),
+        src,
+        builtin_fns,
+        cancellation.clone(),
+    )?
+    .with_roots(&visible_const_values, None);
     let mut constraints = HashMap::new();
     let decl_iter = dag
         .consts()
@@ -491,23 +482,15 @@ fn resolve_application_field_constraints(
         type_def.source(),
         type_def.span(),
     )?;
-    let application_ctx = EvalContext {
-        cancellation: ctx.cancellation.clone(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns: ctx.builtin_fns,
-        registry: ctx.tir.registry(),
-        src: owner_src,
-        tir: ctx.tir,
-        current_dag: dag,
-        current_decl: None,
-        root_values: Some(&visible_const_values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: Some(&nat_bindings),
-        host_fns: None,
-    };
+    let application_ctx = EvalContext::provisional_constants(
+        ctx.tir,
+        dag.dag_id(),
+        owner_src,
+        ctx.builtin_fns,
+        ctx.cancellation.clone(),
+    )?
+    .with_roots(&visible_const_values, None)
+    .with_generic_nat_bindings(&nat_bindings);
     let mut constraints = Vec::new();
     for (key, field_semantics) in dag
         .semantic()
