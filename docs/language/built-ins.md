@@ -82,7 +82,10 @@ node shifted: Complex<Length> = @displacement + to_complex(1.0 m);
 
 `polar` rejects a negative magnitude instead of silently rotating the phase by
 π. Arithmetic and complex function results must remain finite. Complex division
-by zero is an evaluation error. See
+by zero is an evaluation error. Division computes the quotient of the exact
+binary64 input components and rounds each result component once, retaining
+representable signed subnormals without overflowing intermediate products.
+This does not make the other complex operations exact. See
 [Complex Arithmetic](expressions.md#complex-arithmetic) for the mixed
 real/complex operation matrix.
 
@@ -302,6 +305,11 @@ These functions operate on rank-one `for` comprehensions or indexed values.
 | `rss(values)` | `D[I] -> D` | Root sum square, computed with scaled accumulation |
 | `count(values)` | `T[I] -> Int` | Exact number of elements |
 
+`mean` accumulates its binary64 input values exactly and rounds only the final
+quotient. Thus a large intermediate sum does not overflow a representable mean,
+and cancellation does not erase a much smaller remaining term. Input literals
+still have ordinary binary64 precision; this is not decimal arithmetic.
+
 `argmax` and `argmin` return the extremum's *location* as an
 [index key](indexes.md#index-keys) rather than its value, so the result can
 re-index the source or any other value on the same axis. Because axes are
@@ -428,7 +436,12 @@ numerically ill-conditioned matrices, and verify the residual before returning
 a result. These failures are explicit evaluation errors; they never return
 `NaN` or infinity. `det` remains defined for singular matrices and returns
 zero. Because a determinant's physical dimension is `D` raised to the matrix
-order, `det` requires a concrete axis cardinality.
+order, `det` requires a concrete axis cardinality. The computed LU pivots are
+multiplied exactly before rounding the final determinant, so intermediate
+products cannot lose a representable result. LU factorization itself remains
+floating-point and is not an exact determinant algorithm. A nonsingular
+factorization whose determinant overflows or underflows entirely to zero
+reports an evaluation error; representable subnormal determinants are retained.
 
 Dense kernels share a checked budget of 10,000,000 estimated arithmetic
 operations per declaration evaluation. Work such as an oversized matrix

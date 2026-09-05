@@ -63,6 +63,35 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn numeric_regressions_retain_small_final_values() {
+    let result = compile_and_eval(
+        r#"
+node matrix: Dimensionless[Fin(4), Fin(4)] = table[Fin(4), Fin(4)] {
+    1.0e-200, 0.0, 0.0, 0.0;
+    0.0, 1.0e-200, 0.0, 0.0;
+    0.0, 0.0, 1.0e200, 0.0;
+    0.0, 0.0, 0.0, 1.0e200;
+};
+node determinant: Dimensionless = det(@matrix);
+node samples: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0e308; 1.0e-100; -1.0e308; };
+node average: Dimensionless = mean(@samples);
+node quotient: Complex<Dimensionless> = complex(5.0e-324, 0.0) / complex(0.5, 0.5);
+node real_part: Dimensionless = re(@quotient);
+node imaginary_part: Dimensionless = im(@quotient);
+"#,
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert!((find_value(&result, "determinant") - 1.0).abs() <= 4.0 * f64::EPSILON);
+    assert_eq!(find_value(&result, "average"), 1.0e-100 / 3.0);
+    assert_eq!(find_value(&result, "real_part").to_bits(), 1);
+    assert_eq!(
+        find_value(&result, "imaginary_part").to_bits(),
+        (-f64::from_bits(1)).to_bits()
+    );
+}
+
+#[test]
 fn selective_import_rejects_required_static_inputs() {
     for (declaration, import_item, expected_kind) in [
         (

@@ -1,3 +1,5 @@
+use num_rational::BigRational;
+use num_traits::ToPrimitive;
 use thiserror::Error;
 
 /// Failure to project an `i64` into binary64 without changing its value.
@@ -127,19 +129,6 @@ impl ScaledSum {
         }
         computed_finite_quantity((value / self.scale) / self.normalized_sum, context)
     }
-
-    fn mean(
-        self,
-        count: usize,
-        context: impl Into<String>,
-    ) -> Result<f64, QuantityValidationError> {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "materialized collection lengths are exactly representable in binary64"
-        )]
-        let count = count as f64;
-        computed_finite_quantity((self.normalized_sum / count) * self.scale, context)
-    }
 }
 
 fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
@@ -158,13 +147,102 @@ fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
     sum + correction
 }
 
-/// Compute a mean with scaled, compensated accumulation.
-pub fn scaled_mean(
+/// Average the exact binary64 inputs, rounding only the final quotient.
+///
+/// A common floating scale can erase a small term before cancellation reveals
+/// it. Exact binary rationals retain that term and also avoid overflowing a
+/// representable mean's intermediate sum. This is not decimal reinterpretation.
+pub fn exact_mean(
     values: &[f64],
     context: impl Into<String>,
 ) -> Result<f64, QuantityValidationError> {
     let context = context.into();
-    ScaledSum::from_values(values, context.clone())?.mean(values.len(), context)
+    if values.is_empty() {
+        return Err(QuantityValidationError::NanResult { context });
+    }
+    let total = values
+        .iter()
+        .try_fold(BigRational::default(), |total, value| {
+            let rational = BigRational::from_float(*value).ok_or_else(|| {
+                QuantityValidationError::NonFinite {
+                    context: context.clone(),
+                    value: *value,
+                }
+            })?;
+            Ok::<_, QuantityValidationError>(total + rational)
+        })?;
+    let average = total / BigRational::from_integer(values.len().into());
+    let result = average
+        .to_f64()
+        .ok_or_else(|| QuantityValidationError::NanResult {
+            context: context.clone(),
+        })?;
+    computed_finite_quantity(result, context)
+}
+
+#[cfg(test)]
+mod mean_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn mean_matches_independent_bounded_integer_reference(
+            integers in proptest::collection::vec(-1_000_000_i32..=1_000_000, 1..32),
+        ) {
+            // Both integer accumulation and conversion are exact in this range;
+            // the independent reference performs one binary64 division.
+            let total: i32 = integers.iter().sum();
+            let count = i32::try_from(integers.len()).unwrap();
+            let values = integers.into_iter().map(f64::from).collect::<Vec<_>>();
+            prop_assert_eq!(exact_mean(&values, "mean()").unwrap(), f64::from(total) / f64::from(count));
+        }
+    }
+
+    #[test]
+    fn cancellation_preserves_a_small_representable_mean_in_every_order() {
+        for values in [
+            [1.0e308, 1.0e-100, -1.0e308],
+            [1.0e-100, -1.0e308, 1.0e308],
+            [-1.0e308, 1.0e308, 1.0e-100],
+            [1.0e308, -1.0e308, 1.0e-100],
+            [-1.0e308, 1.0e-100, 1.0e308],
+            [1.0e-100, 1.0e308, -1.0e308],
+        ] {
+            assert_eq!(exact_mean(&values, "mean()").unwrap(), 1.0e-100 / 3.0);
+        }
+        assert_eq!(
+            exact_mean(&[f64::MAX, f64::MAX], "mean()").unwrap(),
+            f64::MAX
+        );
+        assert_eq!(
+            exact_mean(
+                &[f64::MAX, f64::MAX, 1.0e-100, -f64::MAX, -f64::MAX],
+                "mean()"
+            )
+            .unwrap(),
+            1.0e-100 / 5.0
+        );
+    }
+
+    #[test]
+    fn mean_rounds_subnormals_once_and_rejects_non_finite_inputs() {
+        let tiny = f64::from_bits(1);
+        for value in [tiny, -tiny, f64::MIN_POSITIVE, f64::MAX] {
+            assert_eq!(exact_mean(&[value, value], "mean()").unwrap(), value);
+        }
+        assert_eq!(
+            exact_mean(&[tiny, f64::from_bits(2)], "mean()")
+                .unwrap()
+                .to_bits(),
+            2
+        );
+        assert_eq!(exact_mean(&[tiny, -tiny], "mean()").unwrap(), 0.0);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(exact_mean(&[value], "mean()").is_err());
+        }
+        assert!(exact_mean(&[], "mean()").is_err());
+    }
 }
 
 /// Incremental scaled root-sum-square accumulator.
