@@ -1841,7 +1841,7 @@ fn eval_hir_constructor_call(
 fn index_def_for_ref<'a>(
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
-) -> Option<&'a IndexDef> {
+) -> Option<std::borrow::Cow<'a, IndexDef>> {
     ctx.tir.index_def(index_ref)
 }
 
@@ -1905,11 +1905,12 @@ fn map_entry_index_def<'a>(
     key: &hir::expr::MapEntryKey,
     index_ref: &IndexTypeRef,
     ctx: &'a EvalContext<'_>,
-) -> Option<&'a IndexDef> {
+) -> Option<std::borrow::Cow<'a, IndexDef>> {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => {
-            ctx.tir.declared_index_def(variant.variant.index())
-        }
+        hir::expr::MapEntryKey::IndexVariant(variant) => ctx
+            .tir
+            .declared_index_def(variant.variant.index())
+            .map(std::borrow::Cow::Borrowed),
         hir::expr::MapEntryKey::FinitePosition { .. } => index_def_for_ref(index_ref, ctx),
     }
 }
@@ -2107,7 +2108,7 @@ fn eval_hir_for_comp(
                 hir::expr::ForBindingIndex::Named(index) => {
                     let index = ctx.current_dag.runtime_index_type_ref(&index.value);
                     index_def_for_ref(&index, ctx)
-                        .and_then(IndexDef::concrete_cardinality)
+                        .and_then(|definition| definition.concrete_cardinality())
                         .map(graphcal_compiler::registry::types::IndexCardinality::get)
                         .ok_or_else(|| {
                             ctx.internal_error(
@@ -2158,38 +2159,21 @@ fn eval_hir_for_comp_bindings(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let binding = &bindings[0];
-    let (idx_name, error_span, dynamic_finite_index) = match &binding.index {
+    let (idx_name, error_span) = match &binding.index {
         hir::expr::ForBindingIndex::Named(index) => (
             ctx.current_dag.runtime_index_type_ref(&index.value),
             index.span,
-            None,
         ),
         hir::expr::ForBindingIndex::Finite { cardinality, span } => {
             let size = eval_hir_nat_expr(cardinality, ctx)?;
             let finite_index = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(size)
                 .map_err(|err| ctx.eval_error(err.to_string(), *span))?;
-            (
-                IndexTypeRef::from_finite_index(finite_index),
-                *span,
-                Some(finite_index),
-            )
+            (IndexTypeRef::from_finite_index(finite_index), *span)
         }
     };
 
-    let dynamic_nat_def;
-    let idx_def = if let Some(def) = index_def_for_ref(&idx_name, ctx) {
-        def
-    } else if let Some(finite_index) = dynamic_finite_index {
-        dynamic_nat_def = IndexDef {
-            name: finite_index.display_name(),
-            kind: IndexKind::Finite {
-                cardinality: finite_index.cardinality(),
-            },
-        };
-        &dynamic_nat_def
-    } else {
-        return Err(ctx.internal_error(format!("unknown index `{idx_name}`"), error_span));
-    };
+    let idx_def = index_def_for_ref(&idx_name, ctx)
+        .ok_or_else(|| ctx.internal_error(format!("unknown index `{idx_name}`"), error_span))?;
 
     let remaining = &bindings[1..];
     let variants = idx_def.entry_keys();

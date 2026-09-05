@@ -268,6 +268,17 @@ pub struct IndexDef {
 }
 
 impl IndexDef {
+    /// Derive a structural definition from an already validated cardinality.
+    #[must_use]
+    pub fn finite(index: FiniteIndex) -> Self {
+        Self {
+            name: index.display_name(),
+            kind: IndexKind::Finite {
+                cardinality: index.cardinality(),
+            },
+        }
+    }
+
     /// Return this definition's coarse semantic category.
     #[must_use]
     pub const fn category(&self) -> IndexCategory {
@@ -521,15 +532,6 @@ impl IndexRegistry {
     /// Iterate over compiler-generated structural index identities.
     pub fn finite_indexes(&self) -> impl Iterator<Item = FiniteIndex> + '_ {
         self.finite_indexes.keys().copied()
-    }
-
-    /// Iterate over compiler-generated structural indexes and their definitions.
-    pub(crate) fn finite_index_definitions(
-        &self,
-    ) -> impl Iterator<Item = (FiniteIndex, &IndexDef)> {
-        self.finite_indexes
-            .iter()
-            .map(|(identity, definition)| (*identity, definition))
     }
 }
 

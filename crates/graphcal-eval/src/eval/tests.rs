@@ -4035,6 +4035,38 @@ fn nested_instantiated_file_include_reexports_requested_plot() {
 }
 
 #[test]
+fn plot_only_finite_axes_do_not_require_unrelated_declarations() {
+    for prefix in [
+        "",
+        "node unrelated: Dimensionless[Fin(2)] = table[Fin(2)] { 1.0; 1.0; };\n",
+    ] {
+        let source = format!(
+            "{prefix}{}",
+            r#"
+param divisor: Dimensionless = 1.0;
+plot curve = {
+    mark: line,
+    encode: {
+        x: for i: Fin(2) { 1.0 },
+        y: for i: Fin(2) { 1.0 / @divisor },
+    },
+};
+"#
+        );
+        let result = compile_and_eval(&source).unwrap();
+        assert!(!result.has_errors(), "{result:?}");
+        assert_eq!(result.plots.len(), 1);
+        assert_eq!(result.plots[0].encodings.len(), 2);
+        for (_, values) in &result.plots[0].encodings {
+            match values {
+                PlotFieldValue::Numbers(values) => assert_eq!(values.as_slice(), [1.0, 1.0]),
+                other => panic!("expected numeric plot data, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn requested_plot_specializes_its_required_index_axis() {
     let result = compile_and_eval(
         "index Axis = { One, Two };\n\
