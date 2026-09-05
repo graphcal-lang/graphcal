@@ -158,7 +158,7 @@ impl<'a> EvalContext<'a> {
     }
 
     #[must_use]
-    pub fn with_roots(
+    pub const fn with_roots(
         mut self,
         values: &'a RuntimeValueMap,
         instances: Option<&'a PresentationInstanceMap>,
@@ -169,13 +169,13 @@ impl<'a> EvalContext<'a> {
     }
 
     #[must_use]
-    pub fn with_presentation_calls(mut self, calls: &'a EvaluatedPresentationCalls) -> Self {
+    pub const fn with_presentation_calls(mut self, calls: &'a EvaluatedPresentationCalls) -> Self {
         self.environment.presentation_calls = Some(calls);
         self
     }
 
     #[must_use]
-    pub fn with_generic_nat_bindings(
+    pub const fn with_generic_nat_bindings(
         mut self,
         bindings: &'a HashMap<GenericParamName, u64>,
     ) -> Self {
@@ -202,29 +202,25 @@ impl<'a> EvalContext<'a> {
     where
         'a: 'b,
     {
-        let mut context = match self.capabilities {
-            Capabilities::ProvisionalConstants => EvalContext::provisional_constants(
-                self.tir,
-                dag.dag_id(),
-                src,
-                self.builtin_fns,
-                self.cancellation.clone(),
-            )?,
-            Capabilities::Checked { facts, host } => EvalContext::checked(
-                self.tir,
-                facts,
-                dag.dag_id(),
-                src,
-                self.builtin_fns,
-                host,
-                self.cancellation.clone(),
-            )?,
+        let mut context = self.with_src(src);
+        context.environment.current_dag = match self.capabilities {
+            Capabilities::ProvisionalConstants => {
+                self.tir.dag_registry().get(dag.dag_id()).ok_or_else(|| {
+                    context.internal_error(
+                        format!("constant scope `{}` has no compiled body", dag.dag_id()),
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?
+            }
+            Capabilities::Checked { facts, .. } => {
+                CheckedExecutionScope::new(self.tir, facts, dag.dag_id())
+                    .map_err(|error| {
+                        context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
+                    })?
+                    .dag()
+            }
         };
-        context.environment.work_budget = self.work_budget.clone();
-        context.environment.root_values = self.root_values;
-        context.environment.root_presentation_instances = self.root_presentation_instances;
-        context.environment.presentation_calls = self.presentation_calls;
-        context.environment.generic_nat_bindings = self.generic_nat_bindings;
+        context.environment.current_decl = None;
         Ok(context)
     }
 

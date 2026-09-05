@@ -171,7 +171,7 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
         checked.struct_field_constraints.as_ref()
     ));
     assert!(!context.struct_field_constraints().unwrap().is_empty());
-    assert!(std::ptr::eq(context.host_fns().unwrap(), &host));
+    assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
     let empty = crate::execution_facts::CheckedExecutionFacts::empty();
     assert!(
         crate::eval_expr::EvalContext::checked(

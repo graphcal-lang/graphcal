@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::TIR;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
@@ -35,11 +35,6 @@ pub struct ExecPlan {
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    /// Resolved domain constraints for struct/union member fields, keyed by
-    /// owner-qualified struct/constructor/field identity. Looked up at every
-    /// `ExprKind::ConstructorCall` evaluation to validate field values.
-    pub(crate) struct_field_constraints:
-        Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
     /// Per-DAG checked facts required by nested callable evaluation.
     pub(crate) checked_execution_facts: CheckedExecutionFacts,
 }
@@ -286,7 +281,6 @@ pub fn compile_checked_with_cancellation(
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
-        struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
         checked_execution_facts: facts.clone(),
     })
 }
@@ -460,7 +454,7 @@ mod tests {
         ));
         assert!(Arc::ptr_eq(
             &facts.struct_field_constraints,
-            &plan.struct_field_constraints
+            &plan.checked_execution_facts.struct_field_constraints
         ));
     }
 

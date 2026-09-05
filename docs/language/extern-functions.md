@@ -402,6 +402,10 @@ Two boundary cases:
 
 ## Failure Semantics
 
+Static checking uses function metadata without invoking host functions.
+Extern calls are runtime-only: constant expressions and domain bounds cannot
+invoke them.
+
 Extern functions can fail at runtime (a plugin reports a failure, traps,
 runs out of fuel, or a host function returns an error). Failures follow
 graphcal's per-node containment model:

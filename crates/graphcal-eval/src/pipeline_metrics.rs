@@ -12,13 +12,17 @@ pub enum Event {
     PresentationEvaluation,
 }
 
+#[cfg(not(test))]
 #[inline]
+pub const fn record(_event: Event) {}
+
+#[cfg(test)]
 pub fn record(event: Event) {
-    #[cfg(test)]
     record_many(event, 1);
-    #[cfg(not(test))]
-    let _ = event;
 }
+
+#[cfg(test)]
+pub use observer::{measure, record_many};
 
 #[cfg(test)]
 mod observer {
@@ -70,6 +74,3 @@ mod observer {
         )
     }
 }
-
-#[cfg(test)]
-pub use observer::{measure, record_many};
