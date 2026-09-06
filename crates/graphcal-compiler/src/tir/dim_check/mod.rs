@@ -1,6 +1,6 @@
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::syntax::type_name::ResolvedStructTypeName;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -26,6 +26,9 @@ pub(crate) use helpers::{expect_quantity, format_inferred_type};
 use helpers::{format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match};
 
 mod builtins;
+mod concrete_obligations;
+mod expression_axes;
+pub mod expression_facts;
 mod helpers;
 #[expect(
     clippy::too_many_arguments,
@@ -34,6 +37,7 @@ mod helpers;
               large match on ExprKind variants is inherently long"
 )]
 mod infer;
+use expression_facts::install_instance_expression_facts;
 mod model_schema;
 mod plot;
 mod presentation;
@@ -110,11 +114,6 @@ impl InferredIndex {
     #[must_use]
     pub(crate) const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
         self.reference.declared_resolved()
-    }
-
-    #[must_use]
-    const fn concrete_finite_index(&self) -> Option<crate::registry::types::FiniteIndex> {
-        self.reference.finite_index()
     }
 
     #[must_use]
@@ -282,7 +281,7 @@ impl InferredType {
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     cancellation: &'a crate::cancellation::CancellationToken,
-    materialized_shapes: &'a infer::hir::MaterializedShapeCollector,
+    expression_facts: &'a infer::hir::ExpressionFactCollector,
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
@@ -342,7 +341,7 @@ impl DimCheckContext<'_> {
         expr: &crate::hir::Expr,
         owner: &ResolvedDeclName,
     ) -> Result<InferredType, GraphcalError> {
-        infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+        infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
             expr,
             Some(owner),
             self.declared_types,
@@ -352,60 +351,24 @@ impl DimCheckContext<'_> {
             self.builtin_fns,
             self.src,
             self.cancellation,
-            self.materialized_shapes.clone(),
+            self.expression_facts.clone(),
         )
     }
 }
 
-fn validate_decl_concrete_type_obligations(
+fn validate_declared_shape(
     ctx: &DimCheckContext<'_>,
     name: &ScopedName,
-    type_ann_span: Span,
+    span: Span,
 ) -> Result<(), GraphcalError> {
-    let declared = ctx
-        .declared_types
-        .get(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("no declared type recorded for `{name}`"),
-            src: ctx.src.clone(),
-            span: type_ann_span.into(),
-        })?;
-    let inferred = InferredType::from(declared);
-    infer::hir::validate_concrete_type_obligations(
-        &inferred,
-        ctx.dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.builtin_fns,
-        ctx.src,
-        type_ann_span,
-        ctx.cancellation,
-    )
-}
-
-fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for application in concrete_constructor_applications(ctx.tir, ctx.dag, ctx.src)? {
-        ctx.checkpoint()?;
-        let inferred = InferredType::Struct(
-            InferredStructType::from_ref(application.identity().clone()),
-            application
-                .generic_args()
-                .iter()
-                .map(InferredGenericArg::from)
-                .collect(),
-        );
-        infer::hir::validate_concrete_type_obligations(
-            &inferred,
-            ctx.dag,
-            ctx.tir,
-            ctx.registry,
-            ctx.builtin_fns,
+    let ty = ctx.declared_types.get(name).ok_or_else(|| {
+        GraphcalError::internal_error(
+            "declaration has no checked type",
             ctx.src,
-            application.span(),
-            ctx.cancellation,
-        )?;
-    }
-    Ok(())
+            DiagnosticAnchor::Source(span),
+        )
+    })?;
+    expression_axes::checked_expression_shape(ty, ctx.tir, ctx.src, span).map(|_| ())
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -439,14 +402,22 @@ fn check_decl_expr_type(
         .flat_map(|instance| &instance.output_projections)
         .any(|projection| &projection.exposed_name == name)
     {
-        return Ok(());
+        // Projection bodies are generated from the already checked instance
+        // interface. Retain that proof rather than treating them as unchecked.
+        return body_ctx.expression_facts.record(
+            hir_expr,
+            &InferredType::from(declared),
+            body_ctx.dag,
+            body_ctx.tir,
+            body_ctx.src,
+        );
     }
     let owner = body_ctx.dag.require_bound_decl_identity(
         name,
         body_ctx.src,
         DiagnosticAnchor::Source(*type_ann_span),
     )?;
-    let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         hir_expr,
         Some(&owner),
         body_ctx.declared_types,
@@ -456,7 +427,7 @@ fn check_decl_expr_type(
         body_ctx.builtin_fns,
         body_ctx.src,
         body_ctx.cancellation,
-        body_ctx.materialized_shapes.clone(),
+        body_ctx.expression_facts.clone(),
     )?;
     let matches = body_ctx.dag.resolved_decl_types.get(name).map_or_else(
         || types_match(declared, &inferred),
@@ -504,7 +475,7 @@ fn check_dynamic_unit_scale_type(
         });
     }
     let entry_ctx = ctx.for_body(&entry.src);
-    let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         &entry.expr,
         None,
         entry_ctx.declared_types,
@@ -514,7 +485,7 @@ fn check_dynamic_unit_scale_type(
         entry_ctx.builtin_fns,
         entry_ctx.src,
         entry_ctx.cancellation,
-        entry_ctx.materialized_shapes.clone(),
+        entry_ctx.expression_facts.clone(),
     )?;
     if !matches!(
         &inferred,
@@ -1012,34 +983,14 @@ pub fn check_dimensions_tir_with_cancellation(
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
 
-    // Check each canonical source body once. Semantic instances reuse a body
-    // already proven closed over rigid Static ports, so only their signatures
-    // and value-binding conformance are specialized at the include site.
-    for (_, dag) in tir
-        .local_dags()
-        .filter(|(_, dag)| dag.is_semantic_instance())
-    {
-        cancellation.checkpoint()?;
-        let declared_types = dag.build_declared_types(src)?;
-        let collector = infer::hir::MaterializedShapeCollector::default();
-        let ctx = DimCheckContext {
-            cancellation,
-            materialized_shapes: &collector,
-            declared_types: &declared_types,
-            dag,
-            tir,
-            registry: &tir.registry,
-            builtin_fns,
-            src,
-        };
-        check_param_defaults(&ctx)?;
-    }
+    // Canonical bodies are checked once. Instance facts are specialized below,
+    // after canonical publication; only independently lowered bindings infer.
     let checked_dag_facts = tir
         .local_dags()
         .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(dag_id, dag)| {
             cancellation.checkpoint()?;
-            let collector = infer::hir::MaterializedShapeCollector::default();
+            let collector = infer::hir::ExpressionFactCollector::new(dag);
             let plot_shapes = check_dimensions_dag(
                 dag,
                 tir,
@@ -1049,30 +1000,67 @@ pub fn check_dimensions_tir_with_cancellation(
                 cancellation,
                 &collector,
             )?;
-            Ok((dag_id.clone(), collector.snapshot(), plot_shapes))
+            dag.owned_expression_roots()
+                .try_for_each(|root| collector.record_contextual(root, src))?;
+            Ok((dag_id.clone(), collector, plot_shapes))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let collectors: HashMap<_, _> = checked_dag_facts
+        .iter()
+        .map(|(owner, collector, _)| (owner.clone(), collector.clone()))
+        .collect();
+    check_field_domain_constraint_targets(tir, src)?;
+    check_field_domain_constraint_dimensions(
+        tir,
+        &tir.registry,
+        builtin_fns,
+        src,
+        cancellation,
+        &collectors,
+    )?;
+    drop(collectors);
     let mut checked_plot_shapes = HashMap::new();
-    for (dag_id, shapes, plot_shapes) in checked_dag_facts {
-        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
+    for (dag_id, collector, plot_shapes) in checked_dag_facts {
+        let dag = tir.dags.get(&dag_id).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
                 src,
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        dag.semantic.materialized_shapes = shapes;
+        let published = crate::tir::expression_facts::CheckedExpressionFacts::publish(
+            dag.dag_id().clone(),
+            dag.body_revision().clone(),
+            &dag.owned_expression_roots().collect::<Vec<_>>(),
+            collector.finish(),
+            &|index| expression_axes::checked_index_cardinality(tir, index),
+        )
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                format!("DAG `{dag_id}`: {error}"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+        tir.dags
+            .get_mut(&dag_id)
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    "checked DAG disappeared during fact publication",
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?
+            .semantic
+            .expression_facts = Some(published);
         checked_plot_shapes.insert(dag_id, plot_shapes);
     }
 
-    // Validate domain constraints on HIR nominal fields. Types reachable
-    // through dep imports were already validated in their defining file's
-    // pipeline, so the redundant pass is idempotent. (#450 Position 1+2.)
-    cancellation.checkpoint()?;
-    check_field_domain_constraint_targets(tir, src)?;
-    cancellation.checkpoint()?;
-    check_field_domain_constraint_dimensions(tir, &tir.registry, builtin_fns, src, cancellation)?;
+    install_instance_expression_facts(tir, src, cancellation)?;
+    concrete_obligations::validate_project(tir, src, cancellation)?;
 
+    // Field targets and dimensions were checked before publication; installing
+    // instance expression facts does not change their nominal definitions.
     cancellation.checkpoint()?;
     let presentation_facts =
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
@@ -1148,8 +1136,7 @@ pub fn reconcile_external_override_dependencies<S>(
 ///
 /// # Errors
 ///
-/// Returns a compiler diagnostic if a supposedly checked TIR can no longer be
-/// inferred consistently.
+/// Returns a compiler diagnostic if retained checking results are unavailable.
 pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -1171,12 +1158,13 @@ pub fn collect_override_dependency_summary_with_cancellation(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
-    let builtin_fns = builtin_functions();
     let mut summary = OverrideDependencySummary::new();
 
     for (_, dag) in tir.local_dags() {
         cancellation.checkpoint()?;
-        let declared_types = dag.build_declared_types(src)?;
+        let facts = dag.expression_facts().map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
         for param in &dag.params {
             let Some(default) = &param.default else {
                 continue;
@@ -1188,18 +1176,40 @@ pub fn collect_override_dependency_summary_with_cancellation(
                 body_src,
                 DiagnosticAnchor::Source(param.span),
             )?;
-            let (_, mut dependencies) =
-                infer::hir::infer_hir_type_with_nominal_dependencies_and_cancellation(
-                    &default.expr,
-                    &owner,
-                    &declared_types,
-                    dag,
-                    tir,
-                    &tir.registry,
-                    builtin_fns,
-                    body_src,
-                    cancellation,
-                )?;
+            let record = facts
+                .get(default.expr.id().map_err(|error| {
+                    GraphcalError::internal_error(
+                        error.to_string(),
+                        body_src,
+                        DiagnosticAnchor::Source(default.expr.span),
+                    )
+                })?)
+                .map_err(|error| {
+                    GraphcalError::internal_error(
+                        error.to_string(),
+                        body_src,
+                        DiagnosticAnchor::Source(default.expr.span),
+                    )
+                })?;
+            let mut dependencies: HashSet<_> = record
+                .nominal_observations()
+                .iter()
+                .filter_map(|observation| {
+                    use crate::tir::expression_facts::NominalObservation;
+                    match observation {
+                        NominalObservation::Field { identity, .. }
+                        | NominalObservation::Constructor { identity, .. }
+                        | NominalObservation::TypeArgument(identity) => {
+                            Some(NominalOverrideIdentity::Type(identity.clone()))
+                        }
+                        NominalObservation::IndexLabel { identity, .. }
+                        | NominalObservation::IndexArgument(identity) => identity
+                            .declared_resolved()
+                            .cloned()
+                            .map(NominalOverrideIdentity::Index),
+                    }
+                })
+                .collect();
             dependencies.retain(|identity| is_bindable_nominal(dag, identity));
             if !dependencies.is_empty() {
                 summary.insert(owner, dependencies);
@@ -1224,158 +1234,6 @@ fn is_bindable_nominal(
     dag.semantic.bindable_nominals.contains(&bindable)
 }
 
-/// One exact concrete nominal application observed in semantic HIR.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConcreteNominalTypeApplication {
-    identity: StructTypeRef,
-    generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
-    span: Span,
-}
-
-impl ConcreteNominalTypeApplication {
-    #[must_use]
-    pub const fn identity(&self) -> &StructTypeRef {
-        &self.identity
-    }
-
-    #[must_use]
-    pub fn generic_args(&self) -> &[crate::registry::declared_type::DeclaredGenericArg] {
-        &self.generic_args
-    }
-
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        self.span
-    }
-}
-
-/// Collect exact concrete nominal applications from every semantic expression
-/// in one DAG, including constructor calls inside field bounds.
-///
-/// # Errors
-///
-/// Returns a compiler diagnostic when a constructor application is not exact,
-/// sort-correct, and concrete.
-pub fn concrete_constructor_applications(
-    tir: &crate::tir::typed::TIR,
-    dag: &crate::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ConcreteNominalTypeApplication>, GraphcalError> {
-    let mut applications = HashMap::new();
-    let mut error = None;
-    dag.visit_expressions(&mut |expr| {
-        if error.is_some() {
-            return;
-        }
-        let resolved = match expr.kind() {
-            crate::hir::ExprKind::ConstructorCall {
-                callee,
-                generic_args,
-                ..
-            } => concrete_constructor_generic_args(
-                tir,
-                dag,
-                &callee.value,
-                generic_args,
-                src,
-                callee.span,
-            )
-            .map(|generic_args| (callee.value.clone(), generic_args)),
-            crate::hir::ExprKind::ConstRef(target) => match &target.value {
-                crate::hir::ConstRef::Constructor(constructor) => {
-                    concrete_constructor_generic_args(tir, dag, constructor, &[], src, target.span)
-                        .map(|generic_args| (constructor.clone(), generic_args))
-                }
-                crate::hir::ConstRef::Decl(_)
-                | crate::hir::ConstRef::Builtin(_)
-                | crate::hir::ConstRef::GenericNatParam(_) => return,
-            },
-            _ => return,
-        };
-        match resolved {
-            Ok((constructor, generic_args)) => {
-                let Some(target) = dag
-                    .semantic
-                    .constructor_refs
-                    .constructor_defs
-                    .get(&constructor)
-                else {
-                    error = Some(GraphcalError::InternalError {
-                        message: format!(
-                            "semantic constructor metadata missing for `{constructor}`"
-                        ),
-                        src: src.clone(),
-                        span: expr.span.into(),
-                    });
-                    return;
-                };
-                applications
-                    .entry((
-                        StructTypeRef::from_resolved(target.owning_type.clone()),
-                        generic_args,
-                    ))
-                    .or_insert(expr.span);
-            }
-            Err(diagnostic) => error = Some(diagnostic),
-        }
-    });
-    error.map_or_else(
-        || {
-            Ok(applications
-                .into_iter()
-                .map(
-                    |((identity, generic_args), span)| ConcreteNominalTypeApplication {
-                        identity,
-                        generic_args,
-                        span,
-                    },
-                )
-                .collect())
-        },
-        Err,
-    )
-}
-
-/// Resolve one HIR constructor call's complete concrete generic identity.
-///
-/// Evaluation uses this checked compiler boundary rather than reimplementing
-/// generic sorting/default substitution. The returned arguments are exact,
-/// concrete, and in declaration order.
-///
-/// # Errors
-///
-/// Returns a compiler diagnostic when constructor metadata is missing or the
-/// application is not a concrete, valid application of its owning type.
-pub fn concrete_constructor_generic_args(
-    tir: &crate::tir::typed::TIR,
-    dag: &crate::tir::typed::DagTIR,
-    constructor: &ResolvedConstructorName,
-    applied_generic_args: &[crate::hir::GenericArg],
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Vec<crate::registry::declared_type::DeclaredGenericArg>, GraphcalError> {
-    let target = dag
-        .semantic
-        .constructor_refs
-        .constructor_defs
-        .get(constructor)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("semantic constructor metadata missing for `{constructor}`"),
-            src: src.clone(),
-            span: span.into(),
-        })?;
-    infer::hir::resolve_concrete_generic_args(
-        &target.owning_type,
-        &target.type_def,
-        applied_generic_args,
-        dag,
-        tir,
-        &tir.registry,
-        src,
-        span,
-    )
-}
-
 /// Check one already-lowered external value expression against a concrete
 /// declared type in this TIR's root module.
 ///
@@ -1398,9 +1256,10 @@ pub fn check_external_value_expr_type(
     expr: &crate::hir::Expr,
     expected: &DeclaredType,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
     let builtin_fns = builtin_functions();
-    let inferred = infer::hir::infer_hir_type_with_owner(
+    let collector = infer::hir::ExpressionFactCollector::new(tir.root());
+    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         expr,
         None,
         declared_types,
@@ -1409,19 +1268,33 @@ pub fn check_external_value_expr_type(
         &tir.registry,
         builtin_fns,
         src,
+        &crate::cancellation::CancellationToken::unbounded(),
+        collector.clone(),
     )?;
-    infer::hir::validate_concrete_type_obligations(
-        &inferred,
+    concrete_obligations::validate_concrete_type_obligations(
+        &DeclaredType::from(&inferred),
         tir.root(),
         tir,
-        &tir.registry,
-        builtin_fns,
         src,
         expr.span,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if types_match(expected, &inferred) {
-        Ok(())
+        collector.record_contextual(expr, src)?;
+        crate::tir::expression_facts::CheckedExpressionFacts::publish(
+            tir.root_dag_id().clone(),
+            tir.root().body_revision().clone(),
+            &[expr],
+            collector.finish(),
+            &|index| expression_axes::checked_index_cardinality(tir, index),
+        )
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                error.to_string(),
+                src,
+                DiagnosticAnchor::Source(expr.span),
+            )
+        })
     } else {
         Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(expected, &tir.registry),
@@ -1436,8 +1309,11 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> 
     for entry in &ctx.dag.params {
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(ctx.src);
-        let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_declared_shape(
+            &ctx.for_body(annotation_src),
+            &entry.name,
+            entry.type_ann.span,
+        )?;
         let Some(default) = entry.default.as_ref() else {
             continue;
         };
@@ -1456,13 +1332,13 @@ fn check_dimensions_dag(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-    materialized_shapes: &infer::hir::MaterializedShapeCollector,
+    expression_facts: &infer::hir::ExpressionFactCollector,
 ) -> Result<plot::CheckedPlotChannelShapes, GraphcalError> {
     cancellation.checkpoint()?;
     let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
         cancellation,
-        materialized_shapes,
+        expression_facts,
         declared_types: &declared_types,
         dag,
         tir,
@@ -1476,23 +1352,26 @@ fn check_dimensions_dag(
     for entry in &dag.consts {
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
-        let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_declared_shape(
+            &ctx.for_body(annotation_src),
+            &entry.name,
+            entry.type_ann.span,
+        )?;
         let body_ctx = ctx.for_body(entry.body_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
     for entry in &dag.nodes {
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
-        let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_declared_shape(
+            &ctx.for_body(annotation_src),
+            &entry.name,
+            entry.type_ann.span,
+        )?;
         let body_ctx = ctx.for_body(entry.body_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
     check_param_defaults(&ctx)?;
-
-    ctx.checkpoint()?;
-    validate_hir_concrete_type_obligations(&ctx)?;
 
     ctx.checkpoint()?;
     check_dynamic_unit_scale_types(&ctx)?;
@@ -1606,7 +1485,7 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
         };
 
         for bound in bounds {
-            let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+            let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
                 &bound.value,
                 Some(&key),
                 ctx.declared_types,
@@ -1616,7 +1495,7 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
                 ctx.builtin_fns,
                 body_src,
                 ctx.cancellation,
-                ctx.materialized_shapes.clone(),
+                ctx.expression_facts.clone(),
             )?;
             check_one_bound(name, bound, &inferred, &expected, ctx.registry, body_src)?;
         }
@@ -1789,12 +1668,17 @@ fn field_constraint_definition_dag<'a>(
 /// Field bounds cross into HIR with their nominal definition; the same
 /// owner-qualified field can be referenced
 /// from several DAGs, so a seen-set dedupes the checks.
+#[expect(
+    clippy::too_many_lines,
+    reason = "checks each nominal field's target and definition-scoped bounds together"
+)]
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
+    collectors: &HashMap<crate::dag_id::DagId, infer::hir::ExpressionFactCollector>,
 ) -> Result<(), GraphcalError> {
     let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
@@ -1864,21 +1748,25 @@ fn check_field_domain_constraint_dimensions(
             };
             let definition_dag =
                 field_constraint_definition_dag(tir, key, diagnostic_src, diagnostic_span)?;
+            let Some(collector) = collectors.get(definition_dag.dag_id()) else {
+                // Imported definitions already carry their canonical proof.
+                continue;
+            };
             for bound in field_semantics.domain_bounds() {
                 let definition_types = definition_dag.build_declared_types(&bound.src)?;
-                let inferred =
-                    infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
-                        &bound.value,
-                        None,
-                        &definition_types,
-                        definition_dag,
-                        tir,
-                        registry,
-                        builtin_fns,
-                        &bound.src,
-                        cancellation,
-                        infer::hir::MaterializedShapeCollector::default(),
-                    )?;
+                let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
+                    &bound.value,
+                    None,
+                    &definition_types,
+                    definition_dag,
+                    tir,
+                    registry,
+                    builtin_fns,
+                    &bound.src,
+                    cancellation,
+                    collector.clone(),
+                )?;
+                collector.retain_nat_scope(&bound.value, type_def.generic_params());
                 match &expected {
                     Some(expected) => check_one_bound_with_display_name(
                         &display_name,

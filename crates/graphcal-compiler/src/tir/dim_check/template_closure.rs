@@ -43,7 +43,7 @@ fn infer_operand(
     owner: Option<&ResolvedDeclName>,
     expr: &hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
-    infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+    infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         expr,
         owner,
         ctx.declared_types,
@@ -53,7 +53,7 @@ fn infer_operand(
         ctx.builtin_fns,
         ctx.src,
         ctx.cancellation,
-        ctx.materialized_shapes.clone(),
+        ctx.expression_facts.clone(),
     )
 }
 
@@ -374,10 +374,10 @@ fn check_rigid_dimension_port(
         )
     })?;
     let declared_types = rigid_dag.build_declared_types(ctx.src)?;
-    let materialized_shapes = infer::hir::MaterializedShapeCollector::default();
+    let expression_facts = infer::hir::ExpressionFactCollector::new(rigid_dag);
     let rigid_ctx = DimCheckContext {
         cancellation: ctx.cancellation,
-        materialized_shapes: &materialized_shapes,
+        expression_facts: &expression_facts,
         declared_types: &declared_types,
         dag: rigid_dag,
         tir: &rigid_tir,

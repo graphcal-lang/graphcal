@@ -283,20 +283,28 @@ the single resolution stage of the compiler:
   Expression semantics are private behind read-only access; consuming and
   reconstructing a node cannot retain its old identity. Cloning an immutable
   expression preserves its identity; fresh lowering creates a fresh revision
-  even when all source coordinates agree. A single exhaustive child inventory
+  even when all source coordinates agree. Finished expressions/assertions share
+  immutable bodies and source maps; expression handles box their variant payload.
+  Occurrence ordinals are `usize` positions, not language Nat values or wire IDs.
+  A single exhaustive child inventory
   serves identity assignment, dependency collection, and structural inspection.
   DAG root enumeration distinguishes bounds owned by the current semantic body
   from referenced foreign nominal bounds, while dependency inspection still
   visits both.
-  Materialization and presentation call-site keys now use scoped expression IDs,
-  with presentation diagnostics stored outside key equality. Materialization
-  facts are still sparse: complete checked expression coverage and removal of
-  runtime reconstruction/checking remain separate work.
+  Presentation call-site keys use scoped expression IDs, with diagnostics stored
+  outside key equality. `tir/expression_facts.rs` replaces the old sparse
+  materialization map: every owned root and descendant has a value or contextual
+  record, with explicit scalar/concrete/symbolic shape. Publication checks
+  owner/revision, exact source-ID coverage, operation/child compatibility, and
+  shape consistency against canonical index cardinalities without inferring types.
+  Constructor calls and match targets retain checked nominal identities; runtime
+  consumes these facts instead of resolving constructor generics again.
   `body_revision.rs` separately identifies a semantic checking revision: rechecking
   an immutable source tree cannot authorize old execution facts merely because
   its DAG name and expression IDs still agree. Checked execution scope selection
-  validates this revision, and generic Nat services retain canonical parameter
-  owners rather than matching a type parameter's leaf name.
+  validates this revision. Generic Nat discharge belongs only to checking and
+  uses canonical parameter owners, never same-leaf matching. Interpretation has
+  no Nat-binding store or source-Nat evaluation service.
 - `hir/closed_expr.rs` validates the complete syntactically closed input-literal
   subset, rejects nonfinite/unresolved/computational nodes, and finishes a fresh
   source revision before parameter binding checks. `ClosedExpr` preserves this
@@ -371,10 +379,15 @@ variant literal rules) run when `HirProject` is consumed by checking.
 
 `tir/typed.rs` resolves type annotations into semantic type expressions.
 `tir/materialized_shape.rs` defines the checked total-cardinality policy carried
-by concrete indexed expressions. `tir/presentation.rs` defines owner-qualified,
+by concrete indexed expressions. `tir/expression_facts.rs` defines sealed expression records and their separate
+diagnostic projection. `tir/presentation.rs` defines owner-qualified,
 structurally nested display provenance and checked plot-channel dimensions.
 `tir/dim_check/` infers and installs concrete value types, eager shape facts,
-and presentation facts before evaluation.
+and presentation facts before evaluation. `expression_axes.rs` derives axes from
+checked declared types. `concrete_obligations.rs` specializes published nominal
+bound products, including scalar-result obligations, without raw-bound inference.
+Constructor preparation uses the complete owned-root inventory, including
+nominal bounds in their canonical defining (possibly imported) scope.
 
 In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
@@ -425,8 +438,28 @@ side map clones bodies.
 `DagSemanticBody` contains derived facts only:
 
 - `semantic.dependencies`: owner-qualified declaration dependency maps.
-- `semantic.constructor_refs`: canonical constructor-call and constructor-match
-  metadata backed by shared project-store type handles.
+- `semantic.constructor_refs`: canonical constructor metadata for checking,
+  backed by shared project-store type handles.
+- `semantic.expression_facts`: sealed value/contextual results, operation and
+  direct dependency identities, complete shapes, constructor applications and
+  required field obligations, match targets, and binder-aware nominal observations.
+  Rows retain the semantic owner and checking revision. Static instances specialize
+  retained rows and check only independently lowered replacement bindings; replaced
+  defaults are excluded from the instance's owned coverage. Generic bound products
+  discharge Nat obligations through canonical `GenericParamId` scopes before
+  interpretation; canonical substitutions remain in checking-only contexts.
+  `expression_facts/static_index.rs` retains key/integer-selection membership
+  requirements independently of result shape. Publication validates their
+  structural coverage and composes readiness in postorder, so a deferred child
+  blocks its enclosing expression before an earlier sibling can invoke a host.
+  Conflicting origins for one ID and incorrect contextual subtypes are rejected.
+  Contextual completion walks once per owned or independently checked root, not
+  once per inferred node. External values and replacement bindings complete their
+  own contextual operands before publication. Active visit counts and actual
+  contextual-row checks cover both traversed values and inserted metadata.
+  Published tables, checking stamps, immutable operations/dependencies, lexical
+  scopes, and nominal observations share storage across clones/specializations;
+  specialized types and obligation axes are constructed independently.
 - `semantic.type_defs`: resolved field/default semantics plus shared handles to
   canonical nominal definitions.
 - `semantic.decl_bindings`: declaration records and visible imported values
@@ -567,6 +600,11 @@ The compiler crate owns the functional core through TIR.
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
 | `tir/materialized_shape.rs`   | Checked total cardinality for eagerly materialized indexed values |
+| `tir/expression_facts.rs` | Sealed, revision-bound expression records and coverage validation |
+| `tir/expression_facts/static_index.rs` | Retained static membership requirements and readiness |
+| `tir/dim_check/expression_axes.rs` | Cardinalities and shapes from checked declared types |
+| `tir/dim_check/expression_facts.rs` | Retained instance specialization and canonical generic-bound discharge |
+| `tir/dim_check/concrete_obligations.rs` | Concrete application validation using published bound facts |
 | `tir/presentation.rs`         | Structured owner-qualified display and plot-channel facts     |
 | `tir/typed.rs`                | Typed semantic bodies, including atomic dynamic-unit entries   |
 | `tir/dim_check/`              | Dimension/type inference, including scalar unit-scale checks   |
@@ -1063,7 +1101,12 @@ adaptation remain separate; both use the same assertion and expected-failure
 semantics. The frame and assertion modules import contract definitions directly,
 including the public `tir::typed::model` data module, not checking re-exports.
 Nested contexts retain their enclosing declaration's work budget. Aggregate
-operation/resource limits and constructor/presentation reconstruction remain C/D.
+operation/resource limits and presentation replay remain Phase D. Constructors
+and matches consume retained expression applications; required field constraints
+cannot silently disappear, and instance comprehensions no longer reconstruct
+missing materialization facts. Key forms, maps, comprehensions, and unfold
+consume retained axes; normalized Nat arithmetic is never replayed from source.
+Dynamic positions and actual numeric/domain/owner/generic-argument checks remain.
 
 It contains no cloned HIR bodies and no parser or registry-building work;
 evaluation reads declaration/assertion/visualization records from the checked
@@ -1346,8 +1389,8 @@ All Rust files in the workspace, in library-consumer order. The order is
 derived from the actual `use`/`pub use` graph by
 `./internals/reading-order.py`; re-run that script after dependency-affecting
 refactors. Files in one strongly connected component are kept together and
-ordered for readability, while every dependency edge outside those documented
-cycles points backward in this list. Stage headings are curated contiguous
+ordered for readability, while every dependency edge outside the cycles reported
+by that script points backward in this list. Stage headings are curated contiguous
 slices of the generated order. This reading aid is not an enforcement waiver
 for edges inside an SCC. The standalone [pipeline-layer guard](pipeline-layers/README.md)
 runs in both `just lint` and `just test`, resolves aliases/re-export boundaries,
@@ -1482,9 +1525,9 @@ Its source-analysis limits are documented separately from this heuristic orderin
 3. `crates/graphcal-compiler/src/hir/diagnostics.rs`
 4. `crates/graphcal-compiler/src/hir/lower.rs`
 5. `crates/graphcal-compiler/src/hir/expr.rs`
-6. `crates/graphcal-compiler/src/hir/closed_expr.rs`
-7. `crates/graphcal-compiler/src/hir/nominal.rs`
-8. `crates/graphcal-compiler/src/hir/mod.rs`
+6. `crates/graphcal-compiler/src/hir/nominal.rs`
+7. `crates/graphcal-compiler/src/hir/mod.rs`
+8. `crates/graphcal-compiler/src/hir/closed_expr.rs`
 
 ### Stage 8 - IR lowering, TIR, checking, and formal conformance
 
@@ -1494,33 +1537,40 @@ Its source-analysis limits are documented separately from this heuristic orderin
 4. `crates/graphcal-compiler/src/ir/include.rs`
 5. `crates/graphcal-compiler/src/ir/lower.rs`
 6. `crates/graphcal-compiler/src/tir/presentation.rs`
-7. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
-8. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
-9. `crates/graphcal-compiler/src/tir/typed/collect.rs`
-10. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
-11. `crates/graphcal-compiler/src/tir/typed/model.rs`
-12. `crates/graphcal-compiler/src/tir/typed/ops.rs`
-13. `crates/graphcal-compiler/src/tir/typed.rs`
-14. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
-15. `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
-16. `crates/graphcal-compiler/src/tir/typed/tests.rs`
-17. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
-18. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
-19. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
-20. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-21. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
-22. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
-23. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
-24. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
-25. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-26. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
-27. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
-28. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
-29. `crates/graphcal-compiler/src/ir/static_dependencies.rs`
-30. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
-31. `crates/graphcal-compiler/src/tir/template_closure.rs`
-32. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
-33. `crates/graphcal-compiler/src/tir/template_closure/formal_conformance.rs`
+7. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
+8. `crates/graphcal-compiler/src/ir/static_dependencies.rs`
+9. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
+10. `crates/graphcal-compiler/src/tir/template_closure.rs`
+11. `crates/graphcal-compiler/src/tir/template_closure/formal_conformance.rs`
+12. `crates/graphcal-compiler/src/tir/expression_facts/static_index.rs`
+13. `crates/graphcal-compiler/src/tir/expression_facts.rs`
+14. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
+15. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
+16. `crates/graphcal-compiler/src/tir/typed/collect.rs`
+17. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
+18. `crates/graphcal-compiler/src/tir/typed/model.rs`
+19. `crates/graphcal-compiler/src/tir/typed/ops.rs`
+20. `crates/graphcal-compiler/src/tir/typed.rs`
+21. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
+22. `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
+23. `crates/graphcal-compiler/src/tir/typed/tests.rs`
+24. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
+25. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
+26. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+27. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+28. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
+29. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
+30. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
+31. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+32. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
+33. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
+34. `crates/graphcal-compiler/src/tir/expression_facts/tests.rs`
+35. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
+36. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
+37. `crates/graphcal-compiler/src/tir/dim_check/expression_facts.rs`
+38. `crates/graphcal-compiler/src/tir/dim_check/expression_facts/tests.rs`
+39. `crates/graphcal-compiler/src/tir/dim_check/concrete_obligations.rs`
+40. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
@@ -1553,7 +1603,7 @@ Its source-analysis limits are documented separately from this heuristic orderin
 7. `crates/graphcal-plugin-macros/src/codegen.rs`
 8. `crates/graphcal-plugin/src/lib.rs`
 
-### Stage 13 - Cross-crate runtime and tooling foundations
+### Stage 13 - Runtime foundations
 
 1. `crates/graphcal-eval/src/decl_key.rs`
 2. `crates/graphcal-eval/src/eval_expr/numeric.rs`
@@ -1573,29 +1623,6 @@ Its source-analysis limits are documented separately from this heuristic orderin
 16. `crates/graphcal-eval/src/declaration_locations.rs`
 17. `crates/graphcal-eval/src/constant_pools.rs`
 18. `crates/graphcal-eval/src/execution_plan.rs`
-19. `crates/graphcal-report/src/lib.rs`
-20. `crates/graphcal-report/src/escape.rs`
-21. `crates/graphcal-report/src/vega_assets.rs`
-22. `crates/graphcal-report/src/report_hydrate.rs`
-23. `crates/graphcal-test-support/src/lib.rs`
-24. `crates/graphcal-test-support/src/project.rs`
-25. `crates/graphcal-test-support/src/bytes.rs`
-26. `crates/graphcal-fmt/src/lib.rs`
-27. `crates/graphcal-fmt/src/format/type_expr.rs`
-28. `crates/graphcal-fmt/src/format/expr.rs`
-29. `crates/graphcal-fmt/src/format/decl.rs`
-30. `crates/graphcal-fmt/src/format/mod.rs`
-31. `crates/graphcal-lsp/src/lib.rs`
-32. `crates/graphcal-lsp/src/convert.rs`
-33. `crates/graphcal-lsp/src/cursor_context.rs`
-34. `crates/graphcal-lsp/src/symbol_identity.rs`
-35. `crates/graphcal-lsp/src/nominal_type_index.rs`
-36. `crates/graphcal-lsp/src/symbol_table.rs`
-37. `crates/graphcal-lsp/src/project_symbols.rs`
-38. `crates/graphcal-lsp/src/formatting.rs`
-39. `crates/graphcal-lsp/src/workspace_revision.rs`
-40. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
-41. `crates/graphcal-cli/src/lib.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 
@@ -1633,8 +1660,8 @@ Its source-analysis limits are documented separately from this heuristic orderin
 32. `crates/graphcal-eval/src/project_compiler/lowering.rs`
 33. `crates/graphcal-eval/src/project_compiler/session.rs`
 34. `crates/graphcal-eval/src/eval/runtime.rs`
-35. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-36. `crates/graphcal-eval/src/eval/project/prepared.rs`
+35. `crates/graphcal-eval/src/eval/project/prepared.rs`
+36. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
 37. `crates/graphcal-eval/src/eval_expr/mod.rs`
 38. `crates/graphcal-eval/src/eval/project/mod.rs`
 39. `crates/graphcal-eval/src/project_compiler/mod.rs`
@@ -1653,19 +1680,27 @@ Its source-analysis limits are documented separately from this heuristic orderin
 9. `crates/graphcal-eval/src/eval/tests.rs`
 10. `crates/graphcal-eval/src/graph_ir/mod.rs`
 11. `crates/graphcal-eval/src/graph_ir/dot.rs`
+12. `crates/graphcal-eval/src/eval/tests/checked_expressions.rs`
 
 ### Stage 16 - Report rendering (`graphcal-report`)
 
-1. `crates/graphcal-report/src/vega.rs`
-2. `crates/graphcal-report/src/plot_page.rs`
-3. `crates/graphcal-report/src/value_display.rs`
-4. `crates/graphcal-report/src/report_ir.rs`
-5. `crates/graphcal-report/src/report_html.rs`
-6. `crates/graphcal-report/src/report_markdown.rs`
+1. `crates/graphcal-report/src/lib.rs`
+2. `crates/graphcal-report/src/escape.rs`
+3. `crates/graphcal-report/src/vega_assets.rs`
+4. `crates/graphcal-report/src/report_hydrate.rs`
+5. `crates/graphcal-report/src/vega.rs`
+6. `crates/graphcal-report/src/plot_page.rs`
+7. `crates/graphcal-report/src/value_display.rs`
+8. `crates/graphcal-report/src/report_ir.rs`
+9. `crates/graphcal-report/src/report_html.rs`
+10. `crates/graphcal-report/src/report_markdown.rs`
 
-### Stage 17 - Tenax Arrow transport (`graphcal-tenax`)
+### Stage 17 - Test support and Tenax Arrow transport
 
-1. `crates/graphcal-tenax/src/lib.rs`
+1. `crates/graphcal-test-support/src/lib.rs`
+2. `crates/graphcal-test-support/src/project.rs`
+3. `crates/graphcal-test-support/src/bytes.rs`
+4. `crates/graphcal-tenax/src/lib.rs`
 
 ### Stage 18 - Browser WASM adapter (`graphcal-wasm`)
 
@@ -1685,22 +1720,38 @@ Its source-analysis limits are documented separately from this heuristic orderin
 5. `crates/graphcal-plugin-host/src/host.rs`
 6. `crates/graphcal-plugin-host/src/lib.rs`
 
-### Stage 20 - Language server (`graphcal-lsp`)
+### Stage 20 - Formatter and language server (with CLI library boundary)
 
-1. `crates/graphcal-lsp/src/diagnostics.rs`
-2. `crates/graphcal-lsp/src/formatting_scheduler.rs`
-3. `crates/graphcal-lsp/src/resolve.rs`
-4. `crates/graphcal-lsp/src/completion.rs`
-5. `crates/graphcal-lsp/src/signature_help.rs`
-6. `crates/graphcal-lsp/src/inlay_hints.rs`
-7. `crates/graphcal-lsp/src/document_symbols.rs`
-8. `crates/graphcal-lsp/src/document_links.rs`
-9. `crates/graphcal-lsp/src/code_actions.rs`
-10. `crates/graphcal-lsp/src/goto_definition.rs`
-11. `crates/graphcal-lsp/src/references.rs`
-12. `crates/graphcal-lsp/src/hover.rs`
-13. `crates/graphcal-lsp/src/rename.rs`
-14. `crates/graphcal-lsp/src/server.rs`
+1. `crates/graphcal-fmt/src/lib.rs`
+2. `crates/graphcal-fmt/src/format/type_expr.rs`
+3. `crates/graphcal-fmt/src/format/expr.rs`
+4. `crates/graphcal-fmt/src/format/decl.rs`
+5. `crates/graphcal-fmt/src/format/mod.rs`
+6. `crates/graphcal-lsp/src/lib.rs`
+7. `crates/graphcal-lsp/src/convert.rs`
+8. `crates/graphcal-lsp/src/cursor_context.rs`
+9. `crates/graphcal-lsp/src/symbol_identity.rs`
+10. `crates/graphcal-lsp/src/nominal_type_index.rs`
+11. `crates/graphcal-lsp/src/symbol_table.rs`
+12. `crates/graphcal-lsp/src/project_symbols.rs`
+13. `crates/graphcal-lsp/src/formatting.rs`
+14. `crates/graphcal-lsp/src/workspace_revision.rs`
+15. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+16. `crates/graphcal-lsp/src/formatting_scheduler.rs`
+17. `crates/graphcal-cli/src/lib.rs`
+18. `crates/graphcal-lsp/src/diagnostics.rs`
+19. `crates/graphcal-lsp/src/resolve.rs`
+20. `crates/graphcal-lsp/src/completion.rs`
+21. `crates/graphcal-lsp/src/signature_help.rs`
+22. `crates/graphcal-lsp/src/inlay_hints.rs`
+23. `crates/graphcal-lsp/src/document_symbols.rs`
+24. `crates/graphcal-lsp/src/document_links.rs`
+25. `crates/graphcal-lsp/src/code_actions.rs`
+26. `crates/graphcal-lsp/src/goto_definition.rs`
+27. `crates/graphcal-lsp/src/references.rs`
+28. `crates/graphcal-lsp/src/hover.rs`
+29. `crates/graphcal-lsp/src/rename.rs`
+30. `crates/graphcal-lsp/src/server.rs`
 
 ### Stage 21 - CLI shell and plugin support
 

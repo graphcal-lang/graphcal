@@ -7,7 +7,6 @@ use std::sync::Arc;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::hir::types::GenericParamId;
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
@@ -54,7 +53,6 @@ pub struct EvalEnvironment<'a> {
     pub root_values: Option<&'a RuntimeValueMap>,
     pub root_presentation_instances: Option<&'a PresentationInstanceMap>,
     pub presentation_calls: Option<&'a EvaluatedPresentationCalls>,
-    pub generic_nat_bindings: Option<&'a HashMap<GenericParamId, u64>>,
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -62,6 +60,8 @@ pub struct EvalEnvironment<'a> {
 pub struct EvalContext<'a> {
     environment: EvalEnvironment<'a>,
     capabilities: Capabilities<'a>,
+    independent_expressions:
+        Option<&'a graphcal_compiler::tir::expression_facts::CheckedExpressionFacts>,
 }
 
 impl<'a> Deref for EvalContext<'a> {
@@ -92,7 +92,6 @@ impl<'a> EvalContext<'a> {
             root_values: None,
             root_presentation_instances: None,
             presentation_calls: None,
-            generic_nat_bindings: None,
         }
     }
 
@@ -115,6 +114,7 @@ impl<'a> EvalContext<'a> {
         Ok(Self {
             environment: Self::environment(tir, dag, src, builtin_fns, cancellation),
             capabilities: Capabilities::ProvisionalConstants,
+            independent_expressions: None,
         })
     }
 
@@ -140,7 +140,39 @@ impl<'a> EvalContext<'a> {
         Ok(Self {
             environment: Self::environment(tir, scope.dag(), src, builtin_fns, cancellation),
             capabilities: Capabilities::Checked { plan, host },
+            independent_expressions: None,
         })
+    }
+
+    pub fn with_expression_facts(
+        mut self,
+        facts: &'a graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
+    ) -> Result<Self, GraphcalError> {
+        facts
+            .validate_environment(self.current_dag.dag_id(), self.current_dag.body_revision())
+            .map_err(|error| self.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;
+        self.independent_expressions = Some(facts);
+        Ok(self)
+    }
+
+    pub fn expression_fact(
+        &self,
+        expr: &graphcal_compiler::hir::expr::Expr,
+    ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionRecord, GraphcalError>
+    {
+        let facts = match self.independent_expressions {
+            Some(facts) => facts,
+            None => self
+                .current_dag
+                .expression_facts()
+                .map_err(|error| self.internal_error(error.to_string(), expr.span))?,
+        };
+        facts
+            .executable_value(
+                expr.id()
+                    .map_err(|error| self.internal_error(error.to_string(), expr.span))?,
+            )
+            .map_err(|error| self.internal_error(error.to_string(), expr.span))
     }
 
     pub const fn checked_execution_facts(&self) -> Option<&'a CheckedExecutionFacts> {
@@ -192,15 +224,6 @@ impl<'a> EvalContext<'a> {
     }
 
     #[must_use]
-    pub const fn with_generic_nat_bindings(
-        mut self,
-        bindings: &'a HashMap<GenericParamId, u64>,
-    ) -> Self {
-        self.environment.generic_nat_bindings = Some(bindings);
-        self
-    }
-
-    #[must_use]
     pub fn with_src<'b>(&'b self, src: &'b NamedSource<Arc<String>>) -> EvalContext<'b>
     where
         'a: 'b,
@@ -241,6 +264,9 @@ impl<'a> EvalContext<'a> {
             }
         };
         context.environment.current_decl = None;
+        // Unit/call bodies select their own canonical table, never a fallback
+        // from a closed input body's unrelated expression revision.
+        context.independent_expressions = None;
         Ok(context)
     }
 
@@ -271,6 +297,7 @@ impl<'a> EvalContext<'a> {
         }
     }
 
+    #[cold]
     pub fn internal_error(
         &self,
         message: impl Into<String>,

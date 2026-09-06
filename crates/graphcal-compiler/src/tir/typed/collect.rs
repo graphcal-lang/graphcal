@@ -15,8 +15,7 @@ use crate::syntax::type_name::ResolvedConstructorName;
 
 use super::{
     DagTIR, ModuleTypeContext, ResolvedConstructorRefs, ResolvedConstructorTarget,
-    ResolvedDagDependencies, ResolvedDomainBound, ResolvedExpectedFailMetadata, internal_error,
-    module_resolve_error,
+    ResolvedDagDependencies, ResolvedExpectedFailMetadata, internal_error, module_resolve_error,
 };
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(
@@ -173,60 +172,6 @@ pub(super) fn collect_resolved_dag_dependencies(
     Ok(resolved)
 }
 
-pub(super) fn collect_resolved_constructor_refs(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
-    asserts: &[crate::ir::lower::AssertEntry],
-    domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
-    ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedConstructorRefs, GraphcalError> {
-    let mut refs = ResolvedConstructorRefs::default();
-
-    for entry in consts {
-        collect_resolved_constructor_refs_from_expr(
-            &entry.expr,
-            ctx,
-            entry.body_src.resolve(src),
-            &mut refs,
-        )?;
-    }
-    for entry in params {
-        if let Some(default) = &entry.default {
-            collect_resolved_constructor_refs_from_expr(
-                &default.expr,
-                ctx,
-                default.src.resolve(src),
-                &mut refs,
-            )?;
-        }
-    }
-    for entry in nodes {
-        collect_resolved_constructor_refs_from_expr(
-            &entry.expr,
-            ctx,
-            entry.body_src.resolve(src),
-            &mut refs,
-        )?;
-    }
-    for bounds in domain_bounds.values() {
-        for bound in bounds {
-            collect_resolved_constructor_refs_from_expr(&bound.value, ctx, &bound.src, &mut refs)?;
-        }
-    }
-    for entry in asserts {
-        collect_resolved_constructor_refs_from_assert_body(
-            &entry.body,
-            ctx,
-            entry.body_src.resolve(src),
-            &mut refs,
-        )?;
-    }
-
-    Ok(refs)
-}
-
 fn record_resolved_constructor_target(
     constructor: &ResolvedConstructorName,
     ctx: ModuleTypeContext<'_>,
@@ -261,160 +206,48 @@ pub(super) fn collect_resolved_constructor_refs_from_expr(
     src: &NamedSource<Arc<String>>,
     refs: &mut ResolvedConstructorRefs,
 ) -> Result<(), GraphcalError> {
-    // Recursion choke point: recurses once per tree level (unbounded for
-    // left-nested operator chains).
-    crate::stack::with_stack_growth(|| {
-        collect_resolved_constructor_refs_from_expr_inner(expr, ctx, src, refs)
-    })
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "expression traversal mirrors HIR variants"
-)]
-fn collect_resolved_constructor_refs_from_expr_inner(
-    expr: &hir::Expr,
-    ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-    refs: &mut ResolvedConstructorRefs,
-) -> Result<(), GraphcalError> {
-    match expr.kind() {
-        hir::ExprKind::Error { children } => {
-            for child in children {
-                collect_resolved_constructor_refs_from_expr(child, ctx, src, refs)?;
-            }
-            Ok(())
+    let mut result = Ok(());
+    hir::visit_expr(expr, &mut |node| {
+        if result.is_err() {
+            return;
         }
-        hir::ExprKind::Number(_)
-        | hir::ExprKind::Integer(_)
-        | hir::ExprKind::Bool(_)
-        | hir::ExprKind::StringLiteral(_)
-        | hir::ExprKind::OffsetDateTimeLiteral(_)
-        | hir::ExprKind::CivilDateTimeLiteral(_)
-        | hir::ExprKind::ZonedDateTimeLiteral(_)
-        | hir::ExprKind::IanaTimeZoneLiteral(_)
-        | hir::ExprKind::TypeSystemRef(_)
-        | hir::ExprKind::GraphRef(_)
-        | hir::ExprKind::LocalRef(_)
-        | hir::ExprKind::QuantityLiteral { .. }
-        | hir::ExprKind::VariantLiteral(_) => Ok(()),
-        hir::ExprKind::ConstRef(target) => {
-            if let hir::ConstRef::Constructor(constructor) = &target.value {
-                record_resolved_constructor_target(constructor, ctx, src, target.span, refs)?;
-            }
-            Ok(())
-        }
-        hir::ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_resolved_constructor_refs_from_expr(lhs, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(rhs, ctx, src, refs)
-        }
-        hir::ExprKind::UnaryOp { operand, .. } => {
-            collect_resolved_constructor_refs_from_expr(operand, ctx, src, refs)
-        }
-        hir::ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                collect_resolved_constructor_refs_from_expr(arg, ctx, src, refs)?;
-            }
-            Ok(())
-        }
-        hir::ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_resolved_constructor_refs_from_expr(condition, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(then_branch, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(else_branch, ctx, src, refs)
-        }
-        hir::ExprKind::Convert { expr, .. }
-        | hir::ExprKind::DisplayTimezone { expr, .. }
-        | hir::ExprKind::FieldAccess { expr, .. } => {
-            collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)
-        }
-        hir::ExprKind::ConstructorCall { callee, fields, .. } => {
-            record_resolved_constructor_target(&callee.value, ctx, src, callee.span, refs)?;
-            for field in fields {
-                collect_resolved_constructor_refs_from_expr(&field.value, ctx, src, refs)?;
-            }
-            Ok(())
-        }
-        hir::ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                collect_resolved_constructor_refs_from_expr(&entry.value, ctx, src, refs)?;
-            }
-            Ok(())
-        }
-        hir::ExprKind::ForComp { body, .. } => {
-            collect_resolved_constructor_refs_from_expr(body, ctx, src, refs)
-        }
-        hir::ExprKind::IndexAccess { expr, args } => {
-            collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)?;
-            for arg in args {
-                if let hir::expr::IndexArg::Expr(expr) = arg {
-                    collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)?;
+        result = (|| {
+            match node.kind() {
+                hir::ExprKind::ConstructorCall { callee, .. } => {
+                    record_resolved_constructor_target(&callee.value, ctx, src, callee.span, refs)?;
                 }
-            }
-            Ok(())
-        }
-        hir::ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_resolved_constructor_refs_from_expr(source, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(init, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(body, ctx, src, refs)
-        }
-        hir::ExprKind::Unfold { init, body, .. } => {
-            collect_resolved_constructor_refs_from_expr(init, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(body, ctx, src, refs)
-        }
-        hir::ExprKind::KeyForm { arg, .. } => {
-            collect_resolved_constructor_refs_from_expr(arg, ctx, src, refs)
-        }
-        hir::ExprKind::Match { scrutinee, arms } => {
-            collect_resolved_constructor_refs_from_expr(scrutinee, ctx, src, refs)?;
-            for arm in arms {
-                if let hir::expr::MatchPattern::Constructor { constructor, .. } = &arm.pattern {
-                    record_resolved_constructor_target(
-                        &constructor.value,
-                        ctx,
-                        src,
-                        constructor.span,
-                        refs,
-                    )?;
+                hir::ExprKind::ConstRef(target) => {
+                    if let hir::ConstRef::Constructor(constructor) = &target.value {
+                        record_resolved_constructor_target(
+                            constructor,
+                            ctx,
+                            src,
+                            target.span,
+                            refs,
+                        )?;
+                    }
                 }
-                collect_resolved_constructor_refs_from_expr(&arm.body, ctx, src, refs)?;
+                hir::ExprKind::Match { arms, .. } => {
+                    for arm in arms {
+                        if let hir::expr::MatchPattern::Constructor { constructor, .. } =
+                            &arm.pattern
+                        {
+                            record_resolved_constructor_target(
+                                &constructor.value,
+                                ctx,
+                                src,
+                                constructor.span,
+                                refs,
+                            )?;
+                        }
+                    }
+                }
+                _ => {}
             }
             Ok(())
-        }
-        hir::ExprKind::DagCall { args, .. } => {
-            for arg in args {
-                collect_resolved_constructor_refs_from_expr(&arg.value, ctx, src, refs)?;
-            }
-            Ok(())
-        }
-    }
-}
-
-fn collect_resolved_constructor_refs_from_assert_body(
-    body: &hir::AssertBody,
-    ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-    refs: &mut ResolvedConstructorRefs,
-) -> Result<(), GraphcalError> {
-    match body {
-        hir::AssertBody::Expr(expr) => {
-            collect_resolved_constructor_refs_from_expr(expr, ctx, src, refs)
-        }
-        hir::AssertBody::Tolerance {
-            actual,
-            expected,
-            tolerance,
-        } => {
-            collect_resolved_constructor_refs_from_expr(actual, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(expected, ctx, src, refs)?;
-            collect_resolved_constructor_refs_from_expr(tolerance, ctx, src, refs)
-        }
-    }
+        })();
+    });
+    result
 }
 
 pub(super) fn collect_hir_decl_bindings(

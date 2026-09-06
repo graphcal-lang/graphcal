@@ -1,3 +1,5 @@
+mod checked_expressions;
+
 use std::collections::HashSet;
 
 use super::*;
@@ -63,6 +65,67 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn generated_checked_expression_coverage_includes_every_owned_root_family() {
+    use graphcal_compiler::tir::expression_facts::{ExpressionFact, ExpressionShape};
+    let template = r#"
+const node factor: Dimensionless = 2.0;
+param scale: Dimensionless(min: 1.0) = @factor;
+unit step: Length = (@scale) m;
+param x: Length(min: 0.0 m) = 1.0 step;
+type Boxed { Boxed(value: Length(min: 0.0 m)), }
+node boxed: Boxed = Boxed(value: @x);
+node values: Length[Fin(SIZE)] = for p: Fin(SIZE) { @boxed.value };
+assert close = @x ~= 2.0 m +/- 0.01 m;
+plot curve = { mark: line { stroke_width: 2.0 }, encode: { x: @values }, title: "Curve" };
+figure comparison = { plots: [curve], title: "Comparison" };
+layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
+"#;
+    for size in 2..=6 {
+        let source = template.replace("SIZE", &size.to_string());
+        let mut old_ids = Vec::new();
+        for padding in ["", "\n\n    "] {
+            let project = crate::loader::LoadedProject::from_source(
+                &format!("{padding}{source}"),
+                "coverage.gcl",
+            )
+            .unwrap();
+            let checked = ProjectCompiler::new(&project).check().unwrap();
+            let dag = checked.tir().root();
+            let facts = dag.expression_facts().unwrap();
+            let mut ids = std::collections::HashSet::new();
+            dag.owned_expression_roots().for_each(|root| {
+                graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
+                    let id = expr.id().unwrap();
+                    assert_eq!(facts.span(id).unwrap(), expr.span);
+                    facts.get(id).unwrap();
+                    ids.insert(id.clone());
+                });
+            });
+            assert_eq!(ids.len(), facts.records().count());
+            assert!(
+                ids.len() > 20,
+                "coverage fixture must not become vacuous: {} rows",
+                ids.len()
+            );
+            assert!(old_ids.iter().all(|id| facts.get(id).is_err()));
+            assert!(facts.records().any(|(_, record)| matches!(&record.fact, ExpressionFact::Value { shape: ExpressionShape::Concrete(shape), .. } if shape.total().get() == size)));
+            assert_eq!(dag.semantic().dynamic_unit_scales.len(), 1);
+            assert!(
+                facts
+                    .records()
+                    .any(|(_, record)| matches!(record.fact, ExpressionFact::Contextual(_)))
+            );
+            old_ids = ids.into_iter().collect();
+            let prepared = checked
+                .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())
+                .unwrap();
+            let row = prepared.binding_builder().finish().unwrap();
+            assert!(!prepared.evaluate(&row).unwrap().has_errors());
+        }
+    }
+}
+
+#[test]
 fn pipeline_cost_baseline_observes_preparation_and_repeated_call_work() {
     let source = r"
 type Packet { Packet(value: Length), }
@@ -75,8 +138,34 @@ node other_output: Length = @worker(x: 2000.0 m)::out;
 node packet: Packet = Packet(value: @first);
 ";
     let project = crate::loader::LoadedProject::from_source(source, "metrics.gcl").unwrap();
-    let (prepared, preparation) =
-        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let ((prepared, retained_constructors), preparation) = crate::pipeline_metrics::measure(|| {
+        let checked = ProjectCompiler::new(&project).check().unwrap();
+        let retained = checked
+            .tir()
+            .dag_registry()
+            .values()
+            .flat_map(|dag| dag.expression_facts().unwrap().records())
+            .filter(|(_, record)| {
+                matches!(
+                    record.fact,
+                    graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+                        constructor: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        (
+            checked
+                .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())
+                .unwrap(),
+            retained,
+        )
+    });
+    assert_eq!(
+        retained_constructors, 1,
+        "the actual constructor application must have been retained"
+    );
     let row = prepared.binding_builder().finish().unwrap();
     let (first, first_counts) =
         crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
@@ -101,8 +190,12 @@ node packet: Packet = Packet(value: @first);
         first_counts.frame_executions, 3,
         "root and both calls must use the shared machine"
     );
-    // Constructor resolution and presentation replay remain C/D work.
-    assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
+    // Constructor applications are retained during checking and consumed here.
+    // Presentation replay remains Phase D work.
+    assert!(
+        first_counts.constructor_fact_consumptions > 0,
+        "{first_counts:?}"
+    );
     assert!(
         first_counts.presentation_evaluations > 0,
         "{first_counts:?}"
@@ -355,11 +448,20 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     let foreign = std::collections::HashMap::from([(b, 3)]);
     let values = crate::execution_facts::RuntimeValueMap::new();
     let locals = crate::eval_expr::HirLocalValueMap::root();
+    let facts =
+        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+            &tir,
+            tir.root(),
+            bound,
+            &own,
+            &src,
+        )
+        .unwrap();
     let value = crate::eval_expr::eval_hir_expr(
         bound,
         &values,
         &locals,
-        &context.clone().with_generic_nat_bindings(&own),
+        &context.clone().with_expression_facts(&facts).unwrap(),
     )
     .unwrap();
     let graphcal_compiler::registry::runtime_value::RuntimeValue::Quantity(value) = value else {
@@ -367,11 +469,12 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     };
     assert_eq!(value.get().to_bits(), 3.0_f64.to_bits());
     assert!(
-        crate::eval_expr::eval_hir_expr(
+        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+            &tir,
+            tir.root(),
             bound,
-            &values,
-            &locals,
-            &context.with_generic_nat_bindings(&foreign)
+            &foreign,
+            &src
         )
         .is_err()
     );

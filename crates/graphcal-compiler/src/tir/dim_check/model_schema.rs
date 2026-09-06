@@ -245,23 +245,14 @@ fn validate_application_obligations(
     definition: &ModelTypeDefinition<'_>,
     _src: &NamedSource<Arc<String>>,
 ) -> Result<(), ConcreteModelTypeError> {
-    let inferred_args = generic_args
-        .iter()
-        .map(InferredGenericArg::from)
-        .collect::<Vec<_>>();
-    let inferred_application = super::InferredType::Struct(
-        super::InferredStructType::from_ref(identity.clone()),
-        inferred_args,
-    );
+    let application = DeclaredType::Struct(identity.clone(), generic_args.to_vec());
     let metadata_dag = tir
         .dag_with_type_metadata(identity.resolved())
         .unwrap_or_else(|| tir.root());
-    super::infer::hir::validate_concrete_type_obligations(
-        &inferred_application,
+    super::concrete_obligations::validate_concrete_type_obligations(
+        &application,
         metadata_dag,
         tir,
-        &tir.registry,
-        crate::registry::builtins::builtin_functions(),
         definition.type_def.source(),
         definition.type_def.span(),
         &crate::cancellation::CancellationToken::unbounded(),

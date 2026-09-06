@@ -8,9 +8,7 @@ use std::num::NonZeroUsize;
 
 use thiserror::Error;
 
-use crate::expression_id::ExprId;
 use crate::registry::types::{IndexCardinality, MAX_INDEX_CARDINALITY};
-use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
 
 /// Largest number of scalar leaves that one indexed value may materialize.
@@ -44,36 +42,6 @@ impl EagerCardinality {
     #[must_use]
     pub const fn get(self) -> usize {
         self.0.get()
-    }
-}
-
-/// Stable identity of one materialized expression within a checked DAG.
-///
-/// Immutable source identity is paired with the canonical declaration owner
-/// because semantic instances may share the same source expression.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MaterializedExpressionKey {
-    owner: ResolvedDeclName,
-    expression: ExprId,
-}
-
-impl MaterializedExpressionKey {
-    /// Pair a canonical declaration owner with one immutable expression identity.
-    #[must_use]
-    pub const fn new(owner: ResolvedDeclName, expression: ExprId) -> Self {
-        Self { owner, expression }
-    }
-
-    /// Canonical declaration whose body owns the expression.
-    #[must_use]
-    pub const fn owner(&self) -> &ResolvedDeclName {
-        &self.owner
-    }
-
-    /// Source identity, independent of diagnostic coordinates.
-    #[must_use]
-    pub const fn expression(&self) -> &ExprId {
-        &self.expression
     }
 }
 

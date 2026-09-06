@@ -11,7 +11,8 @@ struct Revision;
 #[derive(Debug, Clone)]
 pub struct ExprId {
     revision: Arc<Revision>,
-    ordinal: u64,
+    // A position in an in-memory body, not a language Nat or serialized identity.
+    ordinal: usize,
 }
 
 impl PartialEq for ExprId {
@@ -34,7 +35,7 @@ pub struct UnassignedExprId;
 /// Construction-only allocator. Each allocator represents a fresh body revision.
 pub(crate) struct ExprIds {
     revision: Arc<Revision>,
-    next: u64,
+    next: usize,
 }
 
 impl Default for ExprIds {
@@ -86,9 +87,9 @@ mod tests {
     fn exhausted_allocator_does_not_publish_or_wrap() {
         let mut ids = ExprIds {
             revision: Arc::new(Revision),
-            next: u64::MAX,
+            next: usize::MAX,
         };
         assert!(ids.allocate().is_err());
-        assert_eq!(ids.next, u64::MAX);
+        assert_eq!(ids.next, usize::MAX);
     }
 }

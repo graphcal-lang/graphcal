@@ -14,7 +14,7 @@ pub enum Event {
     ScheduleConstruction,
     ImportedSourceResolution,
     FrameExecution,
-    ConstructorResolution,
+    ConstructorFactConsumption,
     PresentationEvaluation,
 }
 
@@ -52,7 +52,7 @@ mod observer {
         pub schedule_constructions: u64,
         pub imported_source_resolutions: u64,
         pub frame_executions: u64,
-        pub constructor_resolutions: u64,
+        pub constructor_fact_consumptions: u64,
         pub presentation_evaluations: u64,
     }
 
@@ -68,7 +68,7 @@ mod observer {
                 Event::ScheduleConstruction => &mut counts.schedule_constructions,
                 Event::ImportedSourceResolution => &mut counts.imported_source_resolutions,
                 Event::FrameExecution => &mut counts.frame_executions,
-                Event::ConstructorResolution => &mut counts.constructor_resolutions,
+                Event::ConstructorFactConsumption => &mut counts.constructor_fact_consumptions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
             };
             *count = count.saturating_add(amount);
@@ -101,9 +101,9 @@ mod observer {
                 frame_executions: after
                     .frame_executions
                     .saturating_sub(before.frame_executions),
-                constructor_resolutions: after
-                    .constructor_resolutions
-                    .saturating_sub(before.constructor_resolutions),
+                constructor_fact_consumptions: after
+                    .constructor_fact_consumptions
+                    .saturating_sub(before.constructor_fact_consumptions),
                 presentation_evaluations: after
                     .presentation_evaluations
                     .saturating_sub(before.presentation_evaluations),

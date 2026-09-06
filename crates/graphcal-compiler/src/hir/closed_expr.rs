@@ -48,7 +48,7 @@ impl ClosedExpr {
     }
 
     #[must_use]
-    pub const fn source_map(&self) -> &ExpressionSourceMap {
+    pub fn source_map(&self) -> &ExpressionSourceMap {
         self.expression.source_map()
     }
 }

@@ -35,8 +35,8 @@ impl PreparedProject {
                         span: expr.span.into(),
                     })
                 })?;
-        let hir = self.lower_closed_binding(port, &normalized)?;
-        let value = self.evaluate_closed_binding(&hir)?;
+        let (hir, facts) = self.lower_closed_binding(port, &normalized)?;
+        let value = self.evaluate_closed_binding(&hir, &facts)?;
         let presentation = graphcal_compiler::tir::dim_check::checked_expression_presentation(
             &self.tir,
             port.runtime_key.as_resolved(),
@@ -179,7 +179,13 @@ impl PreparedProject {
         &self,
         port: &ParameterPort,
         expr: &Expr,
-    ) -> Result<graphcal_compiler::hir::closed_expr::ClosedExpr, CompileError> {
+    ) -> Result<
+        (
+            graphcal_compiler::hir::closed_expr::ClosedExpr,
+            graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
+        ),
+        CompileError,
+    > {
         let hir =
             self.lower_closed_binding_expr(expr, &port.value_schema, self.tir.root_dag_id())?;
         let span = hir.span;
@@ -194,14 +200,14 @@ impl PreparedProject {
                     span: span.into(),
                 })
             })?;
-        graphcal_compiler::tir::dim_check::check_external_value_expr_type(
+        let facts = graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             &self.tir,
             &self.declared_types,
             &hir,
             &port.declared_type,
             &self.source,
         )?;
-        Ok(hir)
+        Ok((hir, facts))
     }
 
     /// Lower a closed boundary value against its canonical recursive schema.
@@ -443,6 +449,7 @@ impl PreparedProject {
     fn evaluate_closed_binding(
         &self,
         expr: &graphcal_compiler::hir::closed_expr::ClosedExpr,
+        facts: &graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
     ) -> Result<RuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
@@ -457,7 +464,8 @@ impl PreparedProject {
             &self.host_fns,
             cancellation,
         )?
-        .with_roots(&values, None);
+        .with_roots(&values, None)
+        .with_expression_facts(facts)?;
         eval_hir_expr(expr, &values, &locals, &context).map_err(CompileError::from)
     }
 

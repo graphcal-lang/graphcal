@@ -2352,6 +2352,7 @@ pub enum GraphcalError {
 impl GraphcalError {
     /// Construct an internal diagnostic with an explicit source-anchor policy.
     #[must_use]
+    #[cold]
     pub fn internal_error(
         message: impl Into<String>,
         src: &NamedSource<Arc<String>>,

@@ -12,15 +12,9 @@ pub mod numeric;
 mod unit_scale;
 mod work_budget;
 
-use std::collections::HashMap;
-
-use graphcal_compiler::hir::{NominalField, NominalTypeDef};
-use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
-use graphcal_compiler::tir::typed::StructFieldConstraintKey;
+use graphcal_compiler::registry::declared_type::IndexTypeRef;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_constraint::ResolvedDomainConstraint;
 
 pub use crate::execution_facts::RuntimeValueMap;
 pub use context::EvalContext;
@@ -34,40 +28,6 @@ pub fn index_ref_matches_resolved(
     expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
 ) -> bool {
     actual.declared_resolved() == Some(expected)
-}
-
-fn runtime_struct_type_def<'a>(
-    type_name: &graphcal_compiler::syntax::type_name::ResolvedStructTypeName,
-    ctx: &'a EvalContext<'_>,
-) -> Option<&'a NominalTypeDef> {
-    ctx.tir.struct_type_def(type_name)
-}
-
-fn constructor_fields_for_runtime_struct<'a>(
-    type_def: &'a NominalTypeDef,
-    constructor: &ConstructorName,
-) -> Option<&'a [NominalField]> {
-    type_def
-        .union_members()?
-        .iter()
-        .find_map(|member| (member.name() == *constructor).then_some(member.fields()))
-}
-
-fn find_struct_field_constraint<'a>(
-    constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
-    owning_type: Option<&StructTypeRef>,
-    generic_args: &[DeclaredGenericArg],
-    constructor: &ConstructorName,
-    field: &FieldName,
-) -> Option<&'a ResolvedDomainConstraint> {
-    owning_type.and_then(|owning_type| {
-        constraints.get(&StructFieldConstraintKey::for_application(
-            owning_type.clone(),
-            generic_args.to_vec(),
-            constructor.clone(),
-            field.clone(),
-        ))
-    })
 }
 
 fn dag_decl_runtime_key(

@@ -887,6 +887,41 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "dim_check", "expression_facts"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "concrete_obligations"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "expression_axes"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "expression_facts", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts", "static_index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "builtins"]
 role = "checking"
 
@@ -1144,6 +1179,11 @@ role = "facade"
 [[module]]
 package = "eval"
 path = ["eval", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "tests", "checked_expressions"]
 role = "facade"
 
 [[module]]
