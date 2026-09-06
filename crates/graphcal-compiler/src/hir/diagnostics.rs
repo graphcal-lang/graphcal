@@ -483,6 +483,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::TimeScaleInValuePosition { span, .. }
         | hir::ExprLowerError::UnknownUnit { span, .. }
         | hir::ExprLowerError::TooManyLocals { span }
+        | hir::ExprLowerError::ExpressionIdentity { span, .. }
         | hir::ExprLowerError::EmptyMapEntry { span }
         | hir::ExprLowerError::InvalidMapEntryKey { span }
         | hir::ExprLowerError::ExtraMapVariant { span, .. }

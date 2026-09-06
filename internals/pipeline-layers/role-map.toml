@@ -127,6 +127,26 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["expression_id"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["expression_id", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["expression_source"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["expression_source", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["finite_value"]
 role = "contracts"
 
