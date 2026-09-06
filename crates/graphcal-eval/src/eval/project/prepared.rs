@@ -154,15 +154,14 @@ impl ParameterBindingBuilder<'_> {
         if !matches!(port.declared_type, DeclaredType::Quantity(_)) {
             return Err(self.project.binding_kind_error(port, "Quantity"));
         }
-        if !si_value.is_finite() {
-            return Err(self
-                .project
-                .binding_value_error(port, "quantity must be finite"));
-        }
+        let value = RuntimeValue::quantity(si_value).map_err(|_| {
+            self.project
+                .binding_value_error(port, "quantity must be finite")
+        })?;
         self.insert(
             position,
             RuntimeParameterBinding {
-                value: RuntimeValue::Quantity(si_value),
+                value,
                 presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
             },
         )

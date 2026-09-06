@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 
 use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
+use crate::finite_value::{FiniteQuantity, NonFiniteQuantity};
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::type_name::{
@@ -82,7 +83,7 @@ impl std::error::Error for RuntimeValueError {}
 /// The compiler/evaluator boundary representation of a runtime value.
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
-    Quantity(f64),
+    Quantity(FiniteQuantity),
     Complex(ComplexValue),
     Bool(bool),
     Int(i64),
@@ -113,13 +114,36 @@ pub enum RuntimeValue {
     CoordinateLabel {
         index_name: IndexTypeRef,
         position: usize,
-        value: f64,
+        value: FiniteQuantity,
     },
     /// A datetime instant (internally stored as a `hifitime::Epoch`).
     Datetime(hifitime::Epoch),
 }
 
 impl RuntimeValue {
+    /// Construct a finite quantity runtime value.
+    pub fn quantity(value: f64) -> Result<Self, NonFiniteQuantity> {
+        FiniteQuantity::try_new(value).map(Self::Quantity)
+    }
+
+    /// Construct a finite complex runtime value from Cartesian components.
+    pub fn complex(re: f64, im: f64) -> Result<Self, crate::complex_value::ComplexValueError> {
+        ComplexValue::try_new(re, im).map(Self::Complex)
+    }
+
+    /// Construct a coordinate label with a finite coordinate value.
+    pub fn coordinate_label(
+        index_name: IndexTypeRef,
+        position: usize,
+        value: f64,
+    ) -> Result<Self, NonFiniteQuantity> {
+        FiniteQuantity::try_new(value).map(|value| Self::CoordinateLabel {
+            index_name,
+            position,
+            value,
+        })
+    }
+
     /// Construct a label value after resolving the index leaf into an owner.
     #[must_use]
     pub fn label_with_owner(
@@ -208,7 +232,7 @@ impl RuntimeValue {
     /// (Type mismatches should be caught by `dim_check`; this is defense-in-depth.)
     pub fn expect_quantity(&self, context: &str) -> Result<f64, RuntimeValueError> {
         match self {
-            Self::Quantity(v) | Self::CoordinateLabel { value: v, .. } => Ok(*v),
+            Self::Quantity(v) | Self::CoordinateLabel { value: v, .. } => Ok(v.get()),
             other => Err(RuntimeValueError {
                 expected: "quantity",
                 context: context.to_string(),
@@ -240,5 +264,30 @@ impl RuntimeValue {
                 actual: other.kind(),
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dag_id::DagId;
+    use crate::registry::declared_type::IndexTypeRef;
+    use crate::registry::runtime_value::RuntimeValue;
+    use crate::syntax::index_name::IndexName;
+
+    #[test]
+    fn scalar_and_coordinate_ingress_reject_non_finite_values() {
+        assert!(RuntimeValue::quantity(f64::NAN).is_err());
+        assert!(RuntimeValue::complex(f64::INFINITY, 0.0).is_err());
+
+        let index = IndexTypeRef::with_owner(
+            DagId::root_in_package("finite-tests", "root"),
+            IndexName::expect_valid("Sample"),
+        );
+        let coordinate = RuntimeValue::coordinate_label(index.clone(), 0, -0.0).unwrap();
+        let RuntimeValue::CoordinateLabel { value, .. } = coordinate else {
+            panic!("expected coordinate label");
+        };
+        assert_eq!(value.get().to_bits(), (-0.0_f64).to_bits());
+        assert!(RuntimeValue::coordinate_label(index, 0, f64::NEG_INFINITY).is_err());
     }
 }

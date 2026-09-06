@@ -5,6 +5,7 @@
 //! exact typed axis identities and key order supplied by the arguments.
 
 use graphcal_compiler::builtin::LinearAlgebraFn;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::declared_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -187,13 +188,24 @@ fn vector_value(axis: Axis, values: Vec<f64>) -> Result<RuntimeValue, LinearAlge
             axis.len()
         )));
     }
+    let entries = axis
+        .keys
+        .into_iter()
+        .zip(values)
+        .map(|(key, value)| {
+            FiniteQuantity::try_new(value)
+                .map(|value| (key, RuntimeValue::Quantity(value)))
+                .map_err(|error| {
+                    LinearAlgebraError::Numeric(QuantityValidationError::NonFinite {
+                        context: "linear-algebra indexed result".to_string(),
+                        value: error.value,
+                    })
+                })
+        })
+        .collect::<Result<IndexMap<_, _>, _>>()?;
     Ok(RuntimeValue::Indexed {
         index_name: axis.index_name,
-        entries: axis
-            .keys
-            .into_iter()
-            .zip(values.into_iter().map(RuntimeValue::Quantity))
-            .collect(),
+        entries,
     })
 }
 
@@ -230,22 +242,27 @@ fn matrix_value(
             let entries = column_keys
                 .iter()
                 .cloned()
-                .zip(
-                    values
-                        .by_ref()
-                        .take(column_keys.len())
-                        .map(RuntimeValue::Quantity),
-                )
-                .collect::<IndexMap<_, _>>();
-            (
+                .zip(values.by_ref().take(column_keys.len()))
+                .map(|(key, value)| {
+                    FiniteQuantity::try_new(value)
+                        .map(|value| (key, RuntimeValue::Quantity(value)))
+                        .map_err(|error| {
+                            LinearAlgebraError::Numeric(QuantityValidationError::NonFinite {
+                                context: "linear-algebra matrix result".to_string(),
+                                value: error.value,
+                            })
+                        })
+                })
+                .collect::<Result<IndexMap<_, _>, _>>()?;
+            Ok::<_, LinearAlgebraError>((
                 row_key,
                 RuntimeValue::Indexed {
                     index_name: column_index_name.clone(),
                     entries,
                 },
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<IndexMap<_, _>, _>>()?;
     Ok(RuntimeValue::Indexed {
         index_name: rows.index_name,
         entries: row_entries,
@@ -361,7 +378,16 @@ fn evaluate_dot(
         ));
     }
     let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
-    sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
+    sum_products(lhs.values, rhs.values, "dot()", &mut control).and_then(|value| {
+        FiniteQuantity::try_new(value)
+            .map(RuntimeValue::Quantity)
+            .map_err(|error| {
+                LinearAlgebraError::Numeric(QuantityValidationError::NonFinite {
+                    context: "dot() result".to_string(),
+                    value: error.value,
+                })
+            })
+    })
 }
 
 fn evaluate_matmul(
@@ -415,6 +441,20 @@ fn evaluate_transpose(
     matrix_value(matrix.columns, matrix.rows, values)
 }
 
+fn finite_runtime_quantity(
+    value: f64,
+    context: &'static str,
+) -> Result<RuntimeValue, LinearAlgebraError> {
+    FiniteQuantity::try_new(value)
+        .map(RuntimeValue::Quantity)
+        .map_err(|error| {
+            LinearAlgebraError::Numeric(QuantityValidationError::NonFinite {
+                context: context.to_string(),
+                value: error.value,
+            })
+        })
+}
+
 fn evaluate_trace(
     arguments: Vec<RuntimeValue>,
     ctx: &EvalContext<'_>,
@@ -434,7 +474,7 @@ fn evaluate_trace(
             numeric::computed_finite_quantity(sum + value, "trace()")
                 .map_err(LinearAlgebraError::from)
         })
-        .map(RuntimeValue::Quantity)
+        .and_then(|value| finite_runtime_quantity(value, "trace()"))
 }
 
 fn evaluate_norm(
@@ -444,7 +484,7 @@ fn evaluate_norm(
     let function = LinearAlgebraFn::Norm;
     let vector = vector_from_value(one_argument(function, arguments)?, "norm")?;
     let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
-    norm(&vector.values, &mut control).map(RuntimeValue::Quantity)
+    norm(&vector.values, &mut control).and_then(|value| finite_runtime_quantity(value, "norm()"))
 }
 
 fn evaluate_cross(
@@ -565,8 +605,8 @@ fn evaluate_determinant(
         matrix.rows.len(),
         &mut control,
     )
-    .map(RuntimeValue::Quantity)
     .map_err(LinearAlgebraError::from)
+    .and_then(|value| finite_runtime_quantity(value, "det()"))
 }
 
 /// Evaluate a shape-checked built-in linear-algebra operation.

@@ -461,6 +461,14 @@ The indivisible types. Each represents a single atomic datum.
 | `Bool` | Boolean | No |
 | `Datetime(S)` | High-precision epoch in time scale `S` | No |
 
+At the evaluator boundary, `Quantity` magnitudes and both Cartesian components
+of `Complex` values must be finite binary64 numbers. NaN and infinities are
+rejected before they become semantic runtime values. Signed zero and
+representable signed subnormal values remain valid and are not normalized away.
+Numerical kernels may use raw binary64 work buffers for intermediate results,
+but their outputs cross this finite-value boundary before entering the runtime
+value graph.
+
 `Quantity(D)`, `Key(I)`, and `Datetime(S)` are semantic notation, not literal
 source syntax. Their source spellings are:
 

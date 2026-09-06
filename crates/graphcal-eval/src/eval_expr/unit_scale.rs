@@ -16,9 +16,9 @@ pub(in crate::eval_expr) fn checked_finite_quantity(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_quantity(value, context)
-        .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+    let value = numeric::finite_quantity(value, context)
+        .map_err(|err| ctx.eval_error(err.to_string(), span))?;
+    RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 fn checked_positive_finite_unit_scale(
@@ -38,9 +38,9 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_quantity(value * scale, "quantity literal value")
-        .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+    let value = numeric::finite_quantity(value * scale, "quantity literal value")
+        .map_err(|err| ctx.eval_error(err.to_string(), span))?;
+    RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
 fn resolve_dynamic_unit_scale(
@@ -86,7 +86,7 @@ fn resolve_dynamic_unit_scale(
         ));
     };
     let dynamic_scale = checked_positive_finite_unit_scale(
-        scale_f64,
+        scale_f64.get(),
         "dynamic unit scale",
         scale_hir.expr.span,
         &scale_ctx,

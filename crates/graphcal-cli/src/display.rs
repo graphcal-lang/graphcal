@@ -443,7 +443,7 @@ mod tests {
 
     fn displayed_complex_length(re: f64, im: f64, label: &str, scale: f64) -> Value {
         Value::Complex {
-            si_value: ComplexValue::new(re, im),
+            si_value: ComplexValue::try_new(re, im).unwrap(),
             dimension: prelude_base_dimension("Length").unwrap(),
             display_unit: Some(DisplayUnit::try_new(label, scale).unwrap()),
         }

@@ -5189,7 +5189,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        crate::eval_expr::RuntimeValue::Quantity(9.0),
+        crate::eval_expr::RuntimeValue::quantity(9.0).unwrap(),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action"))
@@ -5250,7 +5250,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let mut fields = indexmap::IndexMap::new();
     fields.insert(
         graphcal_compiler::syntax::type_name::FieldName::expect_valid("distance"),
-        crate::eval_expr::RuntimeValue::Quantity(99.0),
+        crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")).unwrap(),
@@ -6123,13 +6123,13 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         graphcal_compiler::syntax::index_name::IndexEntryKey::named(
             graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
         ),
-        crate::eval_expr::RuntimeValue::Quantity(99.0),
+        crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
     );
     entries.insert(
         graphcal_compiler::syntax::index_name::IndexEntryKey::named(
             graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Coast"),
         ),
-        crate::eval_expr::RuntimeValue::Quantity(100.0),
+        crate::eval_expr::RuntimeValue::quantity(100.0).unwrap(),
     );
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("series"))

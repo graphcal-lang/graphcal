@@ -218,7 +218,9 @@ pub fn check_domain_constraint(
             })
         }),
         RuntimeValue::Quantity(value) => match &constraint.kind {
-            ResolvedDomainConstraintKind::Quantity(bounds) => check_quantity_bounds(*value, bounds),
+            ResolvedDomainConstraintKind::Quantity(bounds) => {
+                check_quantity_bounds(value.get(), bounds)
+            }
             other => Err(constraint_kind_mismatch("Quantity", other)),
         },
         RuntimeValue::Int(value) => match &constraint.kind {
@@ -316,15 +318,8 @@ mod tests {
 
     #[test]
     fn non_finite_internal_quantity_never_passes_bounds() {
-        let constraint = ResolvedDomainConstraint::quantity(ResolvedDomainBounds::new(
-            Some(ResolvedDomainBound::new(0.0, "0".to_string())),
-            Some(ResolvedDomainBound::new(1.0, "1".to_string())),
-        ));
-
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let error = check_domain_constraint(&RuntimeValue::Quantity(value), &constraint)
-                .expect_err("non-finite internal quantities must fail closed");
-            assert!(error.message.contains("must be finite"));
+            assert!(RuntimeValue::quantity(value).is_err());
         }
     }
 
@@ -334,7 +329,9 @@ mod tests {
             Some(ResolvedDomainBound::new(f64::NAN, "NaN".to_string())),
             None,
         ));
-        assert!(check_domain_constraint(&RuntimeValue::Quantity(0.5), &constraint).is_err());
+        assert!(
+            check_domain_constraint(&RuntimeValue::quantity(0.5).unwrap(), &constraint).is_err()
+        );
     }
 
     #[test]

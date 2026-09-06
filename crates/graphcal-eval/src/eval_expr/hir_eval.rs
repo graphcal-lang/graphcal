@@ -483,17 +483,19 @@ fn eval_hir_binop(
             }
             match (&l, &r) {
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) if op == BinOp::Sub => {
-                    return super::datetime::checked_epoch_difference_seconds(*le, *re)
-                        .map(RuntimeValue::Quantity)
-                        .map_err(|error| ctx.eval_error(error.to_string(), span));
+                    let seconds = super::datetime::checked_epoch_difference_seconds(*le, *re)
+                        .map_err(|error| ctx.eval_error(error.to_string(), span))?;
+                    return checked_finite_quantity(seconds, "datetime difference", span, ctx);
                 }
                 (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot add two datetimes", span));
                 }
                 (RuntimeValue::Datetime(e), RuntimeValue::Quantity(secs)) => {
                     let result = match op {
-                        BinOp::Add => super::datetime::checked_epoch_add_seconds(*e, *secs),
-                        BinOp::Sub => super::datetime::checked_epoch_subtract_seconds(*e, *secs),
+                        BinOp::Add => super::datetime::checked_epoch_add_seconds(*e, secs.get()),
+                        BinOp::Sub => {
+                            super::datetime::checked_epoch_subtract_seconds(*e, secs.get())
+                        }
                         _ => {
                             return Err(ctx.eval_error(
                                 format!("unsupported operator {op:?} for Datetime and quantity"),
@@ -506,7 +508,7 @@ fn eval_hir_binop(
                         .map_err(|error| ctx.eval_error(error.to_string(), span));
                 }
                 (RuntimeValue::Quantity(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
-                    return super::datetime::checked_epoch_add_seconds(*e, *secs)
+                    return super::datetime::checked_epoch_add_seconds(*e, secs.get())
                         .map(RuntimeValue::Datetime)
                         .map_err(|error| ctx.eval_error(error.to_string(), span));
                 }
@@ -531,7 +533,7 @@ fn eval_hir_binop(
                 .expect_quantity("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             super::arithmetic::eval_quantity_binop(op, lv, rv, ctx, span)
-                .map(RuntimeValue::Quantity)
+                .and_then(|value| checked_finite_quantity(value, "quantity operation", span, ctx))
         }
     }
 }
@@ -572,15 +574,15 @@ fn eval_hir_power(
                 .map(RuntimeValue::Int)
         }
         (RuntimeValue::Quantity(base), PowerExponent::Exact(exact)) => {
-            super::arithmetic::eval_exact_quantity_power(base, exact, ctx, span)
-                .map(RuntimeValue::Quantity)
+            super::arithmetic::eval_exact_quantity_power(base.get(), exact, ctx, span)
+                .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
         }
         (RuntimeValue::Quantity(base), _) => {
             let runtime_exponent = eval_hir_expr(exponent_expr, values, local_values, ctx)?
                 .expect_quantity("power exponent")
                 .map_err(|error| ctx.internal_error(error.to_string(), span))?;
-            super::arithmetic::eval_quantity_binop(op, base, runtime_exponent, ctx, span)
-                .map(RuntimeValue::Quantity)
+            super::arithmetic::eval_quantity_binop(op, base.get(), runtime_exponent, ctx, span)
+                .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
         }
         (other, _) => Err(ctx.internal_error(
             format!("non-numeric base reached power evaluation: {other:?}"),
@@ -608,10 +610,13 @@ fn eval_hir_unary(
                 RuntimeValue::Complex(value) => super::complex::negate(value)
                     .map(RuntimeValue::Complex)
                     .map_err(|error| ctx.eval_error(error.to_string(), span)),
-                _ => Ok(RuntimeValue::Quantity(
+                _ => checked_finite_quantity(
                     -v.expect_quantity("unary negation")
                         .map_err(|e| ctx.eval_error(e.to_string(), span))?,
-                )),
+                    "unary negation",
+                    span,
+                    ctx,
+                ),
             }
         }
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
@@ -764,7 +769,7 @@ fn eval_hir_fn_call(
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
-                RuntimeValue::Quantity(v) => v,
+                RuntimeValue::Quantity(v) => v.get(),
                 RuntimeValue::Int(v) => {
                     exact_numeric_datetime_arg(v, name.as_str(), args[0].span, ctx)?
                 }
@@ -798,7 +803,7 @@ fn eval_hir_fn_call(
                 DatetimeToFn::Mjd => epoch.to_mjd_utc_days(),
                 DatetimeToFn::Unix => epoch.to_unix_seconds(),
             };
-            Ok(RuntimeValue::Quantity(result))
+            checked_finite_quantity(result, "datetime conversion", args[0].span, ctx)
         }
         EvalBuiltinRule::RegistryFunction => {
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
@@ -929,11 +934,8 @@ fn eval_hir_key_form(
                     span,
                 ));
             };
-            Ok(RuntimeValue::CoordinateLabel {
-                index_name: axis_ref,
-                position,
-                value: data.coordinate_value(position),
-            })
+            RuntimeValue::coordinate_label(axis_ref, position, data.coordinate_value(position))
+                .map_err(|error| ctx.eval_error(error.to_string(), span))
         }
     }
 }
@@ -996,11 +998,12 @@ fn runtime_key_for_entry(
                             span,
                         )
                     })?;
-                    Ok(RuntimeValue::CoordinateLabel {
-                        index_name: index_name.clone(),
+                    RuntimeValue::coordinate_label(
+                        index_name.clone(),
                         position,
-                        value: data.coordinate_value(position),
-                    })
+                        data.coordinate_value(position),
+                    )
+                    .map_err(|error| ctx.internal_error(error.to_string(), span))
                 }
                 _ => Err(ctx.internal_error(
                     format!("position key on non-coordinate, non-finite index `{index_name}`"),
@@ -1061,7 +1064,7 @@ fn eval_hir_conversion_fn(
                 clippy::cast_precision_loss,
                 reason = "explicit Int to float conversion"
             )]
-            Ok(RuntimeValue::Quantity(i as f64))
+            checked_finite_quantity(i as f64, "to_float()", args[0].span, ctx)
         }
         TypeConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -1268,7 +1271,7 @@ fn flatten_extern_array(
     match (expected, value) {
         (ScalarValueKind::Quantity(_), RuntimeValue::Quantity(value)) => Ok(FlattenedExternArray {
             axes: Vec::new(),
-            values: FlattenedExternArrayValues::Quantity(vec![*value]),
+            values: FlattenedExternArrayValues::Quantity(vec![value.get()]),
         }),
         (ScalarValueKind::Bool, RuntimeValue::Bool(value)) => Ok(FlattenedExternArray {
             axes: Vec::new(),
@@ -1520,7 +1523,7 @@ fn eval_hir_extern_fn(
                         .enumerate()
                         .map(|(index, value)| {
                             validate_quantity(value)
-                                .map(crate::host_abi::FiniteHostQuantity::get)
+                                .map(graphcal_compiler::finite_value::FiniteQuantity::get)
                                 .map_err(|error| {
                                 ctx.eval_error(
                                     format!(
@@ -1590,7 +1593,7 @@ fn eval_hir_extern_fn(
     })?;
 
     match decoded {
-        ValidatedHostResult::Quantity { value, .. } => Ok(RuntimeValue::Quantity(value.get())),
+        ValidatedHostResult::Quantity { value, .. } => Ok(RuntimeValue::Quantity(value)),
         ValidatedHostResult::Int(value) => Ok(RuntimeValue::Int(value)),
         ValidatedHostResult::Bool(value) => Ok(RuntimeValue::Bool(value)),
         ValidatedHostResult::Array(array) => {
@@ -1622,7 +1625,7 @@ fn eval_hir_extern_fn(
                 ValidatedHostArrayValues::Quantity { values, .. } => rebuild_extern_array(
                     &axes,
                     values,
-                    |value| RuntimeValue::Quantity(value.get()),
+                    |value| RuntimeValue::Quantity(*value),
                     ctx,
                     expr.span,
                 ),
@@ -1657,9 +1660,7 @@ fn eval_hir_extern_fn(
                     let value = match field.value() {
                         ValidatedHostFieldValue::Bool(value) => RuntimeValue::Bool(*value),
                         ValidatedHostFieldValue::Int(value) => RuntimeValue::Int(*value),
-                        ValidatedHostFieldValue::Quantity(value) => {
-                            RuntimeValue::Quantity(value.get())
-                        }
+                        ValidatedHostFieldValue::Quantity(value) => RuntimeValue::Quantity(*value),
                     };
                     (field.name().clone(), value)
                 })
@@ -1697,12 +1698,12 @@ fn eval_hir_builtin_fn(
     let result = builtin
         .eval(&arg_values)
         .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), expr.span))?;
-    Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
-        result,
+    checked_finite_quantity(
+        super::arithmetic::check_finite(result, name.as_str(), ctx, expr.span)?,
         name.as_str(),
-        ctx,
         expr.span,
-    )?))
+        ctx,
+    )
 }
 
 fn eval_hir_field_access(
@@ -2190,11 +2191,12 @@ fn eval_hir_for_comp_bindings(
                 }
             }
             (IndexKind::Coordinate(data), IndexEntryKey::Position(_)) => {
-                RuntimeValue::CoordinateLabel {
-                    index_name: idx_name.clone(),
+                RuntimeValue::coordinate_label(
+                    idx_name.clone(),
                     position,
-                    value: data.coordinate_value(position),
-                }
+                    data.coordinate_value(position),
+                )
+                .map_err(|error| ctx.internal_error(error.to_string(), error_span))?
             }
             (IndexKind::Finite { .. }, IndexEntryKey::Position(_)) => {
                 RuntimeValue::Int(i64::try_from(position).map_err(|_| {
@@ -2508,19 +2510,21 @@ fn eval_hir_unfold(
         unfold_locals.bind(recurrence.previous_state.id, previous_state);
         unfold_locals.bind(
             recurrence.previous_index.id,
-            RuntimeValue::CoordinateLabel {
-                index_name: index_ref.clone(),
-                position: previous_position,
-                value: coordinate_data.coordinate_value(previous_position),
-            },
+            RuntimeValue::coordinate_label(
+                index_ref.clone(),
+                previous_position,
+                coordinate_data.coordinate_value(previous_position),
+            )
+            .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
         );
         unfold_locals.bind(
             recurrence.current_index.id,
-            RuntimeValue::CoordinateLabel {
-                index_name: index_ref.clone(),
+            RuntimeValue::coordinate_label(
+                index_ref.clone(),
                 position,
-                value: coordinate_data.coordinate_value(position),
-            },
+                coordinate_data.coordinate_value(position),
+            )
+            .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
         );
         let body_value = eval_hir_expr(body, values, &unfold_locals, ctx)?;
         result_entries.insert(variant.clone(), body_value.clone());

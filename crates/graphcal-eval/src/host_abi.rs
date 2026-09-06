@@ -16,6 +16,8 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
 use thiserror::Error;
 
+use graphcal_compiler::finite_value::FiniteQuantity;
+
 use crate::host_fns::HostFnValue;
 
 /// Why one raw scalar cannot represent its declared ABI kind.
@@ -70,18 +72,6 @@ impl fmt::Display for InvalidIntReason {
     }
 }
 
-/// A quantity already proven finite at the host ABI boundary.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FiniteHostQuantity(f64);
-
-impl FiniteHostQuantity {
-    /// Recover the finite binary64 payload.
-    #[must_use]
-    pub const fn get(self) -> f64 {
-        self.0
-    }
-}
-
 /// Encode a Graphcal `Bool` for the host ABI.
 #[must_use]
 pub const fn encode_bool(value: bool) -> f64 {
@@ -104,11 +94,8 @@ pub fn encode_int(value: i64) -> Result<f64, HostScalarError> {
 /// # Errors
 ///
 /// Returns [`HostScalarError::NonFiniteQuantity`] for NaN and infinities.
-pub fn validate_quantity(value: f64) -> Result<FiniteHostQuantity, HostScalarError> {
-    value
-        .is_finite()
-        .then_some(FiniteHostQuantity(value))
-        .ok_or(HostScalarError::NonFiniteQuantity { value })
+pub fn validate_quantity(value: f64) -> Result<FiniteQuantity, HostScalarError> {
+    FiniteQuantity::try_new(value).map_err(|_| HostScalarError::NonFiniteQuantity { value })
 }
 
 /// Decode an ABI `Bool` slot. Numeric equality intentionally treats `-0.0`
@@ -256,7 +243,7 @@ pub enum ValidatedHostArrayValues {
         /// Declared element dimension.
         element: DimMonomial,
         /// Finite SI values.
-        values: Vec<FiniteHostQuantity>,
+        values: Vec<FiniteQuantity>,
     },
     /// Boolean elements.
     Bool(Vec<bool>),
@@ -301,7 +288,7 @@ pub enum ValidatedHostFieldValue {
     /// Integer field.
     Int(i64),
     /// Finite quantity field.
-    Quantity(FiniteHostQuantity),
+    Quantity(FiniteQuantity),
 }
 
 /// One named field in a validated host record.
@@ -337,7 +324,7 @@ pub enum ValidatedHostResult {
         /// Declared result dimension.
         dimension: DimMonomial,
         /// Finite SI value.
-        value: FiniteHostQuantity,
+        value: FiniteQuantity,
     },
     /// Dense typed scalar array.
     Array(ValidatedHostArray),
@@ -488,10 +475,7 @@ mod tests {
     fn scalar_policy_accepts_signed_zero_and_exact_sparse_integers() {
         assert_eq!(decode_bool(-0.0), Ok(false));
         assert_eq!(decode_int(-0.0), Ok(0));
-        assert_eq!(
-            validate_quantity(-0.0).map(FiniteHostQuantity::get),
-            Ok(-0.0)
-        );
+        assert_eq!(validate_quantity(-0.0).map(FiniteQuantity::get), Ok(-0.0));
         assert_eq!(encode_int(1_i64 << 54), Ok(2.0_f64.powi(54)));
         assert!(encode_int((1_i64 << 53) + 1).is_err());
         assert!(encode_int(i64::MAX).is_err());

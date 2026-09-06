@@ -1,4 +1,5 @@
 use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
@@ -58,19 +59,30 @@ pub(super) fn aggregate_indexed_values(
     }
 
     match kind {
-        AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Maximum => aggregate_maximum(entries).map(RuntimeValue::Quantity),
-        AggregationFn::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Sum => aggregate_sum(entries).and_then(runtime_quantity),
+        AggregationFn::Product => aggregate_product(entries).and_then(runtime_quantity),
+        AggregationFn::Minimum => aggregate_minimum(entries).and_then(runtime_quantity),
+        AggregationFn::Maximum => aggregate_maximum(entries).and_then(runtime_quantity),
+        AggregationFn::Mean => aggregate_mean(entries).and_then(runtime_quantity),
         AggregationFn::RootSumSquare => {
-            aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
+            aggregate_root_sum_square(entries).and_then(runtime_quantity)
         }
         AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Int),
         AggregationFn::Argmin | AggregationFn::Argmax => Err(AggregationError::ExtremumRouting {
             function: kind.builtin_name(),
         }),
     }
+}
+
+fn runtime_quantity(value: f64) -> Result<RuntimeValue, AggregationError> {
+    FiniteQuantity::try_new(value)
+        .map(RuntimeValue::Quantity)
+        .map_err(|error| {
+            AggregationError::Quantity(numeric::QuantityValidationError::NonFinite {
+                context: "aggregation result".to_string(),
+                value: error.value,
+            })
+        })
 }
 
 /// Entry key of the extremum element, resolving ties to the first entry in
@@ -231,43 +243,67 @@ mod tests {
     #[test]
     fn product_and_rss_evaluate_with_numerical_checks() {
         let entries = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Quantity(3.0)),
-            (IndexEntryKey::position(1), RuntimeValue::Quantity(4.0)),
+            (
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(3.0).unwrap(),
+            ),
+            (
+                IndexEntryKey::position(1),
+                RuntimeValue::quantity(4.0).unwrap(),
+            ),
         ]);
         assert!(matches!(
             aggregate_indexed_values(AggregationFn::Product, &entries),
-            Ok(RuntimeValue::Quantity(12.0))
+            Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 12.0_f64.to_bits()
         ));
         assert!(matches!(
             aggregate_indexed_values(AggregationFn::RootSumSquare, &entries),
-            Ok(RuntimeValue::Quantity(5.0))
+            Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 5.0_f64.to_bits()
         ));
 
         let large = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e308)),
-            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e308)),
+            (
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(1.0e308).unwrap(),
+            ),
+            (
+                IndexEntryKey::position(1),
+                RuntimeValue::quantity(1.0e308).unwrap(),
+            ),
         ]);
         let RuntimeValue::Quantity(rss) =
             aggregate_indexed_values(AggregationFn::RootSumSquare, &large).unwrap()
         else {
             panic!("rss must return a quantity");
         };
-        assert!(rss.is_finite());
+        assert!(rss.get().is_finite());
 
         let small = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e-300)),
-            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e-300)),
+            (
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(1.0e-300).unwrap(),
+            ),
+            (
+                IndexEntryKey::position(1),
+                RuntimeValue::quantity(1.0e-300).unwrap(),
+            ),
         ]);
         let RuntimeValue::Quantity(small_rss) =
             aggregate_indexed_values(AggregationFn::RootSumSquare, &small).unwrap()
         else {
             panic!("rss must return a quantity");
         };
-        assert!(small_rss > 0.0);
+        assert!(small_rss.get() > 0.0);
 
         let overflowing_product = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Quantity(f64::MAX)),
-            (IndexEntryKey::position(1), RuntimeValue::Quantity(2.0)),
+            (
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(f64::MAX).unwrap(),
+            ),
+            (
+                IndexEntryKey::position(1),
+                RuntimeValue::quantity(2.0).unwrap(),
+            ),
         ]);
         assert!(matches!(
             aggregate_indexed_values(AggregationFn::Product, &overflowing_product),
@@ -280,15 +316,21 @@ mod tests {
     #[test]
     fn mean_avoids_overflow_in_a_representable_result() {
         let entries = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e308)),
-            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e308)),
+            (
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(1.0e308).unwrap(),
+            ),
+            (
+                IndexEntryKey::position(1),
+                RuntimeValue::quantity(1.0e308).unwrap(),
+            ),
         ]);
         let RuntimeValue::Quantity(mean) =
             aggregate_indexed_values(AggregationFn::Mean, &entries).unwrap()
         else {
             panic!("mean must return a quantity");
         };
-        assert!((mean / 1.0e308 - 1.0).abs() < f64::EPSILON);
+        assert!((mean.get() / 1.0e308 - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -310,7 +352,10 @@ mod tests {
 
         let inner = RuntimeValue::Indexed {
             index_name: IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(1).unwrap()),
-            entries: IndexMap::from([(IndexEntryKey::position(0), RuntimeValue::Quantity(1.0))]),
+            entries: IndexMap::from([(
+                IndexEntryKey::position(0),
+                RuntimeValue::quantity(1.0).unwrap(),
+            )]),
         };
         let entries = IndexMap::from([(IndexEntryKey::position(0), inner)]);
         let error = aggregate_indexed_values(AggregationFn::Count, &entries).unwrap_err();
