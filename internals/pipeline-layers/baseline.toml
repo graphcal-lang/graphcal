@@ -394,14 +394,6 @@ reason = "Observed eval::eval_expr::hir_eval -> eval::eval::runtime (production)
 
 [[exception]]
 from_package = "eval"
-from_path = ["eval_expr", "hir_eval"]
-to_package = "eval"
-to_path = ["exec_plan"]
-test_only = false
-reason = "Observed eval::eval_expr::hir_eval -> eval::exec_plan (production) at ./crates/graphcal-eval/src/eval_expr/hir_eval.rs:2681 (qualified path); roles are interpreter -> checking. Planned deletion seam: move evaluation consumers to an execution-plan/value interface."
-
-[[exception]]
-from_package = "eval"
 from_path = ["eval_expr", "hir_eval", "tests"]
 to_package = "eval"
 to_path = ["eval"]

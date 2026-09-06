@@ -13,7 +13,7 @@ use graphcal_compiler::tir::typed::{DagTIR, TIR};
 use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
 use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
-use crate::execution_plan::ExecPlan;
+use crate::execution_plan::{CallablePlan, ExecPlan};
 use crate::execution_scope::CheckedExecutionScope;
 
 /// Check a TIR and select its root execution plan.
@@ -87,7 +87,7 @@ pub fn combined_runtime_order_for(
     root: &graphcal_compiler::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
     let dags = semantic_runtime_dags_from(tir, root, src)?;
     let candidates = dags
         .iter()
@@ -179,10 +179,46 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     validate_execution_facts(tir, facts, src, cancellation)?;
-    let root_scope = checked_scope(tir, facts, tir.root_dag_id(), src)?;
+    let declaration_locations = prepare_declaration_locations(tir, src)?;
+    let root = prepare_callable_plan(
+        tir,
+        facts,
+        tir.root(),
+        &declaration_locations,
+        src,
+        cancellation,
+    )?;
+    let callables = tir
+        .dag_registry()
+        .values()
+        .filter(|dag| dag.dag_id() != tir.root_dag_id())
+        .map(|dag| {
+            prepare_callable_plan(tir, facts, dag, &declaration_locations, src, cancellation)
+                .map(|plan| (plan.owner.clone(), plan))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(ExecPlan {
+        declaration_locations,
+        root,
+        callables,
+        checked_execution_facts: facts.clone(),
+    })
+}
+
+fn prepare_callable_plan(
+    tir: &TIR,
+    facts: &CheckedExecutionFacts,
+    body: &DagTIR,
+    declaration_locations: &DeclarationLocations,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CallablePlan, GraphcalError> {
+    cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
+    let root_scope = checked_scope(tir, facts, body.dag_id(), src)?;
     let root_facts = root_scope.facts();
+    let src = root_facts.source();
     let semantic_dags = semantic_runtime_dags_from(tir, root_scope.dag(), src)?;
     let semantic_facts = semantic_dags
         .iter()
@@ -212,22 +248,24 @@ pub fn compile_checked_with_cancellation(
         Arc::clone(&root_facts.domain_constraints)
     };
     let topo_order = if has_instances {
-        combined_runtime_order_for(tir, tir.root(), src)?
+        combined_runtime_order_for(tir, body, src)?
     } else {
         root_facts.topo_order.as_ref().clone()
     };
 
-    let declaration_locations = prepare_declaration_locations(tir, src)?;
-
     validate_schedule_locations(
         &topo_order,
-        &declaration_locations,
+        declaration_locations,
         &semantic_dags.iter().map(|dag| dag.dag_id()).collect(),
         src,
     )?;
 
-    Ok(ExecPlan {
-        declaration_locations,
+    Ok(CallablePlan {
+        owner: body.dag_id().clone(),
+        execution_dags: semantic_dags
+            .iter()
+            .map(|dag| dag.dag_id().clone())
+            .collect(),
         const_values,
         imported_values: prepare_imported_values(tir, facts, &semantic_dags, src)?,
         topo_order,
@@ -256,7 +294,6 @@ pub fn compile_checked_with_cancellation(
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
-        checked_execution_facts: facts.clone(),
     })
 }
 
@@ -500,8 +537,10 @@ mod tests {
     #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!((quantity(&plan.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON);
-        assert!(plan.topo_order.is_empty());
+        assert!(
+            (quantity(&plan.root.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON
+        );
+        assert!(plan.root.topo_order.is_empty());
     }
 
     #[test]
@@ -510,7 +549,9 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((quantity(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
+        assert!(
+            (quantity(&plan.root.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10
+        );
     }
 
     #[test]
@@ -529,10 +570,13 @@ mod tests {
         let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
         let root_facts = facts.for_dag(tir.root_dag_id()).unwrap();
 
-        assert!(Arc::ptr_eq(&root_facts.const_values, &plan.const_values));
+        assert!(Arc::ptr_eq(
+            &root_facts.const_values,
+            &plan.root.const_values
+        ));
         assert!(Arc::ptr_eq(
             &root_facts.domain_constraints,
-            &plan.domain_constraints
+            &plan.root.domain_constraints
         ));
         assert!(Arc::ptr_eq(
             &facts.struct_field_constraints,
@@ -718,16 +762,19 @@ mod tests {
         )
         .unwrap();
         let x_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "x")
             .unwrap();
         let y_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "y")
             .unwrap();
         let z_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "z")
@@ -762,7 +809,7 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         assert!(
             (quantity(
-                &plan.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                &plan.root.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
                     tir.root_dag_id().clone(),
                     DeclName::expect_valid("b")
                 ))]
@@ -780,6 +827,7 @@ mod tests {
         );
         let plan = compile(&tir, &src).unwrap();
         let a_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|name| {
@@ -790,6 +838,7 @@ mod tests {
             })
             .unwrap();
         let b_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|name| {

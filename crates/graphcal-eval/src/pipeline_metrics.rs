@@ -11,6 +11,7 @@ pub enum Event {
     #[cfg(test)]
     UnsharedImportedBody,
     PlanConstruction,
+    ScheduleConstruction,
     ConstructorResolution,
     PresentationEvaluation,
 }
@@ -46,6 +47,7 @@ mod observer {
         pub imported_body_references: u64,
         pub unshared_imported_bodies: u64,
         pub plan_constructions: u64,
+        pub schedule_constructions: u64,
         pub constructor_resolutions: u64,
         pub presentation_evaluations: u64,
     }
@@ -59,6 +61,7 @@ mod observer {
                 Event::ImportedBodyReference => &mut counts.imported_body_references,
                 Event::UnsharedImportedBody => &mut counts.unshared_imported_bodies,
                 Event::PlanConstruction => &mut counts.plan_constructions,
+                Event::ScheduleConstruction => &mut counts.schedule_constructions,
                 Event::ConstructorResolution => &mut counts.constructor_resolutions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
             };
@@ -83,6 +86,9 @@ mod observer {
                 plan_constructions: after
                     .plan_constructions
                     .saturating_sub(before.plan_constructions),
+                schedule_constructions: after
+                    .schedule_constructions
+                    .saturating_sub(before.schedule_constructions),
                 constructor_resolutions: after
                     .constructor_resolutions
                     .saturating_sub(before.constructor_resolutions),

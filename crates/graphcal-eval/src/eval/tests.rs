@@ -93,9 +93,10 @@ node packet: Packet = Packet(value: @first);
         "single-file fixture has no ordinary imports"
     );
     assert!(preparation.plan_constructions > 0, "{preparation:?}");
-    // These positive counts deliberately document the pre-B/C/D baseline,
-    // not a desirable runtime contract. Migrations must change them to zero.
-    assert!(first_counts.plan_constructions > 0, "{first_counts:?}");
+    assert_eq!(first_counts.plan_constructions, 0, "{first_counts:?}");
+    assert!(preparation.schedule_constructions > 0);
+    assert_eq!(first_counts.schedule_constructions, 0, "{first_counts:?}");
+    // Constructor resolution and presentation replay remain C/D work.
     assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
     assert!(
         first_counts.presentation_evaluations > 0,
@@ -196,7 +197,7 @@ fn pipeline_cost_baseline_diamond_keeps_constant_pools_and_shared_call_bodies() 
 }
 
 #[test]
-fn pipeline_cost_baseline_replays_native_selector_for_presentation() {
+fn pipeline_cost_baseline_replays_pure_native_selector_for_presentation() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -213,13 +214,8 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
         graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:selector-counter"),
         graphcal_compiler::syntax::function_name::FnName::expect_valid("toggle"),
         move |_| {
-            Ok(crate::host_fns::HostFnValue::F64(
-                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
-                    1.0
-                } else {
-                    0.0
-                },
-            ))
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::host_fns::HostFnValue::F64(1.0))
         },
     );
     let prepared = ProjectCompiler::new(&project)
@@ -242,13 +238,13 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
     let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
         panic!("expected quantity");
     };
-    // D06 must replace these baseline assertions with one call and "km".
+    // D06 must remove the extra invocation while preserving this pure result.
     assert_eq!(
         calls.load(Ordering::SeqCst),
         2,
         "presentation replay baseline"
     );
-    assert_eq!(display_unit.as_ref().unwrap().label, "m");
+    assert_eq!(display_unit.as_ref().unwrap().label, "km");
 }
 
 #[test]
@@ -269,14 +265,18 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     assert!(provisional.host_fns().is_none());
     assert!(provisional.checked_execution_facts().is_none());
     assert!(provisional.struct_field_constraints().is_none());
+    assert!(provisional.execution_plan().is_err());
 
     let checked =
         crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
             .unwrap();
+    let plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
+            .unwrap();
     let host = crate::host_fns::HostFunctionRegistry::new();
     let context = crate::eval_expr::EvalContext::checked(
         &tir,
-        &checked,
+        &plan,
         tir.root_dag_id(),
         &src,
         builtin,
@@ -291,11 +291,14 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     ));
     assert!(!context.struct_field_constraints().unwrap().is_empty());
     assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
-    let empty = crate::execution_facts::CheckedExecutionFacts::empty();
+    let mut broken_plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
+            .unwrap();
+    broken_plan.checked_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
     assert!(
         crate::eval_expr::EvalContext::checked(
             &tir,
-            &empty,
+            &broken_plan,
             tir.root_dag_id(),
             &src,
             builtin,
@@ -327,6 +330,123 @@ fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
     );
     assert!(
         matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared physical location"))
+    );
+}
+
+#[test]
+fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
+    let mut host = crate::host_fns::HostFunctionRegistry::new();
+    host.register(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:pure-plan-test"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("twice"),
+        |args| match &args[0] {
+            crate::host_fns::HostFnValue::F64(value) => {
+                Ok(crate::host_fns::HostFnValue::F64(value * 2.0))
+            }
+            other => panic!("expected checked scalar argument, got {other:?}"),
+        },
+    );
+    for body in [
+        "pub node a: Dimensionless = probe::twice(2.0); pub node z: Dimensionless = probe::twice(@a); pub node q: Dimensionless = probe::twice(3.0);",
+        "pub node q: Dimensionless = probe::twice(3.0); pub node z: Dimensionless = probe::twice(@a); pub node a: Dimensionless = probe::twice(2.0);",
+    ] {
+        for declarations in [
+            format!(
+                "{body} node output: Dimensionless = @z; node independent: Dimensionless = @q;"
+            ),
+            format!(
+                "dag inner {{ {body} }} node output: Dimensionless = @inner()::z; node independent: Dimensionless = @inner()::q;"
+            ),
+        ] {
+            let source = format!(
+                "import plugin \"graphcal:pure-plan-test\" as probe {{ fn twice(x: Dimensionless) -> Dimensionless; }} {declarations}"
+            );
+            let project =
+                crate::loader::LoadedProject::from_source(&source, "pure-plans.gcl").unwrap();
+            let prepared = ProjectCompiler::new(&project)
+                .host_fns(&host)
+                .prepare()
+                .unwrap();
+            let row = prepared.binding_builder().finish().unwrap();
+            let (result, counts) =
+                crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+            assert!(!result.has_errors(), "{result:?}");
+            assert_quantity_value(&result, "output", 8.0);
+            assert_quantity_value(&result, "independent", 6.0);
+            assert_eq!(counts.plan_constructions, 0);
+            assert_eq!(counts.schedule_constructions, 0);
+        }
+    }
+}
+
+fn callable_plan_fixture() -> (
+    graphcal_compiler::tir::typed::TIR,
+    miette::NamedSource<std::sync::Arc<String>>,
+) {
+    let source = "const node BASE: Dimensionless = 3.0; dag helper { const node LOCAL: Dimensionless = 20.0; pub node out: Dimensionless = @LOCAL; } node value: Dimensionless = @helper()::out + @BASE;";
+    let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
+    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
+    assert!(
+        tir.dag_registry().len() > 1,
+        "fixture must contain a real callable body"
+    );
+    (tir, src)
+}
+
+#[test]
+fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
+    let (tir, src) = callable_plan_fixture();
+    let (plan, counts) =
+        crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    assert_eq!(
+        counts.plan_constructions,
+        u64::try_from(tir.dag_registry().len()).unwrap()
+    );
+    assert_eq!(plan.callables.len() + 1, tir.dag_registry().len());
+    for dag in tir.dag_registry().values() {
+        let callable = plan.callable(dag.dag_id()).unwrap();
+        assert_eq!(&callable.owner, dag.dag_id());
+        assert_eq!(callable.execution_dags, [dag.dag_id().clone()]);
+        let facts = plan.checked_execution_facts.for_dag(dag.dag_id()).unwrap();
+        assert!(!facts.const_values.is_empty());
+        assert!(std::sync::Arc::ptr_eq(
+            &callable.const_values,
+            &facts.const_values
+        ));
+    }
+}
+
+#[test]
+fn callable_lookup_rejects_another_bodys_plan() {
+    let (tir, src) = callable_plan_fixture();
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let owner = plan.callables.keys().next().unwrap().clone();
+    plan.callables.get_mut(&owner).unwrap().owner = plan.root.owner.clone();
+    assert!(matches!(
+        plan.callable(&owner),
+        Err(crate::execution_plan::CallablePlanError::WrongOwner { .. })
+    ));
+}
+
+#[test]
+fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
+    let source = "dag helper { pub node out: Dimensionless = 1.0; } node value: Dimensionless = @helper()::out;";
+    let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
+    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    assert!(!plan.callables.is_empty());
+    plan.callables.clear();
+    let result = super::runtime::run_eval_loop_with_bindings(
+        &plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        &tir,
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &crate::host_fns::HostFunctionRegistry::new(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    assert!(
+        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared callable plan"))
     );
 }
 

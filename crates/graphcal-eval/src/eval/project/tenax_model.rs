@@ -293,7 +293,7 @@ impl PreparedProject {
         let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext::checked(
             &self.tir,
-            &self.plan.checked_execution_facts,
+            &self.plan,
             self.tir.root_dag_id(),
             &self.source,
             builtin_fns,
@@ -312,6 +312,7 @@ impl PreparedProject {
             let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
                 &assertion.body,
                 self.plan
+                    .root
                     .expected_fail
                     .get(&RuntimeDeclKey::resolved(owner.clone())),
                 &values,

@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::assertion_expectation::ExpectedFail;
+use graphcal_compiler::dag_id::DagId;
+use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
@@ -15,6 +17,44 @@ use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 pub struct ExecPlan {
     /// Physical bodies selected from completed declaration indexes at preparation.
     pub(crate) declaration_locations: DeclarationLocations,
+    pub(crate) root: CallablePlan,
+    /// Non-root bodies; the root has the same callable contract without a copy.
+    pub(crate) callables: HashMap<DagId, CallablePlan>,
+    pub(crate) checked_execution_facts: CheckedExecutionFacts,
+}
+
+#[derive(Debug, Error)]
+pub enum CallablePlanError {
+    #[error("DAG `{0}` has no prepared callable plan")]
+    Missing(DagId),
+    #[error("prepared callable plan for `{expected}` belongs to `{actual}`")]
+    WrongOwner { expected: DagId, actual: DagId },
+}
+
+impl ExecPlan {
+    pub(crate) fn callable(&self, owner: &DagId) -> Result<&CallablePlan, CallablePlanError> {
+        let plan = if owner == &self.root.owner {
+            &self.root
+        } else {
+            self.callables
+                .get(owner)
+                .ok_or_else(|| CallablePlanError::Missing(owner.clone()))?
+        };
+        if &plan.owner != owner {
+            return Err(CallablePlanError::WrongOwner {
+                expected: owner.clone(),
+                actual: plan.owner.clone(),
+            });
+        }
+        Ok(plan)
+    }
+}
+
+/// One body and its included-instance closure, prepared before evaluation.
+#[derive(Debug)]
+pub struct CallablePlan {
+    pub(crate) owner: DagId,
+    pub(crate) execution_dags: Vec<DagId>,
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
     pub(crate) const_values: Arc<RuntimeValueMap>,
@@ -33,6 +73,4 @@ pub struct ExecPlan {
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    /// Per-DAG checked facts required by nested callable evaluation.
-    pub(crate) checked_execution_facts: CheckedExecutionFacts,
 }

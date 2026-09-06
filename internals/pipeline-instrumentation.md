@@ -14,7 +14,8 @@ cargo test --locked -p graphcal-eval --lib pipeline_cost_baseline -- --nocapture
 | --- | --- |
 | Imported body reference | Comparing a completed importing TIR's body address with its publishing module's canonical body |
 | Unshared imported body | A reference check found different body addresses |
-| Plan construction | Root execution-plan preparation and combined callable/instance scheduling |
+| Plan construction | Construction of each retained callable/instance-closure plan during preparation |
+| Schedule construction | Actual per-body runtime graph construction and combined instance-closure scheduling |
 | Constructor resolution | The expression evaluator's constructor generic-argument reconstruction |
 | Presentation evaluation | Branch/match selector replay and expression-valued index projection arguments |
 
@@ -37,17 +38,28 @@ A native-host selector fixture also reproduces a semantic presentation defect:
 checking invokes no host function, but evaluation calls an alternating Boolean
 selector **twice**. The SI result correctly retains the first branch's 1000 m,
 while presentation selects the second branch's `m` label instead of the authored
-first branch's `km`. Phase D must change this baseline to **one host call** and
-`km` presentation; a native `Fn` signature does not establish purity.
+first branch's `km`. A native `Fn` signature does not establish purity. The
+subsequently accepted plugin contract makes this impure counter's calculation
+results undefined. It is historical evidence, not a future scheduling or
+presentation correctness oracle. The maintained replay test now uses a pure,
+always-true selector with non-semantic call-count instrumentation: its label is
+already `km`, but it still records two invocations. Phase D must reduce that count
+to **one** while preserving the pure result.
 
 The old body-copy hooks were removed with their copying paths; retaining an
 unrecorded event and asserting zero would not prove sharing. The current observer
 instead compares actual body addresses at completed module publication, and
 requires a positive number of reference checks for imported projects.
 
-Positive runtime planning, constructor, and presentation counts still document
-work to remove, not desirable behavior. Retain value/equivalence assertions when
-changing their expectations in the remaining B–D work.
+The callable-plan checkpoint changes the two-call fixture to **2 plans during
+preparation and 0 during each evaluation**. A separate, active schedule counter
+observes both checking's runtime graph builder and the combined scheduler;
+preparation has positive schedule work and evaluation must have **zero**. This
+prevents zero plan counts from hiding a reintroduced call to a sorting helper.
+Constructor resolution (**1**) and presentation evaluation (**3**) remain
+positive baselines for C/D, not desirable
+behavior. Pure-plugin tests permute declaration order and compare root/call values
+without asserting independent invocation order.
 
 ## Module ownership checkpoint
 
@@ -72,8 +84,10 @@ Independent temporary mutations reintroduced each of: a duplicate shared ID,
 a copied imported unit, a copied imported body, and a copied project type store.
 Each failed its intended assertion, after which exact source was restored and
 positive tests rerun. These are bounded mutation checks, not exhaustive clone,
-allocation, or performance instrumentation. Callable planning and runtime owner
-searches still remain to be removed in Phase B.
+allocation, or performance instrumentation. Callable schedules and physical
+locations are now prepared: missing/misowned plans and missing locations fail
+closed. Import lookup and pooled constant retention still need migration, followed
+by the shared machine; Phase B is not complete.
 
 ## Invocation-state ownership
 

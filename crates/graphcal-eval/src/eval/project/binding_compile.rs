@@ -105,7 +105,12 @@ impl ParameterBindingBuilder<'_> {
         binding: RuntimeParameterBinding,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        if let Some(constraint) = self.project.plan.domain_constraints.get(&port.runtime_key)
+        if let Some(constraint) = self
+            .project
+            .plan
+            .root
+            .domain_constraints
+            .get(&port.runtime_key)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(&binding.value, constraint)
         {
@@ -444,7 +449,7 @@ impl PreparedProject {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext::checked(
             &self.tir,
-            &self.plan.checked_execution_facts,
+            &self.plan,
             self.tir.root_dag_id(),
             &self.source,
             builtin_fns,
@@ -492,6 +497,7 @@ pub(super) fn build_parameter_ports(
                 .map_err(CompileError::Eval)?;
             let runtime_key = parameter.runtime_key().clone();
             let domain = plan
+                .root
                 .domain_constraints
                 .get(&runtime_key)
                 .map(parameter_domain);

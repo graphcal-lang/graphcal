@@ -2667,31 +2667,26 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let checked = ctx.checked_execution_facts().ok_or_else(|| {
-        ctx.internal_error(
-            "runtime DAG call has no checked execution-fact store",
-            target.span,
-        )
-    })?;
+    let plan = ctx.execution_plan()?;
+    let callable = plan
+        .callable(&target.value)
+        .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
+    let checked = &plan.checked_execution_facts;
     let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, &target.value)
         .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
     let dag_tir = scope.dag();
     let dag_facts = scope.facts();
 
-    let call_dags = crate::exec_plan::semantic_runtime_dags_from(ctx.tir, dag_tir, ctx.src)?;
-    let call_facts = call_dags
+    let call_dags = callable
+        .execution_dags
         .iter()
-        .map(|dag| {
-            crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, dag.dag_id())
-                .map(crate::execution_scope::CheckedExecutionScope::facts)
+        .map(|owner| {
+            crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, owner)
+                .map(crate::execution_scope::CheckedExecutionScope::dag)
                 .map_err(|error| ctx.internal_error(error.to_string(), target.span))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut dag_values = call_facts
-        .iter()
-        .flat_map(|facts| facts.const_values.iter())
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<RuntimeValueMap>();
+    let mut dag_values = callable.const_values.as_ref().clone();
     let mut dag_presentations = PresentationInstanceMap::new();
     for binding in args {
         let key = super::dag_decl_runtime_key(&binding.target.value);
@@ -2714,22 +2709,20 @@ fn eval_hir_dag_call(
     }
 
     let empty_hir_locals = HirLocalValueMap::root();
-    let schedule =
-        crate::exec_plan::combined_runtime_order_for(ctx.tir, dag_tir, dag_facts.source())?;
-    for key in &schedule {
+    for key in &callable.topo_order {
         if dag_values.contains_key(key) {
             continue;
         }
-        let scheduled_dag = call_dags
-            .iter()
-            .copied()
-            .find(|dag| dag.runtime_expr(key.as_resolved()).is_some())
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!("DAG schedule references missing value declaration `{key}`"),
-                    output.span,
-                )
-            })?;
+        let physical_body = plan
+            .declaration_locations
+            .body_for(key)
+            .map_err(|error| ctx.internal_error(error.to_string(), output.span))?;
+        let scheduled_dag = ctx.tir.dag_registry().get(physical_body).ok_or_else(|| {
+            ctx.internal_error(
+                format!("DAG schedule references missing value declaration `{key}`"),
+                output.span,
+            )
+        })?;
         let scheduled_facts = checked.for_dag(scheduled_dag.dag_id()).ok_or_else(|| {
             ctx.internal_error(
                 format!(

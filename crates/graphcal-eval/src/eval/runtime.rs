@@ -222,19 +222,19 @@ pub(super) fn run_eval_loop_with_bindings(
 
     // Insert imported compile-time constants into the lookup table.
     // They keep their original `ScopedName` qualification.
-    for (name, val) in &plan.imported_values {
+    for (name, val) in &plan.root.imported_values {
         values.insert(name.clone(), val.clone());
     }
 
     // Insert const values into the lookup table.
-    for (name, val) in plan.const_values.iter() {
+    for (name, val) in plan.root.const_values.iter() {
         values.insert(name.clone(), val.clone());
     }
 
     // Inject supplied params before evaluating defaults or dependent nodes.
     // Bound and defaulted params share the same resolved domain constraints.
     for (name, binding) in bindings {
-        if let Some(constraint) = plan.domain_constraints.get(name)
+        if let Some(constraint) = plan.root.domain_constraints.get(name)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(&binding.value, constraint)
         {
@@ -251,7 +251,7 @@ pub(super) fn run_eval_loop_with_bindings(
 
     // Evaluate in topological order (params first, then nodes that depend on them).
     // Top-level declarations in a single file are always `Local`-form names.
-    for name in &plan.topo_order {
+    for name in &plan.root.topo_order {
         cancellation.checkpoint()?;
         if values.contains_key(name) || errors.contains_key(name) {
             continue;
@@ -278,7 +278,7 @@ pub(super) fn run_eval_loop_with_bindings(
 
         let ctx = EvalContext::checked(
             tir,
-            &plan.checked_execution_facts,
+            plan,
             current_dag.dag_id(),
             src,
             builtin_fns,
@@ -312,7 +312,7 @@ pub(super) fn run_eval_loop_with_bindings(
             Ok(evaluated) => {
                 let (val, presentation) = evaluated.into_parts();
                 // Check domain constraints after successful evaluation.
-                if let Some(constraint) = plan.domain_constraints.get(name)
+                if let Some(constraint) = plan.root.domain_constraints.get(name)
                     && let Err(violation) =
                         crate::domain_check::check_domain_constraint(&val, constraint)
                 {
@@ -446,7 +446,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let ctx = EvalContext::checked(
         tir,
-        &plan.checked_execution_facts,
+        plan,
         tir.root_dag_id(),
         src,
         builtin_fns,
@@ -529,7 +529,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
         let key = local_key(name)?;
         let value = match decl_type {
-            DeclType::Const => plan.const_values.get(&key).map_or_else(
+            DeclType::Const => plan.root.const_values.get(&key).map_or_else(
                 || {
                     Err(GraphcalError::internal_error(
                         format!("checked source-order constant `{key}` has no runtime value"),
@@ -748,6 +748,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
                 || {
                     let ef = plan
+                        .root
                         .expected_fail
                         .get(&RuntimeDeclKey::resolved(owner.clone()));
                     evaluate_assert_with_expected_fail(
@@ -800,7 +801,8 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         )
                     })?;
                 let expected = projection.expected_fail.as_ref().or_else(|| {
-                    plan.expected_fail
+                    plan.root
+                        .expected_fail
                         .get(&RuntimeDeclKey::resolved(owner.clone()))
                 });
                 let result = evaluate_assert_with_expected_fail(
@@ -999,6 +1001,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .map(|(name, _)| {
             let key = local_key(name)?;
             Ok(plan
+                .root
                 .domain_constraints
                 .get(&key)
                 .map(|constraint| (name.clone(), constraint.clone())))
@@ -1042,6 +1045,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         }
     }
     let assumes_map = plan
+        .root
         .assumes_map
         .iter()
         .map(|(assertion, assumers)| {

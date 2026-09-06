@@ -583,7 +583,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
 | `declaration_locations.rs` | Validated declaration-to-physical-body index prepared from body records |
-| `execution_plan.rs`     | Immutable plan records, independent of preparation algorithms |
+| `execution_plan.rs`     | Immutable root/callable plans and fail-closed plan selection |
 | `exec_plan.rs`          | Checked-fact validation and execution-plan preparation       |
 | `domain_constraint.rs`  | Family-preserving evaluated bounds and validated same-scale instants |
 | `domain_check.rs`       | Runtime and compile-time value validation against those contracts |
@@ -980,28 +980,42 @@ it already carries canonical call routing.
 
 ### 3.8 ExecPlan
 
-`ExecPlan` in `execution_plan.rs` is the runtime-ready form of a root `DagTIR`.
-Preparation and validation remain free functions in checking `exec_plan.rs`;
-runtime consumers import the data directly, without a checking-layer re-export:
+`ExecPlan` in `execution_plan.rs` retains one `CallablePlan` for every checked
+body, including its semantic-instance closure. The root uses the same contract
+and is stored once, separately from the non-root map. Preparation and validation
+remain free functions in checking `exec_plan.rs`; runtime consumers import data
+directly, without a checking-layer re-export:
 
 ```text
 ExecPlan
   declaration_locations: DeclarationLocations  // physical body, not semantic owner
-  const_values: Arc<RuntimeValueMap>  // retained checked fact store
+  root: CallablePlan
+  callables: HashMap<DagId, CallablePlan>  // excludes root
+  checked_execution_facts: CheckedExecutionFacts
+
+CallablePlan
+  owner: DagId
+  execution_dags: Vec<DagId>  // prepared semantic closure
+  const_values: Arc<RuntimeValueMap>  // shared for singleton closures
   imported_values: RuntimeValueMap
   topo_order: Vec<RuntimeDeclKey>
   assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>
   expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>  // assertion_expectation.rs contract
   domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
-  checked_execution_facts: CheckedExecutionFacts  // authoritative field constraints + per-DAG facts
 ```
 
 Preparation derives physical locations from each body's authoritative
 `DagDeclarationIndex`, including parameters without default expressions. It
 rejects duplicate locations and schedule entries absent from the index or outside
-the selected semantic closure. Root execution requires those locations and does
-not fall back to scanning bodies. Inline-call planning and import lookup still
-have separate runtime paths pending unification.
+the selected semantic closure for every callable. Root and call execution require
+those locations and do not scan bodies to find scheduled declarations. Checked
+contexts require prepared plans as well as matching body/fact scopes; missing or
+misowned callable plans fail closed. Calls no longer traverse include graphs or
+construct schedules. Independent plugin invocation order remains unspecified.
+
+Import seeding still has a runtime lookup path, and constants from multi-body
+closures are still aggregated during preparation. Retained import/constant pools
+and a shared root/call execution kernel remain follow-up work.
 
 It contains no cloned HIR bodies and no parser or registry-building work;
 evaluation reads declaration/assertion/visualization records from the checked
