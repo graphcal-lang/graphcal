@@ -1263,6 +1263,11 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["execution_plan"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["graph_ir"]
 role = "contracts"
 

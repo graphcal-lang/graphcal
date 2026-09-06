@@ -582,7 +582,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | `presentation_calls.rs`           | Evaluation-owned call storage and scope-validated invocation handles |
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
-| `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
+| `execution_plan.rs`     | Immutable plan records, independent of preparation algorithms |
+| `exec_plan.rs`          | Checked-fact validation and execution-plan preparation       |
 | `domain_constraint.rs`  | Family-preserving evaluated bounds and validated same-scale instants |
 | `domain_check.rs`       | Runtime and compile-time value validation against those contracts |
 | `eval/runtime.rs`       | Evaluation loop                                               |
@@ -978,7 +979,9 @@ it already carries canonical call routing.
 
 ### 3.8 ExecPlan
 
-`ExecPlan` is the runtime-ready form of a root `DagTIR`:
+`ExecPlan` in `execution_plan.rs` is the runtime-ready form of a root `DagTIR`.
+Preparation and validation remain free functions in checking `exec_plan.rs`;
+runtime consumers import the data directly, without a checking-layer re-export:
 
 ```text
 ExecPlan
@@ -1515,6 +1518,7 @@ Its source-analysis limits are documented separately from this heuristic orderin
 36. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
 37. `crates/graphcal-cli/src/lib.rs`
 38. `crates/graphcal-eval/src/pipeline_metrics.rs`
+39. `crates/graphcal-eval/src/execution_plan.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 

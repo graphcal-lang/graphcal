@@ -260,7 +260,7 @@ struct ProjectOutputAssembly {
 pub struct PreparedProject {
     plan_id: u64,
     tir: graphcal_compiler::tir::typed::TIR,
-    plan: crate::exec_plan::ExecPlan,
+    plan: crate::execution_plan::ExecPlan,
     declared_types: HashMap<ScopedName, DeclaredType>,
     source: NamedSource<Arc<String>>,
     host_fns: crate::host_fns::HostFunctionRegistry,
@@ -286,7 +286,7 @@ impl std::fmt::Debug for PreparedProject {
 impl PreparedProject {
     pub(in crate::eval::project) fn from_compiled(
         compiled: CompiledFile,
-        plan: crate::exec_plan::ExecPlan,
+        plan: crate::execution_plan::ExecPlan,
         source: NamedSource<Arc<String>>,
         host_fns: crate::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,

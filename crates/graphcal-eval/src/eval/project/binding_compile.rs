@@ -478,7 +478,7 @@ impl PreparedProject {
 pub(super) fn build_parameter_ports(
     plan_id: u64,
     entry_interface: &CheckedEntryInterface,
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ParameterPort>, CompileError> {
     entry_interface

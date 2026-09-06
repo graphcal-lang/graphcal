@@ -204,7 +204,7 @@ impl RuntimeEvaluation {
     reason = "one dependency-ordered loop keeps value insertion and per-node failure isolation auditable"
 )]
 pub(super) fn run_eval_loop_with_bindings(
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -391,7 +391,7 @@ fn failed_runtime_dependencies(
 /// Evaluate a plan with one row of runtime parameter bindings.
 pub(super) fn evaluate_plan_with_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
@@ -416,7 +416,7 @@ pub(super) fn evaluate_plan_with_bindings_and_cancellation(
 )]
 pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
