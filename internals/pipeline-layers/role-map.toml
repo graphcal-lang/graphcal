@@ -182,6 +182,16 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["hir", "closed_expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "closed_expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr"]
 role = "contracts"
 
@@ -973,6 +983,11 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "presentation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "presentation", "tests"]
 role = "contracts"
 
 [[module]]

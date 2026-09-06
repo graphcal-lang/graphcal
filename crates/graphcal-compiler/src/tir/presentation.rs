@@ -219,13 +219,13 @@ pub enum PresentationMatchPattern {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PresentationCallKey {
     owner: ResolvedDeclName,
-    span: Span,
+    expression: crate::expression_id::ExprId,
 }
 
 impl PresentationCallKey {
     #[must_use]
-    pub const fn new(owner: ResolvedDeclName, span: Span) -> Self {
-        Self { owner, span }
+    pub const fn new(owner: ResolvedDeclName, expression: crate::expression_id::ExprId) -> Self {
+        Self { owner, expression }
     }
 
     /// Declaration whose body owns this call site.
@@ -235,8 +235,8 @@ impl PresentationCallKey {
     }
 
     #[must_use]
-    pub const fn span(&self) -> Span {
-        self.span
+    pub const fn expression(&self) -> &crate::expression_id::ExprId {
+        &self.expression
     }
 }
 
@@ -262,6 +262,8 @@ pub enum PresentationProvenance {
     /// definition-owned dynamic units and branch selectors.
     DagCall {
         key: PresentationCallKey,
+        /// Diagnostic projection, deliberately outside call-site identity.
+        span: Span,
         output: Box<Self>,
     },
     /// Indexed access whose removed comprehension binders are substituted from
@@ -374,4 +376,57 @@ impl PlotChannelPresentation {
 pub struct DagPresentationFacts {
     pub declarations: HashMap<ResolvedDeclName, PresentationProvenance>,
     pub plot_channels: HashMap<ResolvedDeclName, HashMap<EncodingChannel, PlotChannelPresentation>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_site_identity_is_scoped_and_independent_of_diagnostic_projection() {
+        let dag = DagId::from_virtual_relative_path(std::path::Path::new("calls.gcl")).unwrap();
+        let owner = |name| {
+            ResolvedDeclName::from_def(
+                dag.clone(),
+                crate::syntax::decl_name::DeclName::expect_valid(name),
+            )
+        };
+        let mut ids = crate::expression_id::ExprIds::default();
+        let expression = ids.allocate().unwrap();
+        let key = PresentationCallKey::new(owner("first"), expression.clone());
+        let projections =
+            [Span::new(0, 1), Span::new(10, 11)].map(|span| PresentationProvenance::DagCall {
+                key: key.clone(),
+                span,
+                output: Box::new(PresentationProvenance::None),
+            });
+        let [
+            PresentationProvenance::DagCall {
+                key: first,
+                span: first_span,
+                ..
+            },
+            PresentationProvenance::DagCall {
+                key: shifted,
+                span: shifted_span,
+                ..
+            },
+        ] = projections
+        else {
+            panic!("expected call projections");
+        };
+        assert_eq!(first, shifted);
+        assert_ne!(first_span, shifted_span);
+        let other_node = PresentationCallKey::new(owner("first"), ids.allocate().unwrap());
+        let other_owner = PresentationCallKey::new(owner("second"), expression);
+        let rebuilt = PresentationCallKey::new(
+            owner("first"),
+            crate::expression_id::ExprIds::default().allocate().unwrap(),
+        );
+        assert_eq!(
+            std::collections::HashSet::from([first, shifted, other_node, other_owner, rebuilt])
+                .len(),
+            4
+        );
+    }
 }

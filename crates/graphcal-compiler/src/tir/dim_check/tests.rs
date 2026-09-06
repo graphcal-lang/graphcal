@@ -319,6 +319,45 @@ fn cycle_detection_uses_semantic_dependencies() {
 }
 
 #[test]
+fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
+    let source =
+        "node result: Dimensionless = sum(for p: Fin(2) { 1.0 }) + sum(for q: Fin(3) { 1.0 });";
+    let (mut tir, src) = module_aware_tir(source);
+    let owner = ResolvedDeclName::from_def(
+        tir.root_dag_id().clone(),
+        tir.root().nodes()[0].name.member().clone(),
+    );
+    let mut ids = Vec::new();
+    crate::hir::visit_expr(&tir.root().nodes()[0].expr, &mut |expr| {
+        if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
+            ids.push(expr.id().unwrap().clone());
+        }
+    });
+    assert_eq!(ids.len(), 2);
+    tir.root_mut().nodes[0]
+        .expr
+        .map_spans_for_test(|_| Span::new(0, 1));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    let totals = |body: &crate::tir::typed::DagTIR| {
+        ids.iter()
+            .map(|id| body.materialized_shape(&owner, id).unwrap().total().get())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(totals(tir.root()), vec![2, 3]);
+    tir.root_mut().nodes[0]
+        .expr
+        .map_spans_for_test(|_| Span::new(2, 3));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    assert_eq!(totals(tir.root()), vec![2, 3]);
+    let (mut rebuilt, rebuilt_src) = module_aware_tir(source);
+    check_dimensions_tir(&mut rebuilt, &rebuilt_src).unwrap();
+    assert!(
+        ids.iter()
+            .all(|id| rebuilt.root().materialized_shape(&owner, id).is_none())
+    );
+}
+
+#[test]
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
     tir.root_mut().nodes[0]

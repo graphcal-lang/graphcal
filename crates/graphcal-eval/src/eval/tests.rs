@@ -378,6 +378,54 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
 }
 
 #[test]
+fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
+    let source = "node values: Dimensionless[Fin(2)] = for p: Fin(2) { 1.0 };";
+    let tir = compile_to_tir(source, "shape-identities.gcl").unwrap();
+    let src = miette::NamedSource::new(
+        "shape-identities.gcl",
+        std::sync::Arc::new(source.to_string()),
+    );
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    let facts =
+        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
+            .unwrap();
+    let plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &facts, &src, &cancellation)
+            .unwrap();
+    let hosts = crate::host_fns::HostFunctionRegistry::new();
+    let owner = graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+        tir.root_dag_id().clone(),
+        graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
+    );
+    let context = crate::eval_expr::EvalContext::checked(
+        &tir,
+        &plan,
+        tir.root_dag_id(),
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &hosts,
+        cancellation,
+    )
+    .unwrap()
+    .for_decl(&owner);
+    let original = &tir.root().nodes()[0].expr;
+    let mut shifted = (**original).clone();
+    shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
+    assert_ne!(shifted.span, original.span);
+    assert_eq!(shifted.id().unwrap(), original.id().unwrap());
+    let value = crate::eval_expr::eval_hir_expr(
+        &shifted,
+        &crate::execution_facts::RuntimeValueMap::new(),
+        &crate::eval_expr::HirLocalValueMap::root(),
+        &context,
+    )
+    .unwrap();
+    assert!(
+        matches!(value, graphcal_compiler::registry::runtime_value::RuntimeValue::Indexed { entries, .. } if entries.len() == 2)
+    );
+}
+
+#[test]
 fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shared() {
     let source = "node x: Dimensionless = 1.0;";
     let tir = compile_to_tir(source, "revisions.gcl").unwrap();

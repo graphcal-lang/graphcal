@@ -288,13 +288,20 @@ the single resolution stage of the compiler:
   DAG root enumeration distinguishes bounds owned by the current semantic body
   from referenced foreign nominal bounds, while dependency inspection still
   visits both.
-  This identity foundation does not by itself migrate existing span-keyed
-  materialization/presentation facts or establish complete checked-fact coverage.
+  Materialization and presentation call-site keys now use scoped expression IDs,
+  with presentation diagnostics stored outside key equality. Materialization
+  facts are still sparse: complete checked expression coverage and removal of
+  runtime reconstruction/checking remain separate work.
   `body_revision.rs` separately identifies a semantic checking revision: rechecking
   an immutable source tree cannot authorize old execution facts merely because
   its DAG name and expression IDs still agree. Checked execution scope selection
   validates this revision, and generic Nat services retain canonical parameter
   owners rather than matching a type parameter's leaf name.
+- `hir/closed_expr.rs` validates the complete syntactically closed input-literal
+  subset, rejects nonfinite/unresolved/computational nodes, and finishes a fresh
+  source revision before parameter binding checks. `ClosedExpr` preserves this
+  stronger invariant; it is not a type proof or a claim that referenced units
+  require no runtime services.
 - `hir/lower.rs` lowers syntax AST type references into HIR with a
   `ModuleResolver`, a `GenericScope`, and an optional prelude scope.
 
@@ -1475,8 +1482,9 @@ Its source-analysis limits are documented separately from this heuristic orderin
 3. `crates/graphcal-compiler/src/hir/diagnostics.rs`
 4. `crates/graphcal-compiler/src/hir/lower.rs`
 5. `crates/graphcal-compiler/src/hir/expr.rs`
-6. `crates/graphcal-compiler/src/hir/nominal.rs`
-7. `crates/graphcal-compiler/src/hir/mod.rs`
+6. `crates/graphcal-compiler/src/hir/closed_expr.rs`
+7. `crates/graphcal-compiler/src/hir/nominal.rs`
+8. `crates/graphcal-compiler/src/hir/mod.rs`
 
 ### Stage 8 - IR lowering, TIR, checking, and formal conformance
 

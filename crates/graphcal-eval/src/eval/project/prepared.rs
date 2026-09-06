@@ -4,12 +4,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::{
-    ConstRef, ExprKind as HirExprKind, ExprLoweringContext, FunctionRef, GenericScope,
-    PreludeTypeScope,
+    ExprKind as HirExprKind, ExprLoweringContext, GenericScope, PreludeTypeScope,
 };
 use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::registry::builtins::builtin_functions;
@@ -18,7 +16,6 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::IndexKind;
-use graphcal_compiler::syntax::ast::UnaryOp;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;

@@ -228,7 +228,7 @@ fn eval_hir_expr_inner(
             ctx,
         ),
         hir::ExprKind::ForComp { bindings, body } => eval_hir_for_comp(
-            expr.span,
+            expr,
             bindings,
             body,
             values,
@@ -297,7 +297,7 @@ fn eval_hir_expr_inner(
             output,
             ..
         } => eval_hir_dag_call(
-            expr.span,
+            expr,
             target,
             args,
             output,
@@ -2086,7 +2086,7 @@ fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, 
 }
 
 fn eval_hir_for_comp(
-    span: Span,
+    expr: &hir::Expr,
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
@@ -2094,8 +2094,16 @@ fn eval_hir_for_comp(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let span = expr.span;
     if let Some(owner) = &ctx.current_decl
-        && ctx.current_dag.materialized_shape(owner, span).is_none()
+        && ctx
+            .current_dag
+            .materialized_shape(
+                owner,
+                expr.id()
+                    .map_err(|error| ctx.internal_error(error.to_string(), span))?,
+            )
+            .is_none()
     {
         if !ctx.current_dag.is_semantic_instance() {
             return Err(ctx.internal_error(
@@ -2639,7 +2647,7 @@ fn eval_hir_match(
     reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
 )]
 fn eval_hir_dag_call(
-    call_span: Span,
+    call: &hir::Expr,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,
@@ -2648,6 +2656,7 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let call_span = call.span;
     let plan = ctx.execution_plan()?;
     let callable = plan
         .callable(&target.value)
@@ -2744,7 +2753,7 @@ fn eval_hir_dag_call(
     let presentation = retain_called_dag_presentation_values(
         dag_tir,
         &output.value,
-        call_span,
+        call,
         dag_values,
         output_presentation,
         ctx,
@@ -2755,11 +2764,12 @@ fn eval_hir_dag_call(
 fn retain_called_dag_presentation_values(
     dag: &DagTIR,
     output: &ResolvedDeclKey,
-    call_span: Span,
+    call: &hir::Expr,
     values: RuntimeValueMap,
     output_presentation: PresentationInstance,
     ctx: &EvalContext<'_>,
 ) -> Result<PresentationInstance, GraphcalError> {
+    let call_span = call.span;
     let requires_values = dag.declaration_presentation(output).is_some_and(
         graphcal_compiler::tir::presentation::PresentationProvenance::requires_runtime_values,
     );
@@ -2782,7 +2792,9 @@ fn retain_called_dag_presentation_values(
         .record(
             graphcal_compiler::tir::presentation::PresentationCallKey::new(
                 owner.clone(),
-                call_span,
+                call.id()
+                    .map_err(|error| ctx.internal_error(error.to_string(), call_span))?
+                    .clone(),
             ),
             values,
         )

@@ -122,8 +122,8 @@ fn attach_presentation_with_locals(
         PresentationProvenance::Indexed { index, elements } => {
             attach_indexed(value, index, elements, instance, ctx, values, locals)
         }
-        PresentationProvenance::DagCall { key, output } => {
-            attach_dag_call(value, key, output, instance, ctx, locals)
+        PresentationProvenance::DagCall { key, span, output } => {
+            attach_dag_call(value, key, *span, output, instance, ctx, locals)
         }
         PresentationProvenance::IndexProjection {
             defining_dag,
@@ -214,6 +214,7 @@ fn attach_struct(
 fn attach_dag_call(
     value: &mut Value,
     key: &PresentationCallKey,
+    span: Span,
     output: &PresentationProvenance,
     instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
@@ -225,14 +226,14 @@ fn attach_dag_call(
             return Err(presentation_error(
                 ctx,
                 "checked DAG-call presentation has no runtime invocation identity",
-                key.span(),
+                span,
             ));
         }
         Some(_) => {
             return Err(presentation_error(
                 ctx,
                 "checked DAG-call presentation has incompatible runtime invocation provenance",
-                key.span(),
+                span,
             ));
         }
     };
@@ -240,14 +241,14 @@ fn attach_dag_call(
         presentation_error(
             ctx,
             "checked DAG-call presentation has no evaluated call store",
-            key.span(),
+            span,
         )
     })?;
     let call_values = calls.invocation(key, invocation).map_err(|error| {
         presentation_error(
             ctx,
             format!("checked DAG-call presentation values are unavailable: {error}"),
-            key.span(),
+            span,
         )
     })?;
     attach_presentation_with_locals(

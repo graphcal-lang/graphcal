@@ -163,7 +163,16 @@ impl MaterializedShapeCollector {
         let Some(owner) = owner else {
             return Ok(());
         };
-        let key = MaterializedExpressionKey::new(owner.clone(), expr.span);
+        let key = MaterializedExpressionKey::new(
+            owner.clone(),
+            expr.id()
+                .map_err(|error| GraphcalError::InternalError {
+                    message: error.to_string(),
+                    src: src.clone(),
+                    span: expr.span.into(),
+                })?
+                .clone(),
+        );
         match self.shapes.borrow_mut().entry(key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(shape);

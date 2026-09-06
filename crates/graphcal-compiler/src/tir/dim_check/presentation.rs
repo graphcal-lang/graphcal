@@ -365,7 +365,17 @@ impl PresentationResolver<'_> {
                 let output = self.declaration(&output.value)?;
                 if output.requires_runtime_values() {
                     Ok(PresentationProvenance::DagCall {
-                        key: PresentationCallKey::new(owner.clone(), expr.span),
+                        key: PresentationCallKey::new(
+                            owner.clone(),
+                            expr.id()
+                                .map_err(|error| GraphcalError::InternalError {
+                                    message: error.to_string(),
+                                    src: src.clone(),
+                                    span: expr.span.into(),
+                                })?
+                                .clone(),
+                        ),
+                        span: expr.span,
                         output: Box::new(output),
                     })
                 } else {
@@ -763,8 +773,9 @@ fn project_field(
             Some(presentation) => presentation,
             None => PresentationProvenance::None,
         },
-        PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
+        PresentationProvenance::DagCall { key, span, output } => PresentationProvenance::DagCall {
             key,
+            span,
             output: Box::new(project_field(*output, field)),
         },
         PresentationProvenance::IndexProjection {
@@ -892,8 +903,9 @@ fn project_index_layers(
         return provenance;
     };
     match provenance {
-        PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
+        PresentationProvenance::DagCall { key, span, output } => PresentationProvenance::DagCall {
             key,
+            span,
             output: Box::new(project_index_layers(*output, args, substitutions)),
         },
         PresentationProvenance::IndexProjection {

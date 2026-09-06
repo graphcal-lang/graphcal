@@ -163,12 +163,19 @@ mod tests {
     use graphcal_compiler::syntax::span::Span;
 
     fn key(span: Span) -> PresentationCallKey {
+        let expression = graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(
+            graphcal_compiler::hir::expr::Expr::new(
+                graphcal_compiler::hir::expr::ExprKind::Bool(true),
+                span,
+            ),
+        )
+        .unwrap();
         PresentationCallKey::new(
             ResolvedDeclName::from_def(
                 DagId::new("presentation-tests", NonEmpty::singleton(Arc::from("main"))),
                 DeclName::expect_valid("output"),
             ),
-            span,
+            expression.id().unwrap().clone(),
         )
     }
 
@@ -209,7 +216,7 @@ mod tests {
             &calls.invocation(&site, &second).unwrap(),
         ));
         assert!(matches!(
-            calls.invocation(&key(Span::new(2, 3)), &first),
+            calls.invocation(&key(Span::new(0, 1)), &first),
             Err(PresentationCallValuesError::WrongCallSite { .. })
         ));
     }

@@ -1,13 +1,12 @@
 //! Prepared-parameter binding compilation and row construction.
 
 use super::{
-    AstExprKind, BuiltinFnName, CheckedEntryInterface, CompileError, ConstRef, DeclName,
-    DiagnosticAnchor, EvalContext, Expr, ExprLoweringContext, FunctionRef, GenericScope,
-    GraphcalError, HirExprKind, HirLocalValueMap, ModelSchemaGraph, ModelSchemaGraphBuilder,
-    ModelValueSchema, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
-    PreludeTypeScope, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
-    RuntimeValue, RuntimeValueMap, Span, UnaryOp, builtin_functions, eval_hir_expr,
-    parameter_domain,
+    AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalContext,
+    Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, HirLocalValueMap,
+    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelValueSchema, ParameterBindingBuilder,
+    ParameterPort, ParameterPosition, ParameterValue, PreludeTypeScope, PreparedProject,
+    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValue, RuntimeValueMap, Span,
+    builtin_functions, eval_hir_expr, parameter_domain,
 };
 
 impl PreparedProject {
@@ -180,19 +179,21 @@ impl PreparedProject {
         &self,
         port: &ParameterPort,
         expr: &Expr,
-    ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
+    ) -> Result<graphcal_compiler::hir::closed_expr::ClosedExpr, CompileError> {
         let hir =
             self.lower_closed_binding_expr(expr, &port.value_schema, self.tir.root_dag_id())?;
-        validate_closed_hir(&hir).map_err(|message| {
-            CompileError::Eval(GraphcalError::EvalError {
-                message: format!(
-                    "binding for `{}` is not a closed value: {message}",
-                    port.name
-                ),
-                src: self.source.clone(),
-                span: hir.span.into(),
-            })
-        })?;
+        let span = hir.span;
+        let hir =
+            graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: format!(
+                        "binding for `{}` is not a closed value: {message}",
+                        port.name
+                    ),
+                    src: self.source.clone(),
+                    span: span.into(),
+                })
+            })?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             &self.tir,
             &self.declared_types,
@@ -441,7 +442,7 @@ impl PreparedProject {
 
     fn evaluate_closed_binding(
         &self,
-        expr: &graphcal_compiler::hir::Expr,
+        expr: &graphcal_compiler::hir::closed_expr::ClosedExpr,
     ) -> Result<RuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
@@ -613,64 +614,4 @@ fn normalize_binding_literal_in_place(
         _ => {}
     }
     Ok(())
-}
-
-fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'static str> {
-    match expr.kind() {
-        HirExprKind::Number(value) if value.is_finite() => Ok(()),
-        HirExprKind::Number(_) => Err("numeric values must be finite"),
-        HirExprKind::Integer(_)
-        | HirExprKind::Bool(_)
-        | HirExprKind::OffsetDateTimeLiteral(_)
-        | HirExprKind::CivilDateTimeLiteral(_)
-        | HirExprKind::ZonedDateTimeLiteral(_)
-        | HirExprKind::IanaTimeZoneLiteral(_)
-        | HirExprKind::VariantLiteral(_) => Ok(()),
-        HirExprKind::QuantityLiteral { value, .. } if value.is_finite() => Ok(()),
-        HirExprKind::QuantityLiteral { .. } => Err("quantity values must be finite"),
-        HirExprKind::ConstRef(reference) if matches!(reference.value, ConstRef::Constructor(_)) => {
-            Ok(())
-        }
-        HirExprKind::UnaryOp {
-            op: UnaryOp::Neg,
-            operand,
-        } => validate_closed_hir(operand),
-        HirExprKind::FnCall { callee, args }
-            if matches!(
-                callee.value,
-                FunctionRef::Builtin(BuiltinFnName::Complex | BuiltinFnName::Datetime)
-                    | FunctionRef::Epoch { .. }
-            ) =>
-        {
-            args.iter().try_for_each(validate_closed_hir)
-        }
-        HirExprKind::DisplayTimezone { expr, .. } => validate_closed_hir(expr),
-        HirExprKind::ConstructorCall { fields, .. } => fields
-            .iter()
-            .try_for_each(|field| validate_closed_hir(&field.value)),
-        HirExprKind::MapLiteral { entries } => entries
-            .iter()
-            .try_for_each(|entry| validate_closed_hir(&entry.value)),
-        HirExprKind::KeyForm { arg, .. } => validate_closed_hir(arg),
-        HirExprKind::Error { .. } => Err("an unresolved expression is not allowed"),
-        HirExprKind::StringLiteral(_)
-        | HirExprKind::TypeSystemRef(_)
-        | HirExprKind::GraphRef(_)
-        | HirExprKind::ConstRef(_)
-        | HirExprKind::LocalRef(_)
-        | HirExprKind::BinOp { .. }
-        | HirExprKind::UnaryOp { .. }
-        | HirExprKind::FnCall { .. }
-        | HirExprKind::If { .. }
-        | HirExprKind::Convert { .. }
-        | HirExprKind::FieldAccess { .. }
-        | HirExprKind::ForComp { .. }
-        | HirExprKind::IndexAccess { .. }
-        | HirExprKind::Scan { .. }
-        | HirExprKind::Unfold { .. }
-        | HirExprKind::Match { .. }
-        | HirExprKind::DagCall { .. } => {
-            Err("references, computations, and control-flow expressions are not allowed")
-        }
-    }
 }

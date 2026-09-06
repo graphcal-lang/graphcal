@@ -442,13 +442,16 @@ fn specialize_presentation(
                 elements,
             })
         }
-        PresentationProvenance::DagCall { key, output } => Ok(PresentationProvenance::DagCall {
-            key: PresentationCallKey::new(
-                rebase_runtime_decl(key.owner(), runtime_owner_rebases),
-                key.span(),
-            ),
-            output: Box::new(recurse(output)?),
-        }),
+        PresentationProvenance::DagCall { key, span, output } => {
+            Ok(PresentationProvenance::DagCall {
+                key: PresentationCallKey::new(
+                    rebase_runtime_decl(key.owner(), runtime_owner_rebases),
+                    key.expression().clone(),
+                ),
+                span: *span,
+                output: Box::new(recurse(output)?),
+            })
+        }
         PresentationProvenance::IndexProjection {
             defining_dag,
             owner,

@@ -620,10 +620,24 @@ impl CheckedExpr {
     pub(crate) fn replace_kind_for_test(&mut self, kind: ExprKind) {
         *self = Self::finish(Expr::new(kind, self.expr.span)).unwrap();
     }
+
+    /// Change diagnostic projections without changing any semantic node identity.
+    pub(crate) fn map_spans_for_test(&mut self, project: impl Fn(Span) -> Span) {
+        fn apply(expr: &mut Expr, project: &impl Fn(Span) -> Span) {
+            crate::stack::with_stack_growth(|| {
+                expr.span = project(expr.span);
+                visit_expr_children_mut(expr, &mut |child| apply(child, project));
+            });
+        }
+        apply(&mut self.expr, &project);
+        self.source_map = expression_source_map(std::iter::once(&self.expr)).unwrap();
+    }
 }
 
 impl CheckedExpr {
-    fn finish(mut expr: Expr) -> Result<Self, crate::expression_source::ExpressionSourceError> {
+    pub(super) fn finish(
+        mut expr: Expr,
+    ) -> Result<Self, crate::expression_source::ExpressionSourceError> {
         assign_expression_ids(&mut expr, &mut crate::expression_id::ExprIds::default())?;
         let source_map = expression_source_map(std::iter::once(&expr))?;
         Ok(Self { expr, source_map })

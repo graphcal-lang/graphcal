@@ -2022,10 +2022,13 @@ impl DagTIR {
     pub fn materialized_shape(
         &self,
         owner: &ResolvedDeclName,
-        span: Span,
+        expression: &crate::expression_id::ExprId,
     ) -> Option<&crate::tir::materialized_shape::MaterializedShape> {
         self.semantic.materialized_shapes.get(
-            &crate::tir::materialized_shape::MaterializedExpressionKey::new(owner.clone(), span),
+            &crate::tir::materialized_shape::MaterializedExpressionKey::new(
+                owner.clone(),
+                expression.clone(),
+            ),
         )
     }
 
