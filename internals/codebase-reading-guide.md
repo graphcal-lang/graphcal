@@ -582,6 +582,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `presentation_calls.rs`           | Evaluation-owned call storage and scope-validated invocation handles |
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
+| `declaration_locations.rs` | Validated declaration-to-physical-body index prepared from body records |
 | `execution_plan.rs`     | Immutable plan records, independent of preparation algorithms |
 | `exec_plan.rs`          | Checked-fact validation and execution-plan preparation       |
 | `domain_constraint.rs`  | Family-preserving evaluated bounds and validated same-scale instants |
@@ -985,6 +986,7 @@ runtime consumers import the data directly, without a checking-layer re-export:
 
 ```text
 ExecPlan
+  declaration_locations: DeclarationLocations  // physical body, not semantic owner
   const_values: Arc<RuntimeValueMap>  // retained checked fact store
   imported_values: RuntimeValueMap
   topo_order: Vec<RuntimeDeclKey>
@@ -993,6 +995,13 @@ ExecPlan
   domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
   checked_execution_facts: CheckedExecutionFacts  // authoritative field constraints + per-DAG facts
 ```
+
+Preparation derives physical locations from each body's authoritative
+`DagDeclarationIndex`, including parameters without default expressions. It
+rejects duplicate locations and schedule entries absent from the index or outside
+the selected semantic closure. Root execution requires those locations and does
+not fall back to scanning bodies. Inline-call planning and import lookup still
+have separate runtime paths pending unification.
 
 It contains no cloned HIR bodies and no parser or registry-building work;
 evaluation reads declaration/assertion/visualization records from the checked
@@ -1518,7 +1527,8 @@ Its source-analysis limits are documented separately from this heuristic orderin
 36. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
 37. `crates/graphcal-cli/src/lib.rs`
 38. `crates/graphcal-eval/src/pipeline_metrics.rs`
-39. `crates/graphcal-eval/src/execution_plan.rs`
+39. `crates/graphcal-eval/src/declaration_locations.rs`
+40. `crates/graphcal-eval/src/execution_plan.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 

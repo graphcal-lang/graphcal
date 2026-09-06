@@ -6,12 +6,15 @@ use std::sync::Arc;
 use graphcal_compiler::assertion_expectation::ExpectedFail;
 
 use crate::decl_key::RuntimeDeclKey;
+use crate::declaration_locations::DeclarationLocations;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
 pub struct ExecPlan {
+    /// Physical bodies selected from completed declaration indexes at preparation.
+    pub(crate) declaration_locations: DeclarationLocations,
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
     pub(crate) const_values: Arc<RuntimeValueMap>,

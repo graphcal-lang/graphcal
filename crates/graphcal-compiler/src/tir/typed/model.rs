@@ -2180,6 +2180,12 @@ impl DagTIR {
         Ok(())
     }
 
+    /// Iterate identities from the authoritative value-record index, including
+    /// required parameters that have no default expression.
+    pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
+        self.declaration_index.values.keys()
+    }
+
     /// Look up the single authoritative HIR expression owned by a const.
     #[must_use]
     pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {

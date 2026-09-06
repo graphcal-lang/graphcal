@@ -5,11 +5,13 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::TIR;
+use graphcal_compiler::tir::typed::{DagTIR, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
+use crate::declaration_locations::DeclarationLocations;
 use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::execution_scope::CheckedExecutionScope;
@@ -215,33 +217,19 @@ pub fn compile_checked_with_cancellation(
         root_facts.topo_order.as_ref().clone()
     };
 
+    let declaration_locations = prepare_declaration_locations(tir, src)?;
+
+    validate_schedule_locations(
+        &topo_order,
+        &declaration_locations,
+        &semantic_dags.iter().map(|dag| dag.dag_id()).collect(),
+        src,
+    )?;
+
     Ok(ExecPlan {
+        declaration_locations,
         const_values,
-        imported_values: semantic_dags
-            .iter()
-            .flat_map(|dag| {
-                dag.imported_bindings()
-                    .values()
-                    .map(move |binding| (*dag, binding))
-            })
-            .try_fold(RuntimeValueMap::new(), |mut values, (dag, binding)| {
-                if let Some(value) = crate::execution_scope::checked_imported_constant(
-                    tir, facts, binding,
-                )
-                .map_err(|error| {
-                    GraphcalError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })? {
-                    values.insert(
-                        RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
-                        value.clone(),
-                    );
-                }
-                Ok::<_, GraphcalError>(values)
-            })?,
+        imported_values: prepare_imported_values(tir, facts, &semantic_dags, src)?,
         topo_order,
         assumes_map: semantic_dags
             .iter()
@@ -269,6 +257,72 @@ pub fn compile_checked_with_cancellation(
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
         checked_execution_facts: facts.clone(),
+    })
+}
+
+fn prepare_imported_values(
+    tir: &TIR,
+    facts: &CheckedExecutionFacts,
+    dags: &[&DagTIR],
+    src: &NamedSource<Arc<String>>,
+) -> Result<RuntimeValueMap, GraphcalError> {
+    dags.iter()
+        .flat_map(|dag| {
+            dag.imported_bindings()
+                .values()
+                .map(move |binding| (*dag, binding))
+        })
+        .try_fold(RuntimeValueMap::new(), |mut values, (dag, binding)| {
+            if let Some(value) = crate::execution_scope::checked_imported_constant(
+                tir, facts, binding,
+            )
+            .map_err(|error| {
+                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            })? {
+                values.insert(
+                    RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
+                    value.clone(),
+                );
+            }
+            Ok(values)
+        })
+}
+
+fn prepare_declaration_locations(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<DeclarationLocations, GraphcalError> {
+    DeclarationLocations::try_new(tir.dag_registry().values().flat_map(|dag| {
+        dag.value_declaration_identities().map(|identity| {
+            (
+                RuntimeDeclKey::resolved(identity.clone()),
+                dag.dag_id().clone(),
+            )
+        })
+    }))
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })
+}
+
+fn validate_schedule_locations(
+    order: &[RuntimeDeclKey],
+    locations: &DeclarationLocations,
+    allowed_bodies: &HashSet<&DagId>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    order.iter().try_for_each(|declaration| {
+        let body = locations.body_for(declaration).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+        if !allowed_bodies.contains(body) {
+            return Err(GraphcalError::internal_error(
+                format!("scheduled declaration `{declaration}` is physically in `{body}`, outside its callable closure"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+        Ok(())
     })
 }
 
@@ -384,6 +438,42 @@ mod tests {
         project_types.insert_local_hir(&ir).unwrap();
         let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
         (tir, src)
+    }
+
+    #[test]
+    fn prepared_locations_include_parameters_without_defaults() {
+        let (tir, src) = tir_from_source(
+            "param input: Dimensionless; node doubled: Dimensionless = 2.0 * @input;",
+        );
+        let plan = compile(&tir, &src).unwrap();
+        let input = resolved_key("input");
+        assert!(tir.root().runtime_expr(input.as_resolved()).is_none());
+        assert_eq!(
+            plan.declaration_locations.body_for(&input).unwrap(),
+            tir.root_dag_id()
+        );
+    }
+
+    #[test]
+    fn schedules_reject_missing_and_out_of_closure_locations() {
+        let src = make_src("");
+        let owner = test_dag_id();
+        let other = DagId::from_virtual_relative_path(std::path::Path::new("other.gcl")).unwrap();
+        let key = resolved_key("x");
+        for locations in [
+            DeclarationLocations::try_new([]).unwrap(),
+            DeclarationLocations::try_new([(key.clone(), other)]).unwrap(),
+        ] {
+            assert!(
+                validate_schedule_locations(
+                    std::slice::from_ref(&key),
+                    &locations,
+                    &HashSet::from([&owner]),
+                    &src,
+                )
+                .is_err()
+            );
+        }
     }
 
     fn quantity(rv: &RuntimeValue) -> f64 {

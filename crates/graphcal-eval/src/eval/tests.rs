@@ -306,6 +306,30 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     );
 }
 
+#[test]
+fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
+    let source = "node x: Dimensionless = 1.0;";
+    let tir = compile_to_tir(source, "locations.gcl").unwrap();
+    let src = miette::NamedSource::new("locations.gcl", std::sync::Arc::new(source.to_string()));
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    // Deliberately corrupt only the prepared index: the declaration still exists
+    // in TIR, so an accidental fallback search would let evaluation succeed.
+    plan.declaration_locations =
+        crate::declaration_locations::DeclarationLocations::try_new([]).unwrap();
+    let result = super::runtime::run_eval_loop_with_bindings(
+        &plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        &tir,
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &crate::host_fns::HostFunctionRegistry::new(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    assert!(
+        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared physical location"))
+    );
+}
+
 // Compile-time negative API assertion: implementing DerefMut would make the
 // inferred marker ambiguous and fail compilation, allowing unchecked replacement
 // of the selected environment through its read-only field interface.

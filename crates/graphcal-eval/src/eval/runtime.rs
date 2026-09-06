@@ -257,15 +257,16 @@ pub(super) fn run_eval_loop_with_bindings(
             continue;
         }
 
-        let current_dag = tir
-            .dag_containing_declaration(name.as_resolved())
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("TIR runtime declaration owner is missing for `{name}`"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+        let physical_body = plan.declaration_locations.body_for(name).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+        let current_dag = tir.dag_registry().get(physical_body).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("TIR runtime declaration owner is missing for `{name}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         // Check canonical dependencies in the declaration's source or semantic
         // instance DAG rather than assuming every runtime body belongs to root.
         let failed_deps = failed_runtime_dependencies(current_dag, name, &errors);
