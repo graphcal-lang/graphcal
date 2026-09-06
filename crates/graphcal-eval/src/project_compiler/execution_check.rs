@@ -9,7 +9,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
 
-use crate::domain_check::ResolvedDomainConstraint;
+use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts, RuntimeValueMap};
 
 mod const_schedule;

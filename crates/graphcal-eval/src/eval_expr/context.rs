@@ -16,7 +16,7 @@ use graphcal_compiler::syntax::type_name::GenericParamName;
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 use miette::NamedSource;
 
-use crate::domain_check::ResolvedDomainConstraint;
+use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_scope::CheckedExecutionScope;
 use crate::host_fns::HostFunctionRegistry;

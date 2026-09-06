@@ -15,7 +15,7 @@ use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use super::visible_values_with_imports;
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::{
+use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };

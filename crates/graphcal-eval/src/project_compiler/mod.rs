@@ -69,7 +69,7 @@ pub(crate) fn resolve_struct_field_constraints(
 ) -> Result<
     HashMap<
         graphcal_compiler::tir::typed::StructFieldConstraintKey,
-        crate::domain_check::ResolvedDomainConstraint,
+        crate::domain_constraint::ResolvedDomainConstraint,
     >,
     GraphcalError,
 > {

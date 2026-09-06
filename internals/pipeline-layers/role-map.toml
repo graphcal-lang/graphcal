@@ -998,6 +998,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["domain_constraint"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["domain_constraint", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["domain_check", "tests"]
 role = "interpreter"
 

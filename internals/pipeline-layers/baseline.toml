@@ -346,14 +346,6 @@ reason = "Observed eval::decl_key -> compiler::tir::typed (production) at ./crat
 
 [[exception]]
 from_package = "eval"
-from_path = ["eval", "types"]
-to_package = "eval"
-to_path = ["domain_check"]
-test_only = false
-reason = "Observed eval::eval::types -> eval::domain_check (production) at ./crates/graphcal-eval/src/eval/types.rs:835 (qualified path); roles are contracts -> interpreter. Planned deletion seam: move runtime-only construction out of the shared contracts crate."
-
-[[exception]]
-from_package = "eval"
 from_path = ["eval_expr"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -471,14 +463,6 @@ to_package = "compiler"
 to_path = ["tir", "typed"]
 test_only = false
 reason = "Observed eval::execution_facts -> compiler::tir::typed (production) at ./crates/graphcal-eval/src/execution_facts.rs:12 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["execution_facts"]
-to_package = "eval"
-to_path = ["domain_check"]
-test_only = false
-reason = "Observed eval::execution_facts -> eval::domain_check (production) at ./crates/graphcal-eval/src/execution_facts.rs:16 (use import); roles are contracts -> interpreter. Planned deletion seam: move runtime-only construction out of the shared contracts crate."
 
 [[exception]]
 from_package = "eval"

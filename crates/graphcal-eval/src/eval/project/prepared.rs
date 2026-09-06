@@ -28,7 +28,7 @@ use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
+use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};

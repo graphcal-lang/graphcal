@@ -10,7 +10,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::TIR;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::ResolvedDomainConstraint;
+use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_scope::CheckedExecutionScope;
 

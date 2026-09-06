@@ -20,7 +20,7 @@ use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::ResolvedDomainConstraint;
+use crate::domain_constraint::ResolvedDomainConstraint;
 
 pub use crate::execution_facts::RuntimeValueMap;
 pub use context::EvalContext;

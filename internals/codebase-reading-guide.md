@@ -581,7 +581,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
 | `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
-| `domain_check.rs`       | Runtime and compile-time domain validation                    |
+| `domain_constraint.rs`  | Family-preserving evaluated bounds and validated same-scale instants |
+| `domain_check.rs`       | Runtime and compile-time value validation against those contracts |
 | `eval/runtime.rs`       | Evaluation loop                                               |
 | `eval_expr/context.rs`  | Immutable phase-selected environments and checked scope transitions |
 | `pipeline_metrics.rs`  | Test-only observations of copying, planning, resolution, and presentation work |
@@ -994,9 +995,11 @@ evaluation reads declaration/assertion/visualization records from the checked
 `RuntimeDeclKey`s and converts back to source-facing `ScopedName`s only while
 assembling public output. Per-DAG execution facts retain only the stores read in
 that scope; project-wide struct-field constraints have a single authoritative
-map. `ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
-separate quantity (`f64`), integer (`i64`), and same-scale datetime instant
-representations, so constraint families cannot mix after resolution.
+map. `ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_constraint.rs`
+and has separate quantity (`f64`), integer (`i64`), and same-scale datetime instant
+representations, so constraint families cannot mix after resolution. The
+`domain_check.rs` interpreter borrows its read-only typed view; checked facts
+and public result records no longer depend on runtime validation algorithms.
 `RuntimeDeclKey` lives in `graphcal-eval/src/decl_key.rs` and keeps runtime maps
 keyed by canonical declaration identity.
 
@@ -1467,39 +1470,40 @@ Its source-analysis limits are documented separately from this heuristic orderin
 2. `crates/graphcal-eval/src/eval_expr/numeric.rs`
 3. `crates/graphcal-eval/src/eval_expr/datetime.rs`
 4. `crates/graphcal-eval/src/lib.rs`
-5. `crates/graphcal-eval/src/domain_check.rs`
-6. `crates/graphcal-eval/src/execution_facts.rs`
-7. `crates/graphcal-eval/src/execution_scope.rs`
-8. `crates/graphcal-eval/src/presentation_calls.rs`
-9. `crates/graphcal-eval/src/runtime_presentation.rs`
-10. `crates/graphcal-eval/src/eval/bindings.rs`
-11. `crates/graphcal-eval/src/import_surface.rs`
-12. `crates/graphcal-eval/src/package_cache.rs`
-13. `crates/graphcal-eval/src/project_compiler/template.rs`
-14. `crates/graphcal-report/src/lib.rs`
-15. `crates/graphcal-report/src/escape.rs`
-16. `crates/graphcal-report/src/vega_assets.rs`
-17. `crates/graphcal-report/src/report_hydrate.rs`
-18. `crates/graphcal-test-support/src/lib.rs`
-19. `crates/graphcal-test-support/src/project.rs`
-20. `crates/graphcal-test-support/src/bytes.rs`
-21. `crates/graphcal-fmt/src/lib.rs`
-22. `crates/graphcal-fmt/src/format/type_expr.rs`
-23. `crates/graphcal-fmt/src/format/expr.rs`
-24. `crates/graphcal-fmt/src/format/decl.rs`
-25. `crates/graphcal-fmt/src/format/mod.rs`
-26. `crates/graphcal-lsp/src/lib.rs`
-27. `crates/graphcal-lsp/src/convert.rs`
-28. `crates/graphcal-lsp/src/cursor_context.rs`
-29. `crates/graphcal-lsp/src/symbol_identity.rs`
-30. `crates/graphcal-lsp/src/nominal_type_index.rs`
-31. `crates/graphcal-lsp/src/symbol_table.rs`
-32. `crates/graphcal-lsp/src/project_symbols.rs`
-33. `crates/graphcal-lsp/src/formatting.rs`
-34. `crates/graphcal-lsp/src/workspace_revision.rs`
-35. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
-36. `crates/graphcal-cli/src/lib.rs`
-37. `crates/graphcal-eval/src/pipeline_metrics.rs`
+5. `crates/graphcal-eval/src/domain_constraint.rs`
+6. `crates/graphcal-eval/src/domain_check.rs`
+7. `crates/graphcal-eval/src/execution_facts.rs`
+8. `crates/graphcal-eval/src/execution_scope.rs`
+9. `crates/graphcal-eval/src/presentation_calls.rs`
+10. `crates/graphcal-eval/src/runtime_presentation.rs`
+11. `crates/graphcal-eval/src/eval/bindings.rs`
+12. `crates/graphcal-eval/src/import_surface.rs`
+13. `crates/graphcal-eval/src/package_cache.rs`
+14. `crates/graphcal-eval/src/project_compiler/template.rs`
+15. `crates/graphcal-report/src/lib.rs`
+16. `crates/graphcal-report/src/escape.rs`
+17. `crates/graphcal-report/src/vega_assets.rs`
+18. `crates/graphcal-report/src/report_hydrate.rs`
+19. `crates/graphcal-test-support/src/lib.rs`
+20. `crates/graphcal-test-support/src/project.rs`
+21. `crates/graphcal-test-support/src/bytes.rs`
+22. `crates/graphcal-fmt/src/lib.rs`
+23. `crates/graphcal-fmt/src/format/type_expr.rs`
+24. `crates/graphcal-fmt/src/format/expr.rs`
+25. `crates/graphcal-fmt/src/format/decl.rs`
+26. `crates/graphcal-fmt/src/format/mod.rs`
+27. `crates/graphcal-lsp/src/lib.rs`
+28. `crates/graphcal-lsp/src/convert.rs`
+29. `crates/graphcal-lsp/src/cursor_context.rs`
+30. `crates/graphcal-lsp/src/symbol_identity.rs`
+31. `crates/graphcal-lsp/src/nominal_type_index.rs`
+32. `crates/graphcal-lsp/src/symbol_table.rs`
+33. `crates/graphcal-lsp/src/project_symbols.rs`
+34. `crates/graphcal-lsp/src/formatting.rs`
+35. `crates/graphcal-lsp/src/workspace_revision.rs`
+36. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+37. `crates/graphcal-cli/src/lib.rs`
+38. `crates/graphcal-eval/src/pipeline_metrics.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 
