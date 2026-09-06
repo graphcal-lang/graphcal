@@ -478,6 +478,14 @@ false)``, fault-isolated to that node. `#[expected_fail]` inversion
 applies as usual: an expected failure is not an error, and an
 unexpected pass is.
 
+Prepared evaluation retains each callable's dependency schedule and checked
+constant pools. Reusing that plan does not merge invocation state: supplied
+parameters, computed values, assertions, and dynamic units remain instance-local.
+Root and call evaluation apply the same default and domain checks. An ordinary
+root node failure leaves independent results available; a failure inside a call
+fails its containing expression. Independent plugin invocation order is
+[unspecified](extern-functions.md#purity-and-invocation-order).
+
 Arguments are evaluated in the surrounding expression scope, so they
 may reference local variables from an enclosing `for`, `scan`,
 `unfold`, or `match` binding:

@@ -6,6 +6,8 @@
 )]
 
 // Modules owned by graphcal-eval.
+pub(crate) mod assertion_eval;
+pub(crate) mod constant_pools;
 pub(crate) mod decl_key;
 pub(crate) mod declaration_locations;
 pub(crate) mod domain_check;
@@ -14,6 +16,7 @@ pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;
 pub(crate) mod execution_facts;
+pub(crate) mod execution_frame;
 pub(crate) mod execution_plan;
 pub(crate) mod execution_scope;
 pub mod graph_ir;

@@ -309,15 +309,20 @@ impl PreparedProject {
                 .lookup_decl_identity(&assertion.name)
                 .into_bound()
                 .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
-            let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
+            let result = crate::assertion_eval::evaluate_assert_with_expected_fail(
                 &assertion.body,
                 self.plan
                     .root
                     .expected_fail
                     .get(&RuntimeDeclKey::resolved(owner.clone())),
-                &values,
-                &empty_locals,
-                &ctx.for_decl(&owner),
+                &mut |expr| {
+                    crate::eval_expr::eval_hir_expr(
+                        expr,
+                        &values,
+                        &empty_locals,
+                        &ctx.for_decl(&owner),
+                    )
+                },
             );
             match result {
                 AssertResult::Pass => {}

@@ -16,6 +16,8 @@ cargo test --locked -p graphcal-eval --lib pipeline_cost_baseline -- --nocapture
 | Unshared imported body | A reference check found different body addresses |
 | Plan construction | Construction of each retained callable/instance-closure plan during preparation |
 | Schedule construction | Actual per-body runtime graph construction and combined instance-closure scheduling |
+| Imported source resolution | Checking's imported-constant body lookup; runtime uses retained pool references |
+| Frame execution | Entry into the shared root/call schedule machine |
 | Constructor resolution | The expression evaluator's constructor generic-argument reconstruction |
 | Presentation evaluation | Branch/match selector replay and expression-valued index projection arguments |
 
@@ -86,8 +88,23 @@ Each failed its intended assertion, after which exact source was restored and
 positive tests rerun. These are bounded mutation checks, not exhaustive clone,
 allocation, or performance instrumentation. Callable schedules and physical
 locations are now prepared: missing/misowned plans and missing locations fail
-closed. Import lookup and pooled constant retention still need migration, followed
-by the shared machine; Phase B is not complete.
+closed. The shared-machine checkpoint also retains multi-body constant pools and
+imported references without copying their payloads during preparation. Pointer
+checks inspect actual values in both views. Calls consume prepared runtime-import
+keys instead of rediscovering lexical bindings or locating constant bodies.
+
+The two-call cost fixture enters the same frame machine **three times**: root
+and both calls. Prepared evaluation has **zero imported-source resolutions** as
+well as zero plan/schedule construction. A separate nonvacuous import/instance
+fixture observes positive source resolution during preparation and none during
+evaluation. Frame initialization still copies values into mutable invocation
+maps; presentation still retains whole call maps until Phase D.
+
+Temporary mutations independently test rejected dependency-order corruption,
+copied imported pools, accidental root fail-fast policy, and reintroduced runtime
+sorting. The layer ratchet forbids interpreter access to checking/runtime facade
+adapters; assertion evaluation uses an expression callback and contract result
+types directly.
 
 ## Invocation-state ownership
 

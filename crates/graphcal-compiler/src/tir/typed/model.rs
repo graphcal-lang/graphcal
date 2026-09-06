@@ -1149,10 +1149,6 @@ pub struct ResolvedStructFieldTypeKey {
 ///
 /// The canonical HIR form remains authoritative on [`NominalGenericParam`];
 /// this sidecar stores only the later semantic fact used for substitution.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "crate-only prevents the public model glob re-export from exposing resolution internals"
-)]
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedGenericDefault {
     pub(crate) resolved: ResolvedGenericArg,
@@ -1284,10 +1280,6 @@ pub struct ResolvedDomainBound {
 }
 
 /// A canonical nominal override that an unrebound param default must not use.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "crate-only prevents the public model glob re-export from exposing reconciliation internals"
-)]
 #[derive(Debug, Clone)]
 pub(crate) enum ResolvedOverrideTarget {
     Index {
@@ -1303,10 +1295,6 @@ pub(crate) enum ResolvedOverrideTarget {
 }
 
 /// One include-site reconciliation obligation for an unrebound param default.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "crate-only prevents the public model glob re-export from exposing reconciliation internals"
-)]
 #[derive(Debug, Clone)]
 pub(crate) struct OverrideReconciliation {
     pub(crate) source_decl: ResolvedDeclName,
@@ -1317,10 +1305,6 @@ pub(crate) struct OverrideReconciliation {
 }
 
 /// A module-owned nominal declaration that may be replaced at an include site.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "crate-only prevents the public model glob re-export from exposing checker internals"
-)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum BindableNominalIdentity {
     Index(ResolvedIndexName),
@@ -1907,10 +1891,6 @@ pub(super) enum DeclarationIndexError {
 }
 
 /// Resolved expected-fail configuration with its authored diagnostic source.
-#[expect(
-    clippy::redundant_pub_crate,
-    reason = "crate-only prevents the public model glob re-export from exposing diagnostic provenance"
-)]
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedExpectedFailMetadata {
     pub(crate) expected: ExpectedFail,

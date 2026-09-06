@@ -1268,6 +1268,21 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["constant_pools"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["execution_frame"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["assertion_eval"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["declaration_locations"]
 role = "contracts"
 

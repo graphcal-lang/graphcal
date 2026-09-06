@@ -96,6 +96,11 @@ node packet: Packet = Packet(value: @first);
     assert_eq!(first_counts.plan_constructions, 0, "{first_counts:?}");
     assert!(preparation.schedule_constructions > 0);
     assert_eq!(first_counts.schedule_constructions, 0, "{first_counts:?}");
+    assert_eq!(first_counts.imported_source_resolutions, 0);
+    assert_eq!(
+        first_counts.frame_executions, 3,
+        "root and both calls must use the shared machine"
+    );
     // Constructor resolution and presentation replay remain C/D work.
     assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
     assert!(
@@ -375,6 +380,8 @@ fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
             assert_quantity_value(&result, "independent", 6.0);
             assert_eq!(counts.plan_constructions, 0);
             assert_eq!(counts.schedule_constructions, 0);
+            assert_eq!(counts.imported_source_resolutions, 0);
+            assert!(counts.frame_executions > 0);
         }
     }
 }
@@ -409,10 +416,9 @@ fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
         assert_eq!(callable.execution_dags, [dag.dag_id().clone()]);
         let facts = plan.checked_execution_facts.for_dag(dag.dag_id()).unwrap();
         assert!(!facts.const_values.is_empty());
-        assert!(std::sync::Arc::ptr_eq(
-            &callable.const_values,
-            &facts.const_values
-        ));
+        for (key, value) in facts.const_values.iter() {
+            assert!(std::ptr::eq(value, callable.const_values.get(key).unwrap()));
+        }
     }
 }
 
@@ -448,6 +454,205 @@ fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
     assert!(
         matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared callable plan"))
     );
+}
+
+#[test]
+fn shared_frames_agree_on_defaults_bindings_domains_and_assertions() {
+    for binding in ["", "input: 3.0"] {
+        let expected = if binding.is_empty() { 4.0 } else { 6.0 };
+        let body = "param input: Dimensionless(min: 0.0, max: 5.0) = 2.0; pub node value: Dimensionless = @input * 2.0; pub assert positive = @value > 0.0; #[expected_fail] pub assert inverted = false;";
+        let called = format!(
+            "dag inner {{ {body} }} node output: Dimensionless = @inner({binding})::value;"
+        );
+        let included = format!(
+            "dag inner {{ {body} }} include inner({binding}) as inner_instance; node output: Dimensionless = @inner_instance::value;"
+        );
+        let root = format!(
+            "{} node output: Dimensionless = @value;",
+            if binding.is_empty() {
+                body.to_string()
+            } else {
+                body.replace("= 2.0;", "= 3.0;")
+            }
+        );
+        for source in [&root, &called, &included] {
+            let result = compile_and_eval(source).unwrap();
+            assert!(!result.has_errors(), "{source}\n{result:?}");
+            assert_quantity_value(&result, "output", expected);
+        }
+    }
+    for body in [
+        "param input: Dimensionless = 6.0; pub node output: Dimensionless(min: 0.0, max: 5.0) = @input;",
+        "pub node output: Dimensionless = 2.0; pub assert fails = false;",
+        "pub node output: Dimensionless = 2.0; #[expected_fail] pub assert unexpected = true;",
+    ] {
+        for source in [
+            body.to_string(),
+            format!("dag inner {{ {body} }} node called: Dimensionless = @inner()::output;"),
+            format!("dag inner {{ {body} }} include inner() as inner_instance;"),
+        ] {
+            let result =
+                compile_and_eval(&format!("{source} node independent: Dimensionless = 7.0;"))
+                    .unwrap();
+            assert!(result.has_errors(), "{source}\n{result:?}");
+            assert_quantity_value(&result, "independent", 7.0);
+        }
+    }
+}
+
+#[test]
+fn shared_frames_reject_dynamic_parameter_domain_violations_without_losing_independent_values() {
+    let body =
+        "param input: Dimensionless(min: 0.0, max: 5.0); pub node output: Dimensionless = @input;";
+    for source in [
+        "param input: Dimensionless(min: 0.0, max: 5.0) = @raw; node output: Dimensionless = @input;".to_string(),
+        format!("dag inner {{ {body} }} node output: Dimensionless = @inner(input: @raw)::output;"),
+        format!("dag inner {{ {body} }} include inner(input: @raw) as configured; node output: Dimensionless = @configured::output;"),
+    ] {
+        let result = compile_and_eval(&format!("param raw: Dimensionless = 6.0; {source} node independent: Dimensionless = 7.0;")).unwrap();
+        assert!(result.has_errors(), "{source}\n{result:?}");
+        assert_quantity_value(&result, "independent", 7.0);
+    }
+}
+
+#[test]
+fn shared_frames_reject_missing_dependencies_and_cancel_before_interpretation() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    let (tir, src) = callable_plan_fixture();
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    plan.root.dependencies.clear();
+    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
+        let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
+        let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
+        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
+            panic!("missing prepared dependencies must not be reconstructed")
+        });
+        assert!(
+            matches!(outcome, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared dependencies"))
+        );
+        cancellation.cancel();
+        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
+            panic!("cancelled frame must not invoke its expression adapter")
+        });
+        assert!(matches!(outcome, Err(GraphcalError::Cancelled(_))));
+    }
+}
+
+#[test]
+fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
+    let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
+    let tir = compile_to_tir(source, "pools.gcl").unwrap();
+    let src = miette::NamedSource::new("pools.gcl", std::sync::Arc::new(source.to_string()));
+    let (plan, preparation) =
+        crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    assert!(preparation.imported_source_resolutions > 0);
+    assert!(plan.root.execution_dags.len() > 1);
+    let mut constants = 0;
+    let mut imports = 0;
+    for callable in std::iter::once(&plan.root).chain(plan.callables.values()) {
+        for (key, value) in callable.const_values.iter() {
+            let body = plan.declaration_locations.body_for(key).unwrap();
+            let canonical = plan
+                .checked_execution_facts
+                .for_dag(body)
+                .unwrap()
+                .const_values
+                .get(key)
+                .unwrap();
+            assert!(std::ptr::eq(value, canonical));
+            constants += 1;
+        }
+        for import in &callable.imports.constants {
+            let value = import.value.value().unwrap();
+            assert!(plan.checked_execution_facts.by_dag.values().any(|facts| {
+                facts
+                    .const_values
+                    .values()
+                    .any(|canonical| std::ptr::eq(value, canonical))
+            }));
+            imports += 1;
+        }
+    }
+    assert!(constants > 2 && imports > 0);
+    let (runtime, counts) = crate::pipeline_metrics::measure(|| {
+        super::runtime::run_eval_loop_with_bindings(
+            &plan,
+            &super::bindings::RuntimeParameterBindings::new(),
+            &tir,
+            &src,
+            graphcal_compiler::registry::builtins::builtin_functions(),
+            &crate::host_fns::HostFunctionRegistry::new(),
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap()
+    });
+    assert!(runtime.errors.is_empty());
+    assert_eq!(counts.imported_source_resolutions, 0);
+    assert_eq!(counts.schedule_constructions, 0);
+    assert_eq!(
+        counts.frame_executions, 2,
+        "one include-closure frame and one inline call"
+    );
+    assert_quantity_value(
+        &compile_and_eval_named(source, "pools.gcl").unwrap(),
+        "output",
+        15.0,
+    );
+}
+
+#[test]
+fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    let source = "node a: Dimensionless = 1.0; node dependent: Dimensionless = @a; node independent: Dimensionless = 2.0;";
+    let tir = compile_to_tir(source, "frame.gcl").unwrap();
+    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let token = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
+        for fatal in [false, true] {
+            let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
+            let outcome = frame.run(&tir, &src, &token, |entry, _| {
+                if entry.key.member() == "a" {
+                    return Err(if fatal {
+                        GraphcalError::internal_error(
+                            "fatal sentinel",
+                            &src,
+                            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                        )
+                    } else {
+                        GraphcalError::EvalError {
+                            message: "ordinary sentinel".into(),
+                            src: src.clone(),
+                            span: entry.expression.span.into(),
+                        }
+                    });
+                }
+                assert_ne!(
+                    entry.key.member(),
+                    "dependent",
+                    "failed dependencies must never be interpreted"
+                );
+                Ok(crate::runtime_presentation::EvaluatedRuntimeValue::new(
+                    graphcal_compiler::registry::runtime_value::RuntimeValue::quantity(2.0)
+                        .unwrap(),
+                    crate::runtime_presentation::PresentationInstance::None,
+                ))
+            });
+            if fatal || matches!(policy, FailurePolicy::Propagate) {
+                assert!(outcome.is_err());
+            } else {
+                outcome.unwrap();
+                assert!(frame.values.keys().any(|key| key.member() == "independent"));
+                assert!(
+                    frame
+                        .errors
+                        .iter()
+                        .any(|(key, error)| key.member() == "dependent"
+                            && matches!(error, NodeError::DependencyFailed { .. }))
+                );
+            }
+        }
+    }
 }
 
 // Compile-time negative API assertion: implementing DerefMut would make the

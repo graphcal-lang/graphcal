@@ -30,7 +30,7 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::names::NamePath;
 
-mod model;
+pub mod model;
 pub use model::*;
 
 impl TIR {

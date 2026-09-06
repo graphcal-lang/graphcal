@@ -16,7 +16,6 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::execution_facts::CheckedDagExecutionFacts;
 use crate::runtime_presentation::{
     EvaluatedRuntimeValue, PresentationInstance, PresentationInstanceMap,
 };
@@ -2636,25 +2635,8 @@ fn eval_hir_match(
     }
 }
 
-fn check_called_dag_domain_constraint(
-    key: &RuntimeDeclKey,
-    value: &RuntimeValue,
-    facts: &CheckedDagExecutionFacts,
-    expr: &hir::Expr,
-    ctx: &EvalContext<'_>,
-) -> Result<(), GraphcalError> {
-    facts
-        .domain_constraints
-        .get(key)
-        .map_or(Ok(()), |constraint| {
-            crate::domain_check::check_domain_constraint(value, constraint)
-                .map_err(|violation| ctx.eval_error(violation.message, expr.span))
-        })
-}
-
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
 )]
 fn eval_hir_dag_call(
@@ -2686,75 +2668,46 @@ fn eval_hir_dag_call(
                 .map_err(|error| ctx.internal_error(error.to_string(), target.span))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut dag_values = callable.const_values.as_ref().clone();
-    let mut dag_presentations = PresentationInstanceMap::new();
+    let mut frame = crate::execution_frame::ExecutionFrame::new(
+        plan,
+        &target.value,
+        crate::execution_frame::FailurePolicy::Propagate,
+    )
+    .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for binding in args {
         let key = super::dag_decl_runtime_key(&binding.target.value);
         let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        check_called_dag_domain_constraint(&key, &value, dag_facts, &binding.value, ctx)?;
-        dag_values.insert(key, value);
+        frame.bind(&key, value, ctx.src, binding.value.span)?;
     }
-    for called_dag in &call_dags {
-        let mut available_values = caller_values.clone();
-        available_values.extend(dag_values.clone());
-        seed_inline_dag_imported_values(
-            called_dag,
-            &mut dag_values,
-            &mut dag_presentations,
-            &available_values,
-            caller_presentations,
-            ctx,
-            call_span,
-        )?;
-    }
+    seed_inline_dag_imported_values(
+        &callable.imports.runtime,
+        &mut frame.values,
+        &mut frame.presentations,
+        caller_values,
+        caller_presentations,
+        ctx,
+    );
 
     let empty_hir_locals = HirLocalValueMap::root();
-    for key in &callable.topo_order {
-        if dag_values.contains_key(key) {
-            continue;
-        }
-        let physical_body = plan
-            .declaration_locations
-            .body_for(key)
-            .map_err(|error| ctx.internal_error(error.to_string(), output.span))?;
-        let scheduled_dag = ctx.tir.dag_registry().get(physical_body).ok_or_else(|| {
-            ctx.internal_error(
-                format!("DAG schedule references missing value declaration `{key}`"),
-                output.span,
+    frame.run(
+        ctx.tir,
+        dag_facts.source(),
+        &ctx.cancellation,
+        |entry, frame| {
+            let context = ctx
+                .for_dag(entry.scope.dag(), entry.scope.facts().source())?
+                .for_decl(entry.key.as_resolved());
+            eval_hir_expr_evaluated(
+                entry.expression,
+                &frame.values,
+                Some(&frame.presentations),
+                &empty_hir_locals,
+                &context,
             )
-        })?;
-        let scheduled_facts = checked.for_dag(scheduled_dag.dag_id()).ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "DAG `{}` has no checked execution facts",
-                    scheduled_dag.dag_id()
-                ),
-                output.span,
-            )
-        })?;
-        let hir_expr = scheduled_dag
-            .runtime_expr(key.as_resolved())
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!("DAG schedule references missing value declaration `{key}`"),
-                    output.span,
-                )
-            })?;
-        let scheduled_ctx = ctx.for_dag(scheduled_dag, scheduled_facts.source())?;
-        let evaluated = eval_hir_expr_evaluated(
-            hir_expr,
-            &dag_values,
-            Some(&dag_presentations),
-            &empty_hir_locals,
-            &scheduled_ctx.for_decl(key.as_resolved()),
-        )?;
-        let (value, presentation) = evaluated.into_parts();
-        check_called_dag_domain_constraint(key, &value, scheduled_facts, hir_expr, &scheduled_ctx)?;
-        dag_values.insert(key.clone(), value);
-        if !presentation.is_none() {
-            dag_presentations.insert(key.clone(), presentation);
-        }
-    }
+        },
+    )?;
+    let mut dag_presentations = frame.presentations;
+    let dag_values = frame.values;
 
     for called_dag in &call_dags {
         let called_facts = checked.for_dag(called_dag.dag_id()).ok_or_else(|| {
@@ -2846,65 +2799,37 @@ fn retain_called_dag_presentation_values(
     ))
 }
 
-/// Seed an inline DAG instance with imported compile-time constants and
-/// outer-scope values resolvable from the caller. Values already provided by
-/// call-site bindings win.
+/// Only explicit prepared runtime imports may consult the caller or root frame.
+/// Supplied/current values and retained checked constants always win.
 fn seed_inline_dag_imported_values(
-    dag_tir: &DagTIR,
+    imports: &[RuntimeDeclKey],
     dag_values: &mut RuntimeValueMap,
     dag_presentations: &mut PresentationInstanceMap,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PresentationInstanceMap>,
     ctx: &EvalContext<'_>,
-    call_span: Span,
-) -> Result<(), GraphcalError> {
-    let facts = ctx.checked_execution_facts().ok_or_else(|| {
-        ctx.internal_error(
-            "runtime DAG call has no checked execution-fact store",
-            call_span,
-        )
-    })?;
-    let own_names: std::collections::HashSet<&graphcal_compiler::syntax::decl_name::DeclName> =
-        dag_tir
-            .consts()
-            .iter()
-            .map(|e| e.name.member())
-            .chain(dag_tir.params().iter().map(|e| e.name.member()))
-            .chain(dag_tir.nodes().iter().map(|e| e.name.member()))
-            .collect();
-    for (scoped, binding) in dag_tir.imported_bindings() {
-        let member = scoped.member();
-        let visible_key = RuntimeDeclKey::resolved(binding.target().clone());
-        let unresolved_local_import =
-            !dag_tir.semantic().decl_bindings.contains_key(scoped) && own_names.contains(member);
-        if unresolved_local_import || dag_values.contains_key(&visible_key) {
+) {
+    for key in imports {
+        if dag_values.contains_key(key) {
             continue;
         }
-        if let Some(value) =
-            crate::execution_scope::checked_imported_constant(ctx.tir, facts, binding)
-                .map_err(|error| ctx.internal_error(error.to_string(), call_span))?
-        {
-            dag_values.insert(visible_key, value.clone());
-            continue;
-        }
-        if let Some(value) = imported_binding_value(binding.target(), caller_values, ctx) {
-            dag_values.insert(visible_key.clone(), value.clone());
-            let presentation = if binding.target().owner() == ctx.current_dag.dag_id() {
-                caller_presentations.and_then(|instances| instances.get(&visible_key))
-            } else if binding.target().owner() == ctx.tir.root_dag_id() {
+        if let Some(value) = imported_binding_value(key.as_resolved(), caller_values, ctx) {
+            dag_values.insert(key.clone(), value.clone());
+            let presentation = if key.as_resolved().owner() == ctx.current_dag.dag_id() {
+                caller_presentations.and_then(|instances| instances.get(key))
+            } else if key.as_resolved().owner() == ctx.tir.root_dag_id() {
                 ctx.root_presentation_instances
-                    .and_then(|instances| instances.get(&visible_key))
+                    .and_then(|instances| instances.get(key))
             } else {
                 None
             };
             if let Some(presentation) = presentation
                 && !presentation.is_none()
             {
-                dag_presentations.insert(visible_key, presentation.clone());
+                dag_presentations.insert(key.clone(), presentation.clone());
             }
         }
     }
-    Ok(())
 }
 
 /// Check the asserts of an inline-instantiated dag body (#812).
@@ -2924,6 +2849,10 @@ fn check_inline_dag_asserts(
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
+    let callable = ctx
+        .execution_plan()?
+        .callable(dag_tir.dag_id())
+        .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for (name, cat) in dag_tir.source_order() {
         if !matches!(cat, DeclCategory::Assert) {
             continue;
@@ -2938,17 +2867,16 @@ fn check_inline_dag_asserts(
                 call_span,
             )
         })?;
-        let ef = dag_tir.expected_fail(name);
-        let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
-            body,
-            ef,
-            dag_values,
-            &empty_hir_locals,
-            &dag_ctx.for_decl(&key),
-        );
+        let ef = callable
+            .expected_fail
+            .get(&RuntimeDeclKey::resolved(key.clone()));
+        let result =
+            crate::assertion_eval::evaluate_assert_with_expected_fail(body, ef, &mut |expr| {
+                eval_hir_expr(expr, dag_values, &empty_hir_locals, &dag_ctx.for_decl(&key))
+            });
         match result {
-            crate::eval::AssertResult::Pass => {}
-            crate::eval::AssertResult::Fail { message } => {
+            crate::eval::types::AssertResult::Pass => {}
+            crate::eval::types::AssertResult::Fail { message } => {
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` failed in inline call of dag `{}` ({message})",
@@ -2957,7 +2885,7 @@ fn check_inline_dag_asserts(
                     call_span,
                 ));
             }
-            crate::eval::AssertResult::Error { message } => {
+            crate::eval::types::AssertResult::Error { message } => {
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` errored in inline call of dag `{}` ({message})",

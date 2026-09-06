@@ -43,13 +43,14 @@ pub struct CheckedExecutionScope<'a> {
 
 /// Resolve imported constants from their defining body's facts. `None` means
 /// a validated deferred runtime import, never an absent required constant.
-/// Preparation and call setup share this fail-closed lookup until callable plans
-/// retain the imported pools directly.
+/// Checking uses this lookup before executable plans exist. Runtime frames use
+/// retained import references instead and must never repeat this body search.
 pub fn checked_imported_constant<'a>(
     tir: &'a TIR,
     facts: &'a CheckedExecutionFacts,
     binding: &ImportedBinding,
 ) -> Result<Option<&'a RuntimeValue>, ExecutionScopeError> {
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ImportedSourceResolution);
     let target = binding.target();
     let dag = tir
         .dag_containing_declaration(target)

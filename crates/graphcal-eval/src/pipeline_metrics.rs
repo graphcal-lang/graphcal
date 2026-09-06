@@ -12,6 +12,8 @@ pub enum Event {
     UnsharedImportedBody,
     PlanConstruction,
     ScheduleConstruction,
+    ImportedSourceResolution,
+    FrameExecution,
     ConstructorResolution,
     PresentationEvaluation,
 }
@@ -48,6 +50,8 @@ mod observer {
         pub unshared_imported_bodies: u64,
         pub plan_constructions: u64,
         pub schedule_constructions: u64,
+        pub imported_source_resolutions: u64,
+        pub frame_executions: u64,
         pub constructor_resolutions: u64,
         pub presentation_evaluations: u64,
     }
@@ -62,6 +66,8 @@ mod observer {
                 Event::UnsharedImportedBody => &mut counts.unshared_imported_bodies,
                 Event::PlanConstruction => &mut counts.plan_constructions,
                 Event::ScheduleConstruction => &mut counts.schedule_constructions,
+                Event::ImportedSourceResolution => &mut counts.imported_source_resolutions,
+                Event::FrameExecution => &mut counts.frame_executions,
                 Event::ConstructorResolution => &mut counts.constructor_resolutions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
             };
@@ -89,6 +95,12 @@ mod observer {
                 schedule_constructions: after
                     .schedule_constructions
                     .saturating_sub(before.schedule_constructions),
+                imported_source_resolutions: after
+                    .imported_source_resolutions
+                    .saturating_sub(before.imported_source_resolutions),
+                frame_executions: after
+                    .frame_executions
+                    .saturating_sub(before.frame_executions),
                 constructor_resolutions: after
                     .constructor_resolutions
                     .saturating_sub(before.constructor_resolutions),

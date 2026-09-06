@@ -10,10 +10,11 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
 
+use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
-use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
-use crate::execution_plan::{CallablePlan, ExecPlan};
+use crate::execution_facts::CheckedExecutionFacts;
+use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
 use crate::execution_scope::CheckedExecutionScope;
 
 /// Check a TIR and select its root execution plan.
@@ -225,17 +226,14 @@ fn prepare_callable_plan(
         .map(|dag| checked_scope(tir, facts, dag.dag_id(), src).map(CheckedExecutionScope::facts))
         .collect::<Result<Vec<_>, _>>()?;
     let has_instances = semantic_dags.len() > 1;
-    let const_values = if has_instances {
-        Arc::new(
-            semantic_facts
-                .iter()
-                .flat_map(|facts| facts.const_values.iter())
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-        )
-    } else {
-        Arc::clone(&root_facts.const_values)
-    };
+    let const_values = ConstantPools::try_new(
+        semantic_facts
+            .iter()
+            .map(|facts| Arc::clone(&facts.const_values)),
+    )
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })?;
     let domain_constraints = if has_instances {
         Arc::new(
             semantic_facts
@@ -267,7 +265,8 @@ fn prepare_callable_plan(
             .map(|dag| dag.dag_id().clone())
             .collect(),
         const_values,
-        imported_values: prepare_imported_values(tir, facts, &semantic_dags, src)?,
+        imports: prepare_imports(tir, facts, &semantic_dags, declaration_locations, src)?,
+        dependencies: prepare_dependencies(tir, &topo_order, declaration_locations, src)?,
         topo_order,
         assumes_map: semantic_dags
             .iter()
@@ -297,32 +296,104 @@ fn prepare_callable_plan(
     })
 }
 
-fn prepare_imported_values(
+fn prepare_dependencies(
+    tir: &TIR,
+    order: &[RuntimeDeclKey],
+    locations: &DeclarationLocations,
+    source: &NamedSource<Arc<String>>,
+) -> Result<HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>, GraphcalError> {
+    let invalid = |message: String| {
+        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
+    };
+    let positions = order
+        .iter()
+        .enumerate()
+        .map(|(position, key)| (key, position))
+        .collect::<HashMap<_, _>>();
+    order
+        .iter()
+        .map(|key| {
+            let body = locations
+                .body_for(key)
+                .map_err(|error| invalid(error.to_string()))?;
+            let dag = tir
+                .dag_registry()
+                .get(body)
+                .ok_or_else(|| invalid(format!("prepared body `{body}` is absent")))?;
+            let dependencies = dag
+                .semantic()
+                .dependencies
+                .runtime_deps
+                .get(key.as_resolved())
+                .into_iter()
+                .flatten()
+                .map(|dependency| RuntimeDeclKey::resolved(dag.runtime_decl_identity(dependency)))
+                .collect::<Vec<_>>();
+            for dependency in &dependencies {
+                locations
+                    .body_for(dependency)
+                    .map_err(|error| invalid(error.to_string()))?;
+                if let Some(dependency_position) = positions.get(dependency)
+                    && dependency_position >= &positions[key]
+                {
+                    return Err(invalid(format!(
+                        "schedule evaluates `{key}` before its dependency `{dependency}`"
+                    )));
+                }
+            }
+            Ok((key.clone(), dependencies))
+        })
+        .collect()
+}
+
+fn prepare_imports(
     tir: &TIR,
     facts: &CheckedExecutionFacts,
     dags: &[&DagTIR],
-    src: &NamedSource<Arc<String>>,
-) -> Result<RuntimeValueMap, GraphcalError> {
-    dags.iter()
-        .flat_map(|dag| {
-            dag.imported_bindings()
-                .values()
-                .map(move |binding| (*dag, binding))
-        })
-        .try_fold(RuntimeValueMap::new(), |mut values, (dag, binding)| {
-            if let Some(value) = crate::execution_scope::checked_imported_constant(
-                tir, facts, binding,
-            )
-            .map_err(|error| {
-                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-            })? {
-                values.insert(
-                    RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
-                    value.clone(),
-                );
+    locations: &DeclarationLocations,
+    source: &NamedSource<Arc<String>>,
+) -> Result<PreparedImports, GraphcalError> {
+    use graphcal_compiler::ir::imported_binding::ImportedValueKind;
+    let invalid = |message: String| {
+        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
+    };
+    let mut result = PreparedImports::default();
+    for dag in dags {
+        let own_names = dag
+            .consts()
+            .iter()
+            .map(|entry| entry.name.member())
+            .chain(dag.params().iter().map(|entry| entry.name.member()))
+            .chain(dag.nodes().iter().map(|entry| entry.name.member()))
+            .collect::<HashSet<_>>();
+        for (scoped, binding) in dag.imported_bindings() {
+            // Lexical shadows are decided once, never rediscovered during a call.
+            if !dag.semantic().decl_bindings.contains_key(scoped)
+                && own_names.contains(scoped.member())
+            {
+                continue;
             }
-            Ok(values)
-        })
+            let source_key = RuntimeDeclKey::resolved(binding.target().clone());
+            let owner = locations
+                .body_for(&source_key)
+                .map_err(|error| invalid(error.to_string()))?;
+            let scope = checked_scope(tir, facts, owner, source)?;
+            match binding.kind() {
+                ImportedValueKind::Constant => result.constants.push(PreparedConstantImport {
+                    destination: RuntimeDeclKey::resolved(
+                        dag.runtime_decl_identity(binding.target()),
+                    ),
+                    value: ConstantReference::try_new(
+                        Arc::clone(&scope.facts().const_values),
+                        source_key,
+                    )
+                    .map_err(|error| invalid(error.to_string()))?,
+                }),
+                ImportedValueKind::Runtime => result.runtime.push(source_key),
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn prepare_declaration_locations(
@@ -535,10 +606,56 @@ mod tests {
     }
 
     #[test]
+    fn preparation_rejects_dependency_order_corruption() {
+        let (tir, src) = tir_from_source(
+            "node antecedent: Dimensionless = 1.0; node subsequent: Dimensionless = @antecedent;",
+        );
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let mut facts = crate::project_compiler::check_execution_facts_with_cancellation(
+            &tir,
+            &src,
+            &cancellation,
+        )
+        .unwrap();
+        let root = Arc::make_mut(
+            Arc::make_mut(&mut facts.by_dag)
+                .get_mut(tir.root_dag_id())
+                .unwrap(),
+        );
+        Arc::make_mut(&mut root.topo_order).reverse();
+        assert!(
+            matches!(compile_checked_with_cancellation(&tir, &facts, &src, &cancellation), Err(GraphcalError::InternalError { message, .. }) if message.contains("before its dependency"))
+        );
+    }
+
+    #[test]
+    fn constant_pool_views_reject_duplicates_and_missing_imports() {
+        let key = resolved_key("constant");
+        let pool = Arc::new(HashMap::from([(
+            key.clone(),
+            RuntimeValue::quantity(2.0).unwrap(),
+        )]));
+        assert!(matches!(
+            ConstantPools::try_new([Arc::clone(&pool), Arc::clone(&pool)]),
+            Err(crate::constant_pools::ConstantPoolError::Duplicate(_))
+        ));
+        assert!(matches!(
+            ConstantReference::try_new(Arc::clone(&pool), resolved_key("absent")),
+            Err(crate::constant_pools::ConstantPoolError::Missing(_))
+        ));
+        let imported = ConstantReference::try_new(Arc::clone(&pool), key.clone()).unwrap();
+        assert!(std::ptr::eq(
+            imported.value().unwrap(),
+            pool.get(&key).unwrap()
+        ));
+    }
+
+    #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
         assert!(
-            (quantity(&plan.root.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON
+            (quantity(plan.root.const_values.get(&resolved_key("g0")).unwrap()) - 9.80665).abs()
+                < f64::EPSILON
         );
         assert!(plan.root.topo_order.is_empty());
     }
@@ -550,7 +667,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            (quantity(&plan.root.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10
+            (quantity(plan.root.const_values.get(&resolved_key("two_g0")).unwrap()) - 19.6133)
+                .abs()
+                < 1e-10
         );
     }
 
@@ -570,9 +689,10 @@ mod tests {
         let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
         let root_facts = facts.for_dag(tir.root_dag_id()).unwrap();
 
-        assert!(Arc::ptr_eq(
-            &root_facts.const_values,
-            &plan.root.const_values
+        let key = resolved_key("lower");
+        assert!(std::ptr::eq(
+            root_facts.const_values.get(&key).unwrap(),
+            plan.root.const_values.get(&key).unwrap()
         ));
         assert!(Arc::ptr_eq(
             &root_facts.domain_constraints,
@@ -809,10 +929,13 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         assert!(
             (quantity(
-                &plan.root.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-                    tir.root_dag_id().clone(),
-                    DeclName::expect_valid("b")
-                ))]
+                plan.root
+                    .const_values
+                    .get(&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                        tir.root_dag_id().clone(),
+                        DeclName::expect_valid("b")
+                    )))
+                    .unwrap()
             ) - 2.0)
                 .abs()
                 < 1e-10

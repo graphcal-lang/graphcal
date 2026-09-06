@@ -7,10 +7,11 @@ use graphcal_compiler::assertion_expectation::ExpectedFail;
 use graphcal_compiler::dag_id::DagId;
 use thiserror::Error;
 
+use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
+use crate::execution_facts::CheckedExecutionFacts;
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
@@ -50,6 +51,18 @@ impl ExecPlan {
     }
 }
 
+#[derive(Debug)]
+pub struct PreparedConstantImport {
+    pub(crate) destination: RuntimeDeclKey,
+    pub(crate) value: ConstantReference,
+}
+
+#[derive(Debug, Default)]
+pub struct PreparedImports {
+    pub(crate) constants: Vec<PreparedConstantImport>,
+    pub(crate) runtime: Vec<RuntimeDeclKey>,
+}
+
 /// One body and its included-instance closure, prepared before evaluation.
 #[derive(Debug)]
 pub struct CallablePlan {
@@ -57,13 +70,13 @@ pub struct CallablePlan {
     pub(crate) execution_dags: Vec<DagId>,
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: Arc<RuntimeValueMap>,
-    /// Compile-time constants imported from dependency module artifacts.
-    /// These are injected directly into the evaluation environment.
-    /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
-    pub(crate) imported_values: RuntimeValueMap,
+    pub(crate) const_values: ConstantPools,
+    /// Retained constant references and explicit runtime imports, selected once
+    /// from lexical bindings during preparation.
+    pub(crate) imports: PreparedImports,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub(crate) topo_order: Vec<RuntimeDeclKey>,
+    pub(crate) dependencies: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
     pub(crate) assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
