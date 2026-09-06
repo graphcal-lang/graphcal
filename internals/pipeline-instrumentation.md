@@ -44,3 +44,11 @@ Phases B–D must change the corresponding fixture assertions to zero when
 ownership, planning, checked constructor facts, and presentation evidence become
 their authorities. Retain the value/equivalence assertions when changing cost
 expectations.
+
+## Bare-Wasm numerical boundary regression
+
+`just wasm-test` also exercises determinant exponent cancellation, the tiny
+cancellation mean, signed complex subnormals, signed zero, and contained overflow
+through the actual JavaScript request/result boundary. It checks SI number bits,
+not rendered strings. This is Node-hosted Wasm coverage, not a full-browser/UI
+claim or proof of arbitrary numerical conditioning.
