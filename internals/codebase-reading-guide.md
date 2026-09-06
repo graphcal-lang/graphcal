@@ -526,6 +526,7 @@ The compiler crate owns the functional core through TIR.
 | `nat.rs`                      | Normalized type-level Nat polynomial forms                    |
 | `dag_id.rs`                   | Filesystem-independent DAG identity                           |
 | `declaration_category.rs`     | Source-order declaration categories independent of collection |
+| `assertion_expectation.rs`    | Phase-parameterized assertion selectors and semantic key matching |
 | `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
@@ -985,7 +986,7 @@ ExecPlan
   imported_values: RuntimeValueMap
   topo_order: Vec<RuntimeDeclKey>
   assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>
-  expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>
+  expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>  // assertion_expectation.rs contract
   domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
   checked_execution_facts: CheckedExecutionFacts  // authoritative field constraints + per-DAG facts
 ```
@@ -1015,6 +1016,13 @@ There are two value layers:
 - `Value` is user-facing and appears in `EvalResult`. Quantity values carry a
   dimension and optional display-unit information; labels, structs, and indexed
   values keep public identity carriers for diagnostics/output.
+
+`assertion_expectation.rs` owns generic expectation records and semantic key
+selection without depending on declaration collection. Source-path aliases and
+blanket-attribute spans remain in the collection/lowering shells; resolved keys
+use canonical `IndexTypeRef` identities. Named selection ignores display aliases
+but rejects equal leaf spellings from different owners. Finite positions bind to
+their tuple's assertion axis during checking, not through a fabricated name.
 
 `TypeNameRef<Ns>` in `registry/declared_type.rs` is the shared identity carrier
 for declared type-level runtime/public values. It stores both a display leaf and
@@ -1363,14 +1371,15 @@ Its source-analysis limits are documented separately from this heuristic orderin
 9. `crates/graphcal-compiler/src/registry/prelude.rs`
 10. `crates/graphcal-compiler/src/registry/reserved_name.rs`
 11. `crates/graphcal-compiler/src/registry/declared_type.rs`
-12. `crates/graphcal-compiler/src/registry/resolve_types.rs`
-13. `crates/graphcal-compiler/src/diagnostic_anchor.rs`
-14. `crates/graphcal-compiler/src/registry/runtime_value.rs`
-15. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
-16. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
-17. `crates/graphcal-compiler/src/registry/builtins.rs`
-18. `crates/graphcal-compiler/src/ir/imported_binding.rs`
-19. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
+12. `crates/graphcal-compiler/src/assertion_expectation.rs`
+13. `crates/graphcal-compiler/src/registry/resolve_types.rs`
+14. `crates/graphcal-compiler/src/diagnostic_anchor.rs`
+15. `crates/graphcal-compiler/src/registry/runtime_value.rs`
+16. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
+17. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
+18. `crates/graphcal-compiler/src/registry/builtins.rs`
+19. `crates/graphcal-compiler/src/ir/imported_binding.rs`
+20. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
 
 ### Stage 6 - Late syntax and Static/name-resolution policy
 

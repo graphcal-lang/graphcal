@@ -4,6 +4,7 @@
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
 
+pub mod assertion_expectation;
 pub mod builtin;
 pub mod cancellation;
 pub mod complex_value;

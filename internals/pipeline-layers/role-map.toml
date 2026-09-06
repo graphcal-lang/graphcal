@@ -7,6 +7,16 @@ role = "facade"
 
 [[module]]
 package = "compiler"
+path = ["assertion_expectation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["assertion_expectation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["builtin"]
 role = "contracts"
 

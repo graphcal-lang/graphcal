@@ -284,22 +284,6 @@ reason = "Observed compiler::tir::typed::model -> compiler::ir::lower (productio
 from_package = "compiler"
 from_path = ["tir", "typed", "model"]
 to_package = "compiler"
-to_path = ["ir", "resolve"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::ir::resolve (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:11 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
-to_path = ["registry", "resolve_types"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::registry::resolve_types (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:11 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
 to_path = ["syntax", "module_resolve"]
 test_only = false
 reason = "Observed compiler::tir::typed::model -> compiler::syntax::module_resolve (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:23 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."

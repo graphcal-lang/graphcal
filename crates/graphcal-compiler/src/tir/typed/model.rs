@@ -4,12 +4,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 use thiserror::Error;
 
+use crate::assertion_expectation::ExpectedFail;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational, RationalError};
 use crate::hir;
 use crate::hir::{NominalConstructor, NominalTypeDef};
-use crate::ir::resolve::ExpectedFail;
 use crate::nat::NatPolyForm;
 use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
 use crate::registry::error::GraphcalError;

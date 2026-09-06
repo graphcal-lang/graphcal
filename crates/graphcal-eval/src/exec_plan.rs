@@ -31,7 +31,8 @@ pub struct ExecPlan {
     pub(crate) assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<RuntimeDeclKey, graphcal_compiler::ir::resolve::ExpectedFail>,
+    pub(crate) expected_fail:
+        HashMap<RuntimeDeclKey, graphcal_compiler::assertion_expectation::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,

@@ -91,7 +91,7 @@ pub struct InstanceAssertionProjection {
     pub target: ResolvedDeclName,
     pub exposed_name: ScopedName,
     /// Include-site override resolved in the including DAG's lexical context.
-    pub expected_fail: Option<crate::ir::resolve::ExpectedFail>,
+    pub expected_fail: Option<crate::assertion_expectation::ExpectedFail>,
 }
 
 /// One plot requested from an instance include site.

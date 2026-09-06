@@ -715,12 +715,12 @@ fn install_override_reconciliations(
 }
 
 fn specialize_expected_fail(
-    expected: &mut crate::ir::resolve::ExpectedFail,
+    expected: &mut crate::assertion_expectation::ExpectedFail,
     substitution: &StaticSubstitution,
 ) {
-    if let crate::ir::resolve::ExpectedFail::Variants(keys) = expected {
+    if let crate::assertion_expectation::ExpectedFail::Variants(keys) = expected {
         for part in keys.iter_mut().flatten() {
-            if let crate::ir::resolve::ExpectedFailKeyPart::Named { index, .. } = part
+            if let crate::assertion_expectation::ExpectedFailKeyPart::Named { index, .. } = part
                 && let Some(source) = index.declared_resolved()
                 && let Some(replacement) = index_substitution(substitution, source)
             {

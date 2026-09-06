@@ -15,6 +15,7 @@ use miette::NamedSource;
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
 use super::static_interface::{Requirement, StaticInputKind as NominalKind};
 
+use crate::assertion_expectation::ExpectedFail;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,
@@ -33,10 +34,7 @@ use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub(crate) use crate::registry::resolve_types::CollectedFile;
-pub use crate::registry::resolve_types::{
-    AttributeTarget, DeclarationKind, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart,
-    ImportedValueNames, ParsedExpectedFail,
-};
+pub use crate::registry::resolve_types::{AttributeTarget, DeclarationKind, ImportedValueNames};
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).

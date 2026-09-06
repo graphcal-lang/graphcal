@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
 use crate::registry::error::GraphcalError;
-use crate::registry::resolve_types::{
-    ExpectedFail, ExpectedFailKeyPart, ParsedExpectedFail, ParsedExpectedFailKey,
-};
+use crate::registry::resolve_types::{ParsedExpectedFail, ParsedExpectedFailKey};
 use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
@@ -25,11 +24,11 @@ pub fn parse_expected_fail_args(
         .iter()
         .map(|arg| match arg {
             AttributeArg::IndexLabel { index, label, span } => {
-                Ok(vec![ExpectedFailKeyPart::parsed(
-                    index.value.clone(),
-                    label.value.clone(),
-                    *span,
-                )])
+                Ok(vec![ExpectedFailKeyPart::Named {
+                    index: index.value.clone(),
+                    variant: label.value.clone(),
+                    span: *span,
+                }])
             }
             AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
                 src: src.clone(),
@@ -46,11 +45,11 @@ pub fn parse_expected_fail_args(
                     .iter()
                     .map(|elem| match elem {
                         AttributeArg::IndexLabel { index, label, span } => {
-                            Ok(ExpectedFailKeyPart::parsed(
-                                index.value.clone(),
-                                label.value.clone(),
-                                *span,
-                            ))
+                            Ok(ExpectedFailKeyPart::Named {
+                                index: index.value.clone(),
+                                variant: label.value.clone(),
+                                span: *span,
+                            })
                         }
                         AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
                             src: src.clone(),

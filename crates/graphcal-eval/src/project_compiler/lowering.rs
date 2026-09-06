@@ -853,8 +853,8 @@ fn resolve_projection_expected_fail(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<Option<graphcal_compiler::ir::resolve::ExpectedFail>, CompileError> {
-    use graphcal_compiler::ir::resolve::{ExpectedFail, ExpectedFailKeyPart};
+) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, CompileError> {
+    use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
     use graphcal_compiler::syntax::attribute::AttributeName;
 
