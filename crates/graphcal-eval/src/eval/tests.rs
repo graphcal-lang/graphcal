@@ -133,6 +133,89 @@ fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
 }
 
 #[test]
+fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
+    for size in [2_u64, 4, 8] {
+        let files = (0..size).map(|index| {
+            let body = match index {
+                0 => "pub node output: Dimensionless = 1.0;".to_string(),
+                _ => format!("import pipeline.layer{} as predecessor; pub node output: Dimensionless = 1.0;", index.saturating_sub(1)),
+            };
+            (format!("layer{index}.gcl"), body)
+        }).collect::<Vec<_>>();
+        let borrowed = files
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect::<Vec<_>>();
+        let (_directory, root) = write_pipeline_project(&borrowed, borrowed.last().unwrap().0);
+        let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+        let (_, counts) =
+            crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+        assert_eq!(
+            counts.dag_body_copies,
+            size.saturating_mul(size.saturating_sub(1)),
+            "{size}-module chain: {counts:?}"
+        );
+        eprintln!("{size}-module chain: {counts:?}");
+    }
+}
+
+#[test]
+fn pipeline_cost_baseline_replays_native_selector_for_presentation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let source = r#"
+import plugin "graphcal:selector-counter" as probe { fn toggle() -> Bool; }
+node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m };
+"#;
+    let project = crate::loader::LoadedProject::from_source(source, "selector.gcl").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let mut host = crate::host_fns::HostFunctionRegistry::new();
+    host.register(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:selector-counter"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("toggle"),
+        move |_| {
+            Ok(crate::host_fns::HostFnValue::F64(
+                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                    1.0
+                } else {
+                    0.0
+                },
+            ))
+        },
+    );
+    let prepared = ProjectCompiler::new(&project)
+        .host_fns(&host)
+        .prepare()
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "checking must not invoke a host"
+    );
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert_quantity_value(&result, "measured", 1000.0);
+    let (_, value) = result
+        .nodes
+        .iter()
+        .find(|(name, _)| *name == scoped_name("measured"))
+        .unwrap();
+    let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
+        panic!("expected quantity");
+    };
+    // D06 must replace these baseline assertions with one call and "km".
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "presentation replay baseline"
+    );
+    assert_eq!(display_unit.as_ref().unwrap().label, "m");
+}
+
+#[test]
 fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let source = "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node x: Bounded = Bounded(value: 2.0);";
     let tir = compile_to_tir(source, "capabilities.gcl").unwrap();
