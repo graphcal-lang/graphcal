@@ -15,6 +15,7 @@ lint: formal
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
     cargo fmt --check
+    cargo metadata --locked --manifest-path fuzz/Cargo.toml --format-version 1 > /dev/null
     CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
     CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
