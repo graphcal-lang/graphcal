@@ -7,9 +7,8 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts, RuntimeValueMap};
 
@@ -45,19 +44,10 @@ pub(super) fn resolve_struct_field_constraints(
 }
 
 fn visible_values_with_imports(
-    dag: &DagTIR,
     local_const_values: &RuntimeValueMap,
     known_const_values: &RuntimeValueMap,
 ) -> RuntimeValueMap {
     let mut values = known_const_values.clone();
-    values.extend(dag.imported_bindings().values().filter_map(|binding| {
-        binding.value().map(|value| {
-            (
-                RuntimeDeclKey::resolved(binding.target().clone()),
-                value.clone(),
-            )
-        })
-    }));
     values.extend(
         local_const_values
             .iter()
@@ -67,25 +57,13 @@ fn visible_values_with_imports(
 }
 
 fn known_const_values(
-    tir: &TIR,
     facts: &HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
 ) -> RuntimeValueMap {
-    let mut values = facts
+    facts
         .values()
         .flat_map(|facts| facts.const_values.iter())
         .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<RuntimeValueMap>();
-    for dag in tir.dag_registry().values() {
-        values.extend(dag.imported_bindings().values().filter_map(|binding| {
-            binding.value().map(|value| {
-                (
-                    RuntimeDeclKey::resolved(binding.target().clone()),
-                    value.clone(),
-                )
-            })
-        }));
-    }
-    values
+        .collect()
 }
 
 fn freeze_checked_execution_facts(
@@ -157,10 +135,10 @@ fn check_dag_execution_facts(
         .filter(|dag_id| !dag_facts.contains_key(*dag_id))
         .cloned()
         .collect::<HashSet<_>>();
-    let initial_values = known_const_values(tir, &dag_facts);
+    let initial_values = known_const_values(&dag_facts);
     let const_pools = eval_const_pools_for_dags(tir, &dag_ids, initial_values, src, cancellation)?;
 
-    let mut all_const_values = known_const_values(tir, &dag_facts);
+    let mut all_const_values = known_const_values(&dag_facts);
     all_const_values.extend(const_pools.values().flat_map(|values| {
         values
             .iter()

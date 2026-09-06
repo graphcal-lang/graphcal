@@ -299,7 +299,6 @@ impl PreparedProject {
             output_surface,
             include_debug_names,
         } = compiled;
-        let tir = tir.with_external_value_constructors();
 
         let mut schema_builder = ModelSchemaGraphBuilder::new(&tir, &source);
         let parameter_ports =

@@ -1,6 +1,8 @@
 //! Static checking from authoritative project HIR to checked TIR.
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::imported_binding::ImportedValueKind;
+use graphcal_compiler::syntax::module_resolve::{DeclSymbolKind, ModuleResolver};
 
 #[allow(
     clippy::wildcard_imports,
@@ -27,21 +29,11 @@ fn declared_type_for_target(
         .cloned()
 }
 
-fn value_for_target(
-    target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
-    module_artifacts: &ModuleArtifactStore,
-) -> Option<RuntimeValue> {
-    module_artifacts
-        .for_owner(target.owner())
-        .and_then(|artifact| artifact.const_values_by_dag.get(target.owner()))
-        .and_then(|values| values.get(&target.to_unowned_def_name()))
-        .cloned()
-}
-
 fn resolve_imported_bindings(
     hir: &graphcal_compiler::ir::lower::HirDag,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     module_artifacts: &ModuleArtifactStore,
+    module_resolver: &ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
     hir.imported_bindings()
@@ -58,11 +50,19 @@ fn resolve_imported_bindings(
                         DiagnosticAnchor::WholeFile,
                     ))
                 })?;
-            let checked = match value_for_target(target, module_artifacts) {
-                Some(value) =>
-                    ImportedBinding::with_value(target.clone(), declared_type, value),
-                None => ImportedBinding::deferred(target.clone(), declared_type),
+            let kind = match module_resolver.decl_symbol_kind(target).map_err(|error| {
+                CompileError::Eval(GraphcalError::internal_error(
+                    error.to_string(), src, DiagnosticAnchor::WholeFile,
+                ))
+            })? {
+                DeclSymbolKind::Const => ImportedValueKind::Constant,
+                DeclSymbolKind::Param | DeclSymbolKind::Node => ImportedValueKind::Runtime,
+                actual => return Err(CompileError::Eval(GraphcalError::internal_error(
+                    format!("HIR imported value `{target}` has non-value category {actual:?}"),
+                    src, DiagnosticAnchor::WholeFile,
+                ))),
             };
+            let checked = ImportedBinding::new(target.clone(), declared_type, kind);
             Ok((lexical.clone(), checked))
         })
         .collect()
@@ -70,19 +70,30 @@ fn resolve_imported_bindings(
 
 fn checked_imported_values(
     tir: &graphcal_compiler::tir::typed::TIR,
-) -> HashMap<ScopedName, (RuntimeValue, DeclaredType)> {
+    facts: &crate::execution_facts::CheckedExecutionFacts,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<ScopedName, (RuntimeValue, DeclaredType)>, CompileError> {
     tir.root()
         .imported_bindings()
         .iter()
-        .filter_map(|(name, binding)| {
-            binding.value().map(|value| {
-                (
+        .try_fold(HashMap::new(), |mut values, (name, binding)| {
+            if let Some(value) = crate::execution_scope::checked_imported_constant(
+                tir, facts, binding,
+            )
+            .map_err(|error| {
+                CompileError::Eval(GraphcalError::internal_error(
+                    error.to_string(),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ))
+            })? {
+                values.insert(
                     name.clone(),
                     (value.clone(), binding.declared_type().clone()),
-                )
-            })
+                );
+            }
+            Ok(values)
         })
-        .collect()
 }
 
 struct ResolvedFileSignatures {
@@ -161,7 +172,7 @@ pub(super) fn check_hir_file(
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     >,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
+    project_types: &Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -179,7 +190,7 @@ pub(super) fn check_hir_file(
         hir.inline_dags,
         file_src,
         module_resolver,
-        project_types,
+        project_types.as_ref(),
         cancellation,
     )?;
 
@@ -188,6 +199,7 @@ pub(super) fn check_hir_file(
         signed_root.hir(),
         &local_interfaces,
         module_artifacts,
+        module_resolver,
         file_src,
     )?;
     let mut tir = graphcal_compiler::tir::typed::type_resolve_signed_builder_with_imported_bindings_and_cancellation(
@@ -195,32 +207,31 @@ pub(super) fn check_hir_file(
         root_bindings,
         file_src,
         module_resolver,
-        project_types,
+        Arc::clone(project_types),
         cancellation,
     )?;
-    if let Some((name, span)) = lowering::imported_runtime_unit_reference(
+    lowering::validate_imported_runtime_units(
         tir.root(),
         &hir.module_map,
         exported_runtime_units,
-    ) {
-        return Err(GraphcalError::ImportRuntimeUnit {
-            name,
-            src: file_src.clone(),
-            span: span.into(),
-        }
-        .into());
-    }
+        file_src,
+    )?;
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
-        let imported_bindings =
-            resolve_imported_bindings(signed.hir(), &local_interfaces, module_artifacts, file_src)?;
+        let imported_bindings = resolve_imported_bindings(
+            signed.hir(),
+            &local_interfaces,
+            module_artifacts,
+            module_resolver,
+            file_src,
+        )?;
         let checked = graphcal_compiler::tir::typed::type_resolve_signed_single_with_imported_bindings_and_cancellation(
             signed,
             imported_bindings,
             file_src,
             module_resolver,
-            project_types,
+            project_types.as_ref(),
             cancellation,
         )?;
         tir.insert_dag(checked).map_err(|error| {
@@ -232,16 +243,13 @@ pub(super) fn check_hir_file(
         })?;
     }
 
-    tir.replace_project_type_store(project_types.clone());
-    lowering::merge_dep_dag_tirs(&mut tir, &hir.module_map, module_artifacts, file_src)?;
-    let mut tir = tir.finish();
-    graphcal_compiler::tir::typed::instantiate_semantic_edges(&mut tir, file_src)?;
-    reconcile_checked_dependency_overrides(&mut tir, module_artifacts);
-    graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
+    lowering::install_shared_module_artifacts(
         &mut tir,
+        &hir.module_map,
+        module_artifacts,
         file_src,
-        cancellation,
     )?;
+    let tir = finish_module_assembly(tir, module_artifacts, file_src, cancellation)?;
     let checked_execution_facts = execution_check::check_execution_facts_with_inherited(
         &tir,
         inherited_execution_facts,
@@ -256,7 +264,9 @@ pub(super) fn check_hir_file(
         &entry_external_surface,
         file_src,
     )?;
-    let imported_values = checked_imported_values(&tir);
+    let imported_values = checked_imported_values(&tir, &checked_execution_facts, file_src)?;
+    #[cfg(test)]
+    observe_shared_artifacts(&tir, project_types, module_artifacts);
 
     Ok(CompiledFile {
         tir,
@@ -268,4 +278,45 @@ pub(super) fn check_hir_file(
         output_surface: hir.output_surface,
         include_debug_names: hir.include_debug_names,
     })
+}
+
+/// Complete mutable local bodies before any execution facts are published.
+fn finish_module_assembly(
+    builder: graphcal_compiler::tir::typed::TirBuilder,
+    module_artifacts: &ModuleArtifactStore,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+    let mut tir = builder.finish();
+    graphcal_compiler::tir::typed::instantiate_semantic_edges(&mut tir, src)?;
+    reconcile_checked_dependency_overrides(&mut tir, module_artifacts);
+    graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
+        &mut tir,
+        src,
+        cancellation,
+    )?;
+    // Preparation only borrows these completed constructor targets.
+    Ok(tir.with_external_value_constructors())
+}
+
+#[cfg(test)]
+fn observe_shared_artifacts(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
+    module_artifacts: &ModuleArtifactStore,
+) {
+    assert!(
+        std::ptr::eq(project_types, tir.project_type_store()),
+        "module checking must retain the canonical project type store"
+    );
+    module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.dag_store.iter())
+        .for_each(|(owner, canonical)| {
+            let imported = tir
+                .dag_registry()
+                .get(owner)
+                .expect("installed imported body");
+            crate::pipeline_metrics::record_imported_body(canonical, imported);
+        });
 }

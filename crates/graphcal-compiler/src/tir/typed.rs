@@ -89,8 +89,8 @@ impl DagTIR {
     ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
     {
         // A DAG's own resolved declarations remain authoritative over imported
-        // lexical bindings. The imported binding record keeps type/value/target
-        // metadata atomic, so no collision can mix independently keyed facts.
+        // lexical bindings. Imported binding records retain target/category/type
+        // metadata; evaluated constants belong to their defining checked pools.
         let mut declared_types = HashMap::new();
         for constant in crate::builtin::BuiltinConst::ALL {
             declared_types.insert(
@@ -239,7 +239,7 @@ pub fn type_resolve_with_modules(
     hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_with_modules_and_cancellation(
         hir,
@@ -259,7 +259,7 @@ pub fn type_resolve_with_modules_and_cancellation(
     hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_builder_with_modules_and_cancellation(
@@ -281,7 +281,7 @@ pub fn type_resolve_builder_with_modules_and_cancellation(
     hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     type_resolve_builder_with_imported_bindings_and_cancellation(
@@ -306,7 +306,7 @@ pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError>
 where
@@ -316,7 +316,7 @@ where
         hir,
         src,
         module_resolver,
-        project_types,
+        &project_types,
         cancellation,
     )?;
     type_resolve_signed_builder_with_imported_bindings_and_cancellation(
@@ -340,7 +340,7 @@ pub fn type_resolve_signed_builder_with_imported_bindings_and_cancellation<S>(
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError>
 where
@@ -350,8 +350,16 @@ where
     validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
     let dag_id = signed.dag_id().clone();
-    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
-    type_resolve_impl(signed, imported_bindings, src, ctx, cancellation)
+    let context_types = Arc::clone(&project_types);
+    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
+    type_resolve_impl(
+        signed,
+        imported_bindings,
+        src,
+        ctx,
+        project_types,
+        cancellation,
+    )
 }
 
 fn validate_checked_imported_bindings<S>(
@@ -417,6 +425,7 @@ fn type_resolve_impl(
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
+    project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
@@ -465,7 +474,7 @@ fn type_resolve_impl(
     )?;
     Ok(TirBuilder::new(
         ir.registry.into_formatting(),
-        module_ctx.types.clone(),
+        project_types,
         root_dag,
         ir.extern_functions,
     ))
@@ -2053,7 +2062,7 @@ pub(crate) fn rigid_dimension_view(
         .collect::<Result<HashMap<_, _>, _>>()?;
 
     let mut rigid = tir.clone();
-    rigid.project_types = rigid_types;
+    rigid.project_types = Arc::new(rigid_types);
     rigid
         .registry
         .dimensions

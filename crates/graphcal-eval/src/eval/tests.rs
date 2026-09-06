@@ -89,7 +89,7 @@ node packet: Packet = Packet(value: @first);
         "prepared evaluation costs should be stable"
     );
     assert_eq!(
-        preparation.dag_body_copies, 0,
+        preparation.imported_body_references, 0,
         "single-file fixture has no ordinary imports"
     );
     assert!(preparation.plan_constructions > 0, "{preparation:?}");
@@ -105,7 +105,7 @@ node packet: Packet = Packet(value: @first);
 }
 
 #[test]
-fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
+fn pipeline_cost_baseline_observes_ordinary_import_body_sharing() {
     let (_directory, root) = write_pipeline_project(
         &[
             ("a.gcl", "pub node output: Dimensionless = 1.0;"),
@@ -125,15 +125,16 @@ fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
         crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
     let row = prepared.binding_builder().finish().unwrap();
     assert!(!prepared.evaluate(&row).unwrap().has_errors());
-    assert!(
-        counts.dag_body_copies > 0,
-        "ordinary-import copying baseline: {counts:?}"
+    assert_eq!(counts.imported_body_references, 3, "{counts:?}");
+    assert_eq!(
+        counts.unshared_imported_bodies, 0,
+        "ordinary imports use canonical immutable body handles: {counts:?}"
     );
     eprintln!("three-module chain preparation: {counts:?}");
 }
 
 #[test]
-fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
+fn pipeline_cost_baseline_import_chains_share_canonical_bodies() {
     for size in [2_u64, 4, 8] {
         let files = (0..size).map(|index| {
             let body = match index {
@@ -151,12 +152,47 @@ fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
         let (_, counts) =
             crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
         assert_eq!(
-            counts.dag_body_copies,
-            size.saturating_mul(size.saturating_sub(1)),
-            "{size}-module chain: {counts:?}"
+            counts.imported_body_references,
+            size.saturating_mul(size.saturating_sub(1)) / 2,
+            "{counts:?}"
+        );
+        assert_eq!(
+            counts.unshared_imported_bodies, 0,
+            "{size}-module chain retains canonical body addresses: {counts:?}"
         );
         eprintln!("{size}-module chain: {counts:?}");
     }
+}
+
+#[test]
+fn pipeline_cost_baseline_diamond_keeps_constant_pools_and_shared_call_bodies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("leaf.gcl", "pub const node BASE: Dimensionless = 2.0;"),
+            (
+                "left.gcl",
+                "import pipeline.leaf::{BASE}; pub const node LEFT: Dimensionless = @BASE + 1.0; pub node out: Dimensionless = @BASE;",
+            ),
+            (
+                "right.gcl",
+                "import pipeline.leaf::{BASE as VALUE}; pub const node RIGHT: Dimensionless = @VALUE + 2.0; pub node out: Dimensionless = @VALUE;",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.left as left; import pipeline.right as right; const node TOTAL: Dimensionless = @left::LEFT + @right::RIGHT; node output: Dimensionless = @TOTAL + @left()::out + @right()::out;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let (prepared, counts) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    assert_eq!(counts.imported_body_references, 6, "{counts:?}");
+    assert_eq!(counts.unshared_imported_bodies, 0, "{counts:?}");
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_quantity_value(&result, "output", 11.0);
 }
 
 #[test]
@@ -1416,6 +1452,57 @@ fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "low", 150.0);
     assert_quantity_value(&result, "high", 300.0);
+}
+
+#[test]
+fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) dim Measure; param measured: Measure; pub node measurement: Measure = @measured; param scale: Dimensionless; pub unit step: Length = (@scale) m; param amount: Length = 3.0 step; pub node out: Length = @amount -> step;",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib(dim Measure: Length, measured: 1.0 m, scale: 1.0) as first; include pipeline.lib(dim Measure: Length, measured: 2.0 m, scale: 2.0) as second; node low: Length = @first::out; node high: Length = @second::out; node first_measurement: Length = @first::measurement; node second_measurement: Length = @second::measurement;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let checked = ProjectCompiler::new(&project).check().unwrap();
+    let instances = checked.tir().root().semantic_instances();
+    assert_eq!(instances.len(), 2);
+    assert_eq!(
+        instances[0].instance.specialization,
+        instances[1].instance.specialization
+    );
+    assert_ne!(instances[0].instance.id, instances[1].instance.id);
+    let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_quantity_value(&result, "low", 3.0);
+    assert_quantity_value(&result, "high", 6.0);
+    assert_quantity_value(&result, "first_measurement", 1.0);
+    assert_quantity_value(&result, "second_measurement", 2.0);
+    for (name, expected_scale) in [("low", 1.0), ("high", 2.0)] {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(key, _)| key == &scoped_name(name))
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap();
+        match value {
+            Value::Quantity {
+                display_unit: Some(unit),
+                ..
+            } => assert!((unit.scale() - expected_scale).abs() < f64::EPSILON),
+            other => panic!("expected instance-owned display unit, got {other:?}"),
+        }
+    }
 }
 
 #[test]

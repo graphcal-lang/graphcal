@@ -40,7 +40,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
 ) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
     let builtin_fns = builtin_functions();
-    let visible_const_values = visible_values_with_imports(dag, const_values, all_const_values);
+    let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
     let ctx = EvalContext::provisional_constants(
         tir,
@@ -474,8 +474,7 @@ fn resolve_application_field_constraints(
         )
     })?;
     let owner_src = constants.source;
-    let visible_const_values =
-        visible_values_with_imports(dag, constants.values, ctx.all_const_values);
+    let visible_const_values = visible_values_with_imports(constants.values, ctx.all_const_values);
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
@@ -611,7 +610,7 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
             )
         })
         .collect::<HashMap<_, _>>();
-    let all_const_values = visible_values_with_imports(tir.root(), const_values, &empty);
+    let all_const_values = visible_values_with_imports(const_values, &empty);
     resolve_struct_field_constraints_for_dags(
         tir,
         &const_scopes,

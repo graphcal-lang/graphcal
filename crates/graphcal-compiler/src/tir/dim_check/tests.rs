@@ -71,7 +71,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
         ir,
         &src,
         &resolver,
-        &project_types,
+        Arc::new(project_types),
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     compile_inline_dag_bodies_test(
@@ -100,7 +100,8 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();
     let tir =
-        crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
+        crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types))
+            .unwrap();
     (tir, src)
 }
 

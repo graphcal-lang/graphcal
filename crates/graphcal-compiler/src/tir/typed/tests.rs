@@ -3,6 +3,7 @@ use crate::dimension::{BaseDimId, Rational};
 use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{FormattingRegistry, RegistryBuilder};
+use crate::syntax::dimension::{ResolvedUnitName, UnitName};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::parser::Parser;
 use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
@@ -385,6 +386,118 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     ));
 }
 
+#[test]
+fn dag_store_clones_share_canonical_body_handles() {
+    let tir = parse_and_type_resolve("node x: Dimensionless = 1;").unwrap();
+    let owner = tir.root_dag_id().clone();
+    let store = tir.freeze_local_dag_store().unwrap();
+    let first = store.handle(&owner).unwrap();
+    let cloned = store.clone();
+    let second = cloned.handle(&owner).unwrap();
+
+    assert!(Arc::ptr_eq(first, second));
+}
+
+fn importer_tir(path: &str, stores: &[&DagStore]) -> TIR {
+    let mut builder =
+        parse_and_type_resolve_builder_named("node x: Dimensionless = 1;", path).unwrap();
+    stores
+        .iter()
+        .try_for_each(|store| builder.insert_shared_dag_store(store))
+        .unwrap();
+    builder.finish()
+}
+
+fn unit_overlay_tir(path: &str) -> (TIR, ResolvedUnitName) {
+    let mut tir = parse_and_type_resolve_builder_named(
+        "const unit local_step: Length = 2.0 m; node distance: Length = 1.0 local_step;",
+        path,
+    )
+    .unwrap()
+    .finish();
+    let unit = ResolvedUnitName::from_def(
+        tir.root_dag_id().clone(),
+        UnitName::expect_valid("local_step"),
+    );
+    let info = tir.unit_info(&unit).unwrap().clone();
+    tir.insert_runtime_unit(unit.clone(), info).unwrap();
+    (tir, unit)
+}
+
+#[test]
+fn imported_store_diamonds_share_bodies_and_units_without_republishing_imports() {
+    let (leaf, unit) = unit_overlay_tir("leaf.gcl");
+    let owner = leaf.root_dag_id().clone();
+    let leaf = leaf.freeze_local_dag_store().unwrap();
+    let left = importer_tir("left.gcl", &[&leaf]);
+    let right = importer_tir("right.gcl", &[&leaf]);
+    for importer in [&left, &right] {
+        assert!(std::ptr::eq(
+            leaf.get(&owner).unwrap(),
+            importer.dag_registry().get(&owner).unwrap()
+        ));
+        assert!(std::ptr::eq(
+            leaf.unit_info(&unit).unwrap(),
+            importer.unit_info(&unit).unwrap()
+        ));
+    }
+    let left = left.freeze_local_dag_store().unwrap();
+    let right = right.freeze_local_dag_store().unwrap();
+    for published in [&left, &right] {
+        assert_eq!(published.len(), 1);
+        assert!(published.get(&owner).is_none());
+        assert!(published.unit_info(&unit).is_none());
+    }
+    let root = importer_tir("root.gcl", &[&leaf, &left, &right]);
+    assert_eq!(root.dag_registry().len(), 4);
+    assert!(std::ptr::eq(
+        leaf.get(&owner).unwrap(),
+        root.dag_registry().get(&owner).unwrap()
+    ));
+    assert!(std::ptr::eq(
+        leaf.unit_info(&unit).unwrap(),
+        root.unit_info(&unit).unwrap()
+    ));
+}
+
+#[test]
+fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
+    let leaf = importer_tir("leaf.gcl", &[])
+        .freeze_local_dag_store()
+        .unwrap();
+    let (owner, body) = leaf.iter().next().unwrap();
+    for shared_first in [false, true] {
+        let mut root =
+            parse_and_type_resolve_builder_named("node x: Dimensionless = 1;", "root.gcl").unwrap();
+        if shared_first {
+            root.insert_shared_dag_store(&leaf).unwrap();
+            assert!(
+                matches!(root.insert_dag(body.clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
+            );
+        } else {
+            root.insert_dag(body.clone()).unwrap();
+            assert!(
+                matches!(root.insert_shared_dag_store(&leaf), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
+            );
+        }
+        assert_eq!(root.finish().dag_registry().len(), 2);
+    }
+}
+
+#[test]
+fn publication_rejects_runtime_units_without_a_defining_body() {
+    let (mut tir, unit) = unit_overlay_tir("root.gcl");
+    let missing = ResolvedUnitName::from_def(
+        tir.root_dag_id().child("missing"),
+        unit.to_unowned_def_name(),
+    );
+    let info = tir.unit_info(&unit).unwrap().clone();
+    tir.insert_runtime_unit(missing.clone(), info).unwrap();
+    assert!(
+        matches!(tir.freeze_local_dag_store(), Err(DagStoreFreezeError::MissingUnitOwner { identity }) if identity == missing)
+    );
+}
+
 fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
     let raw = Parser::new(source).parse_file().unwrap();
     let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
@@ -514,14 +627,21 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
 }
 
 fn parse_and_type_resolve_builder(source: &str) -> Result<TirBuilder, GraphcalError> {
+    parse_and_type_resolve_builder_named(source, "test.gcl")
+}
+
+fn parse_and_type_resolve_builder_named(
+    source: &str,
+    path: &str,
+) -> Result<TirBuilder, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let src = NamedSource::new(path, Arc::new(source.to_string()));
     let (ir, parent_registry) =
         crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id =
-        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(path)).unwrap();
     let mut resolver = ModuleResolver::default();
     resolver
         .add_module(parent_dag_id.clone(), &file.declarations)
@@ -572,7 +692,7 @@ fn parse_and_type_resolve_builder(source: &str) -> Result<TirBuilder, GraphcalEr
         HashMap::new(),
         &src,
         &resolver,
-        &project_types,
+        Arc::new(project_types),
         &cancellation,
     )?;
     compile_inline_dag_bodies_test(
@@ -669,7 +789,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
         ir,
         &src,
         &resolver,
-        &project_types,
+        Arc::new(project_types),
         &crate::cancellation::CancellationToken::unbounded(),
     )
     .unwrap();
@@ -730,7 +850,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();
 
-    let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
+    let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
     let deps = &tir.root().semantic.dependencies;
     let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
     let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));

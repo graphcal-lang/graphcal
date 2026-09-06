@@ -936,10 +936,17 @@ validation; semantic consumers must use `ProjectTypeStore`.
 ```text
 TIR
   registry: FormattingRegistry       // display + timezone boundary
-  project_type_store: ProjectTypeStore
-  root_dag_id: DagId
-  dags: HashMap<DagId, DagTIR>
+  project_types: Arc<ProjectTypeStore>  // one frozen project-wide store
+  dags: DagRegistry
+    root: DagTIR                       // mutable only during local assembly
+    other_dags: HashMap<DagId, DagTIR>  // local inline/instance bodies
+    shared_dags: HashMap<DagId, Arc<DagTIR>>  // immutable imports
+  runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>
   module_aliases: HashMap<ModuleAliasName, DagId>
+
+DagStore  // published by consuming local assembly, never by cloning its closure
+  dags: HashMap<DagId, Arc<DagTIR>>  // only this module's own bodies
+  runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>  // only locally owned overlays
 
 DagTIR
   dag_id: DagId
@@ -958,7 +965,9 @@ DagTIR
   projectable_outputs  // explicit node exports + param input ports
 ```
 
-`TIR::root()` and `TIR::root_mut()` access the file root. `TIR::lookup_call_target`
+`TIR::root()` borrows the file root; crate-internal `root_mut()` is an assembly
+operation. Imported bodies have no mutable registry view. Publication checks
+runtime-unit owners and never republishes imported unit definitions. `TIR::lookup_call_target`
 and `TIR::resolve_call_path` resolve inline DAG call paths through same-file
 children or `module_aliases`. Module-aware callers should prefer
 `DagTIR::semantic.inline_dag_refs` when evaluating a specific expression because
@@ -976,7 +985,7 @@ ExecPlan
   assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>
   expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>
   domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
-  struct_field_constraints: Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>
+  checked_execution_facts: CheckedExecutionFacts  // authoritative field constraints + per-DAG facts
 ```
 
 It contains no cloned HIR bodies and no parser or registry-building work;
@@ -1106,7 +1115,14 @@ or builtin, while a missing required-port substitution is an internal error.
 `ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
 module into `HirProject` using HIR-only dependency interfaces. HIR import
 bindings contain canonical targets but cannot express checked types or values.
-Checking then builds one `ProjectTypeStore` from the complete HIR project. For
+Checking then freezes one shared `ProjectTypeStore` from the complete HIR project.
+Non-root module publication consumes local bodies into an immutable `DagStore`;
+importers install body/unit handles rather than copying dependency closures.
+Imported interfaces carry an explicit constant/runtime category. Required constants
+are read from their defining body's checked pool, with missing facts rejected;
+no mutable imported-value injection or duplicate artifact value map remains.
+Externally bindable constructor targets are completed before execution facts are
+published, not while preparing an already checked project. For
 each physical file it resolves every root/inline declaration signature first,
 then attaches checked imported interfaces and consumes the same
 `SignatureResolvedHirDag` values into TIR bodies. Dependency aliases never

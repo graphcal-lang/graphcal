@@ -1204,6 +1204,11 @@ include nasa.rocket.compute_thrust(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
 node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
 
+Ordinary imports reuse immutable checked module definitions. That sharing does
+not merge instances: even equal Static bindings retain independent parameter
+values, runtime-scaled units, and assertion checks. Imported constants come from
+their defining module's checked scope, not a caller's runtime environment.
+
 Binding expressions can reference `@` values from the surrounding scope:
 
 ```graphcal

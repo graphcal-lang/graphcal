@@ -245,16 +245,28 @@ pub fn compile_checked_with_cancellation(
         imported_values: semantic_dags
             .iter()
             .flat_map(|dag| {
-                dag.imported_bindings().values().filter_map(|binding| {
-                    binding.value().map(|value| {
-                        (
-                            RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
-                            value.clone(),
-                        )
-                    })
-                })
+                dag.imported_bindings()
+                    .values()
+                    .map(move |binding| (*dag, binding))
             })
-            .collect(),
+            .try_fold(RuntimeValueMap::new(), |mut values, (dag, binding)| {
+                if let Some(value) = crate::execution_scope::checked_imported_constant(
+                    tir, facts, binding,
+                )
+                .map_err(|error| {
+                    GraphcalError::internal_error(
+                        error.to_string(),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })? {
+                    values.insert(
+                        RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
+                        value.clone(),
+                    );
+                }
+                Ok::<_, GraphcalError>(values)
+            })?,
         topo_order,
         assumes_map: semantic_dags
             .iter()
@@ -312,6 +324,11 @@ fn validate_execution_facts(
         let invalid = |message: String| {
             GraphcalError::internal_error(message, facts.source(), DiagnosticAnchor::WholeFile)
         };
+        dag.imported_bindings().values().try_for_each(|binding| {
+            crate::execution_scope::checked_imported_constant(tir, all_facts, binding)
+                .map(|_| ())
+                .map_err(|error| invalid(error.to_string()))
+        })?;
         let expected = dag
             .source_order()
             .iter()
@@ -390,7 +407,7 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_local_hir(&ir).unwrap();
-        let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
+        let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
         (tir, src)
     }
 
@@ -524,6 +541,77 @@ mod tests {
         }
         // Mutation of a clone must not damage already published artifacts.
         compile_checked_with_cancellation(&tir, &checked, &src, &cancellation).unwrap();
+    }
+
+    #[test]
+    fn imported_constants_require_defining_facts_and_runtime_absence_is_explicit() {
+        use crate::execution_scope::{ExecutionScopeError, checked_imported_constant};
+        use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
+
+        let (tir, src) =
+            tir_from_source("const node C: Dimensionless = 2.0; param x: Dimensionless;");
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let facts = crate::project_compiler::check_execution_facts_with_cancellation(
+            &tir,
+            &src,
+            &cancellation,
+        )
+        .unwrap();
+        let binding = |name, kind| {
+            let target = resolved_key(name).as_resolved().clone();
+            ImportedBinding::new(
+                target.clone(),
+                tir.runtime_declared_type(&target, &src).unwrap(),
+                kind,
+            )
+        };
+        let constant = binding("C", ImportedValueKind::Constant);
+        assert!(
+            (quantity(
+                checked_imported_constant(&tir, &facts, &constant)
+                    .unwrap()
+                    .unwrap()
+            ) - 2.0)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            checked_imported_constant(&tir, &facts, &binding("x", ImportedValueKind::Runtime))
+                .unwrap()
+                .is_none()
+        );
+        for wrong in [
+            binding("C", ImportedValueKind::Runtime),
+            binding("x", ImportedValueKind::Constant),
+        ] {
+            assert!(matches!(
+                checked_imported_constant(&tir, &facts, &wrong),
+                Err(ExecutionScopeError::WrongImportedKind { .. })
+            ));
+        }
+        let mut missing_value = facts.clone();
+        let dag_facts = Arc::make_mut(
+            Arc::make_mut(&mut missing_value.by_dag)
+                .get_mut(tir.root_dag_id())
+                .unwrap(),
+        );
+        Arc::make_mut(&mut dag_facts.const_values).clear();
+        assert!(matches!(
+            checked_imported_constant(&tir, &missing_value, &constant),
+            Err(ExecutionScopeError::MissingConstant(_))
+        ));
+        let mut missing_owner = facts.clone();
+        Arc::make_mut(&mut missing_owner.by_dag).clear();
+        assert!(matches!(
+            checked_imported_constant(&tir, &missing_owner, &constant),
+            Err(ExecutionScopeError::MissingFacts(_))
+        ));
+        // Corrupting isolated test copies must not damage the published facts.
+        assert!(
+            checked_imported_constant(&tir, &facts, &constant)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

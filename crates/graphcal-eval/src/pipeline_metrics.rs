@@ -6,7 +6,10 @@
 
 #[derive(Debug, Clone, Copy)]
 pub enum Event {
-    DagBodyCopy,
+    #[cfg(test)]
+    ImportedBodyReference,
+    #[cfg(test)]
+    UnsharedImportedBody,
     PlanConstruction,
     ConstructorResolution,
     PresentationEvaluation,
@@ -24,6 +27,15 @@ pub fn record(event: Event) {
 #[cfg(test)]
 pub use observer::{measure, record_many};
 
+/// Observe the actual canonical/importer addresses, not an inactive clone hook.
+#[cfg(test)]
+pub fn record_imported_body<T>(canonical: &T, imported: &T) {
+    record(Event::ImportedBodyReference);
+    if !std::ptr::eq(canonical, imported) {
+        record(Event::UnsharedImportedBody);
+    }
+}
+
 #[cfg(test)]
 mod observer {
     use super::Event;
@@ -31,7 +43,8 @@ mod observer {
 
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
     pub struct Counts {
-        pub dag_body_copies: u64,
+        pub imported_body_references: u64,
+        pub unshared_imported_bodies: u64,
         pub plan_constructions: u64,
         pub constructor_resolutions: u64,
         pub presentation_evaluations: u64,
@@ -43,7 +56,8 @@ mod observer {
         COUNTS.with(|cell| {
             let mut counts = cell.get();
             let count = match event {
-                Event::DagBodyCopy => &mut counts.dag_body_copies,
+                Event::ImportedBodyReference => &mut counts.imported_body_references,
+                Event::UnsharedImportedBody => &mut counts.unshared_imported_bodies,
                 Event::PlanConstruction => &mut counts.plan_constructions,
                 Event::ConstructorResolution => &mut counts.constructor_resolutions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
@@ -60,7 +74,12 @@ mod observer {
         (
             value,
             Counts {
-                dag_body_copies: after.dag_body_copies.saturating_sub(before.dag_body_copies),
+                imported_body_references: after
+                    .imported_body_references
+                    .saturating_sub(before.imported_body_references),
+                unshared_imported_bodies: after
+                    .unshared_imported_bodies
+                    .saturating_sub(before.unshared_imported_bodies),
                 plan_constructions: after
                     .plan_constructions
                     .saturating_sub(before.plan_constructions),

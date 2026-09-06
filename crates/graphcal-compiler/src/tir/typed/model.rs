@@ -857,6 +857,25 @@ pub enum DagRegistryError {
     DuplicateDag { dag_id: crate::dag_id::DagId },
 }
 
+/// Failure to freeze the locally owned portion of an assembly registry.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DagStoreFreezeError {
+    /// Every runtime unit must have a local or imported defining body.
+    #[error("runtime unit `{identity}` has no defining DAG in the assembly registry")]
+    MissingUnitOwner { identity: ResolvedUnitName },
+}
+
+/// Failure to attach one immutable module store to an assembly registry.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DagStoreInsertError {
+    /// The store contains a body identity already owned by the assembly.
+    #[error(transparent)]
+    Registry(#[from] DagRegistryError),
+    /// The store contains a conflicting instance-specialized unit.
+    #[error("runtime unit `{identity}` has competing checked definitions")]
+    CompetingRuntimeUnit { identity: ResolvedUnitName },
+}
+
 /// Checked registry of compiled DAG modules.
 ///
 /// The root DAG is stored directly, so its presence is structural. Every other
@@ -867,6 +886,60 @@ pub enum DagRegistryError {
 pub struct DagRegistry {
     root: DagTIR,
     other_dags: HashMap<crate::dag_id::DagId, DagTIR>,
+    /// Immutable bodies imported from an already-frozen module store.
+    ///
+    /// Assembly owns `root` and `other_dags`; imported bodies are handles only.
+    /// Imported bodies have no mutable registry accessor; inserting a detached
+    /// copy under an already installed identity is rejected.
+    shared_dags: HashMap<crate::dag_id::DagId, Arc<DagTIR>>,
+}
+
+/// Immutable canonical bodies published by one module in a compilation session.
+///
+/// The store is created by consuming an assembly registry. It has no mutation
+/// or completion API. Cloning its local index shares body and unit handles;
+/// project artifacts share the complete store through `Arc`.
+#[derive(Debug, Clone)]
+pub struct DagStore {
+    dags: HashMap<crate::dag_id::DagId, Arc<DagTIR>>,
+    runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
+}
+
+impl DagStore {
+    /// Look up a canonical immutable body.
+    #[must_use]
+    pub fn get(&self, dag_id: &crate::dag_id::DagId) -> Option<&DagTIR> {
+        self.dags.get(dag_id).map(AsRef::as_ref)
+    }
+
+    /// Borrow the canonical body handle for pointer-identity checks and sharing.
+    #[must_use]
+    pub fn handle(&self, dag_id: &crate::dag_id::DagId) -> Option<&Arc<DagTIR>> {
+        self.dags.get(dag_id)
+    }
+
+    /// Iterate over canonical immutable bodies.
+    pub fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
+        self.dags.iter().map(|(id, dag)| (id, dag.as_ref()))
+    }
+
+    /// Look up a runtime unit overlay owned by this publishing module.
+    #[must_use]
+    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
+        self.runtime_units.get(name).map(AsRef::as_ref)
+    }
+
+    /// Number of canonical bodies in this store.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.dags.len()
+    }
+
+    /// Whether this store has no bodies.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.dags.is_empty()
+    }
 }
 
 impl DagRegistry {
@@ -874,7 +947,42 @@ impl DagRegistry {
         Self {
             root,
             other_dags: HashMap::new(),
+            shared_dags: HashMap::new(),
         }
+    }
+
+    /// Consume the mutable local assembly bodies into immutable handles.
+    ///
+    /// Imported handles are deliberately not copied into the new store: they
+    /// already belong to another canonical store.
+    fn freeze_local(
+        self,
+        runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
+    ) -> Result<DagStore, DagStoreFreezeError> {
+        runtime_units.keys().try_for_each(|identity| {
+            self.get(identity.owner()).map(|_| ()).ok_or_else(|| {
+                DagStoreFreezeError::MissingUnitOwner {
+                    identity: identity.clone(),
+                }
+            })
+        })?;
+        let mut dags = self
+            .other_dags
+            .into_iter()
+            .map(|(id, dag)| (id, Arc::new(dag)))
+            .collect::<HashMap<_, _>>();
+        let root_id = self.root.dag_id().clone();
+        dags.insert(root_id, Arc::new(self.root));
+        // Imported unit definitions stay in their publishing module, just like
+        // imported bodies. Only the final importing TIR needs their lookup index.
+        let runtime_units = runtime_units
+            .into_iter()
+            .filter(|(identity, _)| dags.contains_key(identity.owner()))
+            .collect();
+        Ok(DagStore {
+            dags,
+            runtime_units,
+        })
     }
 
     /// Canonical identity of this registry's root DAG.
@@ -895,7 +1003,7 @@ impl DagRegistry {
 
     fn insert(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
         let dag_id = dag.dag_id.clone();
-        if &dag_id == self.root_id() {
+        if &dag_id == self.root_id() || self.shared_dags.contains_key(&dag_id) {
             return Err(DagRegistryError::DuplicateDag { dag_id });
         }
         match self.other_dags.entry(dag_id.clone()) {
@@ -915,7 +1023,9 @@ impl DagRegistry {
         if dag_id == self.root_id() {
             Some(&self.root)
         } else {
-            self.other_dags.get(dag_id)
+            self.other_dags
+                .get(dag_id)
+                .or_else(|| self.shared_dags.get(dag_id).map(AsRef::as_ref))
         }
     }
 
@@ -927,14 +1037,25 @@ impl DagRegistry {
         }
     }
 
+    /// Iterate over local assembly identities and bodies.
+    pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
+        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
+    }
+
     /// Iterate over canonical identities and DAG bodies.
     pub fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
-        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
+        self.local_iter()
+            .chain(self.shared_dags.iter().map(|(id, dag)| (id, dag.as_ref())))
     }
 
     /// Iterate over canonical DAG identities.
     pub fn keys(&self) -> impl Iterator<Item = &crate::dag_id::DagId> {
-        std::iter::once(self.root.dag_id()).chain(self.other_dags.keys())
+        self.iter().map(|(id, _)| id)
+    }
+
+    /// Iterate over identities owned by this mutable assembly registry.
+    pub(crate) fn local_keys(&self) -> impl Iterator<Item = &crate::dag_id::DagId> {
+        self.local_iter().map(|(id, _)| id)
     }
 
     /// Iterate mutably over DAG bodies while preserving their registry keys.
@@ -944,31 +1065,39 @@ impl DagRegistry {
 
     /// Iterate over DAG bodies.
     pub fn values(&self) -> impl Iterator<Item = &DagTIR> {
-        std::iter::once(&self.root).chain(self.other_dags.values())
+        self.iter().map(|(_, dag)| dag)
     }
 
-    /// Number of DAG modules in this registry, including its root.
+    /// Add handles to an immutable module store during assembly.
+    pub(crate) fn insert_shared_store(&mut self, store: &DagStore) -> Result<(), DagRegistryError> {
+        if let Some(dag_id) = store.dags.keys().find(|dag_id| {
+            *dag_id == self.root_id()
+                || self.other_dags.contains_key(*dag_id)
+                || self.shared_dags.contains_key(*dag_id)
+        }) {
+            return Err(DagRegistryError::DuplicateDag {
+                dag_id: dag_id.clone(),
+            });
+        }
+        self.shared_dags.extend(
+            store
+                .dags
+                .iter()
+                .map(|(dag_id, dag)| (dag_id.clone(), Arc::clone(dag))),
+        );
+        Ok(())
+    }
+
+    /// Number of DAG modules in this registry, including its root and imports.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.other_dags.len() + 1
+        self.other_dags.len() + self.shared_dags.len() + 1
     }
 
     /// A checked registry is never empty because construction requires a root.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
-    }
-}
-
-impl<'a> IntoIterator for &'a DagRegistry {
-    type Item = (&'a crate::dag_id::DagId, &'a DagTIR);
-    type IntoIter = std::iter::Chain<
-        std::iter::Once<(&'a crate::dag_id::DagId, &'a DagTIR)>,
-        std::collections::hash_map::Iter<'a, crate::dag_id::DagId, DagTIR>,
-    >;
-
-    fn into_iter(self) -> Self::IntoIter {
-        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
     }
 }
 
@@ -979,7 +1108,9 @@ impl std::ops::Index<&crate::dag_id::DagId> for DagRegistry {
         if index == self.root_id() {
             &self.root
         } else {
-            &self.other_dags[index]
+            self.other_dags
+                .get(index)
+                .unwrap_or_else(|| self.shared_dags[index].as_ref())
         }
     }
 }
@@ -1316,8 +1447,9 @@ pub struct CompetingExternFunctionDefinition {
 #[derive(Debug)]
 pub struct TirBuilder {
     registry: FormattingRegistry,
-    project_types: ProjectTypeStore,
+    project_types: Arc<ProjectTypeStore>,
     dags: DagRegistry,
+    runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     extern_functions:
         HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
@@ -1326,7 +1458,7 @@ pub struct TirBuilder {
 impl TirBuilder {
     pub(in crate::tir::typed) fn new(
         registry: FormattingRegistry,
-        project_types: ProjectTypeStore,
+        project_types: Arc<ProjectTypeStore>,
         root: DagTIR,
         extern_functions: HashMap<
             crate::syntax::plugin::ExternFnKey,
@@ -1337,6 +1469,7 @@ impl TirBuilder {
             registry,
             project_types,
             dags: DagRegistry::new(root),
+            runtime_units: HashMap::new(),
             module_aliases: HashMap::new(),
             extern_functions,
         }
@@ -1361,8 +1494,8 @@ impl TirBuilder {
 
     /// Borrow the owner-qualified type store accumulated for this project.
     #[must_use]
-    pub const fn project_type_store(&self) -> &ProjectTypeStore {
-        &self.project_types
+    pub fn project_type_store(&self) -> &ProjectTypeStore {
+        self.project_types.as_ref()
     }
 
     /// Add a compiled DAG under its own canonical identity.
@@ -1375,9 +1508,30 @@ impl TirBuilder {
         self.dags.insert(dag)
     }
 
-    /// Install the completed canonical type store after child DAG compilation.
-    pub fn replace_project_type_store(&mut self, project_types: ProjectTypeStore) {
-        self.project_types = project_types;
+    /// Add immutable bodies from a previously frozen module store.
+    ///
+    /// Only handles are copied. The body and its checked semantic facts remain
+    /// owned by the store that published them.
+    pub fn insert_shared_dag_store(&mut self, store: &DagStore) -> Result<(), DagStoreInsertError> {
+        if let Some((name, _)) = store.runtime_units.iter().find(|(name, info)| {
+            self.runtime_units
+                .get(*name)
+                .is_some_and(|existing| existing != *info)
+        }) {
+            return Err(DagStoreInsertError::CompetingRuntimeUnit {
+                identity: name.clone(),
+            });
+        }
+        self.dags
+            .insert_shared_store(store)
+            .map_err(DagStoreInsertError::Registry)?;
+        self.runtime_units.extend(
+            store
+                .runtime_units
+                .iter()
+                .map(|(name, info)| (name.clone(), Arc::clone(info))),
+        );
+        Ok(())
     }
 
     /// Bind a source module alias to its canonical callable DAG target.
@@ -1422,6 +1576,7 @@ impl TirBuilder {
             registry: self.registry,
             project_types: self.project_types,
             dags: self.dags,
+            runtime_units: self.runtime_units,
             module_aliases: self.module_aliases,
             extern_functions: self.extern_functions,
         }
@@ -1437,8 +1592,9 @@ impl TirBuilder {
 #[derive(Debug, Clone)]
 pub struct TIR {
     pub(crate) registry: FormattingRegistry,
-    pub(in crate::tir::typed) project_types: ProjectTypeStore,
+    pub(in crate::tir::typed) project_types: Arc<ProjectTypeStore>,
     pub(crate) dags: DagRegistry,
+    pub(crate) runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     pub(crate) extern_functions:
         HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
@@ -1473,14 +1629,24 @@ impl TIR {
 
     /// Borrow the authoritative owner-qualified project type store.
     #[must_use]
-    pub const fn project_type_store(&self) -> &ProjectTypeStore {
-        &self.project_types
+    pub fn project_type_store(&self) -> &ProjectTypeStore {
+        self.project_types.as_ref()
     }
 
-    /// Borrow every reachable DAG through the read-only checked registry.
+    /// Borrow every local and imported DAG through the read-only checked registry.
     #[must_use]
     pub const fn dag_registry(&self) -> &DagRegistry {
         &self.dags
+    }
+
+    /// Consume this TIR's mutable local assembly bodies into an immutable store.
+    /// Imported bodies and runtime units remain owned by their publishing module.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DagStoreFreezeError`] if a runtime unit has no defining body.
+    pub fn freeze_local_dag_store(self) -> Result<DagStore, DagStoreFreezeError> {
+        self.dags.freeze_local(self.runtime_units)
     }
 
     /// Iterate over every DAG owned by this file, including the root and all
@@ -1489,7 +1655,7 @@ impl TIR {
     pub fn local_dags(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
         let root = self.root_dag_id();
         self.dags
-            .iter()
+            .local_iter()
             .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
     }
 
@@ -1580,7 +1746,28 @@ impl TIR {
     /// Look up a unit by its canonical defining-module identity.
     #[must_use]
     pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
-        self.project_types.get_unit(name)
+        self.runtime_units
+            .get(name)
+            .map(AsRef::as_ref)
+            .or_else(|| self.project_types.get_unit(name))
+    }
+
+    /// Install one instance-owned dynamic unit in the mutable assembly overlay.
+    pub(crate) fn insert_runtime_unit(
+        &mut self,
+        name: ResolvedUnitName,
+        info: UnitInfo,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        match self.runtime_units.get(&name) {
+            Some(existing) if existing.as_ref() != &info => {
+                Err(ProjectTypeStoreInsertError::CompetingUnitDefinition { identity: name })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.runtime_units.insert(name, Arc::new(info));
+                Ok(())
+            }
+        }
     }
 
     /// Look up a declared index by its canonical defining-module identity.
@@ -2144,27 +2331,5 @@ impl DagTIR {
         &self,
     ) -> &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding> {
         &self.imported_bindings
-    }
-
-    /// Supply evaluated values for imported bindings owned by one dependency.
-    /// Canonical target, declared type, and value remain in the same record.
-    pub fn supply_imported_values(
-        &mut self,
-        owner: &crate::dag_id::DagId,
-        values: &HashMap<DeclName, crate::registry::runtime_value::RuntimeValue>,
-        declared_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
-    ) {
-        for binding in self.imported_bindings.values_mut() {
-            if binding.target().owner() != owner {
-                continue;
-            }
-            let source_name = binding.target().to_unowned_def_name();
-            if let Some(value) = values.get(&source_name)
-                && let Some(declared_type) = declared_types.get(&ScopedName::from(&source_name))
-            {
-                binding.supply_value(value.clone());
-                binding.replace_declared_type(declared_type.clone());
-            }
-        }
     }
 }

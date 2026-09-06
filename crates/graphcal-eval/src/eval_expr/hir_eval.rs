@@ -2709,7 +2709,8 @@ fn eval_hir_dag_call(
             &available_values,
             caller_presentations,
             ctx,
-        );
+            call_span,
+        )?;
     }
 
     let empty_hir_locals = HirLocalValueMap::root();
@@ -2862,7 +2863,14 @@ fn seed_inline_dag_imported_values(
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PresentationInstanceMap>,
     ctx: &EvalContext<'_>,
-) {
+    call_span: Span,
+) -> Result<(), GraphcalError> {
+    let facts = ctx.checked_execution_facts().ok_or_else(|| {
+        ctx.internal_error(
+            "runtime DAG call has no checked execution-fact store",
+            call_span,
+        )
+    })?;
     let own_names: std::collections::HashSet<&graphcal_compiler::syntax::decl_name::DeclName> =
         dag_tir
             .consts()
@@ -2879,28 +2887,31 @@ fn seed_inline_dag_imported_values(
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
-        let value = binding
-            .value()
-            .or_else(|| imported_binding_value(binding.target(), caller_values, ctx));
-        if let Some(value) = value {
+        if let Some(value) =
+            crate::execution_scope::checked_imported_constant(ctx.tir, facts, binding)
+                .map_err(|error| ctx.internal_error(error.to_string(), call_span))?
+        {
+            dag_values.insert(visible_key, value.clone());
+            continue;
+        }
+        if let Some(value) = imported_binding_value(binding.target(), caller_values, ctx) {
             dag_values.insert(visible_key.clone(), value.clone());
-            if binding.value().is_none() {
-                let presentation = if binding.target().owner() == ctx.current_dag.dag_id() {
-                    caller_presentations.and_then(|instances| instances.get(&visible_key))
-                } else if binding.target().owner() == ctx.tir.root_dag_id() {
-                    ctx.root_presentation_instances
-                        .and_then(|instances| instances.get(&visible_key))
-                } else {
-                    None
-                };
-                if let Some(presentation) = presentation
-                    && !presentation.is_none()
-                {
-                    dag_presentations.insert(visible_key, presentation.clone());
-                }
+            let presentation = if binding.target().owner() == ctx.current_dag.dag_id() {
+                caller_presentations.and_then(|instances| instances.get(&visible_key))
+            } else if binding.target().owner() == ctx.tir.root_dag_id() {
+                ctx.root_presentation_instances
+                    .and_then(|instances| instances.get(&visible_key))
+            } else {
+                None
+            };
+            if let Some(presentation) = presentation
+                && !presentation.is_none()
+            {
+                dag_presentations.insert(visible_key, presentation.clone());
             }
         }
     }
+    Ok(())
 }
 
 /// Check the asserts of an inline-instantiated dag body (#812).

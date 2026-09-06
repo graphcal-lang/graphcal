@@ -100,12 +100,11 @@ pub(super) struct HirFile {
 
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
-    pub(super) const_values_by_dag:
-        HashMap<graphcal_compiler::dag_id::DagId, HashMap<DeclName, RuntimeValue>>,
     pub(super) declared_types_by_dag:
         HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     pub(super) override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
-    pub(super) dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
+    /// The module's own bodies, frozen once and shared by every importer.
+    pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
     pub(super) extern_functions: HashMap<
         graphcal_compiler::syntax::plugin::ExternFnKey,
         graphcal_compiler::ir::lower::ExternFunctionEntry,
@@ -159,12 +158,6 @@ impl ModuleArtifactStore {
 
     pub(super) fn values(&self) -> impl Iterator<Item = &ModuleArtifact> {
         self.by_file.values()
-    }
-
-    pub(super) fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&graphcal_compiler::dag_id::DagId, &ModuleArtifact)> {
-        self.by_file.iter()
     }
 }
 

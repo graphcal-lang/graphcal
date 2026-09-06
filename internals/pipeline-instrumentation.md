@@ -12,7 +12,8 @@ cargo test --locked -p graphcal-eval --lib pipeline_cost_baseline -- --nocapture
 
 | Event | Instrumented boundary |
 | --- | --- |
-| DAG body copy | Retaining a module's cloned DAG registry and cloning imported DAG bodies during merge |
+| Imported body reference | Comparing a completed importing TIR's body address with its publishing module's canonical body |
+| Unshared imported body | A reference check found different body addresses |
 | Plan construction | Root execution-plan preparation and combined callable/instance scheduling |
 | Constructor resolution | The expression evaluator's constructor generic-argument reconstruction |
 | Presentation evaluation | Branch/match selector replay and expression-valued index projection arguments |
@@ -21,7 +22,7 @@ These are not allocation counters, exhaustive clone counts, wall-clock
 benchmarks, or RSS measurements. In particular, nested runtime-value clones and
 compiler-internal temporary rigid views are not counted as imported DAG copies.
 
-## Initial Phase A observations
+## Initial Phase A observations (historical)
 
 - Three-module ordinary-import chain preparation: **6 body copies**, **1 plan**.
 - Two-, four-, and eight-module chains: **2**, **12**, and **56** copies,
@@ -39,11 +40,40 @@ while presentation selects the second branch's `m` label instead of the authored
 first branch's `km`. Phase D must change this baseline to **one host call** and
 `km` presentation; a native `Fn` signature does not establish purity.
 
-Positive runtime counts document work to remove, not desirable behavior.
-Phases B–D must change the corresponding fixture assertions to zero when
-ownership, planning, checked constructor facts, and presentation evidence become
-their authorities. Retain the value/equivalence assertions when changing cost
-expectations.
+The old body-copy hooks were removed with their copying paths; retaining an
+unrecorded event and asserting zero would not prove sharing. The current observer
+instead compares actual body addresses at completed module publication, and
+requires a positive number of reference checks for imported projects.
+
+Positive runtime planning, constructor, and presentation counts still document
+work to remove, not desirable behavior. Retain value/equivalence assertions when
+changing their expectations in the remaining B–D work.
+
+## Module ownership checkpoint
+
+- A three-module chain checks **3** canonical/importer body references, with
+  **0** unshared bodies. Chains of 2/4/8 modules check **1/6/28** references,
+  respectively, also with zero mismatches. The current assembly indexes prior
+  published modules; these reference counts are not a linear-time claim.
+- A real four-file diamond checks **6** references and evaluates imported
+  constants through both selective aliases and called module bodies.
+- Every completed module in evaluator unit tests also checks that its project
+  type-store address matches the session's shared store.
+- Compiler-library diamond tests verify body **and runtime-unit** identity,
+  local-only publication, duplicate-ID rejection in both insertion orders, and
+  rejection of unit overlays without a defining body.
+- An explicit equal-Static specialization test retains distinct runtime instance
+  IDs, parameter values, SI results, and dynamic display scales.
+- Required imported constants are distinguished from deferred runtime imports;
+  missing pools/values or a category mismatch fail rather than disappearing or
+  falling back to caller values.
+
+Independent temporary mutations reintroduced each of: a duplicate shared ID,
+a copied imported unit, a copied imported body, and a copied project type store.
+Each failed its intended assertion, after which exact source was restored and
+positive tests rerun. These are bounded mutation checks, not exhaustive clone,
+allocation, or performance instrumentation. Callable planning and runtime owner
+searches still remain to be removed in Phase B.
 
 ## Invocation-state ownership
 

@@ -2154,7 +2154,7 @@ fn detect_cross_dag_cycles(
     use crate::dag_id::DagId;
 
     let mut edges: BTreeMap<DagId, BTreeMap<DagId, Span>> = BTreeMap::new();
-    for (key, dag_tir) in &tir.dags {
+    for (key, dag_tir) in tir.dags.iter() {
         let mut targets = BTreeMap::new();
         collect_dag_call_targets_from_dag(dag_tir, &mut targets);
         edges.insert(key.clone(), targets);
