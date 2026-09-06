@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
 use graphcal_compiler::ir::imported_binding::{HirImportedBinding, ImportedBinding};
-use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
+use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;

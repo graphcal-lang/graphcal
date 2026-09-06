@@ -22,8 +22,8 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
+use crate::declaration_category::DeclCategory;
 use crate::ir::lower::HirDag;
-use crate::ir::resolve::DeclCategory;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::syntax::module_name::ScopedName;

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, Expr, FigureDecl, File, LayerDecl, PlotDecl, TypeExpr,
 };
@@ -19,8 +20,7 @@ use crate::dimension::Dimension;
 use crate::ir::imported_binding::HirImportedBinding;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::resolve::{
-    CollectedFile, DeclCategory, ImportedValueNames, ParsedExpectedFail,
-    resolve_with_imported_values,
+    CollectedFile, ImportedValueNames, ParsedExpectedFail, resolve_with_imported_values,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::prelude::load_prelude;

@@ -634,7 +634,7 @@ pub enum ModelDefinitionError {
     #[error("selected output `{name}` is a {actual_kind}, not a node")]
     OutputNotNode {
         name: DeclName,
-        actual_kind: graphcal_compiler::ir::resolve::DeclCategory,
+        actual_kind: graphcal_compiler::declaration_category::DeclCategory,
     },
     #[error("selected output `{name}` is private")]
     PrivateOutput { name: DeclName },

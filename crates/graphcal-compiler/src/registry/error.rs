@@ -1670,7 +1670,7 @@ pub enum GraphcalError {
     )]
     OverrideNotAParam {
         name: DeclName,
-        actual_kind: crate::registry::resolve_types::DeclCategory,
+        actual_kind: crate::declaration_category::DeclCategory,
     },
 
     #[error("unknown entry parameter `{name}` in external binding")]

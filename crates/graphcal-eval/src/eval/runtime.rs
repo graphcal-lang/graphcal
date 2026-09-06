@@ -19,7 +19,8 @@ use crate::eval_expr::{
     eval_hir_expr_with_presentation,
 };
 use crate::runtime_presentation::PresentationInstanceMap;
-use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
+use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::ir::resolve::{ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};

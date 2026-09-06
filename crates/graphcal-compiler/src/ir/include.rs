@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{DimExpr, Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
-use crate::ir::resolve::DeclCategory;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{self, Registry};
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};

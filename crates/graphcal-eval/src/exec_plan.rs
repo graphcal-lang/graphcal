@@ -120,8 +120,8 @@ pub fn combined_runtime_order_for(
                 .filter(|(_, category)| {
                     matches!(
                         category,
-                        graphcal_compiler::ir::resolve::DeclCategory::Param
-                            | graphcal_compiler::ir::resolve::DeclCategory::Node
+                        graphcal_compiler::declaration_category::DeclCategory::Param
+                            | graphcal_compiler::declaration_category::DeclCategory::Node
                     )
                 })
                 .map(|(name, _)| {
@@ -315,7 +315,7 @@ fn validate_execution_facts(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
-    use graphcal_compiler::ir::resolve::DeclCategory;
+    use graphcal_compiler::declaration_category::DeclCategory;
 
     for dag in tir.dag_registry().values() {
         cancellation.checkpoint()?;

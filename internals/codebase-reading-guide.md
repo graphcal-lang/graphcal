@@ -525,6 +525,7 @@ The compiler crate owns the functional core through TIR.
 | `syntax/names.rs`             | `NameAtom`, typed name newtypes, paths, resolved names        |
 | `nat.rs`                      | Normalized type-level Nat polynomial forms                    |
 | `dag_id.rs`                   | Filesystem-independent DAG identity                           |
+| `declaration_category.rs`     | Source-order declaration categories independent of collection |
 | `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
@@ -881,7 +882,7 @@ IR = UnfrozenIR::freeze(registry, owner, resolver, src)
   registry: Registry
   consts, params, nodes, asserts          (hir::Expr / hir::AssertBody bodies)
   plots, figures, layers                  (LoweredPlotBody / lowered fields)
-  source_order: Vec<(ScopedName, DeclCategory)>
+  source_order: Vec<(ScopedName, DeclCategory)>  // category contract: declaration_category.rs
   assert_names
   assumes_map
   expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>
@@ -1310,6 +1311,7 @@ Its source-analysis limits are documented separately from this heuristic orderin
 22. `crates/graphcal-compiler/src/syntax/type_name.rs`
 23. `crates/graphcal-compiler/src/nat.rs`
 24. `crates/graphcal-compiler/src/finite_value.rs`
+25. `crates/graphcal-compiler/src/declaration_category.rs`
 
 ### Stage 2 - Core AST, parser entry, and traversal
 

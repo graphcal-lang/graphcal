@@ -925,9 +925,9 @@ fn semantic_value_bindings(
         .filter(|(_, category)| {
             matches!(
                 category,
-                graphcal_compiler::ir::resolve::DeclCategory::Const
-                    | graphcal_compiler::ir::resolve::DeclCategory::Param
-                    | graphcal_compiler::ir::resolve::DeclCategory::Node
+                graphcal_compiler::declaration_category::DeclCategory::Const
+                    | graphcal_compiler::declaration_category::DeclCategory::Param
+                    | graphcal_compiler::declaration_category::DeclCategory::Node
             )
         })
         .map(|(name, _)| {

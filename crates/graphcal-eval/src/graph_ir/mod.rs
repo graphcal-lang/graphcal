@@ -18,7 +18,7 @@ pub mod dot;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::registry::resolve_types::DeclCategory;
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
 use thiserror::Error;

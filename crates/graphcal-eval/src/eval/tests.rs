@@ -7800,7 +7800,7 @@ fn eval_overrides_reject_included_implementation_params() {
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
             name,
-            actual_kind: graphcal_compiler::ir::resolve::DeclCategory::Node,
+            actual_kind: graphcal_compiler::declaration_category::DeclCategory::Node,
         })) => {
             assert!(name.as_str() == "a_shared" || name.as_str() == "b_shared");
         }

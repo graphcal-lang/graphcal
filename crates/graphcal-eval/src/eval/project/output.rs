@@ -1,6 +1,6 @@
 //! Presentation-only assembly for evaluated project outputs.
 
-use graphcal_compiler::ir::resolve::DeclCategory;
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
 use crate::eval::types::{DeclType, EvalResult, NodeError, Value};

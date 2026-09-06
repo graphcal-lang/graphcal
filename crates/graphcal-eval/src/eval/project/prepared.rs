@@ -249,7 +249,10 @@ impl ParameterBindingBuilder<'_> {
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     include_debug_names: IncludeDebugNameMap,
-    imported_source_order: Vec<(ScopedName, graphcal_compiler::ir::resolve::DeclCategory)>,
+    imported_source_order: Vec<(
+        ScopedName,
+        graphcal_compiler::declaration_category::DeclCategory,
+    )>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 

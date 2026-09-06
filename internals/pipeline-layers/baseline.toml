@@ -380,22 +380,6 @@ reason = "Observed eval::eval_expr::hir_eval -> compiler::hir (production) at ./
 from_package = "eval"
 from_path = ["eval_expr", "hir_eval"]
 to_package = "compiler"
-to_path = ["ir", "resolve"]
-test_only = false
-reason = "Observed eval::eval_expr::hir_eval -> compiler::ir::resolve (production) at ./crates/graphcal-eval/src/eval_expr/hir_eval.rs:6 (use import); roles are interpreter -> checking. Planned deletion seam: move evaluation consumers to an execution-plan/value interface."
-
-[[exception]]
-from_package = "eval"
-from_path = ["eval_expr", "hir_eval"]
-to_package = "compiler"
-to_path = ["registry", "resolve_types"]
-test_only = false
-reason = "Observed eval::eval_expr::hir_eval -> compiler::registry::resolve_types (production) at ./crates/graphcal-eval/src/eval_expr/hir_eval.rs:6 (use import); roles are interpreter -> checking. Planned deletion seam: move evaluation consumers to an execution-plan/value interface."
-
-[[exception]]
-from_package = "eval"
-from_path = ["eval_expr", "hir_eval"]
-to_package = "compiler"
 to_path = ["tir", "dim_check"]
 test_only = false
 reason = "Observed eval::eval_expr::hir_eval -> compiler::tir::dim_check (production) at ./crates/graphcal-eval/src/eval_expr/hir_eval.rs:419 (qualified path); roles are interpreter -> checking. Planned deletion seam: move evaluation consumers to an execution-plan/value interface."
@@ -471,14 +455,6 @@ to_package = "compiler"
 to_path = ["tir", "typed"]
 test_only = false
 reason = "Observed eval::execution_scope -> compiler::tir::typed (production) at ./crates/graphcal-eval/src/execution_scope.rs:4 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["graph_ir"]
-to_package = "compiler"
-to_path = ["registry", "resolve_types"]
-test_only = false
-reason = "Observed eval::graph_ir -> compiler::registry::resolve_types (production) at ./crates/graphcal-eval/src/graph_ir/mod.rs:21 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "eval"

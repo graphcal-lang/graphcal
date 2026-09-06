@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::DagId;
+use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, FigureDecl, LayerDecl, PlotDecl};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::attribute::AttributeName;
@@ -172,32 +173,6 @@ pub struct ImportedValueNames {
     /// the value namespace for collision checking and recorded on the DAG so
     /// figures/layers can reference them.
     pub plot_names: Vec<(ScopedName, Span)>,
-}
-
-/// The kind of a declaration (used for source-order tracking).
-#[derive(Debug, Clone, Copy)]
-pub enum DeclCategory {
-    Const,
-    Param,
-    Node,
-    Assert,
-    Plot,
-    Figure,
-    Layer,
-}
-
-impl std::fmt::Display for DeclCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Const => write!(f, "const"),
-            Self::Param => write!(f, "param"),
-            Self::Node => write!(f, "node"),
-            Self::Assert => write!(f, "assert"),
-            Self::Plot => write!(f, "plot"),
-            Self::Figure => write!(f, "figure"),
-            Self::Layer => write!(f, "layer"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

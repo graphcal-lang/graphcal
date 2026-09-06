@@ -37,6 +37,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["declaration_category"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["declaration_category", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["dag_id", "tests"]
 role = "contracts"
 

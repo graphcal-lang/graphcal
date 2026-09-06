@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
-use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
