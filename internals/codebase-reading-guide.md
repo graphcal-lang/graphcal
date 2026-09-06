@@ -280,11 +280,21 @@ the single resolution stage of the compiler:
   source map before returning its read-only body. `expression_id.rs` provides
   allocation-scoped revision identity and body-local ordinals;
   `expression_source.rs` rejects duplicate IDs and cross-revision lookups.
-  Cloning an immutable expression preserves its identity; fresh lowering creates
-  a fresh revision even when all source coordinates agree. A single exhaustive
-  child inventory serves inspection and construction-time identity assignment.
+  Expression semantics are private behind read-only access; consuming and
+  reconstructing a node cannot retain its old identity. Cloning an immutable
+  expression preserves its identity; fresh lowering creates a fresh revision
+  even when all source coordinates agree. A single exhaustive child inventory
+  serves identity assignment, dependency collection, and structural inspection.
+  DAG root enumeration distinguishes bounds owned by the current semantic body
+  from referenced foreign nominal bounds, while dependency inspection still
+  visits both.
   This identity foundation does not by itself migrate existing span-keyed
   materialization/presentation facts or establish complete checked-fact coverage.
+  `body_revision.rs` separately identifies a semantic checking revision: rechecking
+  an immutable source tree cannot authorize old execution facts merely because
+  its DAG name and expression IDs still agree. Checked execution scope selection
+  validates this revision, and generic Nat services retain canonical parameter
+  owners rather than matching a type parameter's leaf name.
 - `hir/lower.rs` lowers syntax AST type references into HIR with a
   `ModuleResolver`, a `GenericScope`, and an optional prelude scope.
 
@@ -1379,6 +1389,7 @@ Its source-analysis limits are documented separately from this heuristic orderin
 25. `crates/graphcal-compiler/src/declaration_category.rs`
 26. `crates/graphcal-compiler/src/expression_id.rs`
 27. `crates/graphcal-compiler/src/expression_source.rs`
+28. `crates/graphcal-compiler/src/body_revision.rs`
 
 ### Stage 2 - Core AST, parser entry, and traversal
 

@@ -321,8 +321,11 @@ fn cycle_detection_uses_semantic_dependencies() {
 #[test]
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
-        crate::hir::ExprKind::StringLiteral("not dimensionless".to_string());
+    tir.root_mut().nodes[0]
+        .expr
+        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+            "not dimensionless".to_string(),
+        ));
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -333,8 +336,11 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         "index Phase = { Burn };\n\
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
-    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
-        crate::hir::ExprKind::StringLiteral("not indexed".to_string());
+    tir.root_mut().nodes[0]
+        .expr
+        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+            "not indexed".to_string(),
+        ));
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -1202,7 +1208,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
     );
 
     let expression = &param.default.as_ref().unwrap().expr;
-    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = &expression.kind else {
+    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = expression.kind() else {
         panic!("expected quantity literal");
     };
     assert_eq!(unit.terms[0].power, crate::dimension::Rational::ONE);
@@ -1213,13 +1219,13 @@ fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
     let expression = &tir.root().nodes().first().unwrap().expr;
     assert!(matches!(
-        expression.kind,
+        expression.kind(),
         crate::hir::ExprKind::BinOp {
             op: crate::syntax::ast::BinOp::Pow(
                 crate::syntax::ast::PowerExponent::Exact(exponent)
             ),
             ..
-        } if exponent == crate::exact_rational::ExactRational::try_new(3, 2).unwrap()
+        } if *exponent == crate::exact_rational::ExactRational::try_new(3, 2).unwrap()
     ));
 }
 

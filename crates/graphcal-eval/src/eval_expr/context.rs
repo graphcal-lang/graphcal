@@ -7,12 +7,12 @@ use std::sync::Arc;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::hir::types::GenericParamId;
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::GenericParamName;
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 use miette::NamedSource;
 
@@ -54,7 +54,7 @@ pub struct EvalEnvironment<'a> {
     pub root_values: Option<&'a RuntimeValueMap>,
     pub root_presentation_instances: Option<&'a PresentationInstanceMap>,
     pub presentation_calls: Option<&'a EvaluatedPresentationCalls>,
-    pub generic_nat_bindings: Option<&'a HashMap<GenericParamName, u64>>,
+    pub generic_nat_bindings: Option<&'a HashMap<GenericParamId, u64>>,
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -194,7 +194,7 @@ impl<'a> EvalContext<'a> {
     #[must_use]
     pub const fn with_generic_nat_bindings(
         mut self,
-        bindings: &'a HashMap<GenericParamName, u64>,
+        bindings: &'a HashMap<GenericParamId, u64>,
     ) -> Self {
         self.environment.generic_nat_bindings = Some(bindings);
         self

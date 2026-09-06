@@ -37,7 +37,7 @@ impl NominalTypeIndex {
     /// Resolve the record constructor produced by an expression when its
     /// nominal type follows directly from HIR and declared types.
     pub fn expression_constructor(&self, expr: &hir::Expr) -> Option<ResolvedConstructorName> {
-        match &expr.kind {
+        match expr.kind() {
             hir::ExprKind::GraphRef(target) => self.declaration_types.get(&target.value).cloned(),
             hir::ExprKind::ConstRef(target) => match &target.value {
                 hir::ConstRef::Decl(name) => self.declaration_types.get(name).cloned(),

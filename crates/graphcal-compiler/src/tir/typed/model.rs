@@ -1898,6 +1898,12 @@ pub(crate) struct ResolvedExpectedFailMetadata {
     pub(crate) attribute_span: Span,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExpressionRootScope {
+    ThisBody,
+    ReferencedBody,
+}
+
 /// The per-DAG compiled body — every field that's specific to one DAG (the
 /// file's own top-level body or an inline `dag X { ... }` child).
 ///
@@ -1907,6 +1913,7 @@ pub(crate) struct ResolvedExpectedFailMetadata {
 #[derive(Debug, Clone)]
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,
+    pub(crate) body_revision: crate::body_revision::BodyRevision,
     pub(crate) consts: Vec<crate::ir::lower::ConstEntry>,
     pub(crate) params: Vec<crate::ir::lower::ParamEntry>,
     pub(crate) nodes: Vec<crate::ir::lower::NodeEntry>,
@@ -1931,6 +1938,17 @@ pub struct DagTIR {
 }
 
 impl DagTIR {
+    #[must_use]
+    pub const fn body_revision(&self) -> &crate::body_revision::BodyRevision {
+        &self.body_revision
+    }
+
+    pub(crate) fn begin_checking_revision(&mut self) {
+        self.body_revision = crate::body_revision::BodyRevision::fresh();
+        self.semantic.materialized_shapes.clear();
+        self.semantic.presentation = crate::tir::presentation::DagPresentationFacts::default();
+    }
+
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id
@@ -2205,7 +2223,7 @@ impl DagTIR {
 
     /// Visit every source unit reference used by this DAG.
     pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
-        self.visit_expressions(&mut |expr| match &expr.kind {
+        self.visit_expressions(&mut |expr| match expr.kind() {
             hir::ExprKind::QuantityLiteral { unit, .. } => unit
                 .terms
                 .iter()
@@ -2218,10 +2236,43 @@ impl DagTIR {
         });
     }
 
-    /// Visit every semantic HIR expression node in this DAG.
+    /// Visit semantic expressions, including referenced nominal bounds for dependency analysis.
     pub(crate) fn visit_expressions(&self, visitor: &mut impl FnMut(&hir::Expr)) {
-        let visit_root = |expr: &hir::Expr, visitor: &mut _| hir::visit_expr(expr, visitor);
+        self.owned_expression_roots()
+            .chain(self.field_bound_roots(ExpressionRootScope::ReferencedBody))
+            .for_each(|root| hir::visit_expr(root, visitor));
+    }
 
+    /// Expression roots checked in this body's environment, not foreign nominal definitions.
+    pub(crate) fn owned_expression_roots(&self) -> impl Iterator<Item = &hir::Expr> {
+        self.declaration_expression_roots()
+            .chain(self.field_bound_roots(ExpressionRootScope::ThisBody))
+    }
+
+    fn field_bound_roots(&self, scope: ExpressionRootScope) -> impl Iterator<Item = &hir::Expr> {
+        self.semantic
+            .type_defs
+            .constrained_fields()
+            .filter(move |(key, _)| self.field_bound_scope(key) == scope)
+            .flat_map(|(_, field)| field.domain_bounds().iter())
+            .map(|bound| &*bound.value)
+    }
+
+    fn field_bound_scope(&self, key: &ResolvedStructFieldTypeKey) -> ExpressionRootScope {
+        let owner = key.owning_type.owner();
+        if self.runtime_owner_rebases.get(owner).unwrap_or(owner) == self.dag_id()
+            || self
+                .semantic_specialization
+                .as_ref()
+                .is_some_and(|specialization| &specialization.template == owner)
+        {
+            ExpressionRootScope::ThisBody
+        } else {
+            ExpressionRootScope::ReferencedBody
+        }
+    }
+
+    fn declaration_expression_roots(&self) -> impl Iterator<Item = &hir::Expr> {
         self.consts
             .iter()
             .map(|entry| &*entry.expr)
@@ -2236,13 +2287,6 @@ impl DagTIR {
                     .domain_bounds
                     .values()
                     .flatten()
-                    .map(|bound| &*bound.value),
-            )
-            .chain(
-                self.semantic
-                    .type_defs
-                    .constrained_fields()
-                    .flat_map(|(_, field)| field.domain_bounds().iter())
                     .map(|bound| &*bound.value),
             )
             .chain(self.plots.iter().flat_map(|entry| {
@@ -2267,12 +2311,11 @@ impl DagTIR {
                     .values()
                     .map(|entry| &*entry.expr),
             )
-            .for_each(|expr| visit_root(expr, visitor));
-
-        self.asserts
-            .iter()
-            .flat_map(|entry| entry.body.expressions())
-            .for_each(|expr| visit_root(expr, visitor));
+            .chain(
+                self.asserts
+                    .iter()
+                    .flat_map(|entry| entry.body.expressions()),
+            )
     }
 
     #[must_use]

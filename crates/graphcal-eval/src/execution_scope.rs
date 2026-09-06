@@ -20,6 +20,8 @@ pub enum ExecutionScopeError {
     MissingFacts(DagId),
     #[error("checked execution facts for `{actual}` were paired with DAG `{expected}`")]
     WrongOwner { expected: DagId, actual: DagId },
+    #[error("checked execution facts for DAG `{0}` belong to another body revision")]
+    WrongRevision(DagId),
     #[error("imported declaration `{0}` has no containing body")]
     MissingDeclaration(ResolvedDeclName),
     #[error("imported declaration `{target}` is not a checked {kind:?} value")]
@@ -90,6 +92,9 @@ impl<'a> CheckedExecutionScope<'a> {
                 expected: dag.dag_id().clone(),
                 actual: facts.dag_id.clone(),
             });
+        }
+        if facts.body_revision != *dag.body_revision() {
+            return Err(ExecutionScopeError::WrongRevision(dag.dag_id().clone()));
         }
         Ok(Self { dag, facts })
     }

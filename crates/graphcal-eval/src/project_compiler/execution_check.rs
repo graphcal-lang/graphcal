@@ -203,6 +203,12 @@ fn check_dag_execution_facts(
             };
             let facts = CheckedDagExecutionFacts {
                 dag_id: dag_id.clone(),
+                body_revision: tir
+                    .dag_registry()
+                    .get(&dag_id)
+                    .ok_or_else(missing)?
+                    .body_revision()
+                    .clone(),
                 source: src.clone(),
                 const_values: Arc::new(const_values),
                 topo_order: Arc::new(schedules.remove(&dag_id).ok_or_else(missing)?),

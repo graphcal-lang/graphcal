@@ -556,7 +556,7 @@ fn check_ineffective_conversions_inner(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     use crate::hir::ExprKind;
-    match &expr.kind {
+    match expr.kind() {
         ExprKind::Convert { expr: inner, .. } | ExprKind::DisplayTimezone { expr: inner, .. } => {
             if !display_position {
                 return Err(GraphcalError::IneffectiveConversion {
@@ -821,7 +821,7 @@ fn broadcast_operand_element<'a>(
 /// the sign), optionally under unary negation. Returns `None` for anything
 /// computed at runtime; those are sign-checked by the evaluator instead.
 fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
-    match &expr.kind {
+    match expr.kind() {
         crate::hir::ExprKind::Number(n) => Some(*n),
         #[expect(
             clippy::cast_precision_loss,
@@ -977,7 +977,8 @@ fn install_presentation_facts(
 /// `tir.build_declared_types()` (derived from `resolved_decl_types`) to validate
 /// that every RHS expression matches its declared type annotation.
 ///
-/// This is a pure validation step — returns `()` on success.
+/// Starts a new semantic checking revision and retains its derived shape and
+/// presentation facts. Returns `()` only after validation succeeds.
 ///
 /// # Errors
 ///
@@ -1004,6 +1005,9 @@ pub fn check_dimensions_tir_with_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     cancellation.checkpoint()?;
+    tir.dags
+        .values_mut()
+        .for_each(crate::tir::typed::DagTIR::begin_checking_revision);
     detect_decl_cycles(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
@@ -1263,7 +1267,7 @@ pub fn concrete_constructor_applications(
         if error.is_some() {
             return;
         }
-        let resolved = match &expr.kind {
+        let resolved = match expr.kind() {
             crate::hir::ExprKind::ConstructorCall {
                 callee,
                 generic_args,
@@ -2047,7 +2051,7 @@ fn collect_dag_call_targets_from_dag(
     out: &mut std::collections::BTreeMap<crate::dag_id::DagId, Span>,
 ) {
     dag.visit_expressions(&mut |expr| {
-        if let crate::hir::ExprKind::DagCall { target, .. } = &expr.kind {
+        if let crate::hir::ExprKind::DagCall { target, .. } = expr.kind() {
             out.entry(target.value.clone()).or_insert(target.span);
         }
     });

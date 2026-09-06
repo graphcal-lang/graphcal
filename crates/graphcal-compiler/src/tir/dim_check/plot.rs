@@ -235,7 +235,7 @@ fn check_plot_encodings(
         .map(|(channel, expr)| {
             ctx.checkpoint()?;
             check_ineffective_conversions(expr, true, ctx.src)?;
-            if matches!(&expr.kind, ExprKind::StringLiteral(_)) {
+            if matches!(expr.kind(), ExprKind::StringLiteral(_)) {
                 return Ok(PlotChannelShape::new(
                     Vec::new(),
                     PlotLeafKind::ContextualString,
@@ -352,7 +352,7 @@ pub(super) fn check_property_value(
     expected: PlotPropertyType,
     field: &LoweredPlotField,
 ) -> Result<(), GraphcalError> {
-    let is_string_literal = matches!(&field.value.kind, ExprKind::StringLiteral(_));
+    let is_string_literal = matches!(field.value.kind(), ExprKind::StringLiteral(_));
     let mismatch = |found: String| GraphcalError::PlotPropertyTypeMismatch {
         property,
         expected: expected.describe(),

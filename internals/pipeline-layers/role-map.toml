@@ -127,6 +127,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["body_revision"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["expression_id"]
 role = "contracts"
 

@@ -329,7 +329,7 @@ impl PresentationResolver<'_> {
         src: &NamedSource<Arc<String>>,
     ) -> Result<PresentationProvenance, GraphcalError> {
         self.cancellation.checkpoint()?;
-        match &expr.kind {
+        match expr.kind() {
             ExprKind::QuantityLiteral { unit, .. } | ExprKind::Convert { target: unit, .. } => {
                 let dimension = infer::resolve_unit_dimension_or_diagnose(unit, self.tir, src)?;
                 let requires_runtime_values = unit.terms.iter().any(|term| {
@@ -937,9 +937,9 @@ fn static_index_key(arg: &hir::expr::IndexArg) -> Option<IndexEntryKey> {
         hir::expr::IndexArg::Variant(variant) => {
             Some(IndexEntryKey::named(variant.variant.variant().clone()))
         }
-        hir::expr::IndexArg::Expr(expr) => match expr.kind {
+        hir::expr::IndexArg::Expr(expr) => match expr.kind() {
             ExprKind::Integer(position) => {
-                u64::try_from(position).ok().map(IndexEntryKey::position)
+                u64::try_from(*position).ok().map(IndexEntryKey::position)
             }
             _ => None,
         },

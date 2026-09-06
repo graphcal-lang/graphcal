@@ -703,7 +703,7 @@ fn contains_type_definition_observation(expr: &hir::Expr) -> bool {
         if found {
             return;
         }
-        found = match &candidate.kind {
+        found = match candidate.kind() {
             hir::ExprKind::FieldAccess { .. } | hir::ExprKind::ConstructorCall { .. } => true,
             hir::ExprKind::ConstRef(target) => {
                 matches!(&target.value, hir::ConstRef::Constructor(_))
@@ -804,7 +804,7 @@ fn infer_hir_type_inner(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let inferred = match &expr.kind {
+    let inferred = match expr.kind() {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before TIR, so inference never sees one.
         hir::ExprKind::Error { .. } => {
@@ -2329,8 +2329,8 @@ fn infer_hir_datetime_constructor(
                 });
             }
             let first_is_valid = match args.len() {
-                1 => matches!(args[0].kind, hir::ExprKind::OffsetDateTimeLiteral(_)),
-                2 => matches!(args[0].kind, hir::ExprKind::ZonedDateTimeLiteral(_)),
+                1 => matches!(args[0].kind(), hir::ExprKind::OffsetDateTimeLiteral(_)),
+                2 => matches!(args[0].kind(), hir::ExprKind::ZonedDateTimeLiteral(_)),
                 _ => false,
             };
             if !first_is_valid {
@@ -2352,7 +2352,7 @@ fn infer_hir_datetime_constructor(
                     span: args[0].span.into(),
                 });
             }
-            if args.len() == 2 && !matches!(args[1].kind, hir::ExprKind::IanaTimeZoneLiteral(_)) {
+            if args.len() == 2 && !matches!(args[1].kind(), hir::ExprKind::IanaTimeZoneLiteral(_)) {
                 let found = infer_arg(
                     &args[1],
                     declared_types,
@@ -2372,16 +2372,13 @@ fn infer_hir_datetime_constructor(
                 });
             }
             let resolved_timezone_matches_argument = match args {
-                [
-                    hir::Expr {
-                        kind: hir::ExprKind::ZonedDateTimeLiteral(datetime),
-                        ..
-                    },
-                    hir::Expr {
-                        kind: hir::ExprKind::IanaTimeZoneLiteral(time_zone),
-                        ..
-                    },
-                ] => datetime.time_zone() == time_zone,
+                [datetime, time_zone] => match (datetime.kind(), time_zone.kind()) {
+                    (
+                        hir::ExprKind::ZonedDateTimeLiteral(datetime),
+                        hir::ExprKind::IanaTimeZoneLiteral(time_zone),
+                    ) => datetime.time_zone() == time_zone,
+                    _ => true,
+                },
                 _ => true,
             };
             if !resolved_timezone_matches_argument {
@@ -2406,7 +2403,7 @@ fn infer_hir_datetime_constructor(
                     span: span.into(),
                 });
             }
-            if !matches!(args[0].kind, hir::ExprKind::CivilDateTimeLiteral(_)) {
+            if !matches!(args[0].kind(), hir::ExprKind::CivilDateTimeLiteral(_)) {
                 let found = infer_arg(
                     &args[0],
                     declared_types,
@@ -2569,7 +2566,7 @@ use super::rules::{self, Operand};
 
 fn try_const_int(expr: &hir::Expr) -> Option<i64> {
     use crate::desugar::desugared_ast::BinOp;
-    match &expr.kind {
+    match expr.kind() {
         hir::ExprKind::Integer(n) => Some(*n),
         hir::ExprKind::UnaryOp {
             op: UnaryOp::Neg,
@@ -3254,7 +3251,7 @@ fn reject_nested_conversion(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     if matches!(
-        inner.kind,
+        inner.kind(),
         hir::ExprKind::Convert { .. } | hir::ExprKind::DisplayTimezone { .. }
     ) {
         return Err(GraphcalError::NestedConversion {

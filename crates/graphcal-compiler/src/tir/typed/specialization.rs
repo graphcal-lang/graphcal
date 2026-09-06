@@ -573,7 +573,7 @@ fn extend_binding_constructor_refs(
         if result.is_err() {
             return;
         }
-        let constructors = match &expr.kind {
+        let constructors = match expr.kind() {
             crate::hir::ExprKind::ConstructorCall { callee, .. } => vec![callee.value.clone()],
             crate::hir::ExprKind::ConstRef(target) => match &target.value {
                 crate::hir::ConstRef::Constructor(constructor) => vec![constructor.clone()],
@@ -837,6 +837,7 @@ fn initialize_instance_identity(
     let owner = edge.instance.id.owner();
     let specialization = &edge.instance.specialization;
     instance.dag_id = owner.clone();
+    instance.begin_checking_revision();
     instance.semantic_specialization = Some(specialization.clone());
     instance.static_ports.clear();
     instance

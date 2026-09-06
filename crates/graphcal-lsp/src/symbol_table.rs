@@ -291,7 +291,7 @@ impl<'a> HirRefCollector<'a> {
         reason = "reference extraction handles every HIR ExprKind variant"
     )]
     fn walk_inner(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
-        match &expr.kind {
+        match expr.kind() {
             hir::ExprKind::Error { children } => {
                 for child in children {
                     self.walk(child, table);
@@ -2448,7 +2448,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 ///
 /// Handles the common cases: number literals, quantity literals, and negated forms.
 fn format_bound_expr(expr: &hir::Expr) -> String {
-    match &expr.kind {
+    match expr.kind() {
         hir::ExprKind::Number(value) => format_number(*value),
         hir::ExprKind::Integer(value) => value.to_string(),
         hir::ExprKind::QuantityLiteral { value, unit } => {

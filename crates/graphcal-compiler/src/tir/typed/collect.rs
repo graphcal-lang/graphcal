@@ -101,7 +101,7 @@ fn collect_unit_names_from_hir(
     names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
 ) {
     hir::visit_expr(expr, &mut |node| {
-        let unit = match &node.kind {
+        let unit = match node.kind() {
             hir::ExprKind::QuantityLiteral { unit, .. } => Some(unit),
             hir::ExprKind::Convert { target, .. } => Some(target),
             _ => None,
@@ -278,7 +278,7 @@ fn collect_resolved_constructor_refs_from_expr_inner(
     src: &NamedSource<Arc<String>>,
     refs: &mut ResolvedConstructorRefs,
 ) -> Result<(), GraphcalError> {
-    match &expr.kind {
+    match expr.kind() {
         hir::ExprKind::Error { children } => {
             for child in children {
                 collect_resolved_constructor_refs_from_expr(child, ctx, src, refs)?;

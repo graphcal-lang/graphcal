@@ -1019,7 +1019,7 @@ fn eval_plot_property(
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<PlotFieldValue, String> {
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
+    if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = expr.kind() {
         return Ok(PlotFieldValue::String(s.clone()));
     }
     let empty_locals = HirLocalValueMap::root();
@@ -1181,7 +1181,7 @@ fn evaluate_plot_channel(
     locals: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<(super::plot_data::ChannelData, Option<String>), PlotEvaluationError> {
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(value) = &expr.kind {
+    if let graphcal_compiler::hir::ExprKind::StringLiteral(value) = expr.kind() {
         return Ok((
             super::plot_data::ChannelData::unindexed_label(value.clone()),
             None,
@@ -1280,7 +1280,7 @@ fn eval_composition_fields(
                 field.property.name()
             ));
         };
-        if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &field.value.kind {
+        if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = field.value.kind() {
             properties.push((*comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }

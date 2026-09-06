@@ -108,7 +108,7 @@ fn eval_hir_expr_inner(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    match &expr.kind {
+    match expr.kind() {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before evaluation.
         hir::ExprKind::Error { .. } => {
@@ -1137,7 +1137,7 @@ fn eval_hir_datetime_constructor(
             }
             let epoch = match args {
                 [arg] => {
-                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = &arg.kind else {
+                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = arg.kind() else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unparsed offset literal".to_string(),
                             src: src.clone(),
@@ -1147,14 +1147,14 @@ fn eval_hir_datetime_constructor(
                     super::datetime::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
-                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = &datetime_arg.kind else {
+                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = datetime_arg.kind() else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unresolved zoned literal".to_string(),
                             src: src.clone(),
                             span: datetime_arg.span.into(),
                         });
                     };
-                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &timezone_arg.kind
+                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = timezone_arg.kind()
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unvalidated timezone argument"
@@ -1194,7 +1194,7 @@ fn eval_hir_datetime_constructor(
                     span: span.into(),
                 });
             };
-            let hir::ExprKind::CivilDateTimeLiteral(datetime) = &arg.kind else {
+            let hir::ExprKind::CivilDateTimeLiteral(datetime) = arg.kind() else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received an unparsed civil literal".to_string(),
                     src: src.clone(),
@@ -2049,14 +2049,13 @@ fn eval_hir_map_literal(
     ))
 }
 
-/// Generic Nat parameters are substituted during TIR construction, so a
-/// `Param` reaching evaluation is an internal invariant violation.
+/// Generic bounds require bindings from the same canonical parameter owner.
 fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, GraphcalError> {
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(*n),
         hir::NatExpr::Param(param) => ctx
             .generic_nat_bindings
-            .and_then(|bindings| bindings.get(&param.value.name))
+            .and_then(|bindings| bindings.get(&param.value))
             .copied()
             .ok_or_else(|| {
                 ctx.internal_error(
@@ -2260,7 +2259,7 @@ fn eval_hir_index_access(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let (base_value, base_presentation) = match &inner.kind {
+    let (base_value, base_presentation) = match inner.kind() {
         hir::ExprKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
             // `eval_hir_expr(inner, ...)` while retaining a reference to the

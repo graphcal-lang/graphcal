@@ -10,7 +10,7 @@ use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use super::visible_values_with_imports;
@@ -336,7 +336,7 @@ fn generic_nat_bindings(
     generic_args: &[DeclaredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<HashMap<GenericParamName, u64>, GraphcalError> {
+) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
     if type_def.generic_params().len() != generic_args.len() {
         return Err(GraphcalError::InternalError {
             message: format!(
@@ -361,7 +361,7 @@ fn generic_nat_bindings(
         })
         .map(|(param, form)| {
             form.constant_value()
-                .map(|value| (param.name().clone(), value))
+                .map(|value| (param.id().clone(), value))
                 .ok_or_else(|| GraphcalError::InternalError {
                     message: format!(
                         "concrete Nat argument `{}` for `{}` remained symbolic",
@@ -871,7 +871,7 @@ fn exact_domain_int_bound(
 
 fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
     use graphcal_compiler::hir::ExprKind;
-    match &expr.kind {
+    match expr.kind() {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::QuantityLiteral { value, unit } => {

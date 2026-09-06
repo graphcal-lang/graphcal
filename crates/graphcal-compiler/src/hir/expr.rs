@@ -617,8 +617,8 @@ impl CheckedExpr {
         self.expr
     }
 
-    pub(crate) fn expr_mut_for_test(&mut self) -> &mut Expr {
-        &mut self.expr
+    pub(crate) fn replace_kind_for_test(&mut self, kind: ExprKind) {
+        *self = Self::finish(Expr::new(kind, self.expr.span)).unwrap();
     }
 }
 
@@ -669,10 +669,17 @@ fn expression_source_map<'a>(
     )
 }
 
-/// HIR expression node.
+/// HIR expression node. Identity-bearing clones cannot change their semantics.
+///
+/// ```compile_fail,E0616
+/// use graphcal_compiler::hir::expr::{Expr, ExprKind};
+/// use graphcal_compiler::syntax::span::Span;
+/// let mut expr = Expr::new(ExprKind::Bool(true), Span::new(0, 4));
+/// expr.kind = ExprKind::Bool(false);
+/// ```
 #[derive(Debug)]
 pub struct Expr {
-    pub kind: ExprKind,
+    kind: ExprKind,
     pub span: Span,
     id: Option<crate::expression_id::ExprId>,
 }
@@ -700,6 +707,18 @@ impl Expr {
             span,
             id: None,
         }
+    }
+
+    /// Inspect semantics without allowing an identity-bearing clone to be rewritten.
+    #[must_use]
+    pub const fn kind(&self) -> &ExprKind {
+        &self.kind
+    }
+
+    /// Consume the node for reconstruction. `Expr::new` starts without an identity.
+    #[must_use]
+    pub fn into_kind(self) -> ExprKind {
+        self.kind
     }
 
     /// Identity is available after strict body lowering, never derived from a span.
@@ -948,107 +967,18 @@ pub fn collect_expr_dependencies(expr: &Expr) -> ExprDependencies {
 }
 
 fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
-    // Recursion choke point: recurses once per tree level (unbounded for
-    // left-nested operator chains).
-    crate::stack::with_stack_growth(|| collect_expr_dependencies_into_inner(expr, deps));
-}
-
-fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies) {
-    match &expr.kind {
-        ExprKind::Error { children } => {
-            for child in children {
-                collect_expr_dependencies_into(child, deps);
-            }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::OffsetDateTimeLiteral(_)
-        | ExprKind::CivilDateTimeLiteral(_)
-        | ExprKind::ZonedDateTimeLiteral(_)
-        | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral(_)
-        | ExprKind::QuantityLiteral { .. } => {}
+    visit_expr(expr, &mut |node| match node.kind() {
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
         }
-        ExprKind::ConstRef(target) => {
-            if let ConstRef::Decl(resolved) = &target.value {
-                deps.const_refs.insert(resolved.clone());
-            }
+        ExprKind::ConstRef(Spanned {
+            value: ConstRef::Decl(target),
+            ..
+        }) => {
+            deps.const_refs.insert(target.clone());
         }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_expr_dependencies_into(lhs, deps);
-            collect_expr_dependencies_into(rhs, deps);
-        }
-        ExprKind::UnaryOp { operand, .. }
-        | ExprKind::Convert { expr: operand, .. }
-        | ExprKind::DisplayTimezone { expr: operand, .. }
-        | ExprKind::FieldAccess { expr: operand, .. } => {
-            collect_expr_dependencies_into(operand, deps);
-        }
-        ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                collect_expr_dependencies_into(arg, deps);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_expr_dependencies_into(condition, deps);
-            collect_expr_dependencies_into(then_branch, deps);
-            collect_expr_dependencies_into(else_branch, deps);
-        }
-        ExprKind::ConstructorCall { fields, .. } => {
-            for field in fields {
-                collect_expr_dependencies_into(&field.value, deps);
-            }
-        }
-        ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                collect_expr_dependencies_into(&entry.value, deps);
-            }
-        }
-        ExprKind::ForComp { body, .. } => collect_expr_dependencies_into(body, deps),
-        ExprKind::IndexAccess { expr, args } => {
-            collect_expr_dependencies_into(expr, deps);
-            for arg in args {
-                if let IndexArg::Expr(expr) = arg {
-                    collect_expr_dependencies_into(expr, deps);
-                }
-            }
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_expr_dependencies_into(source, deps);
-            collect_expr_dependencies_into(init, deps);
-            collect_expr_dependencies_into(body, deps);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            collect_expr_dependencies_into(init, deps);
-            collect_expr_dependencies_into(body, deps);
-        }
-        ExprKind::KeyForm { arg, .. } => {
-            collect_expr_dependencies_into(arg, deps);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_expr_dependencies_into(scrutinee, deps);
-            for arm in arms {
-                collect_expr_dependencies_into(&arm.body, deps);
-            }
-        }
-        ExprKind::DagCall { args, .. } => {
-            for arg in args {
-                collect_expr_dependencies_into(&arg.value, deps);
-            }
-        }
-    }
+        _ => {}
+    });
 }
 
 /// One exhaustive child inventory serves both inspection and construction-time walks.

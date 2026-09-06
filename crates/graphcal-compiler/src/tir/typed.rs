@@ -1599,7 +1599,7 @@ impl HirPolicyChecker<'_> {
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
         let recurse = |inner: &hir::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
-        match &expr.kind {
+        match expr.kind() {
             hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
             hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
@@ -1959,6 +1959,7 @@ impl DagTIRSeed {
         );
         let mut dag = DagTIR {
             dag_id: self.dag_id,
+            body_revision: crate::body_revision::BodyRevision::fresh(),
             consts: self.consts,
             params: self.params,
             nodes: self.nodes,

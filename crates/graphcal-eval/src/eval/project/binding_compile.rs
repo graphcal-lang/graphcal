@@ -306,7 +306,7 @@ impl PreparedProject {
             callee,
             generic_args,
             ..
-        } = signature.kind
+        } = signature.into_kind()
         else {
             return Err(self.binding_internal_error(
                 "canonical external constructor did not lower to a constructor call",
@@ -374,7 +374,7 @@ impl PreparedProject {
                 let lowered_key = self.lower_binding_expr_in_owner(&key_expr, owner)?;
                 let HirExprKind::MapLiteral {
                     entries: lowered_entries,
-                } = lowered_key.kind
+                } = lowered_key.into_kind()
                 else {
                     return Err(self.binding_internal_error(
                         "external map key did not lower to a map literal",
@@ -616,7 +616,7 @@ fn normalize_binding_literal_in_place(
 }
 
 fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'static str> {
-    match &expr.kind {
+    match expr.kind() {
         HirExprKind::Number(value) if value.is_finite() => Ok(()),
         HirExprKind::Number(_) => Err("numeric values must be finite"),
         HirExprKind::Integer(_)
