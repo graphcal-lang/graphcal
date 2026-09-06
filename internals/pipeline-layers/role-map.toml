@@ -1,0 +1,1423 @@
+# Explicit role for every discovered source module. Review new entries before accepting them.
+
+[[module]]
+package = "compiler"
+path = []
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["builtin"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["builtin", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["cancellation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["cancellation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["complex_value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dag_id"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dag_id", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["datetime_literal"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["datetime_literal", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["desugar"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["desugar", "convert"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["desugar", "convert", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["desugar", "desugared_ast"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["diagnostic_anchor"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["diagnostic_anchor", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dimension"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dimension", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dimension", "tests", "prop"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["exact_rational"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["exact_rational", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["finite_value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["finite_value", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["function_signature"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["function_signature", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["hir", "diagnostics"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "lower", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "nominal"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "source_interface"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "types"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "extern_fns"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "imported_binding"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "include"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "instance"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "lower", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "override_reconciliation"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "registry_build"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "required_bindability"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "required_bindability", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "attribute_validation"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "attribute_validation", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "deps"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "formal_conformance"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "include_selection"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "include_selection", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "names"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "resolve", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_dependencies"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_dependencies", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_external_surface_formal_conformance"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["nat"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["nat", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["plot_props"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["plot_shape"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["plot_shape", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["registry", "builtins"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "builtins", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "dag"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "declared_type"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "declared_type", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "dimension_registry"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "format"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "format", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "index", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "prelude"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "prelude", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "reserved_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "reserved_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "resolve_types"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["registry", "runtime_value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "runtime_value", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "time_scale"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "time_scale", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "time_zone"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "time_zone", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "type_def"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "types"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "types", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "unit"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["source_line"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["source_line", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["stack"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["static_interface"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["static_interface", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "common"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "decl"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "decl", "multi_decl_shape_tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "format_equivalent"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "format_equivalent", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "plot_props"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "value", "nat_expr_display_tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "attribute"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "comments"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "comments", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "decl_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "desugar"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "dimension"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "doc_attach"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "doc_attach", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "function_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "import_category"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "index_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "index_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "lexer"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "lexer", "peek_cache"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "lexer", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "local_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "module_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "module_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "module_resolve"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "module_resolve", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "names"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "names", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "non_empty"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "compound"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "compound", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "dag"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "dim_unit"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "figure"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "import"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "layer"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "multi"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "multi", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "plot"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "type_decl"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "decl", "value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "table"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "table", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "token_stream"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "type_expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "type_expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "phase"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "phase", "sealed"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "plugin"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "span"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "span", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "token"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "token", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "type_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "visitor"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["text_position"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["text_position", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "builtins"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "builtins", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "helpers"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "builtin_call"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "builtin_call", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "complex"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "complex", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "finite_axis_form_tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "linear_algebra"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "rules"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "model_schema"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "plot"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "presentation"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "template_closure"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "materialized_shape"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "materialized_shape", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "presentation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "template_closure"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "template_closure", "formal_conformance"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "template_closure", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "collect"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+# Selected data boundary; its colocated builder dependencies are explicit debt.
+path = ["tir", "typed", "model"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "ops"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "specialization"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "type_expr"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = []
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["decl_key"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["domain_check"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["domain_check", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "bindings"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "display"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "plot_data"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "plot_data", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project", "model_schema"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project", "output"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project", "prepared"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project", "prepared", "binding_compile"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "project", "prepared", "tenax_model"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "public_projection"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "public_projection", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "tests", "prop"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "types"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval", "types", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["eval_expr"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "aggregations"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "aggregations", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "arithmetic"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "arithmetic", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "builtin_call"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "builtin_call", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "complex"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "complex", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "context"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "conversions"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "conversions", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "datetime"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "datetime", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "hir_eval"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "hir_eval", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "linear_algebra"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "linear_algebra_lu"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "linear_algebra_lu", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "numeric"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "numeric", "mean_tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "unit_scale"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "work_budget"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "work_budget", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["exec_plan"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["exec_plan", "tests"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["execution_facts"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["execution_scope"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["graph_ir"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["graph_ir", "dot"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["graph_ir", "dot", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["graph_ir", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["host_abi"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_fns"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_fns", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["import_surface"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["import_surface", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["inline_dag"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["loader"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["loader", "inline_dags"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["loader", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_cache"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_cache", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["pipeline_metrics"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["pipeline_metrics", "observer"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["project_compiler"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "checking"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "entry_interface"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "execution_check"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "execution_check", "const_schedule"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "execution_check", "domain_resolve"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "generic_leakage"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "generic_leakage", "tests"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "hir_project"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "imports"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "imports", "tests"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "lowering"]
+role = "checking"
+
+[[module]]
+package = "eval"
+# Shared checking data; producer reach-through must not grow unnoticed.
+path = ["project_compiler", "model"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "pipeline"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "qualified_refs"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "recursion"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "registry_merge"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "session"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["project_compiler", "template"]
+role = "checking"
+
+[[module]]
+package = "eval"
+path = ["runtime_presentation"]
+role = "interpreter"

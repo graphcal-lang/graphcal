@@ -10,7 +10,17 @@ formal-conformance: formal
     GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-eval --test namespace_formal_conformance -- --ignored
     GRAPHCAL_EXTERNAL_SURFACE_ORACLE="$(pwd)/formal/.lake/build/bin/external-surface-oracle" cargo test --package graphcal-compiler --lib external_surface_matches_lean_oracle -- --ignored
 
-lint: formal
+# Syntax-aware module roles, exact dependency debt, and fail-closed fixtures.
+pipeline-layers:
+    cargo test --locked --manifest-path internals/pipeline-layers/Cargo.toml
+    cargo run --locked --manifest-path internals/pipeline-layers/Cargo.toml -- check .
+
+pipeline-layers-lint: pipeline-layers
+    cargo audit --deny warnings --file internals/pipeline-layers/Cargo.lock
+    cargo clippy --locked --manifest-path internals/pipeline-layers/Cargo.toml --all-targets -- -D warnings
+    cargo fmt --manifest-path internals/pipeline-layers/Cargo.toml --check
+
+lint: formal pipeline-layers-lint
     cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
@@ -19,7 +29,7 @@ lint: formal
     CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
     CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
-test: formal-conformance
+test: formal-conformance pipeline-layers
     cargo test --workspace
 
 # Audit the closed-world CLI surface while preserving documented external crate
