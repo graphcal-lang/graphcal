@@ -220,9 +220,7 @@ fn attach_dag_call(
     locals: &PresentationLocalEnv<'_>,
 ) -> Result<(), GraphcalError> {
     let (invocation, output_instance) = match instance {
-        Some(PresentationInstance::DagCall { invocation, output }) => {
-            (*invocation, output.as_ref())
-        }
+        Some(PresentationInstance::DagCall { invocation, output }) => (invocation, output.as_ref()),
         None | Some(PresentationInstance::None) => {
             return Err(presentation_error(
                 ctx,

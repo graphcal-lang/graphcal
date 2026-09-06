@@ -17,9 +17,10 @@ use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 use miette::NamedSource;
 
 use crate::domain_check::ResolvedDomainConstraint;
-use crate::execution_facts::{CheckedExecutionFacts, EvaluatedPresentationCalls, RuntimeValueMap};
+use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_scope::CheckedExecutionScope;
 use crate::host_fns::HostFunctionRegistry;
+use crate::presentation_calls::EvaluatedPresentationCalls;
 use crate::runtime_presentation::PresentationInstanceMap;
 
 use super::work_budget::WorkBudget;

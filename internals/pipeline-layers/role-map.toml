@@ -1318,6 +1318,16 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["presentation_calls"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["presentation_calls", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["pipeline_metrics", "observer"]
 role = "contracts"
 

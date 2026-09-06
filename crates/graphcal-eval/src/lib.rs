@@ -21,5 +21,6 @@ pub(crate) mod inline_dag;
 pub mod loader;
 pub mod package_cache;
 mod pipeline_metrics;
+pub(crate) mod presentation_calls;
 pub mod project_compiler;
 pub(crate) mod runtime_presentation;

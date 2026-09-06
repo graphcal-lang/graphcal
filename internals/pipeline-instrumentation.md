@@ -45,6 +45,19 @@ ownership, planning, checked constructor facts, and presentation evidence become
 their authorities. Retain the value/equivalence assertions when changing cost
 expectations.
 
+## Invocation-state ownership
+
+`presentation_calls.rs` owns mutable per-evaluation call storage separately from
+`execution_facts.rs`. Checked fact records already did not contain the mutable
+store; the module split makes that ownership boundary explicit. Invocation
+handles now carry a private allocation identity as well as their local ordinal:
+a handle from another evaluation is rejected even at an identical static call
+site and ordinal. Tests also cover repeated-call separation, shared read access,
+wrong call sites, and identity exhaustion without partial publication.
+
+This does **not** remove whole-call environment retention or presentation replay;
+those remain Phase D work, and the positive replay counter/defect fixture stays.
+
 ## Bare-Wasm numerical boundary regression
 
 `just wasm-test` also exercises determinant exponent cancellation, the tiny

@@ -577,6 +577,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
 | `execution_facts.rs`              | Per-DAG checked constants, constraints, schedules, and source   |
+| `presentation_calls.rs`           | Evaluation-owned call storage and scope-validated invocation handles |
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
 | `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
@@ -1453,35 +1454,36 @@ Its source-analysis limits are documented separately from this heuristic orderin
 5. `crates/graphcal-eval/src/domain_check.rs`
 6. `crates/graphcal-eval/src/execution_facts.rs`
 7. `crates/graphcal-eval/src/execution_scope.rs`
-8. `crates/graphcal-eval/src/runtime_presentation.rs`
-9. `crates/graphcal-eval/src/eval/bindings.rs`
-10. `crates/graphcal-eval/src/import_surface.rs`
-11. `crates/graphcal-eval/src/package_cache.rs`
-12. `crates/graphcal-eval/src/project_compiler/template.rs`
-13. `crates/graphcal-report/src/lib.rs`
-14. `crates/graphcal-report/src/escape.rs`
-15. `crates/graphcal-report/src/vega_assets.rs`
-16. `crates/graphcal-report/src/report_hydrate.rs`
-17. `crates/graphcal-test-support/src/lib.rs`
-18. `crates/graphcal-test-support/src/project.rs`
-19. `crates/graphcal-test-support/src/bytes.rs`
-20. `crates/graphcal-fmt/src/lib.rs`
-21. `crates/graphcal-fmt/src/format/type_expr.rs`
-22. `crates/graphcal-fmt/src/format/expr.rs`
-23. `crates/graphcal-fmt/src/format/decl.rs`
-24. `crates/graphcal-fmt/src/format/mod.rs`
-25. `crates/graphcal-lsp/src/lib.rs`
-26. `crates/graphcal-lsp/src/convert.rs`
-27. `crates/graphcal-lsp/src/cursor_context.rs`
-28. `crates/graphcal-lsp/src/symbol_identity.rs`
-29. `crates/graphcal-lsp/src/nominal_type_index.rs`
-30. `crates/graphcal-lsp/src/symbol_table.rs`
-31. `crates/graphcal-lsp/src/project_symbols.rs`
-32. `crates/graphcal-lsp/src/formatting.rs`
-33. `crates/graphcal-lsp/src/workspace_revision.rs`
-34. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
-35. `crates/graphcal-cli/src/lib.rs`
-36. `crates/graphcal-eval/src/pipeline_metrics.rs`
+8. `crates/graphcal-eval/src/presentation_calls.rs`
+9. `crates/graphcal-eval/src/runtime_presentation.rs`
+10. `crates/graphcal-eval/src/eval/bindings.rs`
+11. `crates/graphcal-eval/src/import_surface.rs`
+12. `crates/graphcal-eval/src/package_cache.rs`
+13. `crates/graphcal-eval/src/project_compiler/template.rs`
+14. `crates/graphcal-report/src/lib.rs`
+15. `crates/graphcal-report/src/escape.rs`
+16. `crates/graphcal-report/src/vega_assets.rs`
+17. `crates/graphcal-report/src/report_hydrate.rs`
+18. `crates/graphcal-test-support/src/lib.rs`
+19. `crates/graphcal-test-support/src/project.rs`
+20. `crates/graphcal-test-support/src/bytes.rs`
+21. `crates/graphcal-fmt/src/lib.rs`
+22. `crates/graphcal-fmt/src/format/type_expr.rs`
+23. `crates/graphcal-fmt/src/format/expr.rs`
+24. `crates/graphcal-fmt/src/format/decl.rs`
+25. `crates/graphcal-fmt/src/format/mod.rs`
+26. `crates/graphcal-lsp/src/lib.rs`
+27. `crates/graphcal-lsp/src/convert.rs`
+28. `crates/graphcal-lsp/src/cursor_context.rs`
+29. `crates/graphcal-lsp/src/symbol_identity.rs`
+30. `crates/graphcal-lsp/src/nominal_type_index.rs`
+31. `crates/graphcal-lsp/src/symbol_table.rs`
+32. `crates/graphcal-lsp/src/project_symbols.rs`
+33. `crates/graphcal-lsp/src/formatting.rs`
+34. `crates/graphcal-lsp/src/workspace_revision.rs`
+35. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+36. `crates/graphcal-cli/src/lib.rs`
+37. `crates/graphcal-eval/src/pipeline_metrics.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 

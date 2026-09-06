@@ -37,7 +37,7 @@ pub(super) struct EvalLoopResult {
     pub values: RuntimeValueMap,
     pub presentation_instances: PresentationInstanceMap,
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
-    pub presentation_calls: crate::execution_facts::EvaluatedPresentationCalls,
+    pub presentation_calls: crate::presentation_calls::EvaluatedPresentationCalls,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -217,7 +217,7 @@ pub(super) fn run_eval_loop_with_bindings(
     let mut values: RuntimeValueMap = HashMap::new();
     let mut presentation_instances = PresentationInstanceMap::new();
     let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
-    let presentation_calls = crate::execution_facts::EvaluatedPresentationCalls::default();
+    let presentation_calls = crate::presentation_calls::EvaluatedPresentationCalls::default();
 
     // Insert imported compile-time constants into the lookup table.
     // They keep their original `ScopedName` qualification.
