@@ -164,7 +164,16 @@ impl ProjectSymbolIndex {
         }
     }
 
-    /// Whether externally visible definitions in the root have no possible
+    /// Query visibility at the canonical definition, not at the cursor's root.
+    #[must_use]
+    pub fn is_externally_visible(&self, target: &SymbolKey) -> bool {
+        self.documents.values().any(|document| {
+            document.table.definitions.contains_key(target)
+                && document.table.is_externally_visible(target)
+        })
+    }
+
+    /// Whether externally visible definitions in the snapshot have no possible
     /// reverse importers outside this snapshot.
     #[must_use]
     pub const fn covers_reverse_dependencies(&self) -> bool {
