@@ -591,7 +591,9 @@ path). The page is derived from what the model already declares:
 
 The controls follow the param's type and domain constraints: a unit-checked
 entry field for quantities (plus a slider when finite `min`/`max` bounds are
-declared), a checkbox for `Bool`, a stepper for `Int`, a select for
+declared), a checkbox for `Bool`, exact decimal text entry for `Int` (plus a
+unit-step slider only when both endpoints and their difference are safe
+JavaScript integers), a select for
 `Key<Index>` over a named index, and a full closed-literal field for
 everything else. Readers bind closed typed values under the same rules as
 `eval --param` — wrong or missing units are rejected at the input box, values

@@ -147,10 +147,11 @@ pub enum ControlView {
         lower_si: Option<f64>,
         upper_si: Option<f64>,
     },
-    /// Exact integer: stepper, clamped to declared bounds.
+    /// Exact integer endpoints in lossless decimal notation. Numeric sliders
+    /// are a browser concern and require a safe-integer proof.
     Integer {
-        lower: Option<i64>,
-        upper: Option<i64>,
+        lower: Option<String>,
+        upper: Option<String>,
     },
     /// Boolean: checkbox.
     Boolean,
@@ -263,9 +264,10 @@ fn control_view(port: &ParameterPort) -> ControlView {
         }
         ModelValueSchema::Int => {
             let (lower, upper) = match port.domain() {
-                Some(ParameterDomain::Integer(bounds)) => {
-                    (bounds.lower().copied(), bounds.upper().copied())
-                }
+                Some(ParameterDomain::Integer(bounds)) => (
+                    bounds.lower().map(ToString::to_string),
+                    bounds.upper().map(ToString::to_string),
+                ),
                 _ => (None, None),
             };
             ControlView::Integer { lower, upper }
