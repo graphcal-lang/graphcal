@@ -100,102 +100,18 @@ fn collect_unit_names_from_hir(
     expr: &hir::Expr,
     names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
 ) {
-    // Recursion choke point: recurses once per tree level.
-    crate::stack::with_stack_growth(|| match &expr.kind {
-        hir::ExprKind::QuantityLiteral { unit, .. } => {
-            for term in &unit.terms {
-                names.insert(term.name.value.resolved().clone());
-            }
-        }
-        hir::ExprKind::Convert {
-            expr: inner,
-            target,
-        } => {
-            for term in &target.terms {
-                names.insert(term.name.value.resolved().clone());
-            }
-            collect_unit_names_from_hir(inner, names);
-        }
-        hir::ExprKind::Error { .. }
-        | hir::ExprKind::Number(_)
-        | hir::ExprKind::Integer(_)
-        | hir::ExprKind::Bool(_)
-        | hir::ExprKind::StringLiteral(_)
-        | hir::ExprKind::OffsetDateTimeLiteral(_)
-        | hir::ExprKind::CivilDateTimeLiteral(_)
-        | hir::ExprKind::ZonedDateTimeLiteral(_)
-        | hir::ExprKind::IanaTimeZoneLiteral(_)
-        | hir::ExprKind::TypeSystemRef(_)
-        | hir::ExprKind::GraphRef(_)
-        | hir::ExprKind::ConstRef(_)
-        | hir::ExprKind::LocalRef(_)
-        | hir::ExprKind::VariantLiteral(_) => {}
-        hir::ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_unit_names_from_hir(lhs, names);
-            collect_unit_names_from_hir(rhs, names);
-        }
-        hir::ExprKind::UnaryOp { operand, .. }
-        | hir::ExprKind::DisplayTimezone { expr: operand, .. }
-        | hir::ExprKind::FieldAccess { expr: operand, .. } => {
-            collect_unit_names_from_hir(operand, names);
-        }
-        hir::ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                collect_unit_names_from_hir(arg, names);
-            }
-        }
-        hir::ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_unit_names_from_hir(condition, names);
-            collect_unit_names_from_hir(then_branch, names);
-            collect_unit_names_from_hir(else_branch, names);
-        }
-        hir::ExprKind::ConstructorCall { fields, .. } => {
-            for field in fields {
-                collect_unit_names_from_hir(&field.value, names);
-            }
-        }
-        hir::ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                collect_unit_names_from_hir(&entry.value, names);
-            }
-        }
-        hir::ExprKind::ForComp { body, .. } => collect_unit_names_from_hir(body, names),
-        hir::ExprKind::IndexAccess { expr: inner, args } => {
-            collect_unit_names_from_hir(inner, names);
-            for arg in args {
-                if let hir::expr::IndexArg::Expr(arg_expr) = arg {
-                    collect_unit_names_from_hir(arg_expr, names);
-                }
-            }
-        }
-        hir::ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_unit_names_from_hir(source, names);
-            collect_unit_names_from_hir(init, names);
-            collect_unit_names_from_hir(body, names);
-        }
-        hir::ExprKind::Unfold { init, body, .. } => {
-            collect_unit_names_from_hir(init, names);
-            collect_unit_names_from_hir(body, names);
-        }
-        hir::ExprKind::KeyForm { arg, .. } => {
-            collect_unit_names_from_hir(arg, names);
-        }
-        hir::ExprKind::Match { scrutinee, arms } => {
-            collect_unit_names_from_hir(scrutinee, names);
-            for arm in arms {
-                collect_unit_names_from_hir(&arm.body, names);
-            }
-        }
-        hir::ExprKind::DagCall { args, .. } => {
-            for arg in args {
-                collect_unit_names_from_hir(&arg.value, names);
-            }
+    hir::visit_expr(expr, &mut |node| {
+        let unit = match &node.kind {
+            hir::ExprKind::QuantityLiteral { unit, .. } => Some(unit),
+            hir::ExprKind::Convert { target, .. } => Some(target),
+            _ => None,
+        };
+        if let Some(unit) = unit {
+            names.extend(
+                unit.terms
+                    .iter()
+                    .map(|term| term.name.value.resolved().clone()),
+            );
         }
     });
 }

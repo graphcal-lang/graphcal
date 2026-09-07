@@ -276,6 +276,15 @@ the single resolution stage of the compiler:
   the same time. Power operators also retain the parser's typed
   `PowerExponent` classification, backed by `ExactRational`, so checking and
   evaluation never infer an exact exponent from binary64 or source text.
+  Strict expression/assertion lowering seals occurrence IDs and a separate
+  source map before returning its read-only body. `expression_id.rs` provides
+  allocation-scoped revision identity and body-local ordinals;
+  `expression_source.rs` rejects duplicate IDs and cross-revision lookups.
+  Cloning an immutable expression preserves its identity; fresh lowering creates
+  a fresh revision even when all source coordinates agree. A single exhaustive
+  child inventory serves inspection and construction-time identity assignment.
+  This identity foundation does not by itself migrate existing span-keyed
+  materialization/presentation facts or establish complete checked-fact coverage.
 - `hir/lower.rs` lowers syntax AST type references into HIR with a
   `ModuleResolver`, a `GenericScope`, and an optional prelude scope.
 
@@ -1368,6 +1377,8 @@ Its source-analysis limits are documented separately from this heuristic orderin
 23. `crates/graphcal-compiler/src/nat.rs`
 24. `crates/graphcal-compiler/src/finite_value.rs`
 25. `crates/graphcal-compiler/src/declaration_category.rs`
+26. `crates/graphcal-compiler/src/expression_id.rs`
+27. `crates/graphcal-compiler/src/expression_source.rs`
 
 ### Stage 2 - Core AST, parser entry, and traversal
 

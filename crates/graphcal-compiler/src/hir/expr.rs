@@ -91,6 +91,12 @@ pub enum ExprLowerError {
     /// A single expression tree introduced more local bindings than HIR can index.
     #[error("too many local bindings in one expression")]
     TooManyLocals { span: Span },
+    /// The body revision cannot allocate another expression occurrence.
+    #[error("{source}")]
+    ExpressionIdentity {
+        source: crate::expression_source::ExpressionSourceError,
+        span: Span,
+    },
     /// A map literal entry unexpectedly had no keys after syntax lowering.
     #[error("map literal entry has no keys")]
     EmptyMapEntry { span: Span },
@@ -406,7 +412,10 @@ pub(crate) fn lower_expr(
 ) -> Result<CheckedExpr, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
     if diagnostics.is_empty() {
-        Ok(CheckedExpr(lowered))
+        CheckedExpr::finish(lowered).map_err(|source| ExprLowerError::ExpressionIdentity {
+            source,
+            span: expr.span,
+        })
     } else {
         Err(diagnostics.swap_remove(0))
     }
@@ -460,7 +469,12 @@ pub(crate) fn lower_assert_body(
 ) -> Result<CheckedAssertBody, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_assert_body_tolerant(body, ctx);
     if diagnostics.is_empty() {
-        Ok(CheckedAssertBody(lowered))
+        let span = match &lowered {
+            AssertBody::Expr(expr) => expr.span,
+            AssertBody::Tolerance { actual, .. } => actual.span,
+        };
+        CheckedAssertBody::finish(lowered)
+            .map_err(|source| ExprLowerError::ExpressionIdentity { source, span })
     } else {
         Err(diagnostics.swap_remove(0))
     }
@@ -562,44 +576,97 @@ impl<V> Default for LocalEnv<'_, V> {
 
 /// An HIR assertion body proven not to contain tolerant-lowering error nodes.
 #[derive(Debug, Clone)]
-pub struct CheckedAssertBody(AssertBody);
+pub struct CheckedAssertBody {
+    body: AssertBody,
+    source_map: crate::expression_source::ExpressionSourceMap,
+}
 
 impl std::ops::Deref for CheckedAssertBody {
     type Target = AssertBody;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.body
     }
 }
 
 #[cfg(test)]
 impl CheckedAssertBody {
-    pub(crate) const fn from_assert_body_for_test(body: AssertBody) -> Self {
-        Self(body)
+    pub(crate) fn from_assert_body_for_test(body: AssertBody) -> Self {
+        Self::finish(body).unwrap()
     }
 }
 
 /// An HIR expression proven not to contain tolerant-lowering error nodes.
 #[derive(Debug, Clone)]
-pub struct CheckedExpr(Expr);
+pub struct CheckedExpr {
+    expr: Expr,
+    source_map: crate::expression_source::ExpressionSourceMap,
+}
 
 impl std::ops::Deref for CheckedExpr {
     type Target = Expr;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.expr
     }
 }
 
 #[cfg(test)]
 impl CheckedExpr {
     pub(crate) fn into_expr_for_test(self) -> Expr {
-        self.0
+        self.expr
     }
 
     pub(crate) fn expr_mut_for_test(&mut self) -> &mut Expr {
-        &mut self.0
+        &mut self.expr
     }
+}
+
+impl CheckedExpr {
+    fn finish(mut expr: Expr) -> Result<Self, crate::expression_source::ExpressionSourceError> {
+        assign_expression_ids(&mut expr, &mut crate::expression_id::ExprIds::default())?;
+        let source_map = expression_source_map(std::iter::once(&expr))?;
+        Ok(Self { expr, source_map })
+    }
+
+    #[must_use]
+    pub const fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+        &self.source_map
+    }
+}
+
+impl CheckedAssertBody {
+    fn finish(
+        mut body: AssertBody,
+    ) -> Result<Self, crate::expression_source::ExpressionSourceError> {
+        let mut ids = crate::expression_id::ExprIds::default();
+        body.expressions_mut()
+            .try_for_each(|expr| assign_expression_ids(expr, &mut ids))?;
+        let source_map = expression_source_map(body.expressions())?;
+        Ok(Self { body, source_map })
+    }
+
+    #[must_use]
+    pub const fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+        &self.source_map
+    }
+}
+
+fn expression_source_map<'a>(
+    roots: impl Iterator<Item = &'a Expr>,
+) -> Result<
+    crate::expression_source::ExpressionSourceMap,
+    crate::expression_source::ExpressionSourceError,
+> {
+    let mut entries = Vec::new();
+    roots.for_each(|root| {
+        visit_expr(root, &mut |expr| {
+            entries.push(expr.id().map(|id| (id.clone(), expr.span)));
+        });
+    });
+    crate::expression_source::ExpressionSourceMap::try_new(
+        entries.into_iter().collect::<Result<Vec<_>, _>>()?,
+    )
 }
 
 /// HIR expression node.
@@ -607,6 +674,7 @@ impl CheckedExpr {
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+    id: Option<crate::expression_id::ExprId>,
 }
 
 // Manual impl instead of `#[derive(Clone)]`: derived clone glue recurses
@@ -619,6 +687,7 @@ impl Clone for Expr {
         crate::stack::with_stack_growth(|| Self {
             kind: self.kind.clone(),
             span: self.span,
+            id: self.id.clone(),
         })
     }
 }
@@ -626,7 +695,20 @@ impl Clone for Expr {
 impl Expr {
     #[must_use]
     pub const fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            id: None,
+        }
+    }
+
+    /// Identity is available after strict body lowering, never derived from a span.
+    pub fn id(
+        &self,
+    ) -> Result<&crate::expression_id::ExprId, crate::expression_id::UnassignedExprId> {
+        self.id
+            .as_ref()
+            .ok_or(crate::expression_id::UnassignedExprId)
     }
 }
 
@@ -969,97 +1051,71 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
     }
 }
 
-/// Visit every node in an HIR expression exactly once, in pre-order.
-///
-/// Semantic analyses should consume canonical facts directly from HIR through
-/// this traversal instead of copying call-site data into span-keyed side tables.
-pub(crate) fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
-    // Recursion choke point: recurses once per tree level (unbounded for
-    // left-nested operator chains).
-    crate::stack::with_stack_growth(|| visit_expr_inner(expr, visitor));
+/// One exhaustive child inventory serves both inspection and construction-time walks.
+macro_rules! expression_children {
+    ($kind:expr, $iter:ident, $visitor:ident, [$($borrow:tt)*]) => {
+        match $kind {
+            ExprKind::Error { children } => children.$iter().for_each(&mut *$visitor),
+            ExprKind::Number(_) | ExprKind::Integer(_) | ExprKind::Bool(_)
+            | ExprKind::StringLiteral(_) | ExprKind::OffsetDateTimeLiteral(_)
+            | ExprKind::CivilDateTimeLiteral(_) | ExprKind::ZonedDateTimeLiteral(_)
+            | ExprKind::IanaTimeZoneLiteral(_) | ExprKind::TypeSystemRef(_)
+            | ExprKind::GraphRef(_) | ExprKind::ConstRef(_) | ExprKind::LocalRef(_)
+            | ExprKind::QuantityLiteral { .. } | ExprKind::VariantLiteral(_) => {},
+            ExprKind::BinOp { lhs, rhs, .. } => { $visitor(lhs); $visitor(rhs); }
+            ExprKind::UnaryOp { operand, .. } | ExprKind::Convert { expr: operand, .. }
+            | ExprKind::DisplayTimezone { expr: operand, .. } | ExprKind::FieldAccess { expr: operand, .. } => $visitor(operand),
+            ExprKind::FnCall { args, .. } => args.$iter().for_each(&mut *$visitor),
+            ExprKind::If { condition, then_branch, else_branch } => { $visitor(condition); $visitor(then_branch); $visitor(else_branch); }
+            ExprKind::ConstructorCall { fields, .. } => fields.$iter().for_each(|field| $visitor($($borrow)* field.value)),
+            ExprKind::MapLiteral { entries } => entries.$iter().for_each(|entry| $visitor($($borrow)* entry.value)),
+            ExprKind::ForComp { body, .. } => $visitor(body),
+            ExprKind::IndexAccess { expr, args } => {
+                $visitor(expr);
+                args.$iter().for_each(|arg| match arg { IndexArg::Expr(expr) => $visitor(expr), IndexArg::Variant(_) | IndexArg::Var(_) => {} });
+            }
+            ExprKind::Scan { source, init, body, .. } => { $visitor(source); $visitor(init); $visitor(body); }
+            ExprKind::Unfold { init, body, .. } => { $visitor(init); $visitor(body); }
+            ExprKind::KeyForm { arg, .. } => $visitor(arg),
+            ExprKind::Match { scrutinee, arms } => std::iter::once($($borrow)* **scrutinee)
+                .chain(arms.$iter().map(|arm| $($borrow)* arm.body))
+                .for_each(&mut *$visitor),
+            ExprKind::DagCall { args, .. } => args.$iter().for_each(|binding| $visitor($($borrow)* binding.value)),
+        }
+    };
 }
 
-fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
-    visitor(expr);
-    match &expr.kind {
-        ExprKind::Error { children } => {
-            for child in children {
-                visit_expr(child, visitor);
+/// Visit immediate expression children, in structural order.
+pub fn visit_expr_children(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+    expression_children!(&expr.kind, iter, visitor, [&]);
+}
+
+fn visit_expr_children_mut(expr: &mut Expr, visitor: &mut impl FnMut(&mut Expr)) {
+    expression_children!(&mut expr.kind, iter_mut, visitor, [&mut]);
+}
+
+/// Visit all expression occurrences in pre-order. This does not model evaluation order.
+pub fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+    crate::stack::with_stack_growth(|| {
+        visitor(expr);
+        visit_expr_children(expr, &mut |child| visit_expr(child, visitor));
+    });
+}
+
+fn assign_expression_ids(
+    expr: &mut Expr,
+    ids: &mut crate::expression_id::ExprIds,
+) -> Result<(), crate::expression_id::ExprIdExhausted> {
+    crate::stack::with_stack_growth(|| {
+        expr.id = Some(ids.allocate()?);
+        let mut result = Ok(());
+        visit_expr_children_mut(expr, &mut |child| {
+            if result.is_ok() {
+                result = assign_expression_ids(child, ids);
             }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::OffsetDateTimeLiteral(_)
-        | ExprKind::CivilDateTimeLiteral(_)
-        | ExprKind::ZonedDateTimeLiteral(_)
-        | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
-        | ExprKind::GraphRef(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::LocalRef(_)
-        | ExprKind::QuantityLiteral { .. }
-        | ExprKind::VariantLiteral(_) => {}
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            visit_expr(lhs, visitor);
-            visit_expr(rhs, visitor);
-        }
-        ExprKind::UnaryOp { operand, .. }
-        | ExprKind::Convert { expr: operand, .. }
-        | ExprKind::DisplayTimezone { expr: operand, .. }
-        | ExprKind::FieldAccess { expr: operand, .. } => visit_expr(operand, visitor),
-        ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                visit_expr(arg, visitor);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            visit_expr(condition, visitor);
-            visit_expr(then_branch, visitor);
-            visit_expr(else_branch, visitor);
-        }
-        ExprKind::ConstructorCall { fields, .. } => fields
-            .iter()
-            .for_each(|field| visit_expr(&field.value, visitor)),
-        ExprKind::MapLiteral { entries } => entries
-            .iter()
-            .for_each(|entry| visit_expr(&entry.value, visitor)),
-        ExprKind::ForComp { body, .. } => visit_expr(body, visitor),
-        ExprKind::IndexAccess { expr: inner, args } => {
-            visit_expr(inner, visitor);
-            args.iter().for_each(|arg| {
-                if let IndexArg::Expr(arg) = arg {
-                    visit_expr(arg, visitor);
-                }
-            });
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            visit_expr(source, visitor);
-            visit_expr(init, visitor);
-            visit_expr(body, visitor);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            visit_expr(init, visitor);
-            visit_expr(body, visitor);
-        }
-        ExprKind::KeyForm { arg, .. } => visit_expr(arg, visitor),
-        ExprKind::Match { scrutinee, arms } => {
-            visit_expr(scrutinee, visitor);
-            for arm in arms {
-                visit_expr(&arm.body, visitor);
-            }
-        }
-        ExprKind::DagCall { args, .. } => args
-            .iter()
-            .for_each(|binding| visit_expr(&binding.value, visitor)),
-    }
+        });
+        result
+    })
 }
 
 /// Return the first DAG call in an HIR expression, if any.
@@ -1274,6 +1330,33 @@ pub enum AssertBody {
         expected: Box<Expr>,
         tolerance: Box<Expr>,
     },
+}
+
+impl AssertBody {
+    /// Assertion operands have independent lexical scopes but one source revision.
+    pub fn expressions(&self) -> impl Iterator<Item = &Expr> {
+        let operands: [Option<&Expr>; 3] = match self {
+            Self::Expr(expr) => [Some(expr), None, None],
+            Self::Tolerance {
+                actual,
+                expected,
+                tolerance,
+            } => [Some(actual), Some(expected), Some(tolerance)],
+        };
+        operands.into_iter().flatten()
+    }
+
+    fn expressions_mut(&mut self) -> impl Iterator<Item = &mut Expr> {
+        let operands: [Option<&mut Expr>; 3] = match self {
+            Self::Expr(expr) => [Some(expr), None, None],
+            Self::Tolerance {
+                actual,
+                expected,
+                tolerance,
+            } => [Some(actual), Some(expected), Some(tolerance)],
+        };
+        operands.into_iter().flatten()
+    }
 }
 
 /// Field initializer after expression lowering.
@@ -3033,6 +3116,80 @@ mod tests {
         frame.bind(b, 10);
         assert_eq!(frame.get(a), Some(&2));
         assert_eq!(frame.get(b), Some(&10));
+    }
+
+    #[test]
+    fn body_identity_and_source_map_do_not_depend_on_unique_spans() {
+        let span = Span::new(0, 1);
+        let leaf = Expr::new(ExprKind::Bool(true), span);
+        assert!(
+            leaf.id().is_err(),
+            "tolerant/unpublished HIR has no body identity"
+        );
+        let body = CheckedExpr::finish(Expr::new(
+            ExprKind::If {
+                condition: Box::new(leaf.clone()),
+                then_branch: Box::new(leaf.clone()),
+                else_branch: Box::new(leaf),
+            },
+            span,
+        ))
+        .unwrap();
+        let mut ids = std::collections::HashSet::new();
+        visit_expr(&body, &mut |expr| {
+            assert!(ids.insert(expr.id().unwrap().clone()));
+            assert_eq!(body.source_map().span(expr.id().unwrap()).unwrap(), span);
+        });
+        assert_eq!(ids.len(), 4);
+        let mut shifted = body.expr.clone();
+        shifted.span = Span::new(99, 1);
+        assert_eq!(shifted.id().unwrap(), body.id().unwrap());
+        assert_eq!(body.source_map().span(shifted.id().unwrap()).unwrap(), span);
+        let rebuilt = CheckedExpr::finish(shifted).unwrap();
+        assert_ne!(rebuilt.id().unwrap(), body.id().unwrap());
+        assert!(rebuilt.source_map().span(body.id().unwrap()).is_err());
+    }
+
+    #[test]
+    fn tolerance_operands_have_distinct_ids_even_with_identical_source_coordinates() {
+        let leaf = || Box::new(Expr::new(ExprKind::Number(1.0), Span::new(0, 1)));
+        let body = CheckedAssertBody::finish(AssertBody::Tolerance {
+            actual: leaf(),
+            expected: leaf(),
+            tolerance: leaf(),
+        })
+        .unwrap();
+        let ids = body
+            .expressions()
+            .map(|expr| expr.id().unwrap().clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|id| body.source_map().span(id).is_ok()));
+    }
+
+    #[test]
+    fn strict_lowering_publishes_identity_and_source_coverage_for_every_child() {
+        let owner = DagId::root_in_package("test", "identities");
+        let file = desugared_source("node value: Dimensionless = 1.0 + 2.0;");
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+        let scope = GenericScope::new();
+        let body = lower_expr(
+            node_value(&file, "value"),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        )
+        .unwrap();
+        let mut count = 0;
+        visit_expr(&body, &mut |expr| {
+            assert_eq!(
+                body.source_map().span(expr.id().unwrap()).unwrap(),
+                expr.span
+            );
+            count += 1;
+        });
+        assert_eq!(count, 3);
     }
 
     fn node_value<'a>(file: &'a ast::File, name: &str) -> &'a ast::Expr {

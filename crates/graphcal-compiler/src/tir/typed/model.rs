@@ -2269,18 +2269,10 @@ impl DagTIR {
             )
             .for_each(|expr| visit_root(expr, visitor));
 
-        self.asserts.iter().for_each(|entry| match &*entry.body {
-            hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
-            hir::AssertBody::Tolerance {
-                actual,
-                expected,
-                tolerance,
-            } => {
-                visit_root(actual, visitor);
-                visit_root(expected, visitor);
-                visit_root(tolerance, visitor);
-            }
-        });
+        self.asserts
+            .iter()
+            .flat_map(|entry| entry.body.expressions())
+            .for_each(|expr| visit_root(expr, visitor));
     }
 
     #[must_use]
