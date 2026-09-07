@@ -67,7 +67,7 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
     const edit = async value => evaluate(`(() => { const field = document.querySelector('[data-decl="divisor"] .control-field'); field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', { bubbles: true })); })()`);
     const chart = `document.querySelector('figure[data-figure="curve"] canvas')`;
     const failure = `document.querySelector('figure[data-figure="curve"] .error-chip')`;
-    await wait(`document.querySelector('.hydration-status').textContent.startsWith('live')`);
+    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
     if (!initial) {
       await wait(`${failure}?.textContent.includes('division by zero')`);
       assert.equal(await evaluate("typeof window.vegaEmbed"), "function", "failed baseline must include renderer assets");
