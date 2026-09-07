@@ -55,9 +55,9 @@ pub fn render_report_html(
         for error in &document.plot_errors {
             let _ = writeln!(
                 body,
-                "<p class=\"error-chip\">plot <code>{}</code> not rendered: {}</p>",
-                html_escape(&error.name),
-                html_escape(&error.message)
+                "<figure class=\"plot\" data-figure=\"{name}\"><figcaption><span class=\"figure-name\">{name}</span></figcaption><div data-role=\"figure\"><p class=\"error-chip\">Plot unavailable: {message}</p></div></figure>",
+                name = html_escape(&error.name),
+                message = html_escape(&error.message)
             );
         }
         for (index, card) in document.figures.iter().enumerate() {
@@ -75,7 +75,7 @@ pub fn render_report_html(
             let spec_json = escape_json_for_script(&card.figure.spec.to_string());
             let _ = writeln!(
                 body,
-                "<script>vegaEmbed('#{div_id}', {spec_json}, {{\"actions\": false}}).catch(console.error);</script>"
+                "<script>vegaEmbed('#{div_id}', {spec_json}, {{\"actions\": false}}).catch(function(error) {{ var target = document.getElementById('{div_id}'); if (target) {{ target.className = 'error-chip'; target.textContent = 'Plot rendering failed: ' + String(error); }} }});</script>"
             );
             body.push_str("</figure>\n");
         }
@@ -123,7 +123,7 @@ pub fn render_report_html(
 
     push_provenance(&mut body, document);
 
-    let vega_scripts = if document.figures.is_empty() {
+    let vega_scripts = if document.figures.is_empty() && document.plot_errors.is_empty() {
         String::new()
     } else {
         crate::plot_page::vega_script_tags(scripts)

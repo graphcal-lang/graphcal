@@ -464,17 +464,63 @@
     }
   }
 
+  var figureStates = new Map();
+
   function patchFigures(evaluation) {
-    if (typeof window.vegaEmbed !== "function") return;
-    for (var i = 0; i < evaluation.figures.length; i += 1) {
-      var figure = evaluation.figures[i];
-      var holder = document.querySelector(
-        'figure[data-figure="' + selectorEscape(figure.name) + '"] div[id]',
-      );
-      if (holder) {
-        window.vegaEmbed(holder, figure.spec, { actions: false }).catch(function () {});
-      }
+    var specs = new Map(evaluation.figures.map(function (figure) { return [figure.name, figure.spec]; }));
+    var failures = new Map(evaluation.notices.filter(function (notice) {
+      return notice.kind === "plot_error";
+    }).map(function (notice) { return [notice.name, notice.message]; }));
+    var targets = new Map(Array.from(document.querySelectorAll("figure[data-figure]")).map(function (target) {
+      return [target.getAttribute("data-figure"), target];
+    }));
+    var names = new Set([...targets.keys(), ...specs.keys(), ...failures.keys(), ...figureStates.keys()]);
+    if (names.size === 0) return;
+    var section = document.getElementById("plots");
+    if (!section) {
+      section = element("section");
+      section.id = "plots";
+      section.appendChild(element("h2", "", "Plots"));
+      document.querySelector("main").appendChild(section);
     }
+    names.forEach(function (name) {
+      var previous = figureStates.get(name);
+      if (previous && previous.view) previous.view.finalize();
+      var target = targets.get(name);
+      if (!target) {
+        target = element("figure", "plot");
+        target.setAttribute("data-figure", name);
+        section.appendChild(target);
+      }
+      var caption = target.querySelector("figcaption") || element("figcaption", "figure-name", name);
+      var mount = element("div");
+      mount.setAttribute("data-role", "figure");
+      // A fresh mount detaches even a pending renderer from the current result.
+      target.replaceChildren(caption, mount);
+      var state = { view: null };
+      figureStates.set(name, state);
+      function fail(message) {
+        if (figureStates.get(name) !== state) return;
+        mount.replaceChildren(element("p", "error-chip", "Plot unavailable: " + message));
+      }
+      if (failures.has(name) || !specs.has(name)) {
+        fail(failures.get(name) || "not present in the current evaluation");
+        return;
+      }
+      if (typeof window.vegaEmbed !== "function") {
+        fail("Vega renderer is unavailable");
+        return;
+      }
+      Promise.resolve().then(function () {
+        return window.vegaEmbed(mount, specs.get(name), { actions: false });
+      }).then(function (result) {
+        if (figureStates.get(name) !== state) result.view.finalize();
+        else state.view = result.view;
+      }).catch(function (error) {
+        fail("rendering failed: " + String(error));
+        if (figureStates.get(name) === state) setStatus("live · chart rendering failed", "warn");
+      });
+    });
   }
 
   function patchNotices(evaluation) {

@@ -602,7 +602,11 @@ prepared model. Edits re-evaluate the embedded engine (the same compiler and
 evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
 patch values, grids, badges, and charts in place. Static and hydrated value
 cards use the same projection: rank-two values are grids, and higher ranks
-are labelled two-axis slices retaining every leaf and outer-axis label. The moment any input
+are labelled two-axis slices retaining every leaf and outer-axis label.
+Every accepted result also reconciles all charts: failed or missing plots lose
+their previous data and show an individual error. Initially failed plots can
+recover after an input edit. Renderer failures are explicit, and a delayed
+render of an older result cannot replace the current chart. The moment any input
 differs from the as-published baseline, a persistent banner appears with a
 one-click reset. Displayed defaults remain reactive: an untouched control does
 not bind its parameter, and dependent defaults refresh after evaluation. Editing

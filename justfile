@@ -68,6 +68,12 @@ wasm-report-update: wasm-report
 wasm-report-check:
     cargo check -p graphcal
 
+# Real file:// hydration and Vega regression tests in an isolated Chrome profile.
+# Set GRAPHCAL_CHROME when Chrome is not installed at the standard macOS path.
+report-browser-test:
+    cargo build -p graphcal
+    node internals/report-browser-tests.mjs
+
 # Build a hydrated demo report with the embedded engine and drive its payload
 # through the prepared-project API under Node.
 report-smoke: wasm-report wasm-report-check
