@@ -41,6 +41,10 @@ filesystem access when sandbox setup fails. A rooted reader holds an open root
 directory capability and performs opens, metadata queries, canonicalization,
 and directory listing relative to that handle. Concurrent file or parent
 symlink swaps therefore cannot redirect a checked operation outside the root.
+Source and manifest reads accept only regular files. Unix opens are nonblocking
+and revalidate the opened handle, so a FIFO (including one substituted after
+the initial check) cannot indefinitely block ingestion. Byte limits and
+cancellation continue to apply to regular-file reads.
 
 ---
 
