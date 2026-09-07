@@ -31,17 +31,17 @@ repos:
       - id: no-commit-to-branch
 
   - repo: https://github.com/rvben/rumdl-pre-commit
-    rev: 794470c9117665bb6bc2bff622747f50aa43431a  # frozen: v0.2.49
+    rev: 2fecbf66b37cc6d7a0d1edddbe164e3d516eee2b  # frozen: v0.2.68
     hooks:
       - id: rumdl
 
   - repo: https://github.com/crate-ci/typos
-    rev: 12ffd4a04b4893ab75db66a59aaad2d996c3e982  # frozen: v1
+    rev: c132f8b9e3ac7f8f0625490b1cb5b906d1d6a63a  # frozen: v1
     hooks:
       - id: typos
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa  # frozen: v1.29.0
+    rev: cef8b8350da46d8114c7e6b7272aebdccdf193ce  # frozen: v1.30.0
     hooks:
       - id: zizmor
 
