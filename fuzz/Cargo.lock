@@ -387,6 +387,7 @@ name = "graphcal-io"
 version = "0.0.1-alpha.29"
 dependencies = [
  "cap-std",
+ "libc",
  "sha2",
  "tempfile",
  "thiserror",

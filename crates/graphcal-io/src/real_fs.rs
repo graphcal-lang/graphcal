@@ -184,6 +184,63 @@ impl RealFileSystem {
         }
     }
 
+    /// Check before opening to avoid touching known devices, then check the
+    /// handle too. On Unix a substituted FIFO cannot block the open itself.
+    fn open_regular_with_hook(
+        &self,
+        path: &Path,
+        before_open: impl FnOnce(),
+    ) -> Result<File, io::Error> {
+        let reject = || io::Error::new(io::ErrorKind::InvalidInput, "cannot read non-regular file");
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(root) = &self.root {
+            let relative = Self::rooted_relative_path(root, path)?;
+            if !root
+                .directory
+                .metadata(&relative)
+                .map_err(normalize_rooted_error)?
+                .is_file()
+            {
+                return Err(reject());
+            }
+            before_open();
+            let mut options = cap_std::fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use cap_std::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+            }
+            let file = root
+                .directory
+                .open_with(relative, &options)
+                .map_err(normalize_rooted_error)?
+                .into_std();
+            return if file.metadata()?.is_file() {
+                Ok(file)
+            } else {
+                Err(reject())
+            };
+        }
+        if !std::fs::metadata(path)?.is_file() {
+            return Err(reject());
+        }
+        before_open();
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+        }
+        let file = options.open(path)?;
+        if file.metadata()?.is_file() {
+            Ok(file)
+        } else {
+            Err(reject())
+        }
+    }
+
     fn read_bytes_bounded_with_hook(
         &self,
         path: &Path,
@@ -194,20 +251,7 @@ impl RealFileSystem {
         if cancellation.is_cancelled() {
             return Err(FileSystemReadError::Cancelled);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(root) = &self.root {
-            let relative = Self::rooted_relative_path(root, path)?;
-            before_open();
-            let file = root
-                .directory
-                .open(relative)
-                .map_err(normalize_rooted_error)?;
-            let declared_len = file.metadata()?.len();
-            return Self::read_file_bounded(file, declared_len, limit, cancellation);
-        }
-
-        before_open();
-        let file = File::open(path)?;
+        let file = self.open_regular_with_hook(path, before_open)?;
         let declared_len = file.metadata()?.len();
         Self::read_file_bounded(file, declared_len, limit, cancellation)
     }
@@ -320,33 +364,8 @@ impl FileSystemReader for RealFileSystem {
             )
             .into());
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(root) = &self.root {
-            let relative = Self::rooted_relative_path(root, path)?;
-            let file = root
-                .directory
-                .open(relative)
-                .map_err(normalize_rooted_error)?;
-            let metadata = file.metadata()?;
-            if !metadata.is_file() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("cannot hash non-regular file `{}`", path.display()),
-                )
-                .into());
-            }
-            return Self::hash_file_bounded(file, metadata.len(), limit, cancellation);
-        }
-
-        let file = File::open(path)?;
+        let file = self.open_regular_with_hook(path, || {})?;
         let metadata = file.metadata()?;
-        if !metadata.is_file() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("cannot hash non-regular file `{}`", path.display()),
-            )
-            .into());
-        }
         Self::hash_file_bounded(file, metadata.len(), limit, cancellation)
     }
 
@@ -453,6 +472,94 @@ mod tests {
         assert!(fs_reader.is_file(&file));
         assert!(fs_reader.exists(&file));
         assert_eq!(fs_reader.canonicalize(&file).unwrap(), file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_file_reads_have_a_subprocess_watchdog() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+        const CHILD: &str = "GRAPHCAL_SPECIAL_FILE_READ_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            for rooted in [false, true] {
+                for swap in [false, true] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let root = dir.path().canonicalize().unwrap();
+                    let path = root.join("graphcal.toml");
+                    let fifo = || {
+                        assert!(
+                            Command::new("mkfifo")
+                                .arg(&path)
+                                .status()
+                                .unwrap()
+                                .success()
+                        );
+                    };
+                    if swap {
+                        fs::write(&path, "regular").unwrap();
+                    } else {
+                        fifo();
+                    }
+                    let reader = if rooted {
+                        RealFileSystem::rooted(&root).unwrap()
+                    } else {
+                        RealFileSystem::default()
+                    };
+                    assert!(
+                        reader
+                            .read_bytes_bounded_with_hook(&path, TEST_LIMIT, &NeverCancel, || {
+                                if swap {
+                                    fs::remove_file(&path).unwrap();
+                                    fifo();
+                                }
+                            })
+                            .is_err()
+                    );
+                    assert!(
+                        reader
+                            .hash_file_sha256_bounded(&path, TEST_LIMIT, &NeverCancel)
+                            .is_err()
+                    );
+                    let socket = root.join("socket");
+                    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+                    assert!(
+                        reader
+                            .read_bytes_bounded(&socket, TEST_LIMIT, &NeverCancel)
+                            .is_err()
+                    );
+                }
+            }
+            assert!(
+                RealFileSystem::default()
+                    .read_bytes_bounded(Path::new("/dev/null"), TEST_LIMIT, &NeverCancel)
+                    .is_err()
+            );
+            return;
+        }
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "real_fs::tests::special_file_reads_have_a_subprocess_watchdog",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait().unwrap() {
+                Some(status) => {
+                    assert!(status.success());
+                    break;
+                }
+                None if Instant::now() >= deadline => {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("special-file ingestion exceeded watchdog");
+                }
+                None => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
     }
 
     #[test]
