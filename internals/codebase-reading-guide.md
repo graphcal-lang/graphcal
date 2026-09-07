@@ -1245,7 +1245,11 @@ derived from the actual `use`/`pub use` graph by
 refactors. Files in one strongly connected component are kept together and
 ordered for readability, while every dependency edge outside those documented
 cycles points backward in this list. Stage headings are curated contiguous
-slices of the generated order.
+slices of the generated order. This reading aid is not an enforcement waiver
+for edges inside an SCC. The standalone [pipeline-layer guard](pipeline-layers/README.md)
+runs in both `just lint` and `just test`, resolves aliases/re-export boundaries,
+and ratchets exact production/test dependency debt against explicit module roles.
+Its source-analysis limits are documented separately from this heuristic ordering.
 
 ### Stage 0 - Module maps and dependency-free leaves
 
