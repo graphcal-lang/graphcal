@@ -125,6 +125,18 @@ fn html_report_is_self_contained_and_deterministic() {
 }
 
 #[test]
+fn initially_failed_plots_keep_targets_and_renderer_assets() {
+    let document = build_document(
+        "param divisor: Dimensionless = 0.0; plot curve = { mark: point, encode: { y: 1.0 / @divisor } };",
+    );
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    assert!(html.contains("data-figure=\"curve\""));
+    assert!(html.contains("Plot unavailable:"));
+    assert!(html.contains("division by zero"));
+    assert!(html.contains("vegaEmbed"));
+}
+
+#[test]
 fn vega_scripts_are_omitted_without_figures() {
     let document = build_document("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;");
     let html = render_report_html(&document, VegaScriptSource::Inline, None);
