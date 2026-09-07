@@ -12,7 +12,8 @@ use graphcal_compiler::dimension::BaseDimId;
 use graphcal_eval::eval::{DisplayProjectionError, Value, format_number, quantity_display_value};
 
 /// Display body of one evaluated value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", content = "body", rename_all = "snake_case")]
 pub enum ValueBody {
     /// A single formatted scalar (`3138.128 m/s`).
     Scalar(String),
@@ -26,7 +27,7 @@ pub enum ValueBody {
 }
 
 /// A two-axis grid of formatted cells.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct GridTable {
     /// Inner-axis key labels, in first-seen order.
     pub(crate) columns: Vec<String>,
@@ -76,7 +77,7 @@ fn index_depth(value: &Value) -> usize {
 /// # Errors
 ///
 /// Returns the first display-unit projection error encountered in any leaf.
-pub(crate) fn project_value_body(
+pub fn project_value_body(
     value: &Value,
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> Result<ValueBody, DisplayProjectionError> {

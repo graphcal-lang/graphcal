@@ -694,7 +694,10 @@ provenance, `///` captions), and `report_html.rs` / `report_markdown.rs` render
 it deterministically. `report_hydrate.rs` packages the interactive layer —
 the no-modules wasm engine, project sources, and baseline bindings — behind
 `report_runtime.js`, which synthesizes controls from typed parameter ports and
-re-evaluates in a Web Worker. Consumed by the CLI (`--plot`, `report build`)
+re-evaluates in a Web Worker. Wasm declaration outcomes serialize the same
+`value_display::ValueBody` projection consumed by native HTML; JavaScript only
+creates DOM elements and does not reinterpret tensor rank or leaf formatting.
+Consumed by the CLI (`--plot`, `report build`)
 and the browser WASM adapter (playground figures). No file, process, or
 network I/O.
 
