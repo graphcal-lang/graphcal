@@ -113,60 +113,48 @@ fn lower_single_file_to_hir(
     Ok((hir, interfaces))
 }
 
-fn dag_const_values(
+fn validate_dag_constant_values(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     const_values: &crate::eval_expr::RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<DeclName, RuntimeValue>, GraphcalError> {
-    Ok(dag
-        .consts()
-        .iter()
-        .map(|entry| {
-            let identity = dag.require_bound_decl_identity(
-                &entry.name,
+) -> Result<(), GraphcalError> {
+    dag.consts().iter().try_for_each(|entry| {
+        let identity = dag.require_bound_decl_identity(
+            &entry.name,
+            src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
+        let key = crate::decl_key::RuntimeDeclKey::resolved(identity);
+        const_values.get(&key).map(|_| ()).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked constant `{key}` has no value at module publication"),
                 src,
                 DiagnosticAnchor::Source(entry.span),
-            )?;
-            Ok(const_values
-                .get(&crate::decl_key::RuntimeDeclKey::resolved(identity))
-                .cloned()
-                .map(|value| (entry.name.member().clone(), value)))
+            )
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+    })
 }
 
 /// Store one pure compile-time module artifact for downstream imports.
 fn store_module_artifact(
-    compiled: &CompiledFile,
+    compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
-    let const_values_by_dag = compiled
-        .tir
-        .local_dags()
-        .map(|(dag_id, dag)| {
-            let facts = compiled
-                .checked_execution_facts
-                .for_dag(dag_id)
-                .ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::internal_error(
-                        format!("checked module artifact is missing DAG `{dag_id}`"),
-                        file_src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
-            Ok((
-                dag_id.clone(),
-                dag_const_values(dag, &facts.const_values, file_src)?,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, CompileError>>()?;
+    compiled.tir.local_dags().try_for_each(|(dag_id, dag)| {
+        let scope = crate::execution_scope::CheckedExecutionScope::new(
+            &compiled.tir,
+            &compiled.checked_execution_facts,
+            dag_id,
+        )
+        .map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), file_src, DiagnosticAnchor::WholeFile)
+        })?;
+        validate_dag_constant_values(dag, &scope.facts().const_values, file_src)
+    })?;
     let declared_types_by_dag = compiled
         .tir
         .local_dags()
@@ -182,22 +170,25 @@ fn store_module_artifact(
             file_src,
             cancellation,
         )?;
-    #[cfg(test)]
-    crate::pipeline_metrics::record_many(
-        crate::pipeline_metrics::Event::DagBodyCopy,
-        u64::try_from(compiled.tir.dag_registry().keys().count()).expect("test DAG count fits u64"),
-    );
-    let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();
+    // The checked file is no longer needed after publication. Consume its
+    // mutable assembly registry so each local body becomes one immutable
+    // handle; no DAG body is cloned for an importer.
+    let dag_store = compiled.tir.freeze_local_dag_store().map_err(|error| {
+        CompileError::Eval(GraphcalError::internal_error(
+            error.to_string(),
+            file_src,
+            DiagnosticAnchor::WholeFile,
+        ))
+    })?;
 
     module_artifacts
         .insert(
             file_dag_id.clone(),
             ModuleArtifact {
-                const_values_by_dag,
                 declared_types_by_dag,
                 override_dependencies,
-                dag_tirs,
+                dag_store: Arc::new(dag_store),
                 extern_functions,
             },
         )
@@ -265,7 +256,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
 
 fn build_project_type_store(
     hir: &HirProject<'_>,
-) -> Result<graphcal_compiler::tir::typed::ProjectTypeStore, CompileError> {
+) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, CompileError> {
     let root_source = &hir.files[&hir.root].source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|error| {
@@ -298,7 +289,7 @@ fn build_project_type_store(
                     })
             })?;
     }
-    Ok(project_types)
+    Ok(Arc::new(project_types))
 }
 
 /// Consume a complete HIR project and perform all mandatory static checks.
@@ -370,7 +361,7 @@ pub(in crate::project_compiler) fn check_hir_project(
 
         inherited_execution_facts = compiled.checked_execution_facts.clone();
         store_module_artifact(
-            &compiled,
+            compiled,
             file_dag_id,
             &file_src,
             &mut module_artifacts,

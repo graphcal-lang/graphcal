@@ -5,39 +5,17 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::TIR;
+use graphcal_compiler::tir::typed::{DagTIR, TIR};
 
+use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::ResolvedDomainConstraint;
-use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
+use crate::declaration_locations::DeclarationLocations;
+use crate::execution_facts::CheckedExecutionFacts;
+use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
 use crate::execution_scope::CheckedExecutionScope;
-
-/// A compiled execution plan ready for runtime evaluation.
-#[derive(Debug)]
-pub struct ExecPlan {
-    /// Evaluated const values (in base SI units).
-    /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: Arc<RuntimeValueMap>,
-    /// Compile-time constants imported from dependency module artifacts.
-    /// These are injected directly into the evaluation environment.
-    /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
-    pub(crate) imported_values: RuntimeValueMap,
-    /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub(crate) topo_order: Vec<RuntimeDeclKey>,
-    /// Mapping from assert name to the list of declarations that assume it.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
-    /// Mapping from assert name to its expected-fail configuration.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<RuntimeDeclKey, graphcal_compiler::ir::resolve::ExpectedFail>,
-    /// Resolved domain constraints for runtime validation, keyed by declaration name.
-    /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    /// Per-DAG checked facts required by nested callable evaluation.
-    pub(crate) checked_execution_facts: CheckedExecutionFacts,
-}
 
 /// Check a TIR and select its root execution plan.
 ///
@@ -110,7 +88,7 @@ pub fn combined_runtime_order_for(
     root: &graphcal_compiler::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
     let dags = semantic_runtime_dags_from(tir, root, src)?;
     let candidates = dags
         .iter()
@@ -120,8 +98,8 @@ pub fn combined_runtime_order_for(
                 .filter(|(_, category)| {
                     matches!(
                         category,
-                        graphcal_compiler::ir::resolve::DeclCategory::Param
-                            | graphcal_compiler::ir::resolve::DeclCategory::Node
+                        graphcal_compiler::declaration_category::DeclCategory::Param
+                            | graphcal_compiler::declaration_category::DeclCategory::Node
                     )
                 })
                 .map(|(name, _)| {
@@ -202,27 +180,60 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     validate_execution_facts(tir, facts, src, cancellation)?;
-    let root_scope = checked_scope(tir, facts, tir.root_dag_id(), src)?;
+    let declaration_locations = prepare_declaration_locations(tir, src)?;
+    let root = prepare_callable_plan(
+        tir,
+        facts,
+        tir.root(),
+        &declaration_locations,
+        src,
+        cancellation,
+    )?;
+    let callables = tir
+        .dag_registry()
+        .values()
+        .filter(|dag| dag.dag_id() != tir.root_dag_id())
+        .map(|dag| {
+            prepare_callable_plan(tir, facts, dag, &declaration_locations, src, cancellation)
+                .map(|plan| (plan.owner.clone(), plan))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(ExecPlan {
+        declaration_locations,
+        root,
+        callables,
+        checked_execution_facts: facts.clone(),
+    })
+}
+
+fn prepare_callable_plan(
+    tir: &TIR,
+    facts: &CheckedExecutionFacts,
+    body: &DagTIR,
+    declaration_locations: &DeclarationLocations,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CallablePlan, GraphcalError> {
+    cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
+    let root_scope = checked_scope(tir, facts, body.dag_id(), src)?;
     let root_facts = root_scope.facts();
+    let src = root_facts.source();
     let semantic_dags = semantic_runtime_dags_from(tir, root_scope.dag(), src)?;
     let semantic_facts = semantic_dags
         .iter()
         .map(|dag| checked_scope(tir, facts, dag.dag_id(), src).map(CheckedExecutionScope::facts))
         .collect::<Result<Vec<_>, _>>()?;
     let has_instances = semantic_dags.len() > 1;
-    let const_values = if has_instances {
-        Arc::new(
-            semantic_facts
-                .iter()
-                .flat_map(|facts| facts.const_values.iter())
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
-        )
-    } else {
-        Arc::clone(&root_facts.const_values)
-    };
+    let const_values = ConstantPools::try_new(
+        semantic_facts
+            .iter()
+            .map(|facts| Arc::clone(&facts.const_values)),
+    )
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })?;
     let domain_constraints = if has_instances {
         Arc::new(
             semantic_facts
@@ -235,26 +246,27 @@ pub fn compile_checked_with_cancellation(
         Arc::clone(&root_facts.domain_constraints)
     };
     let topo_order = if has_instances {
-        combined_runtime_order_for(tir, tir.root(), src)?
+        combined_runtime_order_for(tir, body, src)?
     } else {
         root_facts.topo_order.as_ref().clone()
     };
 
-    Ok(ExecPlan {
-        const_values,
-        imported_values: semantic_dags
+    validate_schedule_locations(
+        &topo_order,
+        declaration_locations,
+        &semantic_dags.iter().map(|dag| dag.dag_id()).collect(),
+        src,
+    )?;
+
+    Ok(CallablePlan {
+        owner: body.dag_id().clone(),
+        execution_dags: semantic_dags
             .iter()
-            .flat_map(|dag| {
-                dag.imported_bindings().values().filter_map(|binding| {
-                    binding.value().map(|value| {
-                        (
-                            RuntimeDeclKey::resolved(dag.runtime_decl_identity(binding.target())),
-                            value.clone(),
-                        )
-                    })
-                })
-            })
+            .map(|dag| dag.dag_id().clone())
             .collect(),
+        const_values,
+        imports: prepare_imports(tir, facts, &semantic_dags, declaration_locations, src)?,
+        dependencies: prepare_dependencies(tir, &topo_order, declaration_locations, src)?,
         topo_order,
         assumes_map: semantic_dags
             .iter()
@@ -281,7 +293,144 @@ pub fn compile_checked_with_cancellation(
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
-        checked_execution_facts: facts.clone(),
+    })
+}
+
+fn prepare_dependencies(
+    tir: &TIR,
+    order: &[RuntimeDeclKey],
+    locations: &DeclarationLocations,
+    source: &NamedSource<Arc<String>>,
+) -> Result<HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>, GraphcalError> {
+    let invalid = |message: String| {
+        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
+    };
+    let positions = order
+        .iter()
+        .enumerate()
+        .map(|(position, key)| (key, position))
+        .collect::<HashMap<_, _>>();
+    order
+        .iter()
+        .map(|key| {
+            let body = locations
+                .body_for(key)
+                .map_err(|error| invalid(error.to_string()))?;
+            let dag = tir
+                .dag_registry()
+                .get(body)
+                .ok_or_else(|| invalid(format!("prepared body `{body}` is absent")))?;
+            let dependencies = dag
+                .semantic()
+                .dependencies
+                .runtime_deps
+                .get(key.as_resolved())
+                .into_iter()
+                .flatten()
+                .map(|dependency| RuntimeDeclKey::resolved(dag.runtime_decl_identity(dependency)))
+                .collect::<Vec<_>>();
+            for dependency in &dependencies {
+                locations
+                    .body_for(dependency)
+                    .map_err(|error| invalid(error.to_string()))?;
+                if let Some(dependency_position) = positions.get(dependency)
+                    && dependency_position >= &positions[key]
+                {
+                    return Err(invalid(format!(
+                        "schedule evaluates `{key}` before its dependency `{dependency}`"
+                    )));
+                }
+            }
+            Ok((key.clone(), dependencies))
+        })
+        .collect()
+}
+
+fn prepare_imports(
+    tir: &TIR,
+    facts: &CheckedExecutionFacts,
+    dags: &[&DagTIR],
+    locations: &DeclarationLocations,
+    source: &NamedSource<Arc<String>>,
+) -> Result<PreparedImports, GraphcalError> {
+    use graphcal_compiler::ir::imported_binding::ImportedValueKind;
+    let invalid = |message: String| {
+        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
+    };
+    let mut result = PreparedImports::default();
+    for dag in dags {
+        let own_names = dag
+            .consts()
+            .iter()
+            .map(|entry| entry.name.member())
+            .chain(dag.params().iter().map(|entry| entry.name.member()))
+            .chain(dag.nodes().iter().map(|entry| entry.name.member()))
+            .collect::<HashSet<_>>();
+        for (scoped, binding) in dag.imported_bindings() {
+            // Lexical shadows are decided once, never rediscovered during a call.
+            if !dag.semantic().decl_bindings.contains_key(scoped)
+                && own_names.contains(scoped.member())
+            {
+                continue;
+            }
+            let source_key = RuntimeDeclKey::resolved(binding.target().clone());
+            let owner = locations
+                .body_for(&source_key)
+                .map_err(|error| invalid(error.to_string()))?;
+            let scope = checked_scope(tir, facts, owner, source)?;
+            match binding.kind() {
+                ImportedValueKind::Constant => result.constants.push(PreparedConstantImport {
+                    destination: RuntimeDeclKey::resolved(
+                        dag.runtime_decl_identity(binding.target()),
+                    ),
+                    value: ConstantReference::try_new(
+                        Arc::clone(&scope.facts().const_values),
+                        source_key,
+                    )
+                    .map_err(|error| invalid(error.to_string()))?,
+                }),
+                ImportedValueKind::Runtime => result.runtime.push(source_key),
+            }
+        }
+    }
+    Ok(result)
+}
+
+fn prepare_declaration_locations(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<DeclarationLocations, GraphcalError> {
+    DeclarationLocations::try_new(tir.dag_registry().values().flat_map(|dag| {
+        dag.value_declaration_identities().map(|identity| {
+            (
+                RuntimeDeclKey::resolved(identity.clone()),
+                dag.dag_id().clone(),
+            )
+        })
+    }))
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })
+}
+
+fn validate_schedule_locations(
+    order: &[RuntimeDeclKey],
+    locations: &DeclarationLocations,
+    allowed_bodies: &HashSet<&DagId>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    order.iter().try_for_each(|declaration| {
+        let body = locations.body_for(declaration).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+        if !allowed_bodies.contains(body) {
+            return Err(GraphcalError::internal_error(
+                format!("scheduled declaration `{declaration}` is physically in `{body}`, outside its callable closure"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+        Ok(())
     })
 }
 
@@ -303,7 +452,7 @@ fn validate_execution_facts(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
-    use graphcal_compiler::ir::resolve::DeclCategory;
+    use graphcal_compiler::declaration_category::DeclCategory;
 
     for dag in tir.dag_registry().values() {
         cancellation.checkpoint()?;
@@ -312,6 +461,11 @@ fn validate_execution_facts(
         let invalid = |message: String| {
             GraphcalError::internal_error(message, facts.source(), DiagnosticAnchor::WholeFile)
         };
+        dag.imported_bindings().values().try_for_each(|binding| {
+            crate::execution_scope::checked_imported_constant(tir, all_facts, binding)
+                .map(|_| ())
+                .map_err(|error| invalid(error.to_string()))
+        })?;
         let expected = dag
             .source_order()
             .iter()
@@ -390,8 +544,44 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_local_hir(&ir).unwrap();
-        let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
+        let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
         (tir, src)
+    }
+
+    #[test]
+    fn prepared_locations_include_parameters_without_defaults() {
+        let (tir, src) = tir_from_source(
+            "param input: Dimensionless; node doubled: Dimensionless = 2.0 * @input;",
+        );
+        let plan = compile(&tir, &src).unwrap();
+        let input = resolved_key("input");
+        assert!(tir.root().runtime_expr(input.as_resolved()).is_none());
+        assert_eq!(
+            plan.declaration_locations.body_for(&input).unwrap(),
+            tir.root_dag_id()
+        );
+    }
+
+    #[test]
+    fn schedules_reject_missing_and_out_of_closure_locations() {
+        let src = make_src("");
+        let owner = test_dag_id();
+        let other = DagId::from_virtual_relative_path(std::path::Path::new("other.gcl")).unwrap();
+        let key = resolved_key("x");
+        for locations in [
+            DeclarationLocations::try_new([]).unwrap(),
+            DeclarationLocations::try_new([(key.clone(), other)]).unwrap(),
+        ] {
+            assert!(
+                validate_schedule_locations(
+                    std::slice::from_ref(&key),
+                    &locations,
+                    &HashSet::from([&owner]),
+                    &src,
+                )
+                .is_err()
+            );
+        }
     }
 
     fn quantity(rv: &RuntimeValue) -> f64 {
@@ -416,10 +606,58 @@ mod tests {
     }
 
     #[test]
+    fn preparation_rejects_dependency_order_corruption() {
+        let (tir, src) = tir_from_source(
+            "node antecedent: Dimensionless = 1.0; node subsequent: Dimensionless = @antecedent;",
+        );
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let mut facts = crate::project_compiler::check_execution_facts_with_cancellation(
+            &tir,
+            &src,
+            &cancellation,
+        )
+        .unwrap();
+        let root = Arc::make_mut(
+            Arc::make_mut(&mut facts.by_dag)
+                .get_mut(tir.root_dag_id())
+                .unwrap(),
+        );
+        Arc::make_mut(&mut root.topo_order).reverse();
+        assert!(
+            matches!(compile_checked_with_cancellation(&tir, &facts, &src, &cancellation), Err(GraphcalError::InternalError { message, .. }) if message.contains("before its dependency"))
+        );
+    }
+
+    #[test]
+    fn constant_pool_views_reject_duplicates_and_missing_imports() {
+        let key = resolved_key("constant");
+        let pool = Arc::new(HashMap::from([(
+            key.clone(),
+            RuntimeValue::quantity(2.0).unwrap(),
+        )]));
+        assert!(matches!(
+            ConstantPools::try_new([Arc::clone(&pool), Arc::clone(&pool)]),
+            Err(crate::constant_pools::ConstantPoolError::Duplicate(_))
+        ));
+        assert!(matches!(
+            ConstantReference::try_new(Arc::clone(&pool), resolved_key("absent")),
+            Err(crate::constant_pools::ConstantPoolError::Missing(_))
+        ));
+        let imported = ConstantReference::try_new(Arc::clone(&pool), key.clone()).unwrap();
+        assert!(std::ptr::eq(
+            imported.value().unwrap(),
+            pool.get(&key).unwrap()
+        ));
+    }
+
+    #[test]
     fn compile_simple_const() {
         let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
-        assert!((quantity(&plan.const_values[&resolved_key("g0")]) - 9.80665).abs() < f64::EPSILON);
-        assert!(plan.topo_order.is_empty());
+        assert!(
+            (quantity(plan.root.const_values.get(&resolved_key("g0")).unwrap()) - 9.80665).abs()
+                < f64::EPSILON
+        );
+        assert!(plan.root.topo_order.is_empty());
     }
 
     #[test]
@@ -428,7 +666,11 @@ mod tests {
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
-        assert!((quantity(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
+        assert!(
+            (quantity(plan.root.const_values.get(&resolved_key("two_g0")).unwrap()) - 19.6133)
+                .abs()
+                < 1e-10
+        );
     }
 
     #[test]
@@ -447,10 +689,14 @@ mod tests {
         let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
         let root_facts = facts.for_dag(tir.root_dag_id()).unwrap();
 
-        assert!(Arc::ptr_eq(&root_facts.const_values, &plan.const_values));
+        let key = resolved_key("lower");
+        assert!(std::ptr::eq(
+            root_facts.const_values.get(&key).unwrap(),
+            plan.root.const_values.get(&key).unwrap()
+        ));
         assert!(Arc::ptr_eq(
             &root_facts.domain_constraints,
-            &plan.domain_constraints
+            &plan.root.domain_constraints
         ));
         assert!(Arc::ptr_eq(
             &facts.struct_field_constraints,
@@ -527,6 +773,77 @@ mod tests {
     }
 
     #[test]
+    fn imported_constants_require_defining_facts_and_runtime_absence_is_explicit() {
+        use crate::execution_scope::{ExecutionScopeError, checked_imported_constant};
+        use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
+
+        let (tir, src) =
+            tir_from_source("const node C: Dimensionless = 2.0; param x: Dimensionless;");
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let facts = crate::project_compiler::check_execution_facts_with_cancellation(
+            &tir,
+            &src,
+            &cancellation,
+        )
+        .unwrap();
+        let binding = |name, kind| {
+            let target = resolved_key(name).as_resolved().clone();
+            ImportedBinding::new(
+                target.clone(),
+                tir.runtime_declared_type(&target, &src).unwrap(),
+                kind,
+            )
+        };
+        let constant = binding("C", ImportedValueKind::Constant);
+        assert!(
+            (quantity(
+                checked_imported_constant(&tir, &facts, &constant)
+                    .unwrap()
+                    .unwrap()
+            ) - 2.0)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            checked_imported_constant(&tir, &facts, &binding("x", ImportedValueKind::Runtime))
+                .unwrap()
+                .is_none()
+        );
+        for wrong in [
+            binding("C", ImportedValueKind::Runtime),
+            binding("x", ImportedValueKind::Constant),
+        ] {
+            assert!(matches!(
+                checked_imported_constant(&tir, &facts, &wrong),
+                Err(ExecutionScopeError::WrongImportedKind { .. })
+            ));
+        }
+        let mut missing_value = facts.clone();
+        let dag_facts = Arc::make_mut(
+            Arc::make_mut(&mut missing_value.by_dag)
+                .get_mut(tir.root_dag_id())
+                .unwrap(),
+        );
+        Arc::make_mut(&mut dag_facts.const_values).clear();
+        assert!(matches!(
+            checked_imported_constant(&tir, &missing_value, &constant),
+            Err(ExecutionScopeError::MissingConstant(_))
+        ));
+        let mut missing_owner = facts.clone();
+        Arc::make_mut(&mut missing_owner.by_dag).clear();
+        assert!(matches!(
+            checked_imported_constant(&tir, &missing_owner, &constant),
+            Err(ExecutionScopeError::MissingFacts(_))
+        ));
+        // Corrupting isolated test copies must not damage the published facts.
+        assert!(
+            checked_imported_constant(&tir, &facts, &constant)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn preparation_rejects_missing_included_instance_facts() {
         let source = "dag lib { pub node out: Dimensionless = 1.0; }\n\
                       include lib() as inst;\n\
@@ -565,16 +882,19 @@ mod tests {
         )
         .unwrap();
         let x_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "x")
             .unwrap();
         let y_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "y")
             .unwrap();
         let z_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|n| n.member() == "z")
@@ -609,10 +929,13 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         assert!(
             (quantity(
-                &plan.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-                    tir.root_dag_id().clone(),
-                    DeclName::expect_valid("b")
-                ))]
+                plan.root
+                    .const_values
+                    .get(&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                        tir.root_dag_id().clone(),
+                        DeclName::expect_valid("b")
+                    )))
+                    .unwrap()
             ) - 2.0)
                 .abs()
                 < 1e-10
@@ -627,6 +950,7 @@ mod tests {
         );
         let plan = compile(&tir, &src).unwrap();
         let a_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|name| {
@@ -637,6 +961,7 @@ mod tests {
             })
             .unwrap();
         let b_pos = plan
+            .root
             .topo_order
             .iter()
             .position(|name| {

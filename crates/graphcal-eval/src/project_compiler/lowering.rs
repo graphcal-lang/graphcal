@@ -173,14 +173,15 @@ fn remap_imported_dynamic_unit_error(
     }
 }
 
-pub(super) fn imported_runtime_unit_reference(
+pub(super) fn validate_imported_runtime_units(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     exported_runtime_units: &HashMap<
         graphcal_compiler::dag_id::DagId,
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     >,
-) -> Option<(String, Span)> {
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     let mut invalid = None;
     dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
@@ -192,10 +193,17 @@ pub(super) fn imported_runtime_unit_reference(
                 })
             })
         {
-            invalid = Some((unit.to_string(), span));
+            invalid = Some((unit.clone(), span));
         }
     });
-    invalid
+    match invalid {
+        Some((unit, span)) => Err(GraphcalError::ImportRuntimeUnit {
+            name: unit.to_string(),
+            src: src.clone(),
+            span: span.into(),
+        }),
+        None => Ok(()),
+    }
 }
 
 fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
@@ -784,8 +792,8 @@ fn process_dag_body_include_declarations<'a>(
     Ok(())
 }
 
-/// Merge every loaded dependency's compiled DAGs into the importer's flat
-/// canonical registry and record this file root's source alias mappings.
+/// Install shared handles to each published module's own DAG bodies and units,
+/// and record this file root's source alias mappings.
 ///
 /// Imports inside inline DAG bodies have their own lexical scopes and therefore
 /// do not appear in the file root's `module_map`. Their HIR calls already carry
@@ -794,10 +802,10 @@ fn process_dag_body_include_declarations<'a>(
 /// dependency DAGs internally is also necessary when a public DAG calls one of
 /// its private implementation children.
 ///
-/// Each cloned DAG TIR also receives the dep-file values named by the DAG
-/// body's explicit imports, so `import dep::{const as local}` resolves under the
-/// local alias at inline-call eval time.
-pub(super) fn merge_dep_dag_tirs(
+/// Published stores exclude their imported bodies and unit overlays. Constants
+/// remain in defining-body execution facts; no importer mutates a dependency's
+/// bindings or injects values into its immutable body.
+pub(super) fn install_shared_module_artifacts(
     tir: &mut graphcal_compiler::tir::typed::TirBuilder,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     module_artifacts: &ModuleArtifactStore,
@@ -811,7 +819,7 @@ pub(super) fn merge_dep_dag_tirs(
         }
     }
 
-    for (dep_dag_id, dep_eval) in module_artifacts.iter() {
+    for dep_eval in module_artifacts.values() {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its
         // signature from the importer's merged TIR at eval time. Repeated
@@ -827,30 +835,14 @@ pub(super) fn merge_dep_dag_tirs(
                     ))
                 })?;
         }
-        for (dep_id, dag_tir) in &dep_eval.dag_tirs {
-            if dep_id != dep_dag_id && !dep_id.is_descendant_of(dep_dag_id) {
-                // `dep_eval` may itself contain canonical TIRs merged from its
-                // dependencies. Their owning artifacts are visited separately.
-                continue;
-            }
-            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::DagBodyCopy);
-            let mut cloned = dag_tir.clone();
-            // Supply compile-time values imported from this owning dependency.
-            // Canonical target and declared type remain on the same binding
-            // record; no independently keyed source/value maps can diverge.
-            for (owner, const_values) in &dep_eval.const_values_by_dag {
-                if let Some(declared_types) = dep_eval.declared_types_by_dag.get(owner) {
-                    cloned.supply_imported_values(owner, const_values, declared_types);
-                }
-            }
-            tir.insert_dag(cloned).map_err(|error| {
+        tir.insert_shared_dag_store(&dep_eval.dag_store)
+            .map_err(|error| {
                 CompileError::Eval(GraphcalError::internal_error(
                     error.to_string(),
                     src,
                     DiagnosticAnchor::WholeFile,
                 ))
             })?;
-        }
     }
     Ok(())
 }
@@ -861,8 +853,8 @@ fn resolve_projection_expected_fail(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<Option<graphcal_compiler::ir::resolve::ExpectedFail>, CompileError> {
-    use graphcal_compiler::ir::resolve::{ExpectedFail, ExpectedFailKeyPart};
+) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, CompileError> {
+    use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
     use graphcal_compiler::syntax::attribute::AttributeName;
 
@@ -933,9 +925,9 @@ fn semantic_value_bindings(
         .filter(|(_, category)| {
             matches!(
                 category,
-                graphcal_compiler::ir::resolve::DeclCategory::Const
-                    | graphcal_compiler::ir::resolve::DeclCategory::Param
-                    | graphcal_compiler::ir::resolve::DeclCategory::Node
+                graphcal_compiler::declaration_category::DeclCategory::Const
+                    | graphcal_compiler::declaration_category::DeclCategory::Param
+                    | graphcal_compiler::declaration_category::DeclCategory::Node
             )
         })
         .map(|(name, _)| {

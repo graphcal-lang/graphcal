@@ -7,6 +7,16 @@ role = "facade"
 
 [[module]]
 package = "compiler"
+path = ["assertion_expectation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["assertion_expectation", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["builtin"]
 role = "contracts"
 
@@ -33,6 +43,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["dag_id"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["declaration_category"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["declaration_category", "tests"]
 role = "contracts"
 
 [[module]]
@@ -998,6 +1018,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["domain_constraint"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["domain_constraint", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["domain_check", "tests"]
 role = "interpreter"
 
@@ -1233,6 +1263,36 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["execution_plan"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["constant_pools"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["execution_frame"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["assertion_eval"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["declaration_locations"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["declaration_locations", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["graph_ir"]
 role = "contracts"
 
@@ -1314,6 +1374,16 @@ role = "loading"
 [[module]]
 package = "eval"
 path = ["pipeline_metrics"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["presentation_calls"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["presentation_calls", "tests"]
 role = "contracts"
 
 [[module]]

@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::syntax::index_name::{IndexEntryKey, IndexName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -2154,7 +2154,7 @@ fn detect_cross_dag_cycles(
     use crate::dag_id::DagId;
 
     let mut edges: BTreeMap<DagId, BTreeMap<DagId, Span>> = BTreeMap::new();
-    for (key, dag_tir) in &tir.dags {
+    for (key, dag_tir) in tir.dags.iter() {
         let mut targets = BTreeMap::new();
         collect_dag_call_targets_from_dag(dag_tir, &mut targets);
         edges.insert(key.clone(), targets);

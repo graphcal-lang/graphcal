@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::assertion_expectation::ExpectedFail;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
 use crate::ir::lower::ParsedExpectedFailMetadata;
-use crate::ir::resolve::ExpectedFail;
 use crate::registry::error::GraphcalError;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::module_name::ScopedName;
@@ -569,7 +569,7 @@ pub(super) fn resolve_expected_fail_keys(
                         .map(|key| {
                             key.into_iter()
                                 .map(|part| match part {
-                                    crate::registry::resolve_types::ExpectedFailKeyPart::Named {
+                                    crate::assertion_expectation::ExpectedFailKeyPart::Named {
                                         index,
                                         variant,
                                         span,
@@ -584,15 +584,15 @@ pub(super) fn resolve_expected_fail_keys(
                                             .map_err(|err| {
                                                 module_resolve_error(&err, &metadata_src, span)
                                             })?;
-                                        Ok(crate::registry::resolve_types::ExpectedFailKeyPart::resolved(
+                                        Ok(crate::assertion_expectation::ExpectedFailKeyPart::resolved(
                                             resolved, span,
                                         ))
                                     }
-                                    crate::registry::resolve_types::ExpectedFailKeyPart::FinitePosition {
+                                    crate::assertion_expectation::ExpectedFailKeyPart::FinitePosition {
                                         position,
                                         span,
                                     } => Ok(
-                                        crate::registry::resolve_types::ExpectedFailKeyPart::FinitePosition {
+                                        crate::assertion_expectation::ExpectedFailKeyPart::FinitePosition {
                                             position,
                                             span,
                                         },

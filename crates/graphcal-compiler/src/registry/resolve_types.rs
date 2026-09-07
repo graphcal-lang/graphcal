@@ -1,16 +1,15 @@
 //! Data types used by the declaration-collection layer.
 //!
-//! These types have no dependency on the resolution logic itself, making them
-//! suitable for use across all compilation phases.
+//! Source collection shells and attribute policy stay here; execution consumers
+//! use the independent declaration-category and assertion-expectation contracts.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::dag_id::DagId;
+use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey};
+use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, FigureDecl, LayerDecl, PlotDecl};
-use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
@@ -174,32 +173,6 @@ pub struct ImportedValueNames {
     pub plot_names: Vec<(ScopedName, Span)>,
 }
 
-/// The kind of a declaration (used for source-order tracking).
-#[derive(Debug, Clone, Copy)]
-pub enum DeclCategory {
-    Const,
-    Param,
-    Node,
-    Assert,
-    Plot,
-    Figure,
-    Layer,
-}
-
-impl std::fmt::Display for DeclCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Const => write!(f, "const"),
-            Self::Param => write!(f, "param"),
-            Self::Node => write!(f, "node"),
-            Self::Assert => write!(f, "assert"),
-            Self::Plot => write!(f, "plot"),
-            Self::Figure => write!(f, "figure"),
-            Self::Layer => write!(f, "layer"),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Entry types for collected declaration shells
 // ---------------------------------------------------------------------------
@@ -258,135 +231,6 @@ pub struct CollectedLayerEntry {
     pub decl: LayerDecl,
 }
 
-/// One axis segment in a per-variant `#[expected_fail(...)]` key.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpectedFailKeyPart<I = IndexTypeRef> {
-    /// An `Index#Variant` / `module::Index#Variant` segment for a named axis.
-    ///
-    /// Before module-aware TIR resolution, `index` is the source [`NamePath`]
-    /// written in the attribute. After resolution, `index` is the semantic
-    /// [`IndexTypeRef`] used by runtime assertion checks.
-    Named {
-        index: I,
-        variant: IndexVariantName,
-        span: Span,
-    },
-    /// A `#N` segment for a finite structural axis (#816).
-    ///
-    /// Finite axes have no source-level index name, so the axis identity is
-    /// positional: the segment binds to the assertion's axis at the same
-    /// tuple position, validated at dim-check time.
-    FinitePosition { position: u64, span: Span },
-}
-
-impl<I> ExpectedFailKeyPart<I> {
-    /// The source span of this key segment.
-    #[must_use]
-    pub(crate) const fn span(&self) -> Span {
-        match self {
-            Self::Named { span, .. } | Self::FinitePosition { span, .. } => *span,
-        }
-    }
-
-    /// The variant key this segment selects within its axis.
-    #[must_use]
-    pub(crate) fn entry_key(&self) -> IndexEntryKey {
-        match self {
-            Self::Named { variant, .. } => IndexEntryKey::named(variant.clone()),
-            Self::FinitePosition { position, .. } => IndexEntryKey::position(*position),
-        }
-    }
-}
-
-impl ExpectedFailKeyPart<NamePath> {
-    #[must_use]
-    pub(crate) const fn parsed(
-        index_path: NamePath,
-        variant: IndexVariantName,
-        span: Span,
-    ) -> Self {
-        Self::Named {
-            index: index_path,
-            variant,
-            span,
-        }
-    }
-}
-
-impl ExpectedFailKeyPart<IndexTypeRef> {
-    #[must_use]
-    pub fn with_owner(
-        owner: DagId,
-        index: IndexName,
-        variant: IndexVariantName,
-        span: Span,
-    ) -> Self {
-        Self::Named {
-            index: IndexTypeRef::with_owner(owner, index),
-            variant,
-            span,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
-        let (index, variant) = resolved.into_parts();
-        Self::Named {
-            index: IndexTypeRef::from_resolved(index),
-            variant,
-            span,
-        }
-    }
-
-    /// The named index reference, when this segment targets a named axis.
-    #[must_use]
-    pub(crate) const fn named_index(&self) -> Option<&IndexTypeRef> {
-        match self {
-            Self::Named { index, .. } => Some(index),
-            Self::FinitePosition { .. } => None,
-        }
-    }
-
-    /// Whether this segment selects the given entry of an indexed value.
-    ///
-    /// Named segments require the entry's index identity to match; `#N`
-    /// segments match the `#N` entry of any finite structural axis (the axis itself
-    /// was bound positionally at dim-check time).
-    #[must_use]
-    pub fn matches_entry(&self, index: &IndexTypeRef, key: &IndexEntryKey) -> bool {
-        match (self, key) {
-            (
-                Self::Named {
-                    index: expected,
-                    variant: expected_variant,
-                    ..
-                },
-                IndexEntryKey::Named(actual),
-            ) => expected.matches_ref(index) && actual == expected_variant,
-            (Self::FinitePosition { position, .. }, IndexEntryKey::Position(actual)) => {
-                matches!(index, IndexTypeRef::Finite(_)) && actual == position
-            }
-            (Self::Named { .. }, IndexEntryKey::Position(_))
-            | (Self::FinitePosition { .. }, IndexEntryKey::Named(_)) => false,
-        }
-    }
-
-    /// Render this segment for diagnostics: `Index#Variant` or `#N`.
-    #[must_use]
-    pub(crate) fn display(&self) -> String {
-        match self {
-            Self::Named { index, variant, .. } => format!("{}#{variant}", index.display_name()),
-            Self::FinitePosition { position, .. } => format!("#{position}"),
-        }
-    }
-}
-
-/// A single expected-fail key: a list of index/variant pairs.
-///
-/// - Length 1 for single-index assertions: `[Mode#Boost]`
-/// - Length >1 for multi-index assertions: `[(Mode#Boost, Phase#Launch)]`
-pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
-
 pub(crate) type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
 pub type ParsedExpectedFail = ExpectedFail<NamePath>;
 
@@ -398,19 +242,6 @@ pub type ParsedExpectedFail = ExpectedFail<NamePath>;
 pub(crate) struct CollectedExpectedFail {
     pub(crate) expected: ParsedExpectedFail,
     pub(crate) attribute_span: Span,
-}
-
-pub type ResolvedExpectedFailKeyPart = ExpectedFailKeyPart<IndexTypeRef>;
-pub type ResolvedExpectedFailKey = ExpectedFailKey<IndexTypeRef>;
-pub type ResolvedExpectedFail = ExpectedFail<IndexTypeRef>;
-
-/// Describes how an assertion is expected to fail.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpectedFail<I = IndexTypeRef> {
-    /// The entire assertion is expected to fail: `#[expected_fail]`.
-    All,
-    /// Specific index keys are expected to fail: `#[expected_fail(Index#Variant, ...)]`.
-    Variants(Vec<ExpectedFailKey<I>>),
 }
 
 /// Roles that form a file or DAG's externally addressable declaration surface.

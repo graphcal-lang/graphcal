@@ -1,8 +1,13 @@
 //! Matching borrowed DAG and execution facts, without caller-assembled pairs.
 
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
 use thiserror::Error;
+
+use crate::decl_key::RuntimeDeclKey;
 
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts};
 
@@ -15,6 +20,15 @@ pub enum ExecutionScopeError {
     MissingFacts(DagId),
     #[error("checked execution facts for `{actual}` were paired with DAG `{expected}`")]
     WrongOwner { expected: DagId, actual: DagId },
+    #[error("imported declaration `{0}` has no containing body")]
+    MissingDeclaration(ResolvedDeclName),
+    #[error("imported declaration `{target}` is not a checked {kind:?} value")]
+    WrongImportedKind {
+        target: ResolvedDeclName,
+        kind: ImportedValueKind,
+    },
+    #[error("imported constant `{0}` has no checked value in its defining body's pool")]
+    MissingConstant(ResolvedDeclName),
 }
 
 /// A canonical body paired with its own facts from the same selected stores.
@@ -25,6 +39,37 @@ pub enum ExecutionScopeError {
 pub struct CheckedExecutionScope<'a> {
     dag: &'a DagTIR,
     facts: &'a CheckedDagExecutionFacts,
+}
+
+/// Resolve imported constants from their defining body's facts. `None` means
+/// a validated deferred runtime import, never an absent required constant.
+/// Checking uses this lookup before executable plans exist. Runtime frames use
+/// retained import references instead and must never repeat this body search.
+pub fn checked_imported_constant<'a>(
+    tir: &'a TIR,
+    facts: &'a CheckedExecutionFacts,
+    binding: &ImportedBinding,
+) -> Result<Option<&'a RuntimeValue>, ExecutionScopeError> {
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ImportedSourceResolution);
+    let target = binding.target();
+    let dag = tir
+        .dag_containing_declaration(target)
+        .ok_or_else(|| ExecutionScopeError::MissingDeclaration(target.clone()))?;
+    let scope = CheckedExecutionScope::new(tir, facts, dag.dag_id())?;
+    let is_constant = scope.dag().const_expr(target).is_some();
+    match (binding.kind(), is_constant) {
+        (ImportedValueKind::Runtime, false) => Ok(None),
+        (ImportedValueKind::Constant, true) => scope
+            .facts()
+            .const_values
+            .get(&RuntimeDeclKey::resolved(target.clone()))
+            .map(Some)
+            .ok_or_else(|| ExecutionScopeError::MissingConstant(target.clone())),
+        (kind, _) => Err(ExecutionScopeError::WrongImportedKind {
+            target: target.clone(),
+            kind,
+        }),
+    }
 }
 
 impl<'a> CheckedExecutionScope<'a> {

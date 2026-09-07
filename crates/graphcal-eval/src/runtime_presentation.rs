@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::execution_facts::PresentationInvocationId;
+use crate::presentation_calls::PresentationInvocationId;
 
 /// Runtime instantiation of the invocation-bearing parts of checked
 /// presentation provenance.

@@ -293,7 +293,7 @@ impl PreparedProject {
         let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext::checked(
             &self.tir,
-            &self.plan.checked_execution_facts,
+            &self.plan,
             self.tir.root_dag_id(),
             &self.source,
             builtin_fns,
@@ -309,14 +309,20 @@ impl PreparedProject {
                 .lookup_decl_identity(&assertion.name)
                 .into_bound()
                 .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
-            let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
+            let result = crate::assertion_eval::evaluate_assert_with_expected_fail(
                 &assertion.body,
                 self.plan
+                    .root
                     .expected_fail
                     .get(&RuntimeDeclKey::resolved(owner.clone())),
-                &values,
-                &empty_locals,
-                &ctx.for_decl(&owner),
+                &mut |expr| {
+                    crate::eval_expr::eval_hir_expr(
+                        expr,
+                        &values,
+                        &empty_locals,
+                        &ctx.for_decl(&owner),
+                    )
+                },
             );
             match result {
                 AssertResult::Pass => {}
@@ -634,7 +640,7 @@ pub enum ModelDefinitionError {
     #[error("selected output `{name}` is a {actual_kind}, not a node")]
     OutputNotNode {
         name: DeclName,
-        actual_kind: graphcal_compiler::ir::resolve::DeclCategory,
+        actual_kind: graphcal_compiler::declaration_category::DeclCategory,
     },
     #[error("selected output `{name}` is private")]
     PrivateOutput { name: DeclName },

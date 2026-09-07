@@ -89,13 +89,19 @@ node packet: Packet = Packet(value: @first);
         "prepared evaluation costs should be stable"
     );
     assert_eq!(
-        preparation.dag_body_copies, 0,
+        preparation.imported_body_references, 0,
         "single-file fixture has no ordinary imports"
     );
     assert!(preparation.plan_constructions > 0, "{preparation:?}");
-    // These positive counts deliberately document the pre-B/C/D baseline,
-    // not a desirable runtime contract. Migrations must change them to zero.
-    assert!(first_counts.plan_constructions > 0, "{first_counts:?}");
+    assert_eq!(first_counts.plan_constructions, 0, "{first_counts:?}");
+    assert!(preparation.schedule_constructions > 0);
+    assert_eq!(first_counts.schedule_constructions, 0, "{first_counts:?}");
+    assert_eq!(first_counts.imported_source_resolutions, 0);
+    assert_eq!(
+        first_counts.frame_executions, 3,
+        "root and both calls must use the shared machine"
+    );
+    // Constructor resolution and presentation replay remain C/D work.
     assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
     assert!(
         first_counts.presentation_evaluations > 0,
@@ -105,7 +111,7 @@ node packet: Packet = Packet(value: @first);
 }
 
 #[test]
-fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
+fn pipeline_cost_baseline_observes_ordinary_import_body_sharing() {
     let (_directory, root) = write_pipeline_project(
         &[
             ("a.gcl", "pub node output: Dimensionless = 1.0;"),
@@ -125,15 +131,16 @@ fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
         crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
     let row = prepared.binding_builder().finish().unwrap();
     assert!(!prepared.evaluate(&row).unwrap().has_errors());
-    assert!(
-        counts.dag_body_copies > 0,
-        "ordinary-import copying baseline: {counts:?}"
+    assert_eq!(counts.imported_body_references, 3, "{counts:?}");
+    assert_eq!(
+        counts.unshared_imported_bodies, 0,
+        "ordinary imports use canonical immutable body handles: {counts:?}"
     );
     eprintln!("three-module chain preparation: {counts:?}");
 }
 
 #[test]
-fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
+fn pipeline_cost_baseline_import_chains_share_canonical_bodies() {
     for size in [2_u64, 4, 8] {
         let files = (0..size).map(|index| {
             let body = match index {
@@ -151,16 +158,51 @@ fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
         let (_, counts) =
             crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
         assert_eq!(
-            counts.dag_body_copies,
-            size.saturating_mul(size.saturating_sub(1)),
-            "{size}-module chain: {counts:?}"
+            counts.imported_body_references,
+            size.saturating_mul(size.saturating_sub(1)) / 2,
+            "{counts:?}"
+        );
+        assert_eq!(
+            counts.unshared_imported_bodies, 0,
+            "{size}-module chain retains canonical body addresses: {counts:?}"
         );
         eprintln!("{size}-module chain: {counts:?}");
     }
 }
 
 #[test]
-fn pipeline_cost_baseline_replays_native_selector_for_presentation() {
+fn pipeline_cost_baseline_diamond_keeps_constant_pools_and_shared_call_bodies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("leaf.gcl", "pub const node BASE: Dimensionless = 2.0;"),
+            (
+                "left.gcl",
+                "import pipeline.leaf::{BASE}; pub const node LEFT: Dimensionless = @BASE + 1.0; pub node out: Dimensionless = @BASE;",
+            ),
+            (
+                "right.gcl",
+                "import pipeline.leaf::{BASE as VALUE}; pub const node RIGHT: Dimensionless = @VALUE + 2.0; pub node out: Dimensionless = @VALUE;",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.left as left; import pipeline.right as right; const node TOTAL: Dimensionless = @left::LEFT + @right::RIGHT; node output: Dimensionless = @TOTAL + @left()::out + @right()::out;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let (prepared, counts) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    assert_eq!(counts.imported_body_references, 6, "{counts:?}");
+    assert_eq!(counts.unshared_imported_bodies, 0, "{counts:?}");
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_quantity_value(&result, "output", 11.0);
+}
+
+#[test]
+fn pipeline_cost_baseline_replays_pure_native_selector_for_presentation() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -177,13 +219,8 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
         graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:selector-counter"),
         graphcal_compiler::syntax::function_name::FnName::expect_valid("toggle"),
         move |_| {
-            Ok(crate::host_fns::HostFnValue::F64(
-                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
-                    1.0
-                } else {
-                    0.0
-                },
-            ))
+            observed.fetch_add(1, Ordering::SeqCst);
+            Ok(crate::host_fns::HostFnValue::F64(1.0))
         },
     );
     let prepared = ProjectCompiler::new(&project)
@@ -206,13 +243,13 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
     let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
         panic!("expected quantity");
     };
-    // D06 must replace these baseline assertions with one call and "km".
+    // D06 must remove the extra invocation while preserving this pure result.
     assert_eq!(
         calls.load(Ordering::SeqCst),
         2,
         "presentation replay baseline"
     );
-    assert_eq!(display_unit.as_ref().unwrap().label, "m");
+    assert_eq!(display_unit.as_ref().unwrap().label, "km");
 }
 
 #[test]
@@ -233,14 +270,18 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     assert!(provisional.host_fns().is_none());
     assert!(provisional.checked_execution_facts().is_none());
     assert!(provisional.struct_field_constraints().is_none());
+    assert!(provisional.execution_plan().is_err());
 
     let checked =
         crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
             .unwrap();
+    let plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
+            .unwrap();
     let host = crate::host_fns::HostFunctionRegistry::new();
     let context = crate::eval_expr::EvalContext::checked(
         &tir,
-        &checked,
+        &plan,
         tir.root_dag_id(),
         &src,
         builtin,
@@ -255,11 +296,14 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     ));
     assert!(!context.struct_field_constraints().unwrap().is_empty());
     assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
-    let empty = crate::execution_facts::CheckedExecutionFacts::empty();
+    let mut broken_plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
+            .unwrap();
+    broken_plan.checked_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
     assert!(
         crate::eval_expr::EvalContext::checked(
             &tir,
-            &empty,
+            &broken_plan,
             tir.root_dag_id(),
             &src,
             builtin,
@@ -268,6 +312,347 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
+    let source = "node x: Dimensionless = 1.0;";
+    let tir = compile_to_tir(source, "locations.gcl").unwrap();
+    let src = miette::NamedSource::new("locations.gcl", std::sync::Arc::new(source.to_string()));
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    // Deliberately corrupt only the prepared index: the declaration still exists
+    // in TIR, so an accidental fallback search would let evaluation succeed.
+    plan.declaration_locations =
+        crate::declaration_locations::DeclarationLocations::try_new([]).unwrap();
+    let result = super::runtime::run_eval_loop_with_bindings(
+        &plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        &tir,
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &crate::host_fns::HostFunctionRegistry::new(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    assert!(
+        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared physical location"))
+    );
+}
+
+#[test]
+fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
+    let mut host = crate::host_fns::HostFunctionRegistry::new();
+    host.register(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:pure-plan-test"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("twice"),
+        |args| match &args[0] {
+            crate::host_fns::HostFnValue::F64(value) => {
+                Ok(crate::host_fns::HostFnValue::F64(value * 2.0))
+            }
+            other => panic!("expected checked scalar argument, got {other:?}"),
+        },
+    );
+    for body in [
+        "pub node a: Dimensionless = probe::twice(2.0); pub node z: Dimensionless = probe::twice(@a); pub node q: Dimensionless = probe::twice(3.0);",
+        "pub node q: Dimensionless = probe::twice(3.0); pub node z: Dimensionless = probe::twice(@a); pub node a: Dimensionless = probe::twice(2.0);",
+    ] {
+        for declarations in [
+            format!(
+                "{body} node output: Dimensionless = @z; node independent: Dimensionless = @q;"
+            ),
+            format!(
+                "dag inner {{ {body} }} node output: Dimensionless = @inner()::z; node independent: Dimensionless = @inner()::q;"
+            ),
+        ] {
+            let source = format!(
+                "import plugin \"graphcal:pure-plan-test\" as probe {{ fn twice(x: Dimensionless) -> Dimensionless; }} {declarations}"
+            );
+            let project =
+                crate::loader::LoadedProject::from_source(&source, "pure-plans.gcl").unwrap();
+            let prepared = ProjectCompiler::new(&project)
+                .host_fns(&host)
+                .prepare()
+                .unwrap();
+            let row = prepared.binding_builder().finish().unwrap();
+            let (result, counts) =
+                crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+            assert!(!result.has_errors(), "{result:?}");
+            assert_quantity_value(&result, "output", 8.0);
+            assert_quantity_value(&result, "independent", 6.0);
+            assert_eq!(counts.plan_constructions, 0);
+            assert_eq!(counts.schedule_constructions, 0);
+            assert_eq!(counts.imported_source_resolutions, 0);
+            assert!(counts.frame_executions > 0);
+        }
+    }
+}
+
+fn callable_plan_fixture() -> (
+    graphcal_compiler::tir::typed::TIR,
+    miette::NamedSource<std::sync::Arc<String>>,
+) {
+    let source = "const node BASE: Dimensionless = 3.0; dag helper { const node LOCAL: Dimensionless = 20.0; pub node out: Dimensionless = @LOCAL; } node value: Dimensionless = @helper()::out + @BASE;";
+    let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
+    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
+    assert!(
+        tir.dag_registry().len() > 1,
+        "fixture must contain a real callable body"
+    );
+    (tir, src)
+}
+
+#[test]
+fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
+    let (tir, src) = callable_plan_fixture();
+    let (plan, counts) =
+        crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    assert_eq!(
+        counts.plan_constructions,
+        u64::try_from(tir.dag_registry().len()).unwrap()
+    );
+    assert_eq!(plan.callables.len() + 1, tir.dag_registry().len());
+    for dag in tir.dag_registry().values() {
+        let callable = plan.callable(dag.dag_id()).unwrap();
+        assert_eq!(&callable.owner, dag.dag_id());
+        assert_eq!(callable.execution_dags, [dag.dag_id().clone()]);
+        let facts = plan.checked_execution_facts.for_dag(dag.dag_id()).unwrap();
+        assert!(!facts.const_values.is_empty());
+        for (key, value) in facts.const_values.iter() {
+            assert!(std::ptr::eq(value, callable.const_values.get(key).unwrap()));
+        }
+    }
+}
+
+#[test]
+fn callable_lookup_rejects_another_bodys_plan() {
+    let (tir, src) = callable_plan_fixture();
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let owner = plan.callables.keys().next().unwrap().clone();
+    plan.callables.get_mut(&owner).unwrap().owner = plan.root.owner.clone();
+    assert!(matches!(
+        plan.callable(&owner),
+        Err(crate::execution_plan::CallablePlanError::WrongOwner { .. })
+    ));
+}
+
+#[test]
+fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
+    let source = "dag helper { pub node out: Dimensionless = 1.0; } node value: Dimensionless = @helper()::out;";
+    let tir = compile_to_tir(source, "call-plans.gcl").unwrap();
+    let src = miette::NamedSource::new("call-plans.gcl", std::sync::Arc::new(source.to_string()));
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    assert!(!plan.callables.is_empty());
+    plan.callables.clear();
+    let result = super::runtime::run_eval_loop_with_bindings(
+        &plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        &tir,
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &crate::host_fns::HostFunctionRegistry::new(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    assert!(
+        matches!(result, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared callable plan"))
+    );
+}
+
+#[test]
+fn shared_frames_agree_on_defaults_bindings_domains_and_assertions() {
+    for binding in ["", "input: 3.0"] {
+        let expected = if binding.is_empty() { 4.0 } else { 6.0 };
+        let body = "param input: Dimensionless(min: 0.0, max: 5.0) = 2.0; pub node value: Dimensionless = @input * 2.0; pub assert positive = @value > 0.0; #[expected_fail] pub assert inverted = false;";
+        let called = format!(
+            "dag inner {{ {body} }} node output: Dimensionless = @inner({binding})::value;"
+        );
+        let included = format!(
+            "dag inner {{ {body} }} include inner({binding}) as inner_instance; node output: Dimensionless = @inner_instance::value;"
+        );
+        let root = format!(
+            "{} node output: Dimensionless = @value;",
+            if binding.is_empty() {
+                body.to_string()
+            } else {
+                body.replace("= 2.0;", "= 3.0;")
+            }
+        );
+        for source in [&root, &called, &included] {
+            let result = compile_and_eval(source).unwrap();
+            assert!(!result.has_errors(), "{source}\n{result:?}");
+            assert_quantity_value(&result, "output", expected);
+        }
+    }
+    for body in [
+        "param input: Dimensionless = 6.0; pub node output: Dimensionless(min: 0.0, max: 5.0) = @input;",
+        "pub node output: Dimensionless = 2.0; pub assert fails = false;",
+        "pub node output: Dimensionless = 2.0; #[expected_fail] pub assert unexpected = true;",
+    ] {
+        for source in [
+            body.to_string(),
+            format!("dag inner {{ {body} }} node called: Dimensionless = @inner()::output;"),
+            format!("dag inner {{ {body} }} include inner() as inner_instance;"),
+        ] {
+            let result =
+                compile_and_eval(&format!("{source} node independent: Dimensionless = 7.0;"))
+                    .unwrap();
+            assert!(result.has_errors(), "{source}\n{result:?}");
+            assert_quantity_value(&result, "independent", 7.0);
+        }
+    }
+}
+
+#[test]
+fn shared_frames_reject_dynamic_parameter_domain_violations_without_losing_independent_values() {
+    let body =
+        "param input: Dimensionless(min: 0.0, max: 5.0); pub node output: Dimensionless = @input;";
+    for source in [
+        "param input: Dimensionless(min: 0.0, max: 5.0) = @raw; node output: Dimensionless = @input;".to_string(),
+        format!("dag inner {{ {body} }} node output: Dimensionless = @inner(input: @raw)::output;"),
+        format!("dag inner {{ {body} }} include inner(input: @raw) as configured; node output: Dimensionless = @configured::output;"),
+    ] {
+        let result = compile_and_eval(&format!("param raw: Dimensionless = 6.0; {source} node independent: Dimensionless = 7.0;")).unwrap();
+        assert!(result.has_errors(), "{source}\n{result:?}");
+        assert_quantity_value(&result, "independent", 7.0);
+    }
+}
+
+#[test]
+fn shared_frames_reject_missing_dependencies_and_cancel_before_interpretation() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    let (tir, src) = callable_plan_fixture();
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    plan.root.dependencies.clear();
+    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
+        let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
+        let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
+        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
+            panic!("missing prepared dependencies must not be reconstructed")
+        });
+        assert!(
+            matches!(outcome, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared dependencies"))
+        );
+        cancellation.cancel();
+        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
+            panic!("cancelled frame must not invoke its expression adapter")
+        });
+        assert!(matches!(outcome, Err(GraphcalError::Cancelled(_))));
+    }
+}
+
+#[test]
+fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
+    let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
+    let tir = compile_to_tir(source, "pools.gcl").unwrap();
+    let src = miette::NamedSource::new("pools.gcl", std::sync::Arc::new(source.to_string()));
+    let (plan, preparation) =
+        crate::pipeline_metrics::measure(|| crate::exec_plan::compile(&tir, &src).unwrap());
+    assert!(preparation.imported_source_resolutions > 0);
+    assert!(plan.root.execution_dags.len() > 1);
+    let mut constants = 0;
+    let mut imports = 0;
+    for callable in std::iter::once(&plan.root).chain(plan.callables.values()) {
+        for (key, value) in callable.const_values.iter() {
+            let body = plan.declaration_locations.body_for(key).unwrap();
+            let canonical = plan
+                .checked_execution_facts
+                .for_dag(body)
+                .unwrap()
+                .const_values
+                .get(key)
+                .unwrap();
+            assert!(std::ptr::eq(value, canonical));
+            constants += 1;
+        }
+        for import in &callable.imports.constants {
+            let value = import.value.value().unwrap();
+            assert!(plan.checked_execution_facts.by_dag.values().any(|facts| {
+                facts
+                    .const_values
+                    .values()
+                    .any(|canonical| std::ptr::eq(value, canonical))
+            }));
+            imports += 1;
+        }
+    }
+    assert!(constants > 2 && imports > 0);
+    let (runtime, counts) = crate::pipeline_metrics::measure(|| {
+        super::runtime::run_eval_loop_with_bindings(
+            &plan,
+            &super::bindings::RuntimeParameterBindings::new(),
+            &tir,
+            &src,
+            graphcal_compiler::registry::builtins::builtin_functions(),
+            &crate::host_fns::HostFunctionRegistry::new(),
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap()
+    });
+    assert!(runtime.errors.is_empty());
+    assert_eq!(counts.imported_source_resolutions, 0);
+    assert_eq!(counts.schedule_constructions, 0);
+    assert_eq!(
+        counts.frame_executions, 2,
+        "one include-closure frame and one inline call"
+    );
+    assert_quantity_value(
+        &compile_and_eval_named(source, "pools.gcl").unwrap(),
+        "output",
+        15.0,
+    );
+}
+
+#[test]
+fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    let source = "node a: Dimensionless = 1.0; node dependent: Dimensionless = @a; node independent: Dimensionless = 2.0;";
+    let tir = compile_to_tir(source, "frame.gcl").unwrap();
+    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let token = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
+        for fatal in [false, true] {
+            let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
+            let outcome = frame.run(&tir, &src, &token, |entry, _| {
+                if entry.key.member() == "a" {
+                    return Err(if fatal {
+                        GraphcalError::internal_error(
+                            "fatal sentinel",
+                            &src,
+                            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                        )
+                    } else {
+                        GraphcalError::EvalError {
+                            message: "ordinary sentinel".into(),
+                            src: src.clone(),
+                            span: entry.expression.span.into(),
+                        }
+                    });
+                }
+                assert_ne!(
+                    entry.key.member(),
+                    "dependent",
+                    "failed dependencies must never be interpreted"
+                );
+                Ok(crate::runtime_presentation::EvaluatedRuntimeValue::new(
+                    graphcal_compiler::registry::runtime_value::RuntimeValue::quantity(2.0)
+                        .unwrap(),
+                    crate::runtime_presentation::PresentationInstance::None,
+                ))
+            });
+            if fatal || matches!(policy, FailurePolicy::Propagate) {
+                assert!(outcome.is_err());
+            } else {
+                outcome.unwrap();
+                assert!(frame.values.keys().any(|key| key.member() == "independent"));
+                assert!(
+                    frame
+                        .errors
+                        .iter()
+                        .any(|(key, error)| key.member() == "dependent"
+                            && matches!(error, NodeError::DependencyFailed { .. }))
+                );
+            }
+        }
+    }
 }
 
 // Compile-time negative API assertion: implementing DerefMut would make the
@@ -1416,6 +1801,57 @@ fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "low", 150.0);
     assert_quantity_value(&result, "high", 300.0);
+}
+
+#[test]
+fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) dim Measure; param measured: Measure; pub node measurement: Measure = @measured; param scale: Dimensionless; pub unit step: Length = (@scale) m; param amount: Length = 3.0 step; pub node out: Length = @amount -> step;",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib(dim Measure: Length, measured: 1.0 m, scale: 1.0) as first; include pipeline.lib(dim Measure: Length, measured: 2.0 m, scale: 2.0) as second; node low: Length = @first::out; node high: Length = @second::out; node first_measurement: Length = @first::measurement; node second_measurement: Length = @second::measurement;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let checked = ProjectCompiler::new(&project).check().unwrap();
+    let instances = checked.tir().root().semantic_instances();
+    assert_eq!(instances.len(), 2);
+    assert_eq!(
+        instances[0].instance.specialization,
+        instances[1].instance.specialization
+    );
+    assert_ne!(instances[0].instance.id, instances[1].instance.id);
+    let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_quantity_value(&result, "low", 3.0);
+    assert_quantity_value(&result, "high", 6.0);
+    assert_quantity_value(&result, "first_measurement", 1.0);
+    assert_quantity_value(&result, "second_measurement", 2.0);
+    for (name, expected_scale) in [("low", 1.0), ("high", 2.0)] {
+        let value = result
+            .nodes
+            .iter()
+            .find(|(key, _)| key == &scoped_name(name))
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap();
+        match value {
+            Value::Quantity {
+                display_unit: Some(unit),
+                ..
+            } => assert!((unit.scale() - expected_scale).abs() < f64::EPSILON),
+            other => panic!("expected instance-owned display unit, got {other:?}"),
+        }
+    }
 }
 
 #[test]
@@ -7713,7 +8149,7 @@ fn eval_overrides_reject_included_implementation_params() {
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
             name,
-            actual_kind: graphcal_compiler::ir::resolve::DeclCategory::Node,
+            actual_kind: graphcal_compiler::declaration_category::DeclCategory::Node,
         })) => {
             assert!(name.as_str() == "a_shared" || name.as_str() == "b_shared");
         }

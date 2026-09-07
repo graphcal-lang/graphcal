@@ -16,10 +16,12 @@ use graphcal_compiler::syntax::type_name::GenericParamName;
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 use miette::NamedSource;
 
-use crate::domain_check::ResolvedDomainConstraint;
-use crate::execution_facts::{CheckedExecutionFacts, EvaluatedPresentationCalls, RuntimeValueMap};
+use crate::domain_constraint::ResolvedDomainConstraint;
+use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
+use crate::execution_plan::ExecPlan;
 use crate::execution_scope::CheckedExecutionScope;
 use crate::host_fns::HostFunctionRegistry;
+use crate::presentation_calls::EvaluatedPresentationCalls;
 use crate::runtime_presentation::PresentationInstanceMap;
 
 use super::work_budget::WorkBudget;
@@ -30,7 +32,7 @@ enum Capabilities<'a> {
     ProvisionalConstants,
     /// Field validation is mandatory; callable access is explicitly supplied.
     Checked {
-        facts: &'a CheckedExecutionFacts,
+        plan: &'a ExecPlan,
         host: &'a HostFunctionRegistry,
     },
 }
@@ -120,26 +122,41 @@ impl<'a> EvalContext<'a> {
     /// supplied independently of the selected checked project facts.
     pub fn checked(
         tir: &'a TIR,
-        facts: &'a CheckedExecutionFacts,
+        plan: &'a ExecPlan,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
         builtin_fns: &'a BuiltinFunctions,
         host: &'a HostFunctionRegistry,
         cancellation: CancellationToken,
     ) -> Result<Self, GraphcalError> {
-        let scope = CheckedExecutionScope::new(tir, facts, owner).map_err(|error| {
+        plan.callable(owner).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
+        let scope = CheckedExecutionScope::new(tir, &plan.checked_execution_facts, owner).map_err(
+            |error| {
+                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+            },
+        )?;
         Ok(Self {
             environment: Self::environment(tir, scope.dag(), src, builtin_fns, cancellation),
-            capabilities: Capabilities::Checked { facts, host },
+            capabilities: Capabilities::Checked { plan, host },
         })
     }
 
     pub const fn checked_execution_facts(&self) -> Option<&'a CheckedExecutionFacts> {
         match self.capabilities {
             Capabilities::ProvisionalConstants => None,
-            Capabilities::Checked { facts, .. } => Some(facts),
+            Capabilities::Checked { plan, .. } => Some(&plan.checked_execution_facts),
+        }
+    }
+
+    pub fn execution_plan(&self) -> Result<&'a ExecPlan, GraphcalError> {
+        match self.capabilities {
+            Capabilities::ProvisionalConstants => Err(self.internal_error(
+                "provisional constant evaluation has no callable execution plans",
+                DiagnosticAnchor::WholeFile,
+            )),
+            Capabilities::Checked { plan, .. } => Ok(plan),
         }
     }
 
@@ -212,8 +229,11 @@ impl<'a> EvalContext<'a> {
                     )
                 })?
             }
-            Capabilities::Checked { facts, .. } => {
-                CheckedExecutionScope::new(self.tir, facts, dag.dag_id())
+            Capabilities::Checked { plan, .. } => {
+                plan.callable(dag.dag_id()).map_err(|error| {
+                    context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
+                })?;
+                CheckedExecutionScope::new(self.tir, &plan.checked_execution_facts, dag.dag_id())
                     .map_err(|error| {
                         context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
                     })?

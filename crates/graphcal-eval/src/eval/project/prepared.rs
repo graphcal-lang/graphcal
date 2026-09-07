@@ -28,7 +28,7 @@ use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::domain_check::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
+use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
@@ -249,7 +249,10 @@ impl ParameterBindingBuilder<'_> {
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     include_debug_names: IncludeDebugNameMap,
-    imported_source_order: Vec<(ScopedName, graphcal_compiler::ir::resolve::DeclCategory)>,
+    imported_source_order: Vec<(
+        ScopedName,
+        graphcal_compiler::declaration_category::DeclCategory,
+    )>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
 }
 
@@ -257,7 +260,7 @@ struct ProjectOutputAssembly {
 pub struct PreparedProject {
     plan_id: u64,
     tir: graphcal_compiler::tir::typed::TIR,
-    plan: crate::exec_plan::ExecPlan,
+    plan: crate::execution_plan::ExecPlan,
     declared_types: HashMap<ScopedName, DeclaredType>,
     source: NamedSource<Arc<String>>,
     host_fns: crate::host_fns::HostFunctionRegistry,
@@ -283,7 +286,7 @@ impl std::fmt::Debug for PreparedProject {
 impl PreparedProject {
     pub(in crate::eval::project) fn from_compiled(
         compiled: CompiledFile,
-        plan: crate::exec_plan::ExecPlan,
+        plan: crate::execution_plan::ExecPlan,
         source: NamedSource<Arc<String>>,
         host_fns: crate::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
@@ -299,7 +302,6 @@ impl PreparedProject {
             output_surface,
             include_debug_names,
         } = compiled;
-        let tir = tir.with_external_value_constructors();
 
         let mut schema_builder = ModelSchemaGraphBuilder::new(&tir, &source);
         let parameter_ports =

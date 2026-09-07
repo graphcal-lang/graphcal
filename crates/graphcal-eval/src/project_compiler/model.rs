@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::imported_binding::HirImportedBinding;
-use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
+use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -100,12 +101,11 @@ pub(super) struct HirFile {
 
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
-    pub(super) const_values_by_dag:
-        HashMap<graphcal_compiler::dag_id::DagId, HashMap<DeclName, RuntimeValue>>,
     pub(super) declared_types_by_dag:
         HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     pub(super) override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
-    pub(super) dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
+    /// The module's own bodies, frozen once and shared by every importer.
+    pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
     pub(super) extern_functions: HashMap<
         graphcal_compiler::syntax::plugin::ExternFnKey,
         graphcal_compiler::ir::lower::ExternFunctionEntry,
@@ -159,12 +159,6 @@ impl ModuleArtifactStore {
 
     pub(super) fn values(&self) -> impl Iterator<Item = &ModuleArtifact> {
         self.by_file.values()
-    }
-
-    pub(super) fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&graphcal_compiler::dag_id::DagId, &ModuleArtifact)> {
-        self.by_file.iter()
     }
 }
 

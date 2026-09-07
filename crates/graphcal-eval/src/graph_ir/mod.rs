@@ -18,7 +18,7 @@ pub mod dot;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::registry::resolve_types::DeclCategory;
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
 use thiserror::Error;
@@ -385,7 +385,7 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_local_hir(&ir).unwrap();
-        type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap()
+        type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap()
     }
 
     /// Compile through the full project pipeline (loader + inline-DAG body

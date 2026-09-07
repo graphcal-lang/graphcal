@@ -127,8 +127,8 @@ pub(super) fn build_runtime_dag(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
-    // Merge params and nodes, then sort by name for canonical tie-breaking
-    // among incomparable nodes in the topological sort.
+    // Stable graph insertion is an implementation detail, not an invocation-
+    // order contract for independent plugin calls.
     enum DeclRef<'a> {
         Param(&'a graphcal_compiler::ir::lower::ParamEntry),
         Node(&'a graphcal_compiler::ir::lower::NodeEntry),
@@ -151,6 +151,7 @@ pub(super) fn build_runtime_dag(
     }
 
     cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag

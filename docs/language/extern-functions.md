@@ -19,6 +19,25 @@ server, or a program embedding the evaluation engine). They are the escape
 hatch for computations that cannot be expressed as a `dag` block: iterative
 solvers, special functions, property libraries, coordinate transforms.
 
+## Purity and Invocation Order
+
+Plugin functions, including native implementations supplied by an embedder,
+must be pure: their results must depend on their explicit inputs, not on
+invocation history, shared mutable state, or the order in which other functions
+run. Internal caching is acceptable only when it does not change results.
+
+Graphcal respects data dependencies but does **not** guarantee an order for
+independent plugin invocations. An observed order is not a contract; it may
+change between roots and inline calls, evaluations, versions, or execution
+strategies. Do not use declaration order or plugin side effects to coordinate
+calculations.
+
+An impure, order-dependent implementation is a **plugin bug** and makes the
+Graphcal evaluation results **undefined**: Graphcal provides no guarantee about
+the resulting calculation values. This is not permission for memory unsafety or
+for bypassing applicable ABI validation, sandboxing, or resource limits. Native
+implementations remain trusted embedder code; Graphcal cannot prove their purity.
+
 ## Declaring a Plugin
 
 An `import plugin` block declares which functions a plugin provides and,

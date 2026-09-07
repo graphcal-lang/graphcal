@@ -4,25 +4,25 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
+use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
     eval_hir_expr_with_presentation,
 };
+use crate::execution_frame::eval_failed_node_error;
 use crate::runtime_presentation::PresentationInstanceMap;
-use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
+use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 
 use super::display::attach_presentation;
@@ -37,7 +37,7 @@ pub(super) struct EvalLoopResult {
     pub values: RuntimeValueMap,
     pub presentation_instances: PresentationInstanceMap,
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
-    pub presentation_calls: crate::execution_facts::EvaluatedPresentationCalls,
+    pub presentation_calls: crate::presentation_calls::EvaluatedPresentationCalls,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -188,22 +188,9 @@ impl RuntimeEvaluation {
     }
 }
 
-/// Core evaluation loop shared by project and prepared-model evaluation.
-///
-/// Inserts imported and const values, then iterates in topological order.
-/// Unfold expressions carry their resolved axis and are evaluated inline.
-/// Domain constraints are checked after successful evaluation.
-///
-/// Returns all computed values and any per-node errors. Internal invariant
-/// violations are returned immediately rather than being fault-isolated as
-/// ordinary user evaluation failures.
-/// Run the core loop with one plan-validated row of runtime parameter bindings.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one dependency-ordered loop keeps value insertion and per-node failure isolation auditable"
-)]
+/// Execute the root with ordinary failures contained by the shared machine.
 pub(super) fn run_eval_loop_with_bindings(
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -211,175 +198,46 @@ pub(super) fn run_eval_loop_with_bindings(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
     let empty_hir_locals = HirLocalValueMap::root();
-
-    let mut values: RuntimeValueMap = HashMap::new();
-    let mut presentation_instances = PresentationInstanceMap::new();
-    let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
-    let presentation_calls = crate::execution_facts::EvaluatedPresentationCalls::default();
-
-    // Insert imported compile-time constants into the lookup table.
-    // They keep their original `ScopedName` qualification.
-    for (name, val) in &plan.imported_values {
-        values.insert(name.clone(), val.clone());
+    let presentation_calls = crate::presentation_calls::EvaluatedPresentationCalls::default();
+    let mut frame =
+        ExecutionFrame::new(plan, tir.root_dag_id(), FailurePolicy::Contain).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+    for (key, binding) in bindings {
+        frame.bind(key, binding.value.clone(), src, Span::new(0, 0))?;
     }
-
-    // Insert const values into the lookup table.
-    for (name, val) in plan.const_values.iter() {
-        values.insert(name.clone(), val.clone());
-    }
-
-    // Inject supplied params before evaluating defaults or dependent nodes.
-    // Bound and defaulted params share the same resolved domain constraints.
-    for (name, binding) in bindings {
-        if let Some(constraint) = plan.domain_constraints.get(name)
-            && let Err(violation) =
-                crate::domain_check::check_domain_constraint(&binding.value, constraint)
-        {
-            errors.insert(
-                name.clone(),
-                NodeError::EvalFailed {
-                    message: violation.message,
-                },
-            );
-            continue;
-        }
-        values.insert(name.clone(), binding.value.clone());
-    }
-
-    // Evaluate in topological order (params first, then nodes that depend on them).
-    // Top-level declarations in a single file are always `Local`-form names.
-    for name in &plan.topo_order {
-        cancellation.checkpoint()?;
-        if values.contains_key(name) || errors.contains_key(name) {
-            continue;
-        }
-
-        let current_dag = tir
-            .dag_containing_declaration(name.as_resolved())
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("TIR runtime declaration owner is missing for `{name}`"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        // Check canonical dependencies in the declaration's source or semantic
-        // instance DAG rather than assuming every runtime body belongs to root.
-        let failed_deps = failed_runtime_dependencies(current_dag, name, &errors);
-
-        if !failed_deps.is_empty() {
-            errors.insert(name.clone(), NodeError::DependencyFailed { failed_deps });
-            continue;
-        }
-
-        let ctx = EvalContext::checked(
+    frame.run(tir, src, cancellation, |entry, frame| {
+        // Root declarations keep their existing work allowance; nested calls
+        // share this context's budget through immutable scope reselection.
+        let context = EvalContext::checked(
             tir,
-            &plan.checked_execution_facts,
-            current_dag.dag_id(),
-            src,
+            plan,
+            entry.scope.dag().dag_id(),
+            entry.scope.facts().source(),
             builtin_fns,
             host_fns,
             cancellation.clone(),
         )?
-        .with_roots(&values, Some(&presentation_instances))
         .with_presentation_calls(&presentation_calls)
-        .for_decl(name.as_resolved());
-
-        let result = current_dag
-            .runtime_expr(name.as_resolved())
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("TIR runtime declaration missing for `{name}`"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })
-            .and_then(|hir_expr| {
-                eval_hir_expr_with_presentation(
-                    hir_expr,
-                    &values,
-                    &presentation_instances,
-                    &empty_hir_locals,
-                    &ctx,
-                )
-            });
-
-        match result {
-            Ok(evaluated) => {
-                let (val, presentation) = evaluated.into_parts();
-                // Check domain constraints after successful evaluation.
-                if let Some(constraint) = plan.domain_constraints.get(name)
-                    && let Err(violation) =
-                        crate::domain_check::check_domain_constraint(&val, constraint)
-                {
-                    errors.insert(
-                        name.clone(),
-                        NodeError::EvalFailed {
-                            message: violation.message,
-                        },
-                    );
-                    continue;
-                }
-                values.insert(name.clone(), val);
-                if !presentation.is_none() {
-                    presentation_instances.insert(name.clone(), presentation);
-                }
-            }
-            Err(error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_))) => {
-                return Err(error);
-            }
-            Err(error) => {
-                errors.insert(name.clone(), eval_failed_node_error(&error));
-            }
-        }
-    }
-
+        .with_roots(&frame.values, Some(&frame.presentations))
+        .for_decl(entry.key.as_resolved());
+        eval_hir_expr_with_presentation(
+            entry.expression,
+            &frame.values,
+            &frame.presentations,
+            &empty_hir_locals,
+            &context,
+        )
+    })?;
     Ok(EvalLoopResult {
-        values,
-        presentation_instances,
-        errors,
+        values: frame.values,
+        presentation_instances: frame.presentations,
+        errors: frame.errors,
         presentation_calls,
     })
-}
-
-/// Convert a runtime `GraphcalError` into a per-node `EvalFailed` error,
-/// preferring the bare eval message over the full rendered diagnostic.
-fn eval_failed_node_error(e: &GraphcalError) -> NodeError {
-    let message = match e {
-        GraphcalError::EvalError { message, .. } => message.clone(),
-        other => format!("{other}"),
-    };
-    NodeError::EvalFailed { message }
-}
-
-#[expect(
-    clippy::option_if_let_else,
-    reason = "explicit branches document that a declaration absent from the dependency map has no failed dependencies"
-)]
-fn failed_runtime_dependencies(
-    dag: &graphcal_compiler::tir::typed::DagTIR,
-    name: &RuntimeDeclKey,
-    errors: &HashMap<RuntimeDeclKey, NodeError>,
-) -> Vec<DeclName> {
-    match dag
-        .semantic()
-        .dependencies
-        .runtime_deps
-        .get(name.as_resolved())
-    {
-        Some(dependencies) => dependencies
-            .iter()
-            .filter(|dependency| {
-                errors.contains_key(&RuntimeDeclKey::resolved(
-                    dag.runtime_decl_identity(dependency),
-                ))
-            })
-            .map(|dependency| DeclName::from_atom(dependency.atom().clone()))
-            .collect(),
-        None => Vec::new(),
-    }
 }
 
 /// Evaluate using immutable TIR plus one plan and validated runtime bindings.
@@ -390,7 +248,7 @@ fn failed_runtime_dependencies(
 /// Evaluate a plan with one row of runtime parameter bindings.
 pub(super) fn evaluate_plan_with_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
@@ -415,7 +273,7 @@ pub(super) fn evaluate_plan_with_bindings_and_cancellation(
 )]
 pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
+    plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
@@ -444,7 +302,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let ctx = EvalContext::checked(
         tir,
-        &plan.checked_execution_facts,
+        plan,
         tir.root_dag_id(),
         src,
         builtin_fns,
@@ -527,7 +385,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
         let key = local_key(name)?;
         let value = match decl_type {
-            DeclType::Const => plan.const_values.get(&key).map_or_else(
+            DeclType::Const => plan.root.const_values.get(&key).map_or_else(
                 || {
                     Err(GraphcalError::internal_error(
                         format!("checked source-order constant `{key}` has no runtime value"),
@@ -746,15 +604,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
                 || {
                     let ef = plan
+                        .root
                         .expected_fail
                         .get(&RuntimeDeclKey::resolved(owner.clone()));
-                    evaluate_assert_with_expected_fail(
-                        &entry.body,
-                        ef,
-                        &values,
-                        &empty_hir_locals,
-                        &entry_ctx,
-                    )
+                    evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
+                        eval_hir_expr(expr, &values, &empty_hir_locals, &entry_ctx)
+                    })
                 },
                 |message| AssertResult::Error { message },
             );
@@ -798,16 +653,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         )
                     })?;
                 let expected = projection.expected_fail.as_ref().or_else(|| {
-                    plan.expected_fail
+                    plan.root
+                        .expected_fail
                         .get(&RuntimeDeclKey::resolved(owner.clone()))
                 });
-                let result = evaluate_assert_with_expected_fail(
-                    &entry.body,
-                    expected,
-                    &values,
-                    &empty_hir_locals,
-                    &ctx.for_checked_decl(instance_dag, src, &owner)?,
-                );
+                let assertion_ctx = ctx.for_checked_decl(instance_dag, src, &owner)?;
+                let result =
+                    evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {
+                        eval_hir_expr(expr, &values, &empty_hir_locals, &assertion_ctx)
+                    });
                 assertions.push((
                     root_instance_name(
                         tir.root_dag_id(),
@@ -997,6 +851,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .map(|(name, _)| {
             let key = local_key(name)?;
             Ok(plan
+                .root
                 .domain_constraints
                 .get(&key)
                 .map(|constraint| (name.clone(), constraint.clone())))
@@ -1040,6 +895,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         }
     }
     let assumes_map = plan
+        .root
         .assumes_map
         .iter()
         .map(|(assertion, assumers)| {
@@ -1151,556 +1007,6 @@ fn dependency_failure_message<'a>(
         })
         .collect();
     (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
-}
-
-/// Evaluate an assertion body with optional `#[expected_fail]` handling.
-///
-/// For `None` (no `expected_fail`): evaluate and return the result as-is.
-/// For `Some(ExpectedFail::All)`: invert the final result (Pass↔Fail).
-/// For `Some(ExpectedFail::Variants(keys))`: evaluate the expression to get
-/// the raw indexed `RuntimeValue`, invert only the matching variant entries,
-/// then aggregate.
-pub fn evaluate_assert_with_expected_fail(
-    body: &graphcal_compiler::hir::AssertBody,
-    ef: Option<&ExpectedFail>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> AssertResult {
-    match ef {
-        None => evaluate_assert_body(body, values, local_values, ctx),
-        Some(ExpectedFail::All) => {
-            let result = evaluate_assert_body(body, values, local_values, ctx);
-            match result {
-                AssertResult::Pass => AssertResult::Fail {
-                    message: "assertion passed but was marked #[expected_fail]".to_string(),
-                },
-                AssertResult::Fail { .. } => AssertResult::Pass,
-                AssertResult::Error { .. } => result,
-            }
-        }
-        Some(ExpectedFail::Variants(keys)) => {
-            // Per-variant: we need the raw per-key Bool tree to invert
-            // specific entries. For `Expr` bodies that is the evaluated
-            // expression; for tolerance bodies it is the element-wise
-            // pass/fail tree (#809).
-            let bool_tree = match body {
-                graphcal_compiler::hir::AssertBody::Expr(body_expr) => {
-                    match eval_hir_expr(body_expr, values, local_values, ctx) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            return AssertResult::Error {
-                                message: format!("{e}"),
-                            };
-                        }
-                    }
-                }
-                graphcal_compiler::hir::AssertBody::Tolerance {
-                    actual,
-                    expected,
-                    tolerance,
-                } => {
-                    let operands = eval_tolerance_operands(
-                        actual,
-                        expected,
-                        tolerance,
-                        values,
-                        local_values,
-                        ctx,
-                    );
-                    let (actual_val, expected_val, tolerance_val) = match operands {
-                        Ok(operands) => operands,
-                        Err(result) => return result,
-                    };
-                    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
-                        Ok((tree, _)) => tree,
-                        Err(message) => return AssertResult::Error { message },
-                    }
-                }
-            };
-            match bool_tree {
-                RuntimeValue::Indexed {
-                    index_name,
-                    entries,
-                } => {
-                    let inverted = invert_indexed_variants(&index_name, entries, keys);
-                    check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys)
-                }
-                RuntimeValue::Bool(_) => AssertResult::Error {
-                    message:
-                        "invalid compiled plan: per-variant #[expected_fail(...)] on a non-indexed assertion"
-                            .to_string(),
-                },
-                other => AssertResult::Error {
-                    message: format!("expected Bool or Indexed, got {other:?}"),
-                },
-            }
-        }
-    }
-}
-
-fn expected_fail_key_matches_path(
-    path: &[(IndexTypeRef, IndexEntryKey)],
-    key: &ExpectedFailKey,
-) -> bool {
-    path.len() == key.len()
-        && path
-            .iter()
-            .zip(key.iter())
-            .all(|((actual_index, actual_variant), expected)| {
-                expected.matches_entry(actual_index, actual_variant)
-            })
-}
-
-/// Invert specific variant entries in an indexed `RuntimeValue`.
-///
-/// For each entry in the indexed value, if the variant key matches one of the
-/// expected-fail keys, flip `Bool(true)` → `Bool(false)` and vice versa.
-/// For nested indexed values (multi-index), recurse.
-fn invert_indexed_variants(
-    index_name: &IndexTypeRef,
-    entries: IndexMap<IndexEntryKey, RuntimeValue>,
-    keys: &[ExpectedFailKey],
-) -> (IndexTypeRef, IndexMap<IndexEntryKey, RuntimeValue>) {
-    let inverted_entries = entries
-        .into_iter()
-        .map(|(variant, value)| {
-            let new_value = match value {
-                RuntimeValue::Bool(b) => {
-                    // Single-index: check if this variant is in any key
-                    let should_invert = keys
-                        .iter()
-                        .any(|key| key.len() == 1 && key[0].matches_entry(index_name, &variant));
-                    if should_invert {
-                        RuntimeValue::Bool(!b)
-                    } else {
-                        RuntimeValue::Bool(b)
-                    }
-                }
-                RuntimeValue::Indexed {
-                    index_name: inner_index,
-                    entries: inner_entries,
-                } => {
-                    // Multi-index: filter keys that match the current variant at position 0,
-                    // then strip the first element and recurse.
-                    let sub_keys: Vec<ExpectedFailKey> = keys
-                        .iter()
-                        .filter(|key| key.len() >= 2 && key[0].matches_entry(index_name, &variant))
-                        .map(|key| key[1..].to_vec())
-                        .collect();
-                    if sub_keys.is_empty() {
-                        // No expected-fail keys apply to this subtree — leave as-is
-                        RuntimeValue::Indexed {
-                            index_name: inner_index,
-                            entries: inner_entries,
-                        }
-                    } else {
-                        let (idx, ents) =
-                            invert_indexed_variants(&inner_index, inner_entries, &sub_keys);
-                        RuntimeValue::Indexed {
-                            index_name: idx,
-                            entries: ents,
-                        }
-                    }
-                }
-                other => other,
-            };
-            (variant, new_value)
-        })
-        .collect();
-    (index_name.clone(), inverted_entries)
-}
-
-/// Format a list of indexed paths for assertion failure messages.
-///
-/// Each path is a slice of index/variant pairs from outermost to innermost.
-/// For single-index paths, formats as `Mode#Boost, Mode#Cruise`.
-/// For multi-index paths, formats as `(Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`.
-fn format_indexed_path_part(index: &IndexTypeRef, key: &IndexEntryKey) -> String {
-    match key {
-        IndexEntryKey::Named(variant) => format!("{}#{variant}", index.display_name()),
-        IndexEntryKey::Position(_) => key.to_string(),
-    }
-}
-
-fn format_indexed_paths(
-    paths: &[&[(IndexTypeRef, IndexEntryKey)]],
-    is_multi_index: bool,
-) -> String {
-    let formatted: Vec<String> = if is_multi_index {
-        paths
-            .iter()
-            .map(|p| {
-                format!(
-                    "({})",
-                    p.iter()
-                        .map(|(index, key)| format_indexed_path_part(index, key))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            })
-            .collect()
-    } else {
-        paths
-            .iter()
-            .map(|p| format_indexed_path_part(&p[0].0, &p[0].1))
-            .collect()
-    };
-    formatted.join(", ")
-}
-
-/// Check an indexed assertion with expected-fail variant awareness.
-///
-/// After inversion, the semantics are:
-/// - A variant matching an expected-fail key that is `true` (was `false` before inversion)
-///   means "expected failure occurred" → good.
-/// - A variant matching an expected-fail key that is `false` (was `true` before inversion)
-///   means "unexpected pass" → report as failure.
-/// - A variant NOT matching any key behaves normally (`true` = pass, `false` = fail).
-///
-/// We reuse `collect_failing_paths` on the inverted entries, then classify each
-/// failing path as either "unexpected pass" or "unexpected fail".
-fn check_indexed_assert_with_expected_fail(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-    keys: &[ExpectedFailKey],
-) -> AssertResult {
-    match collect_failing_paths(index_name, entries) {
-        Ok(paths) if paths.is_empty() => AssertResult::Pass,
-        Ok(paths) => {
-            // Classify each failing path
-            let mut unexpected_passes = Vec::new();
-            let mut unexpected_fails = Vec::new();
-
-            for path in &paths {
-                let is_expected_fail_key = keys
-                    .iter()
-                    .any(|key| expected_fail_key_matches_path(path, key));
-                if is_expected_fail_key {
-                    // This was an expected-fail key but the value is false after inversion,
-                    // meaning the original was true → unexpected pass
-                    unexpected_passes.push(path.as_slice());
-                } else {
-                    unexpected_fails.push(path.as_slice());
-                }
-            }
-
-            let is_multi_index = paths.iter().any(|p| p.len() > 1);
-            let mut parts = Vec::new();
-
-            if !unexpected_passes.is_empty() {
-                parts.push(format!(
-                    "unexpected pass at {}",
-                    format_indexed_paths(&unexpected_passes, is_multi_index)
-                ));
-            }
-
-            if !unexpected_fails.is_empty() {
-                parts.push(format!(
-                    "failed at {}",
-                    format_indexed_paths(&unexpected_fails, is_multi_index)
-                ));
-            }
-
-            AssertResult::Fail {
-                message: parts.join("; "),
-            }
-        }
-        Err(msg) => AssertResult::Error { message: msg },
-    }
-}
-
-/// Recursively check an indexed assertion value (possibly multi-dimensional).
-///
-/// For single-index: `Bool[Mode]` — entries are `Bool` values.
-/// For multi-index: `Bool[Phase, Maneuver]` — entries are nested `Indexed` values.
-///
-/// Single-index failure message example:
-///   `failed at Mode#Boost`
-/// Multi-index failure message example:
-///   `failed at (Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`
-fn check_indexed_assert(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> AssertResult {
-    match collect_failing_paths(index_name, entries) {
-        Ok(paths) if paths.is_empty() => AssertResult::Pass,
-        Ok(paths) => {
-            let is_multi_index = paths.iter().any(|p| p.len() > 1);
-            AssertResult::Fail {
-                message: format!(
-                    "failed at {}",
-                    format_indexed_paths(
-                        &paths.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-                        is_multi_index,
-                    )
-                ),
-            }
-        }
-        Err(msg) => AssertResult::Error { message: msg },
-    }
-}
-
-/// Recursively collect failing variant paths from an indexed assertion value.
-///
-/// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
-/// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::expect_valid("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
-fn collect_failing_paths(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<Vec<Vec<(IndexTypeRef, IndexEntryKey)>>, String> {
-    let mut paths = Vec::new();
-    for (variant, value) in entries {
-        let key = (index_name.clone(), variant.clone());
-        match value {
-            RuntimeValue::Bool(true) => {}
-            RuntimeValue::Bool(false) => {
-                paths.push(vec![key]);
-            }
-            RuntimeValue::Indexed {
-                index_name: inner_index,
-                entries: inner_entries,
-            } => {
-                // Recurse into nested dimension, prepending current variant to each path
-                for mut inner_path in collect_failing_paths(inner_index, inner_entries)? {
-                    inner_path.insert(0, key.clone());
-                    paths.push(inner_path);
-                }
-            }
-            other => {
-                return Err(format!(
-                    "expected Bool for {}::{variant}, got {other:?}",
-                    index_name.display_name()
-                ));
-            }
-        }
-    }
-    Ok(paths)
-}
-
-/// Evaluate a single assert body and return an `AssertResult`.
-fn evaluate_assert_body(
-    body: &graphcal_compiler::hir::AssertBody,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> AssertResult {
-    match body {
-        graphcal_compiler::hir::AssertBody::Expr(body_expr) => {
-            match eval_hir_expr(body_expr, values, local_values, ctx) {
-                Ok(RuntimeValue::Bool(true)) => AssertResult::Pass,
-                Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
-                    message: "assertion evaluated to false".to_string(),
-                },
-                Ok(RuntimeValue::Indexed {
-                    index_name,
-                    entries,
-                }) => check_indexed_assert(&index_name, &entries),
-                Ok(other) => AssertResult::Error {
-                    message: format!("expected Bool, got {other:?}"),
-                },
-                Err(e) => AssertResult::Error {
-                    message: format!("{e}"),
-                },
-            }
-        }
-        graphcal_compiler::hir::AssertBody::Tolerance {
-            actual,
-            expected,
-            tolerance,
-        } => evaluate_tolerance_assert(actual, expected, tolerance, values, local_values, ctx),
-    }
-}
-
-/// Evaluate a tolerance assertion body (`actual ~= expected +/- tolerance`).
-///
-/// Indexed operands broadcast element-wise (#809): the assertion's shape
-/// comes from `actual`; `expected` and `tolerance` are each unindexed (applied
-/// to every key) or indexed by the same axes. Failures report each failing
-/// key with its actual/expected/delta detail.
-fn evaluate_tolerance_assert(
-    actual: &graphcal_compiler::hir::Expr,
-    expected: &graphcal_compiler::hir::Expr,
-    tolerance: &graphcal_compiler::hir::Expr,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> AssertResult {
-    let (actual_val, expected_val, tolerance_val) =
-        match eval_tolerance_operands(actual, expected, tolerance, values, local_values, ctx) {
-            Ok(operands) => operands,
-            Err(result) => return result,
-        };
-    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
-        Err(message) => AssertResult::Error { message },
-        Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
-        Ok((_, failures)) => AssertResult::Fail {
-            message: format_tolerance_failures(&failures),
-        },
-    }
-}
-
-/// Evaluate the three operand expressions of a tolerance assertion.
-///
-/// Returns the raw runtime values (any shape — shape checking happens in
-/// [`eval_tolerance_tree`]), or the `AssertResult::Error` to report.
-fn eval_tolerance_operands(
-    actual: &graphcal_compiler::hir::Expr,
-    expected: &graphcal_compiler::hir::Expr,
-    tolerance: &graphcal_compiler::hir::Expr,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), AssertResult> {
-    let eval = |expr: &graphcal_compiler::hir::Expr| {
-        eval_hir_expr(expr, values, local_values, ctx).map_err(|e| AssertResult::Error {
-            message: format!("{e}"),
-        })
-    };
-    Ok((eval(actual)?, eval(expected)?, eval(tolerance)?))
-}
-
-/// A failing key of a tolerance assertion, with its numeric detail.
-struct ToleranceFailure {
-    /// Index path from outermost to innermost axis; empty for an unindexed
-    /// assertion.
-    path: Vec<(IndexTypeRef, IndexEntryKey)>,
-    /// `actual X, expected Y +/- T, off by D`.
-    detail: String,
-}
-
-/// Walk a tolerance assertion's operands element-wise, producing the per-key
-/// `Bool` tree (mirroring `actual`'s index structure) plus the detail for
-/// every failing key. A shape/sign/type problem aborts with `Err` —
-/// reported as an assertion ERROR.
-fn eval_tolerance_tree(
-    actual: &RuntimeValue,
-    expected: &RuntimeValue,
-    tolerance: &RuntimeValue,
-) -> Result<(RuntimeValue, Vec<ToleranceFailure>), String> {
-    let mut failures = Vec::new();
-    let mut path = Vec::new();
-    let tree = tolerance_tree_inner(actual, expected, tolerance, &mut path, &mut failures)?;
-    Ok((tree, failures))
-}
-
-fn tolerance_tree_inner(
-    actual: &RuntimeValue,
-    expected: &RuntimeValue,
-    tolerance: &RuntimeValue,
-    path: &mut Vec<(IndexTypeRef, IndexEntryKey)>,
-    failures: &mut Vec<ToleranceFailure>,
-) -> Result<RuntimeValue, String> {
-    if let RuntimeValue::Indexed {
-        index_name,
-        entries,
-    } = actual
-    {
-        let checked_entries = entries
-            .iter()
-            .map(|(variant, actual_entry)| {
-                let expected_entry = tolerance_entry_or_broadcast(expected, index_name, variant)?;
-                let tolerance_entry = tolerance_entry_or_broadcast(tolerance, index_name, variant)?;
-                path.push((index_name.clone(), variant.clone()));
-                let result = tolerance_tree_inner(
-                    actual_entry,
-                    expected_entry,
-                    tolerance_entry,
-                    path,
-                    failures,
-                );
-                path.pop();
-                Ok((variant.clone(), result?))
-            })
-            .collect::<Result<_, String>>()?;
-        return Ok(RuntimeValue::Indexed {
-            index_name: index_name.clone(),
-            entries: checked_entries,
-        });
-    }
-
-    let actual_val = tolerance_quantity_operand(actual, "actual")?;
-    let expected_val = tolerance_quantity_operand(expected, "expected")?;
-    let tolerance_val = tolerance_quantity_operand(tolerance, "tolerance")?;
-    let tol_display = format!("{tolerance_val}");
-
-    // A negative tolerance makes the assertion unsatisfiable (even an
-    // exact match fails). Statically-known negatives are rejected at
-    // check time (#815); this guards tolerances computed at runtime.
-    if tolerance_val < 0.0 {
-        return Err(format!("tolerance must be non-negative, got {tol_display}"));
-    }
-
-    let delta = (actual_val - expected_val).abs();
-    let ok = delta <= tolerance_val;
-    if !ok {
-        failures.push(ToleranceFailure {
-            path: path.clone(),
-            detail: format!(
-                "actual {actual_val}, expected {expected_val} +/- {tol_display}, off by {delta}"
-            ),
-        });
-    }
-    Ok(RuntimeValue::Bool(ok))
-}
-
-/// Select the entry of a broadcastable tolerance operand for one key of
-/// `actual`'s axis: indexed operands index per key (axes were checked
-/// statically; mismatches here are evaluation errors), unindexed operands
-/// broadcast unchanged.
-fn tolerance_entry_or_broadcast<'a>(
-    operand: &'a RuntimeValue,
-    axis: &IndexTypeRef,
-    variant: &IndexEntryKey,
-) -> Result<&'a RuntimeValue, String> {
-    match operand {
-        RuntimeValue::Indexed {
-            index_name,
-            entries,
-        } => {
-            if !index_name.matches_ref(axis) {
-                return Err(format!(
-                    "tolerance assertion operand has mismatched index axes: `{}` vs `{}`",
-                    axis.display_name(),
-                    index_name.display_name()
-                ));
-            }
-            entries.get(variant).ok_or_else(|| {
-                format!(
-                    "tolerance assertion operand is missing entry `{}`",
-                    format_indexed_path_part(index_name, variant)
-                )
-            })
-        }
-        other => Ok(other),
-    }
-}
-
-fn tolerance_quantity_operand(value: &RuntimeValue, role: &str) -> Result<f64, String> {
-    match value {
-        RuntimeValue::Quantity(v) => Ok(v.get()),
-        other => Err(format!("expected quantity {role}, got {other:?}")),
-    }
-}
-
-/// Render tolerance failures: an unindexed assertion reports its detail bare
-/// (`actual X, expected Y +/- T, off by D`); indexed assertions report each
-/// failing key with its detail.
-fn format_tolerance_failures(failures: &[ToleranceFailure]) -> String {
-    if let [failure] = failures
-        && failure.path.is_empty()
-    {
-        return failure.detail.clone();
-    }
-    let is_multi_index = failures.iter().any(|f| f.path.len() > 1);
-    let formatted: Vec<String> = failures
-        .iter()
-        .map(|f| {
-            let key = format_indexed_paths(&[f.path.as_slice()], is_multi_index);
-            format!("failed at {key} ({})", f.detail)
-        })
-        .collect();
-    formatted.join("; ")
 }
 
 /// Evaluate one plot property expression to a `PlotFieldValue`. String

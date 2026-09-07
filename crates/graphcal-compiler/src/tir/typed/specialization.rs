@@ -715,12 +715,12 @@ fn install_override_reconciliations(
 }
 
 fn specialize_expected_fail(
-    expected: &mut crate::ir::resolve::ExpectedFail,
+    expected: &mut crate::assertion_expectation::ExpectedFail,
     substitution: &StaticSubstitution,
 ) {
-    if let crate::ir::resolve::ExpectedFail::Variants(keys) = expected {
+    if let crate::assertion_expectation::ExpectedFail::Variants(keys) = expected {
         for part in keys.iter_mut().flatten() {
-            if let crate::ir::resolve::ExpectedFailKeyPart::Named { index, .. } = part
+            if let crate::assertion_expectation::ExpectedFailKeyPart::Named { index, .. } = part
                 && let Some(source) = index.declared_resolved()
                 && let Some(replacement) = index_substitution(substitution, source)
             {
@@ -1049,7 +1049,7 @@ fn specialize_instance_presentation_facts(
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
     tir.dags
-        .iter()
+        .local_iter()
         .filter_map(|(owner, dag)| {
             dag.semantic_specialization
                 .as_ref()
@@ -1204,7 +1204,9 @@ fn install_plot_projections_for_dag(
 }
 
 fn dag_identity_snapshot(tir: &TIR) -> Vec<crate::dag_id::DagId> {
-    tir.dags.keys().cloned().collect()
+    // Imported bodies are immutable handles. Only local assembly bodies can
+    // receive instance/projection facts.
+    tir.dags.local_keys().cloned().collect()
 }
 
 /// Copy requested instance plots into their semantic parents from leaves upward.
@@ -1247,7 +1249,7 @@ fn install_semantic_projection_bindings(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let dag_ids = tir.dags.keys().cloned().collect::<Vec<_>>();
+    let dag_ids = tir.dags.local_keys().cloned().collect::<Vec<_>>();
     for dag_id in dag_ids {
         let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
             GraphcalError::internal_error(
@@ -1341,11 +1343,9 @@ fn instantiate_semantic_edge(
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let instance = clone_checked_instance(&template, edge, tir, src)?;
     for (unit, info) in runtime_unit_infos {
-        tir.project_types
-            .insert_unit_definition(unit, &info)
-            .map_err(|error| {
-                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-            })?;
+        tir.insert_runtime_unit(unit, info).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
     }
     tir.insert_materialized_dag(instance).map_err(|error| {
         GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
