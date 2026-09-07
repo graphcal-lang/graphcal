@@ -119,6 +119,32 @@ fn provisional_const_scopes<'a>(
         .collect()
 }
 
+fn known_const_presentations(
+    facts: &HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
+) -> crate::presentation_evidence::PresentationInstanceMap {
+    facts
+        .values()
+        .flat_map(|facts| facts.const_presentations.iter())
+        .map(|(key, evidence)| (key.clone(), evidence.clone()))
+        .collect()
+}
+
+fn constant_presentations(
+    values: &RuntimeValueMap,
+    presentations: &crate::presentation_evidence::PresentationInstanceMap,
+) -> Arc<crate::presentation_evidence::PresentationInstanceMap> {
+    Arc::new(
+        values
+            .keys()
+            .filter_map(|key| {
+                presentations
+                    .get(key)
+                    .map(|evidence| (key.clone(), evidence.clone()))
+            })
+            .collect(),
+    )
+}
+
 fn check_dag_execution_facts(
     tir: &TIR,
     inherited: &CheckedExecutionFacts,
@@ -136,7 +162,15 @@ fn check_dag_execution_facts(
         .cloned()
         .collect::<HashSet<_>>();
     let initial_values = known_const_values(&dag_facts);
-    let const_pools = eval_const_pools_for_dags(tir, &dag_ids, initial_values, src, cancellation)?;
+    let inherited_presentations = known_const_presentations(&dag_facts);
+    let (const_pools, presentations) = eval_const_pools_for_dags(
+        tir,
+        &dag_ids,
+        initial_values,
+        inherited_presentations,
+        src,
+        cancellation,
+    )?;
 
     let mut all_const_values = known_const_values(&dag_facts);
     all_const_values.extend(const_pools.values().flat_map(|values| {
@@ -210,6 +244,7 @@ fn check_dag_execution_facts(
                     .body_revision()
                     .clone(),
                 source: src.clone(),
+                const_presentations: constant_presentations(&const_values, &presentations),
                 const_values: Arc::new(const_values),
                 topo_order: Arc::new(schedules.remove(&dag_id).ok_or_else(missing)?),
                 domain_constraints: Arc::new(constraints.remove(&dag_id).ok_or_else(missing)?),

@@ -1,0 +1,4 @@
+node broken: Dimensionless = 1.0 / 0.0;
+unit bad: Length = (@broken) m;
+node chosen: Length = 1.0 m -> bad;
+node unchosen: Length = if true { 1.0 m -> m } else { 1.0 m -> bad };

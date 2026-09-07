@@ -6,7 +6,8 @@ use crate::eval::types::NodeError;
 use crate::execution_facts::RuntimeValueMap;
 use crate::execution_plan::{CallablePlan, ExecPlan};
 use crate::execution_scope::CheckedExecutionScope;
-use crate::runtime_presentation::{EvaluatedRuntimeValue, PresentationInstanceMap};
+use crate::presentation_evidence::PresentationInstanceMap;
+use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
@@ -71,12 +72,20 @@ impl<'a> ExecutionFrame<'a> {
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
+        let presentations = plan
+            .checked_execution_facts
+            .by_dag
+            .values()
+            .flat_map(|facts| facts.const_presentations.iter())
+            .filter(|(key, _)| values.contains_key(*key))
+            .map(|(key, evidence)| (key.clone(), evidence.clone()))
+            .collect();
         Ok(Self {
             plan,
             callable,
             policy,
             values,
-            presentations: PresentationInstanceMap::new(),
+            presentations,
             errors: HashMap::new(),
         })
     }

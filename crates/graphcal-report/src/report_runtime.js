@@ -486,6 +486,19 @@
     }
   }
 
+  function patchNotices(evaluation) {
+    var section = document.getElementById("presentation");
+    if (!section) {
+      section = element("section");
+      section.id = "presentation";
+      document.querySelector("main").appendChild(section);
+    }
+    section.replaceChildren();
+    for (var notice of evaluation.notices) {
+      section.appendChild(element("p", "notice", notice.message));
+    }
+  }
+
   function clearBindingErrors() {
     controls.forEach(function (control) {
       control.setError("");
@@ -499,6 +512,7 @@
       patchParamControls(outcome.evaluation);
       patchChecks(outcome.evaluation);
       patchFigures(outcome.evaluation);
+      patchNotices(outcome.evaluation);
       setStatus(
         outcome.evaluation.has_errors ? "live · evaluation has errors" : "live",
         outcome.evaluation.has_errors ? "warn" : "ok",

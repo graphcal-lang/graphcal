@@ -18,7 +18,10 @@ use crate::eval_expr::{
     eval_hir_expr_with_presentation,
 };
 use crate::execution_frame::eval_failed_node_error;
-use crate::runtime_presentation::PresentationInstanceMap;
+use crate::presentation_evidence::{
+    LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure, PresentationInstance,
+    PresentationInstanceMap,
+};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
@@ -29,7 +32,6 @@ use super::display::attach_presentation;
 use super::public_projection::EvaluatedValue;
 use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
-    validate_display_projection,
 };
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
@@ -37,7 +39,6 @@ pub(super) struct EvalLoopResult {
     pub values: RuntimeValueMap,
     pub presentation_instances: PresentationInstanceMap,
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
-    pub presentation_calls: crate::presentation_calls::EvaluatedPresentationCalls,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -134,31 +135,32 @@ impl RuntimeResultValueAssembly {
 fn project_runtime_value(
     runtime: &RuntimeValue,
     declared_type: &DeclaredType,
-    presentation: &graphcal_compiler::tir::presentation::PresentationProvenance,
-    presentation_instance: Option<&crate::runtime_presentation::PresentationInstance>,
+    presentation_instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
+    diagnostics: &std::cell::RefCell<Vec<PresentationDiagnostic>>,
 ) -> Result<Result<Value, NodeError>, GraphcalError> {
     let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
-    if let Err(error) =
-        attach_presentation(&mut value, presentation, presentation_instance, ctx, values)
-    {
-        return match error {
-            error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
-                Err(error)
-            }
-            error => Ok(Err(eval_failed_node_error(&error))),
-        };
-    }
-    Ok(validate_display_projection(&value)
-        .map(|()| value)
-        .map_err(|error| NodeError::EvalFailed {
-            message: error.to_string(),
-        }))
+    let notices = attach_presentation(&mut value, presentation_instance)
+        .map_err(|error| ctx.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;
+    let declaration = ctx.current_decl.as_ref().ok_or_else(|| {
+        ctx.internal_error(
+            "output projection has no declaration",
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    diagnostics
+        .borrow_mut()
+        .extend(notices.into_iter().map(|detail| PresentationDiagnostic {
+            declaration: declaration.clone(),
+            channel: None,
+            detail,
+        }));
+    Ok(Ok(value))
 }
 
 pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
+    pub(super) presentation_instances: PresentationInstanceMap,
     pub(super) values: RuntimeValueMap,
     pub(super) errors: HashMap<RuntimeDeclKey, NodeError>,
 }
@@ -168,6 +170,7 @@ impl std::fmt::Debug for RuntimeEvaluation {
         formatter
             .debug_struct("RuntimeEvaluation")
             .field("result", &self.result)
+            .field("presentation_instances", &self.presentation_instances)
             .field("values", &self.values)
             .field("errors", &self.errors)
             .finish()
@@ -201,13 +204,17 @@ pub(super) fn run_eval_loop_with_bindings(
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
     let empty_hir_locals = HirLocalValueMap::root();
-    let presentation_calls = crate::presentation_calls::EvaluatedPresentationCalls::default();
     let mut frame =
         ExecutionFrame::new(plan, tir.root_dag_id(), FailurePolicy::Contain).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
     for (key, binding) in bindings {
         frame.bind(key, binding.value.clone(), src, Span::new(0, 0))?;
+        if !binding.presentation.is_none() {
+            frame
+                .presentations
+                .insert(key.clone(), binding.presentation.clone());
+        }
     }
     frame.run(tir, src, cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
@@ -221,7 +228,6 @@ pub(super) fn run_eval_loop_with_bindings(
             host_fns,
             cancellation.clone(),
         )?
-        .with_presentation_calls(&presentation_calls)
         .with_roots(&frame.values, Some(&frame.presentations))
         .for_decl(entry.key.as_resolved());
         eval_hir_expr_with_presentation(
@@ -236,7 +242,6 @@ pub(super) fn run_eval_loop_with_bindings(
         values: frame.values,
         presentation_instances: frame.presentations,
         errors: frame.errors,
-        presentation_calls,
     })
 }
 
@@ -246,27 +251,6 @@ pub(super) fn run_eval_loop_with_bindings(
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
 /// Internal invariant violations abort evaluation as `X001`.
 /// Evaluate a plan with one row of runtime parameter bindings.
-pub(super) fn evaluate_plan_with_bindings_and_cancellation(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::execution_plan::ExecPlan,
-    bindings: &super::bindings::RuntimeParameterBindings,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalResult, GraphcalError> {
-    evaluate_plan_with_values_and_bindings_and_cancellation(
-        tir,
-        plan,
-        bindings,
-        declared_types,
-        src,
-        host_fns,
-        cancellation,
-    )
-    .map(|outcome| outcome.result)
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "linear evaluation pipeline is clearest as a single function"
@@ -288,7 +272,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         values,
         presentation_instances,
         errors,
-        presentation_calls,
     } = run_eval_loop_with_bindings(
         plan,
         bindings,
@@ -309,8 +292,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         host_fns,
         cancellation.clone(),
     )?
-    .with_roots(&values, Some(&presentation_instances))
-    .with_presentation_calls(&presentation_calls);
+    .with_roots(&values, Some(&presentation_instances));
+    let presentation_instances = presentation_instances
+        .iter()
+        .map(|(key, evidence)| {
+            crate::eval_expr::presentation::resolve(evidence.clone(), &values, &ctx)
+                .map(|evidence| (key.clone(), evidence))
+        })
+        .collect::<Result<PresentationInstanceMap, _>>()?;
+    let presentation_diagnostics = std::cell::RefCell::new(Vec::new());
 
     let local_key = |name: &ScopedName| {
         tir.root()
@@ -323,19 +313,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
      -> Result<Result<Value, NodeError>, GraphcalError> {
         let runtime_key = local_key(name)?;
         let declaration = runtime_key.as_resolved();
-        let presentation = bindings
-            .get(&runtime_key)
-            .map(|binding| &binding.presentation)
-            .or_else(|| tir.root().declaration_presentation(declaration))
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "checked presentation facts are missing for declaration `{declaration}`"
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
         let declared_type = declared_types.get(name).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked declared type is missing for public declaration `{declaration}`"),
@@ -346,10 +323,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         project_runtime_value(
             runtime,
             declared_type,
-            presentation,
             presentation_instances.get(&runtime_key),
-            &ctx,
-            &values,
+            &ctx.for_decl(declaration),
+            &presentation_diagnostics,
         )
     };
 
@@ -485,24 +461,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     )
                 })?;
                 let declared_type = tir.runtime_declared_type(&declaration, src)?;
-                let presentation = instance_dag
-                    .declaration_presentation(&declaration)
-                    .ok_or_else(|| {
-                        GraphcalError::internal_error(
-                            format!(
-                                "checked presentation facts are missing for instance declaration `{declaration}`"
-                            ),
-                            instance_src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
                 project_runtime_value(
                     runtime,
                     &declared_type,
-                    presentation,
                     presentation_instances.get(&key),
                     &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
-                    &values,
+                    &presentation_diagnostics,
                 )?
             };
             result_values.insert(
@@ -538,24 +502,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     )
                 })?;
                 let declared_type = tir.runtime_declared_type(&declaration, src)?;
-                let presentation = instance_dag
-                    .declaration_presentation(&declaration)
-                    .ok_or_else(|| {
-                        GraphcalError::internal_error(
-                            format!(
-                                "checked presentation facts are missing for instance declaration `{declaration}`"
-                            ),
-                            instance_src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
                 project_runtime_value(
                     runtime,
                     &declared_type,
-                    presentation,
                     presentation_instances.get(&key),
                     &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
-                    &values,
+                    &presentation_diagnostics,
                 )?
             };
             let debug_scope = if debug_scope_counts
@@ -787,7 +739,8 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
-                    Err(message) => {
+                    Err(PlotEvaluationError::Fatal(error)) => return Err(error),
+                    Err(PlotEvaluationError::Render(message)) => {
                         plot_errors.push(super::types::PlotError {
                             name: entry.name.clone(),
                             message,
@@ -825,7 +778,8 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
-                    Err(message) => {
+                    Err(PlotEvaluationError::Fatal(error)) => return Err(error),
+                    Err(PlotEvaluationError::Render(message)) => {
                         plot_errors.push(super::types::PlotError {
                             name: entry.name.clone(),
                             message,
@@ -924,6 +878,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         })
         .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
+    presentation_diagnostics.borrow_mut().extend(
+        plots
+            .iter()
+            .flat_map(|plot| plot.presentation_diagnostics.iter().cloned()),
+    );
     let result = EvalResult {
         consts,
         params,
@@ -933,6 +892,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         assertions,
         plots,
         plot_errors,
+        presentation_diagnostics: presentation_diagnostics.into_inner(),
         figures,
         layers,
         assumes_map,
@@ -941,6 +901,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     };
     Ok(RuntimeEvaluation {
         result,
+        presentation_instances,
         values,
         errors,
     })
@@ -1018,20 +979,53 @@ fn eval_plot_property(
     expr: &graphcal_compiler::hir::Expr,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Result<PlotFieldValue, String> {
+) -> Result<PlotFieldValue, PlotEvaluationError> {
+    ctx.cancellation.checkpoint().map_err(GraphcalError::from)?;
     if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = expr.kind() {
+        ctx.validate_contextual_operand(
+            expr,
+            graphcal_compiler::tir::expression_facts::ContextualOperand::String,
+        )
+        .map_err(PlotEvaluationError::from)?;
         return Ok(PlotFieldValue::String(s.clone()));
     }
     let empty_locals = HirLocalValueMap::root();
     eval_hir_expr(expr, values, &empty_locals, ctx)
-        .map_err(|e| eval_failed_node_error(&e).to_string())
-        .and_then(|rv| runtime_to_plot_field_value(&rv))
+        .map_err(PlotEvaluationError::from)
+        .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::Render))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum PlotEvaluationError {
+    #[error("{0}")]
     Render(String),
+    #[error(transparent)]
     Fatal(GraphcalError),
+}
+
+impl From<GraphcalError> for PlotEvaluationError {
+    fn from(error: GraphcalError) -> Self {
+        match error {
+            error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
+                Self::Fatal(error)
+            }
+            error => Self::Render(eval_failed_node_error(&error).to_string()),
+        }
+    }
+}
+
+impl PlotEvaluationError {
+    fn with_property(self, property: &graphcal_compiler::ir::lower::LoweredPlotProperty) -> Self {
+        match self {
+            Self::Render(message) => Self::Render(match property {
+                graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(_) => {
+                    format!("mark property `{}`: {message}", property.name())
+                }
+                property => format!("property `{}`: {message}", property.name()),
+            }),
+            fatal @ Self::Fatal(_) => fatal,
+        }
+    }
 }
 
 impl From<String> for PlotEvaluationError {
@@ -1085,6 +1079,7 @@ fn evaluate_plot(
             ))
         })?;
     let mut encoding_meta = Vec::new();
+    let mut presentation_diagnostics = Vec::new();
 
     // Evaluate channels and apply their checked structured presentation before
     // row alignment. Numeric projection and axis labels consume the same fact.
@@ -1097,7 +1092,7 @@ fn evaluate_plot(
                 expr.span,
             ))
         })?;
-        let (data, unit_label) = evaluate_plot_channel(
+        let (data, unit_label, diagnostics) = evaluate_plot_channel(
             *channel,
             expr,
             fact,
@@ -1107,10 +1102,19 @@ fn evaluate_plot(
             ctx,
         )?;
 
-        let dimension_label = fact.dimension().and_then(|dimension| {
-            (!dimension.is_dimensionless())
-                .then(|| ctx.registry.dimensions.format_dimension(dimension))
-        });
+        presentation_diagnostics.extend(diagnostics.into_iter().map(|detail| {
+            PresentationDiagnostic {
+                declaration: owner.clone(),
+                channel: Some(*channel),
+                detail,
+            }
+        }));
+        let dimension_label = match fact.leaf() {
+            PlotLeafKind::Quantity(dimension) if !dimension.is_dimensionless() => {
+                Some(ctx.registry.dimensions.format_dimension(dimension))
+            }
+            _ => None,
+        };
         encoding_meta.push((
             *channel,
             AxisMeta {
@@ -1125,22 +1129,7 @@ fn evaluate_plot(
     // Evaluate mark properties (e.g., stroke_width, opacity). Unknown names
     // are rejected at check time (#845); one that still reaches evaluation
     // is an internal inconsistency.
-    let mut mark_properties = Vec::new();
-    for field in &lowered.mark_properties {
-        let graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(mark_prop) = &field.property
-        else {
-            return Err(PlotEvaluationError::Fatal(ctx.internal_error(
-                format!(
-                    "checked mark property has incompatible classification `{}`",
-                    field.property.name()
-                ),
-                field.value.span,
-            )));
-        };
-        let field_value = eval_plot_property(&field.value, values, ctx)
-            .map_err(|error| format!("mark property `{}`: {error}", field.property.name()))?;
-        mark_properties.push((*mark_prop, field_value));
-    }
+    let mark_properties = evaluate_mark_properties(&lowered.mark_properties, values, ctx)?;
 
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
@@ -1156,7 +1145,7 @@ fn evaluate_plot(
             )));
         };
         let field_value = eval_plot_property(&field.value, values, ctx)
-            .map_err(|error| format!("property `{}`: {error}", plot_prop.name()))?;
+            .map_err(|error| error.with_property(&field.property))?;
         check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
         properties.push((*plot_prop, field_value));
     }
@@ -1166,64 +1155,110 @@ fn evaluate_plot(
         mark_type: entry.mark_type,
         encodings,
         encoding_meta,
+        presentation_diagnostics,
         mark_properties,
         properties,
         displayed: entry.displayed,
     })
 }
 
+fn evaluate_mark_properties(
+    fields: &[graphcal_compiler::ir::lower::LoweredPlotField],
+    values: &RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>, PlotEvaluationError>
+{
+    fields
+        .iter()
+        .map(|field| {
+            let graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(mark_prop) =
+                &field.property
+            else {
+                return Err(PlotEvaluationError::Fatal(ctx.internal_error(
+                    format!(
+                        "checked mark property has incompatible classification `{}`",
+                        field.property.name()
+                    ),
+                    field.value.span,
+                )));
+            };
+            let value = eval_plot_property(&field.value, values, ctx)
+                .map_err(|error| error.with_property(&field.property))?;
+            Ok((*mark_prop, value))
+        })
+        .collect()
+}
+
 fn evaluate_plot_channel(
     channel: graphcal_compiler::syntax::ast::EncodingChannel,
     expr: &graphcal_compiler::hir::Expr,
-    fact: &graphcal_compiler::tir::presentation::PlotChannelPresentation,
+    fact: &graphcal_compiler::plot_shape::PlotChannelShape,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
     locals: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<(super::plot_data::ChannelData, Option<String>), PlotEvaluationError> {
+) -> Result<
+    (
+        super::plot_data::ChannelData,
+        Option<String>,
+        Vec<LeafPresentationDiagnostic>,
+    ),
+    PlotEvaluationError,
+> {
     if let graphcal_compiler::hir::ExprKind::StringLiteral(value) = expr.kind() {
         return Ok((
             super::plot_data::ChannelData::unindexed_label(value.clone()),
             None,
+            Vec::new(),
         ));
     }
     let evaluated = eval_hir_expr_with_presentation(expr, values, presentation_values, locals, ctx)
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let (runtime, presentation_instance) = evaluated.into_parts();
+    let presentation_instance =
+        crate::eval_expr::presentation::resolve(presentation_instance, values, ctx)
+            .map_err(|error| classify_plot_channel_error(channel, error))?;
     let declared_type =
-        plot_declared_type(fact.shape(), ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;
+        plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;
     let mut presented = EvaluatedValue::new(&runtime, &declared_type)
         .project(ctx.tir, ctx.src)
         .map_err(PlotEvaluationError::Fatal)?;
-    attach_presentation(
-        &mut presented,
-        fact.provenance(),
-        Some(&presentation_instance),
-        ctx,
-        values,
-    )
-    .map_err(|error| classify_plot_channel_error(channel, error))?;
-    validate_display_projection(&presented)
-        .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
-    let unit_label = super::plot_data::uniform_quantity_unit_label(&presented)
-        .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
+    let mut diagnostics = attach_presentation(&mut presented, Some(&presentation_instance))
+        .map_err(|error| {
+            PlotEvaluationError::Fatal(ctx.internal_error(error.to_string(), expr.span))
+        })?;
+    let label = super::plot_data::uniform_quantity_unit_label(&presented);
+    let unit_label = match label {
+        Ok(label) if diagnostics.is_empty() => label,
+        label => {
+            if let Err(error) = label {
+                diagnostics.push(LeafPresentationDiagnostic {
+                    path: Vec::new(),
+                    failure: PresentationFailure::Projection { message: error },
+                });
+            }
+            // A numeric channel must use one scale. Fall back atomically to SI,
+            // rather than mixing successfully converted leaves with SI leaves.
+            presented = EvaluatedValue::new(&runtime, &declared_type)
+                .project(ctx.tir, ctx.src)
+                .map_err(PlotEvaluationError::Fatal)?;
+            None
+        }
+    };
     let data = super::plot_data::channel_data_from_presented_value(&runtime, &presented)
         .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
-    Ok((data, unit_label))
+    Ok((data, unit_label, diagnostics))
 }
 
 fn classify_plot_channel_error(
     channel: graphcal_compiler::syntax::ast::EncodingChannel,
     error: GraphcalError,
 ) -> PlotEvaluationError {
-    match error {
-        error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
-            PlotEvaluationError::Fatal(error)
+    match PlotEvaluationError::from(error) {
+        PlotEvaluationError::Render(message) => {
+            PlotEvaluationError::Render(format!("encoding channel `{channel}`: {message}"))
         }
-        error => PlotEvaluationError::Render(format!(
-            "encoding channel `{channel}`: {}",
-            eval_failed_node_error(&error)
-        )),
+        fatal @ PlotEvaluationError::Fatal(_) => fatal,
     }
 }
 
@@ -1256,7 +1291,11 @@ fn plot_declared_type(
         }))
 }
 
+#[cfg(test)]
+mod tests;
+
 /// Evaluated fields of a figure/layer declaration.
+#[derive(Debug)]
 struct CompositionFields {
     properties: Vec<(super::types::CompositionProperty, PlotFieldValue)>,
     plot_names: Vec<ScopedName>,
@@ -1268,31 +1307,22 @@ fn eval_composition_fields(
     plot_name_spans: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Result<CompositionFields, String> {
-    let empty_locals = HirLocalValueMap::root();
+) -> Result<CompositionFields, PlotEvaluationError> {
     let mut properties = Vec::new();
     for field in fields {
         let graphcal_compiler::ir::lower::LoweredPlotProperty::Composition(comp_prop) =
             &field.property
         else {
-            return Err(format!(
-                "internal: checked composition property has incompatible classification `{}`",
-                field.property.name()
-            ));
+            return Err(PlotEvaluationError::Fatal(ctx.internal_error(
+                format!(
+                    "checked composition property has incompatible classification `{}`",
+                    field.property.name()
+                ),
+                field.value.span,
+            )));
         };
-        if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = field.value.kind() {
-            properties.push((*comp_prop, PlotFieldValue::String(s.clone())));
-            continue;
-        }
-        let rv = eval_hir_expr(&field.value, values, &empty_locals, ctx).map_err(|error| {
-            format!(
-                "property `{}`: {}",
-                comp_prop.name(),
-                eval_failed_node_error(&error)
-            )
-        })?;
-        let field_value = runtime_to_plot_field_value(&rv)
-            .map_err(|error| format!("property `{}`: {error}", comp_prop.name()))?;
+        let field_value = eval_plot_property(&field.value, values, ctx)
+            .map_err(|error| error.with_property(&field.property))?;
         check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
         properties.push((*comp_prop, field_value));
     }

@@ -1,757 +1,116 @@
-//! Checked presentation application, coordinate formatting, and display-unit rendering.
+//! Pure projection of evaluated presentation evidence. No interpreter, owner
+//! lookup, host capability, or invocation environment is available here.
 
-use std::collections::{HashMap, HashSet};
-
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::declared_type::StructTypeRef;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::FieldName;
-use graphcal_compiler::tir::presentation::{
-    IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationIndexSubstitution,
-    PresentationLocalBinder, PresentationMatchPattern, PresentationProvenance,
-    PresentationSelection, UnitPresentation,
+use super::types::{DisplayUnit, Value, validate_display_projection};
+use crate::presentation_evidence::{
+    LeafPresentationDiagnostic, PresentationFailure, PresentationInstance, PresentationPathPart,
 };
+use graphcal_compiler::registry::format::format_number;
+use thiserror::Error;
 
-use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
-use crate::runtime_presentation::PresentationInstance;
-
-use super::types::{DisplayUnit, Value};
-
-/// Persistent owner-qualified environment for presentation-only HIR locals.
-///
-/// A raw `LocalId` is unique only within one declaration body. Keeping the
-/// owner in the key prevents presentation selectors from capturing unrelated
-/// locals after indexed projection crosses a declaration boundary.
-struct PresentationLocalEnv<'a> {
-    parent: Option<&'a Self>,
-    bindings: Vec<(PresentationLocalBinder, RuntimeValue)>,
+#[derive(Debug, Error)]
+pub(super) enum PresentationProjectionInvariant {
+    #[error("unresolved presentation computation reached final projection")]
+    Pending,
+    #[error("presentation evidence does not match its checked value shape")]
+    Shape,
+    #[error("presentation field or index is absent from its checked value")]
+    Missing,
+    #[error("validated presentation scale was rejected")]
+    Scale,
 }
 
-impl<'a> PresentationLocalEnv<'a> {
-    const fn root() -> Self {
-        Self {
-            parent: None,
-            bindings: Vec::new(),
-        }
-    }
-
-    const fn child<'b>(
-        &'b self,
-        bindings: Vec<(PresentationLocalBinder, RuntimeValue)>,
-    ) -> PresentationLocalEnv<'b>
-    where
-        'a: 'b,
-    {
-        PresentationLocalEnv {
-            parent: Some(self),
-            bindings,
-        }
-    }
-
-    fn hir_locals_for(&self, owner: &ResolvedDeclName) -> HirLocalValueMap<'static> {
-        let mut seen = HashSet::new();
-        let mut bindings = Vec::new();
-        let mut frame = Some(self);
-        while let Some(current) = frame {
-            current
-                .bindings
-                .iter()
-                .rev()
-                .filter(|(binder, _)| binder.owner() == owner)
-                .for_each(|(binder, value)| {
-                    if seen.insert(binder.local()) {
-                        bindings.push((binder.local(), value.clone()));
-                    }
-                });
-            frame = current.parent;
-        }
-        HirLocalValueMap::from_bindings(bindings)
-    }
-}
-
-/// Apply checked, owner-qualified presentation facts to a public value.
-///
-/// # Errors
-///
-/// Returns an error when dynamic metadata cannot be evaluated or when checked
-/// presentation structure does not match the evaluated value.
 pub(super) fn attach_presentation(
     value: &mut Value,
-    presentation: &PresentationProvenance,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-) -> Result<(), GraphcalError> {
-    attach_presentation_with_locals(
-        value,
-        presentation,
-        instance,
-        ctx,
-        values,
-        &PresentationLocalEnv::root(),
-    )
-}
-
-fn attach_presentation_with_locals(
-    value: &mut Value,
-    presentation: &PresentationProvenance,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<(), GraphcalError> {
-    match presentation {
-        PresentationProvenance::None => Ok(()),
-        PresentationProvenance::Leaf(leaf) => attach_leaf(value, leaf, ctx, values),
-        PresentationProvenance::Struct {
-            owning_type,
-            fields: presentations,
-        } => attach_struct(
-            value,
-            owning_type,
-            presentations,
-            instance,
-            ctx,
-            values,
-            locals,
-        ),
-        PresentationProvenance::Indexed { index, elements } => {
-            attach_indexed(value, index, elements, instance, ctx, values, locals)
-        }
-        PresentationProvenance::DagCall { key, span, output } => {
-            attach_dag_call(value, key, *span, output, instance, ctx, locals)
-        }
-        PresentationProvenance::IndexProjection {
-            defining_dag,
-            owner,
-            substitutions,
-            output,
-        } => attach_index_projection(
-            value,
-            defining_dag,
-            owner,
-            substitutions,
-            output,
-            instance,
-            ctx,
-            values,
-            locals,
-        ),
-        PresentationProvenance::Select(selection) => {
-            let selected = select_presentation(selection, ctx, values, locals)?;
-            attach_presentation_with_locals(value, selected, instance, ctx, values, locals)
-        }
+    evidence: Option<&PresentationInstance>,
+) -> Result<Vec<LeafPresentationDiagnostic>, PresentationProjectionInvariant> {
+    let mut diagnostics = Vec::new();
+    if let Some(evidence) = evidence {
+        attach(value, evidence, &[], &mut diagnostics)?;
     }
+    Ok(diagnostics)
 }
 
-fn attach_struct(
+fn attach(
     value: &mut Value,
-    owning_type: &StructTypeRef,
-    presentations: &HashMap<FieldName, PresentationProvenance>,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<(), GraphcalError> {
-    let instance_fields = match instance {
-        None | Some(PresentationInstance::None) => None,
-        Some(PresentationInstance::Struct { fields }) => Some(fields),
-        Some(_) => {
-            return Err(presentation_error(
-                ctx,
-                "checked struct presentation has incompatible runtime invocation provenance",
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
-    };
-    match value {
-        Value::Struct { type_name, fields }
-            if type_name.resolved() == owning_type.resolved() =>
-        {
-            presentations.iter().try_for_each(|(field, presentation)| {
-                fields.get_mut(field).map_or_else(
-                    || {
-                        Err(presentation_error(
-                            ctx,
-                            format!(
-                                "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
-                            ),
-                            DiagnosticAnchor::WholeFile,
-                        ))
-                    },
-                    |field_value| {
-                        attach_presentation_with_locals(
-                            field_value,
-                            presentation,
-                            instance_fields.and_then(|fields| fields.get(field)),
-                            ctx,
-                            values,
-                            locals,
-                        )
-                    },
-                )
+    evidence: &PresentationInstance,
+    path: &[PresentationPathPart],
+    diagnostics: &mut Vec<LeafPresentationDiagnostic>,
+) -> Result<(), PresentationProjectionInvariant> {
+    match (evidence, value) {
+        (PresentationInstance::None, _) => Ok(()),
+        (PresentationInstance::Pending(_), _) => Err(PresentationProjectionInvariant::Pending),
+        (PresentationInstance::Struct { fields: evidence }, Value::Struct { fields, .. }) => {
+            evidence.iter().try_for_each(|(key, evidence)| {
+                let value = fields
+                    .get_mut(key)
+                    .ok_or(PresentationProjectionInvariant::Missing)?;
+                let path = [path, &[PresentationPathPart::Field(key.clone())]].concat();
+                attach(value, evidence, &path, diagnostics)
             })
         }
-        Value::Struct { type_name, .. } => Err(presentation_error(
-            ctx,
-            format!(
-                "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
-            ),
-            DiagnosticAnchor::WholeFile,
-        )),
-        _ => Err(presentation_error(
-            ctx,
-            "checked struct presentation was paired with a non-struct runtime value",
-            DiagnosticAnchor::WholeFile,
-        )),
-    }
-}
-
-fn attach_dag_call(
-    value: &mut Value,
-    key: &PresentationCallKey,
-    span: Span,
-    output: &PresentationProvenance,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<(), GraphcalError> {
-    let (invocation, output_instance) = match instance {
-        Some(PresentationInstance::DagCall { invocation, output }) => (invocation, output.as_ref()),
-        None | Some(PresentationInstance::None) => {
-            return Err(presentation_error(
-                ctx,
-                "checked DAG-call presentation has no runtime invocation identity",
-                span,
-            ));
+        (PresentationInstance::Indexed { entries: evidence }, Value::Indexed { entries, .. }) => {
+            evidence.iter().try_for_each(|(key, evidence)| {
+                let value = entries
+                    .get_mut(key)
+                    .ok_or(PresentationProjectionInvariant::Missing)?;
+                let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
+                attach(value, evidence, &path, diagnostics)
+            })
         }
-        Some(_) => {
-            return Err(presentation_error(
-                ctx,
-                "checked DAG-call presentation has incompatible runtime invocation provenance",
-                span,
-            ));
-        }
-    };
-    let calls = ctx.presentation_calls.ok_or_else(|| {
-        presentation_error(
-            ctx,
-            "checked DAG-call presentation has no evaluated call store",
-            span,
-        )
-    })?;
-    let call_values = calls.invocation(key, invocation).map_err(|error| {
-        presentation_error(
-            ctx,
-            format!("checked DAG-call presentation values are unavailable: {error}"),
-            span,
-        )
-    })?;
-    attach_presentation_with_locals(
-        value,
-        output,
-        Some(output_instance),
-        ctx,
-        &call_values,
-        locals,
-    )
-}
-
-fn attach_indexed(
-    value: &mut Value,
-    index: &graphcal_compiler::registry::declared_type::IndexTypeRef,
-    elements: &IndexedPresentation,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<(), GraphcalError> {
-    let instance_entries = match instance {
-        None | Some(PresentationInstance::None) => None,
-        Some(PresentationInstance::Indexed { entries }) => Some(entries),
-        Some(_) => {
-            return Err(presentation_error(
-                ctx,
-                "checked indexed presentation has incompatible runtime invocation provenance",
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
-    };
-    match value {
-        Value::Indexed {
-            index_name,
-            entries,
-            ..
-        } if index_name.matches_ref(index) => match elements {
-            IndexedPresentation::Uniform { binder, element } => {
-                entries.iter_mut().try_for_each(|(key, entry)| {
-                    let entry_instance = instance_entries.and_then(|entries| entries.get(key));
-                    match binder {
-                        Some(binder) => {
-                            let binding = presentation_index_binding(index, key, ctx)?;
-                            let child = locals.child(vec![(binder.clone(), binding)]);
-                            attach_presentation_with_locals(
-                                entry,
-                                element,
-                                entry_instance,
-                                ctx,
-                                values,
-                                &child,
-                            )
-                        }
-                        None => attach_presentation_with_locals(
-                            entry,
-                            element,
-                            entry_instance,
-                            ctx,
-                            values,
-                            locals,
-                        ),
-                    }
-                })
-            }
-            IndexedPresentation::Entries(presentations) => presentations
-                .iter()
-                .try_for_each(|(key, presentation)| {
-                    entries.get_mut(key).map_or_else(
-                        || {
-                            Err(presentation_error(
-                                ctx,
-                                format!(
-                                    "checked presentation key `{key}` is absent from runtime indexed value"
-                                ),
-                                DiagnosticAnchor::WholeFile,
-                            ))
-                        },
-                        |entry| {
-                            attach_presentation_with_locals(
-                                entry,
-                                presentation,
-                                instance_entries.and_then(|entries| entries.get(key)),
-                                ctx,
-                                values,
-                                locals,
-                            )
-                        },
-                    )
-                }),
-        },
-        Value::Indexed { index_name, .. } => Err(presentation_error(
-            ctx,
-            format!(
-                "checked presentation index `{index}` does not match runtime index `{index_name}`"
-            ),
-            DiagnosticAnchor::WholeFile,
-        )),
-        _ => Err(presentation_error(
-            ctx,
-            "checked indexed presentation was paired with a non-indexed runtime value",
-            DiagnosticAnchor::WholeFile,
-        )),
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection application carries checked context, values, locals, and invocation provenance"
-)]
-fn attach_index_projection(
-    value: &mut Value,
-    defining_dag: &graphcal_compiler::dag_id::DagId,
-    owner: &ResolvedDeclName,
-    substitutions: &[PresentationIndexSubstitution],
-    output: &PresentationProvenance,
-    instance: Option<&PresentationInstance>,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<(), GraphcalError> {
-    let first = substitutions.first().ok_or_else(|| {
-        presentation_error(
-            ctx,
-            "checked index projection has no binder substitutions",
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    let owner_ctx = checked_owner_context(ctx, defining_dag, owner, first.argument_span())?;
-    let owner_locals = locals.hir_locals_for(owner);
-    let bindings = substitutions
-        .iter()
-        .map(|substitution| {
-            evaluate_index_substitution(substitution, values, &owner_locals, &owner_ctx)
-                .map(|binding| (substitution.binder().clone(), binding))
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let child = locals.child(bindings);
-    attach_presentation_with_locals(value, output, instance, ctx, values, &child)
-}
-
-fn evaluate_index_substitution(
-    substitution: &PresentationIndexSubstitution,
-    values: &RuntimeValueMap,
-    locals: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::registry::declared_type::IndexTypeRef;
-    use graphcal_compiler::syntax::index_name::IndexEntryKey;
-
-    let argument = match substitution.argument() {
-        graphcal_compiler::hir::expr::IndexArg::Variant(variant) => {
-            let argument_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
-            if !substitution.index().matches_ref(&argument_index) {
-                return Err(presentation_error(
-                    ctx,
-                    format!(
-                        "checked presentation projection argument belongs to `{argument_index}`, expected `{}`",
-                        substitution.index()
-                    ),
-                    substitution.argument_span(),
-                ));
-            }
-            RuntimeValue::Label {
-                index_name: argument_index,
-                variant: variant.variant.variant().clone(),
-            }
-        }
-        graphcal_compiler::hir::expr::IndexArg::Var(local) => {
-            locals.get(local.value).cloned().ok_or_else(|| {
-                presentation_error(
-                    ctx,
-                    "checked presentation projection references an unavailable caller local",
-                    local.span,
-                )
-            })?
-        }
-        graphcal_compiler::hir::expr::IndexArg::Expr(expr) => {
-            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-            eval_hir_expr(expr, values, locals, ctx)?
-        }
-    };
-
-    let key = match argument {
-        RuntimeValue::Label {
-            index_name,
-            variant,
-        } => {
-            if !substitution.index().matches_ref(&index_name) {
-                return Err(presentation_error(
-                    ctx,
-                    format!(
-                        "checked presentation projection key belongs to `{index_name}`, expected `{}`",
-                        substitution.index()
-                    ),
-                    substitution.argument_span(),
-                ));
-            }
-            IndexEntryKey::named(variant)
-        }
-        RuntimeValue::CoordinateLabel {
-            index_name,
-            position,
-            ..
-        } => {
-            if !substitution.index().matches_ref(&index_name) {
-                return Err(presentation_error(
-                    ctx,
-                    format!(
-                        "checked presentation projection key belongs to `{index_name}`, expected `{}`",
-                        substitution.index()
-                    ),
-                    substitution.argument_span(),
-                ));
-            }
-            IndexEntryKey::position(u64::try_from(position).map_err(|_| {
-                presentation_error(
-                    ctx,
-                    "presentation projection coordinate position does not fit u64",
-                    substitution.argument_span(),
-                )
-            })?)
-        }
-        RuntimeValue::Int(position) => {
-            let position = u64::try_from(position).map_err(|_| {
-                presentation_error(
-                    ctx,
-                    "presentation projection position is negative or too large",
-                    substitution.argument_span(),
-                )
-            })?;
-            IndexEntryKey::position(position)
-        }
-        other => {
-            return Err(presentation_error(
-                ctx,
-                format!(
-                    "checked presentation projection argument evaluated to {}, expected an index key",
-                    other.kind()
-                ),
-                substitution.argument_span(),
-            ));
-        }
-    };
-    presentation_index_binding(substitution.index(), &key, ctx)
-}
-
-fn attach_leaf(
-    value: &mut Value,
-    leaf: &LeafPresentation,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-) -> Result<(), GraphcalError> {
-    match (value, leaf) {
         (
-            Value::Quantity {
-                dimension,
-                display_unit,
-                ..
-            }
-            | Value::Complex {
-                dimension,
-                display_unit,
-                ..
-            },
-            LeafPresentation::Unit(unit),
-        ) if dimension == unit.dimension() => {
-            *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
+            PresentationInstance::Unit { .. }
+            | PresentationInstance::Timezone(_)
+            | PresentationInstance::Failed(_),
+            Value::Indexed { entries, .. },
+        ) => entries.iter_mut().try_for_each(|(key, value)| {
+            let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
+            attach(value, evidence, &path, diagnostics)
+        }),
+        (PresentationInstance::Failed(failure), Value::Quantity { .. } | Value::Complex { .. }) => {
+            diagnostics.push(LeafPresentationDiagnostic {
+                path: path.to_vec(),
+                failure: failure.clone(),
+            });
             Ok(())
         }
-        (Value::Indexed { entries, .. }, LeafPresentation::Unit(_))
-        | (Value::Indexed { entries, .. }, LeafPresentation::Timezone(_)) => entries
-            .values_mut()
-            .try_for_each(|entry| attach_leaf(entry, leaf, ctx, values)),
-        (Value::Datetime { display_tz, .. }, LeafPresentation::Timezone(timezone)) => {
+        (
+            PresentationInstance::Unit { label, scale },
+            value @ (Value::Quantity { .. } | Value::Complex { .. }),
+        ) => {
+            let unit = DisplayUnit::try_new(label.clone(), scale.get())
+                .map_err(|_| PresentationProjectionInvariant::Scale)?;
+            set_display_unit(value, Some(unit))?;
+            if let Err(error) = validate_display_projection(value) {
+                set_display_unit(value, None)?;
+                diagnostics.push(LeafPresentationDiagnostic {
+                    path: path.to_vec(),
+                    failure: PresentationFailure::Projection {
+                        message: error.to_string(),
+                    },
+                });
+            }
+            Ok(())
+        }
+        (PresentationInstance::Timezone(timezone), Value::Datetime { display_tz, .. }) => {
             *display_tz = Some(timezone.clone());
             Ok(())
         }
-        (
-            Value::Quantity { dimension, .. } | Value::Complex { dimension, .. },
-            LeafPresentation::Unit(unit),
-        ) => Err(presentation_error(
-            ctx,
-            format!(
-                "checked display dimension `{:?}` does not match runtime dimension `{dimension:?}`",
-                unit.dimension()
-            ),
-            unit.unit().span,
-        )),
-        (_, LeafPresentation::Unit(unit)) => Err(presentation_error(
-            ctx,
-            "checked unit presentation was paired with a non-quantity runtime value",
-            unit.unit().span,
-        )),
-        (_, LeafPresentation::Timezone(_)) => Err(presentation_error(
-            ctx,
-            "checked timezone presentation was paired with a non-datetime runtime value",
-            DiagnosticAnchor::WholeFile,
-        )),
+        _ => Err(PresentationProjectionInvariant::Shape),
     }
 }
 
-fn presentation_index_binding(
-    index: &graphcal_compiler::registry::declared_type::IndexTypeRef,
-    key: &graphcal_compiler::syntax::index_name::IndexEntryKey,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::registry::types::IndexKind;
-    use graphcal_compiler::syntax::index_name::IndexEntryKey;
-
-    let definition = ctx.tir.index_def(index);
-    let definition = definition.ok_or_else(|| {
-        presentation_error(
-            ctx,
-            format!("checked presentation index `{index}` has no definition"),
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    match (&definition.kind, key) {
-        (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Named(variant)) => {
-            Ok(RuntimeValue::Label {
-                index_name: index.clone(),
-                variant: variant.clone(),
-            })
+fn set_display_unit(
+    value: &mut Value,
+    unit: Option<DisplayUnit>,
+) -> Result<(), PresentationProjectionInvariant> {
+    match value {
+        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
+            *display_unit = unit;
+            Ok(())
         }
-        (IndexKind::Coordinate(data), IndexEntryKey::Position(position)) => {
-            let position = usize::try_from(*position).map_err(|_| {
-                presentation_error(
-                    ctx,
-                    "coordinate presentation position exceeds the platform index range",
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            RuntimeValue::coordinate_label(index.clone(), position, data.coordinate_value(position))
-                .map_err(|error| {
-                    presentation_error(ctx, error.to_string(), DiagnosticAnchor::WholeFile)
-                })
-        }
-        (IndexKind::Finite { .. }, IndexEntryKey::Position(position)) => i64::try_from(*position)
-            .map(RuntimeValue::Int)
-            .map_err(|_| {
-                presentation_error(
-                    ctx,
-                    "finite presentation position exceeds the Int range",
-                    DiagnosticAnchor::WholeFile,
-                )
-            }),
-        (IndexKind::RequiredCoordinate { .. }, _) => Err(presentation_error(
-            ctx,
-            "unbound required coordinate index reached presentation",
-            DiagnosticAnchor::WholeFile,
-        )),
-        (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Position(_))
-        | (IndexKind::Coordinate(_) | IndexKind::Finite { .. }, IndexEntryKey::Named(_)) => {
-            Err(presentation_error(
-                ctx,
-                "checked presentation key does not match its index kind",
-                DiagnosticAnchor::WholeFile,
-            ))
-        }
+        _ => Err(PresentationProjectionInvariant::Shape),
     }
-}
-
-fn select_presentation<'a>(
-    selection: &'a PresentationSelection,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-    locals: &PresentationLocalEnv<'_>,
-) -> Result<&'a PresentationProvenance, GraphcalError> {
-    match selection {
-        PresentationSelection::If {
-            defining_dag,
-            owner,
-            condition,
-            then_presentation,
-            else_presentation,
-        } => {
-            let owner_ctx = checked_owner_context(ctx, defining_dag, owner, condition.span)?;
-            let owner_locals = locals.hir_locals_for(owner);
-            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-            match eval_hir_expr(condition, values, &owner_locals, &owner_ctx)? {
-                RuntimeValue::Bool(true) => Ok(then_presentation),
-                RuntimeValue::Bool(false) => Ok(else_presentation),
-                other => Err(presentation_error(
-                    &owner_ctx,
-                    format!(
-                        "checked presentation condition evaluated to {}, expected Bool",
-                        other.kind()
-                    ),
-                    condition.span,
-                )),
-            }
-        }
-        PresentationSelection::Match {
-            defining_dag,
-            owner,
-            scrutinee,
-            arms,
-        } => {
-            let owner_ctx = checked_owner_context(ctx, defining_dag, owner, scrutinee.span)?;
-            let owner_locals = locals.hir_locals_for(owner);
-            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
-            let scrutinee_value = eval_hir_expr(scrutinee, values, &owner_locals, &owner_ctx)?;
-            arms.iter()
-                .find(|arm| presentation_pattern_matches(&arm.pattern, &scrutinee_value))
-                .map(|arm| &arm.presentation)
-                .ok_or_else(|| {
-                    presentation_error(
-                        &owner_ctx,
-                        "checked presentation match has no arm for its runtime scrutinee",
-                        scrutinee.span,
-                    )
-                })
-        }
-    }
-}
-
-fn presentation_pattern_matches(pattern: &PresentationMatchPattern, value: &RuntimeValue) -> bool {
-    match (pattern, value) {
-        (
-            PresentationMatchPattern::IndexLabel(expected),
-            RuntimeValue::Label {
-                index_name,
-                variant,
-            },
-        ) => {
-            index_name.declared_resolved() == Some(expected.index())
-                && variant == expected.variant()
-        }
-        (
-            PresentationMatchPattern::Constructor {
-                owning_type,
-                constructor,
-            },
-            RuntimeValue::Struct {
-                type_name,
-                constructor: value_constructor,
-                ..
-            },
-        ) => type_name == owning_type.resolved() && value_constructor == constructor,
-        _ => false,
-    }
-}
-
-fn checked_owner_context<'a, 'ctx>(
-    ctx: &'a EvalContext<'ctx>,
-    defining_dag: &graphcal_compiler::dag_id::DagId,
-    owner: &ResolvedDeclName,
-    span: Span,
-) -> Result<EvalContext<'a>, GraphcalError>
-where
-    'ctx: 'a,
-{
-    let dag = ctx.tir.dag_registry().get(defining_dag).ok_or_else(|| {
-        presentation_error(
-            ctx,
-            format!("checked presentation owner `{defining_dag}` has no runtime DAG"),
-            span,
-        )
-    })?;
-    let source = ctx
-        .checked_execution_facts()
-        .and_then(|facts| facts.for_dag(defining_dag))
-        .map_or(ctx.src, |facts| facts.source());
-    ctx.for_checked_decl(dag, source, owner)
-}
-
-/// Resolve a checked unit expression in its defining declaration environment.
-fn resolve_unit_to_display(
-    presentation: &UnitPresentation,
-    ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-) -> Result<DisplayUnit, GraphcalError> {
-    let unit = presentation.unit();
-    let owner_ctx = checked_owner_context(
-        ctx,
-        presentation.defining_dag(),
-        presentation.owner(),
-        unit.span,
-    )?;
-    let scale = crate::eval_expr::resolve_unit_scale(unit, values, &owner_ctx)?;
-    let label = format_unit_terms_canonical(
-        unit.terms
-            .iter()
-            .map(|item| (item.op, item.name.value.to_string(), item.power)),
-    )
-    .map_err(|_| GraphcalError::DimensionOverflow {
-        src: owner_ctx.src.clone(),
-        span: unit.span.into(),
-    })?;
-    DisplayUnit::try_new(label, scale).map_err(|error| GraphcalError::InternalError {
-        message: format!("validated display-unit scale violated its invariant: {error}"),
-        src: owner_ctx.src.clone(),
-        span: unit.span.into(),
-    })
-}
-
-fn presentation_error(
-    ctx: &EvalContext<'_>,
-    message: impl Into<String>,
-    anchor: impl Into<DiagnosticAnchor>,
-) -> GraphcalError {
-    ctx.internal_error(message, anchor)
 }
 
 fn format_coordinate_impl(
@@ -762,8 +121,7 @@ fn format_coordinate_impl(
     idx_def.coordinate_data().map_or_else(
         || format!("#{position}"),
         |data| {
-            let si_value = data.coordinate_value(position);
-            let display_value = si_value / data.display_scale;
+            let display_value = data.coordinate_value(position) / data.display_scale;
             let formatted = if exact {
                 display_value.to_string()
             } else {
@@ -777,15 +135,12 @@ fn format_coordinate_impl(
     )
 }
 
-/// Format a coordinate-index value for display, e.g. `"0 s"`, `"0.25 s"`.
 pub(super) fn format_coordinate(
     idx_def: &graphcal_compiler::registry::types::IndexDef,
     position: usize,
 ) -> String {
     format_coordinate_impl(idx_def, position, false)
 }
-
-/// Format with enough binary64 precision to distinguish every coordinate.
 pub(super) fn format_coordinate_exact(
     idx_def: &graphcal_compiler::registry::types::IndexDef,
     position: usize,

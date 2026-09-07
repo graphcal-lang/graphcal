@@ -43,8 +43,6 @@ mod plot;
 mod presentation;
 mod template_closure;
 
-pub use presentation::checked_expression_presentation;
-
 pub use model_schema::{
     ConcreteModelConstructor, ConcreteModelField, ConcreteModelType, ConcreteModelTypeError,
     ValidatedModelType,
@@ -506,7 +504,7 @@ fn check_dynamic_unit_scale_type(
 /// A conversion only matters in a *display position*: the top level of a
 /// declaration body, a selected `if`/`match` branch, a constructor field
 /// initializer, a map-literal entry, a for-comprehension body, or a
-/// `scan`/`unfold` init. Anywhere else — arithmetic operands, function
+/// `scan`/`unfold` init or body. Anywhere else — arithmetic operands, function
 /// arguments, comparison operands, conditions, scrutinees, assertion bodies —
 /// the conversion evaluates to the unchanged SI value and its display target
 /// is silently dropped, so it is either a typo or dead code.
@@ -573,13 +571,13 @@ fn check_ineffective_conversions_inner(
         ExprKind::Scan {
             source, init, body, ..
         } => {
-            check_ineffective_conversions(source, false, src)?;
+            check_ineffective_conversions(source, display_position, src)?;
             check_ineffective_conversions(init, display_position, src)?;
-            check_ineffective_conversions(body, false, src)
+            check_ineffective_conversions(body, display_position, src)
         }
         ExprKind::Unfold { init, body, .. } => {
             check_ineffective_conversions(init, display_position, src)?;
-            check_ineffective_conversions(body, false, src)
+            check_ineffective_conversions(body, display_position, src)
         }
         ExprKind::KeyForm { arg, .. } => check_ineffective_conversions(arg, false, src),
         ExprKind::BinOp { lhs, rhs, .. } => {
@@ -1066,9 +1064,6 @@ pub fn check_dimensions_tir_with_cancellation(
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
     install_presentation_facts(tir, presentation_facts, src)?;
     crate::tir::typed::install_semantic_presentation_facts(tir, src)?;
-    let semantic_presentation_facts =
-        presentation::collect_semantic_presentation_facts(tir, src, cancellation)?;
-    install_presentation_facts(tir, semantic_presentation_facts, src)?;
     crate::tir::typed::install_semantic_plot_projection_facts(tir, src)
 }
 

@@ -46,6 +46,13 @@ pub fn render_report_markdown(document: &ReportDocument) -> String {
         }
     }
 
+    if !document.presentation_diagnostics.is_empty() {
+        out.push_str("\n## Presentation diagnostics\n\n");
+        for diagnostic in &document.presentation_diagnostics {
+            let _ = writeln!(out, "- {diagnostic}");
+        }
+    }
+
     if !document.checks.is_empty() {
         out.push_str("\n## Checks\n\n");
         for check in &document.checks {

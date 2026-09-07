@@ -94,7 +94,9 @@ fn collect_unit_names(
     names
 }
 
-/// Collect every unit name mentioned by `QuantityLiteral` / `Convert` nodes.
+/// Only literal scales are computational prerequisites. Conversion targets
+/// select display computations after the frame's SI values exist, including
+/// self/forward references; an unselected display target schedules no work.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
     names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
@@ -102,7 +104,6 @@ fn collect_unit_names_from_hir(
     hir::visit_expr(expr, &mut |node| {
         let unit = match node.kind() {
             hir::ExprKind::QuantityLiteral { unit, .. } => Some(unit),
-            hir::ExprKind::Convert { target, .. } => Some(target),
             _ => None,
         };
         if let Some(unit) = unit {

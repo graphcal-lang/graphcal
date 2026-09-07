@@ -343,6 +343,8 @@ uses positional notation when the rounded decimal exponent is from -4 through
 14 and scientific notation outside that window. JSON output preserves the
 underlying binary64 value and does not apply this presentation rounding.
 
+Display-only failures preserve valid SI values and are reported separately from node failures. `eval` prints a `presentation:` diagnostic to stderr and exits with status 1; JSON output also includes a `presentation_diagnostics` array. HTML/Markdown reports show a separate presentation-diagnostics section. The browser and editor show presentation notices without replacing valid values with computation errors. Prepared rows recompute presentation for each row, including recovery and reset to defaults.
+
 **Exit codes:**
 
 | Code | Meaning |

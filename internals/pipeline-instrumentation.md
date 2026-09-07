@@ -18,8 +18,11 @@ cargo test --locked -p graphcal-eval --lib pipeline_cost_baseline -- --nocapture
 | Schedule construction | Actual per-body runtime graph construction and combined instance-closure scheduling |
 | Imported source resolution | Checking's imported-constant body lookup; runtime uses retained pool references |
 | Frame execution | Entry into the shared root/call schedule machine |
-| Constructor resolution | The expression evaluator's constructor generic-argument reconstruction |
-| Presentation evaluation | Branch/match selector replay and expression-valued index projection arguments |
+| Constructor fact consumption | Reading the retained checked constructor application |
+| Presentation evaluation | Resolving a selected display-only unit request in its live owning frame (never selector replay) |
+| Call frame value nodes | Actual computational value-tree nodes in a completed call, before dropping its frame |
+| Call output evidence nodes | Actual selected evidence-tree nodes returned by that call |
+| Presentation evidence copy node | Every node actually copied by `PresentationInstance::clone` |
 
 These are not allocation counters, exhaustive clone counts, wall-clock
 benchmarks, or RSS measurements. In particular, nested runtime-value clones and
@@ -45,8 +48,7 @@ subsequently accepted plugin contract makes this impure counter's calculation
 results undefined. It is historical evidence, not a future scheduling or
 presentation correctness oracle. The maintained replay test now uses a pure,
 always-true selector with non-semantic call-count instrumentation: its label is
-already `km`, but it still records two invocations. Phase D must reduce that count
-to **one** while preserving the pure result.
+already `km`, but the Phase C baseline still recorded two invocations. Phase D now requires **one**, and repeated rendering leaves that count unchanged.
 
 The old body-copy hooks were removed with their copying paths; retaining an
 unrecorded event and asserting zero would not prove sharing. The current observer
@@ -98,7 +100,7 @@ and both calls. Prepared evaluation has **zero imported-source resolutions** as
 well as zero plan/schedule construction. A separate nonvacuous import/instance
 fixture observes positive source resolution during preparation and none during
 evaluation. Frame initialization still copies values into mutable invocation
-maps; presentation still retains whole call maps until Phase D.
+maps. Phase D now returns only selected output evidence and discards the call map.
 
 Temporary mutations independently test rejected dependency-order corruption,
 copied imported pools, accidental root fail-fast policy, and reintroduced runtime
@@ -108,16 +110,15 @@ types directly.
 
 ## Invocation-state ownership
 
-`presentation_calls.rs` owns mutable per-evaluation call storage separately from
-`execution_facts.rs`. Checked fact records already did not contain the mutable
-store; the module split makes that ownership boundary explicit. Invocation
-handles now carry a private allocation identity as well as their local ordinal:
-a handle from another evaluation is rejected even at an identical static call
-site and ordinal. Tests also cover repeated-call separation, shared read access,
-wrong call sites, and identity exhaustion without partial publication.
+Phase D deletes `presentation_calls.rs`, its handles/store, and compiler-side selector/projection HIR clones. `presentation_evidence.rs` is a contract consumed by the interpreter and output adapters; `runtime_presentation.rs` pairs values atomically with it. Branches and projections transfer selected subtrees rather than storing an ExprId-indexed decision cache. Locals and concrete recurrence iterations carry their own evidence.
 
-This does **not** remove whole-call environment retention or presentation replay;
-those remain Phase D work, and the positive replay counter/defect fixture stays.
+Display-only unit requests retain owner/source and checked unit terms, not values or lexical environments. Called-frame requests resolve before that frame is discarded; caller-owned requests pass through child calls until the caller is complete. Constant selections are immutable compile-time data, with dynamic display requests deferred. Checked/prepared artifacts contain no runtime invocation state.
+
+The retention regression grows a called DAG's unrelated temporary from 2 to 2,000 leaves while its selected two-element output still returns **3 evidence nodes**. Growing the output to 200 leaves instead returns **201**. The active frame-value counter must grow by over 1,900 nodes in the first control. These are structural retention measurements, not RSS or latency claims. Deferred requests provide a clear future aggregate-budget charging point without adding resource policy in this migration.
+
+Borrowed field/index projection returns references into the selected subtree (or valid sparse absence/broadcast evidence), with pointer-identity and zero-copy controls. Scan and match clone only the selected subtree. Increasing annotated inputs/pattern fields from 4 to 64 measures **18 → 258** copied nodes for scan and **6 → 66** for match. Reintroducing whole-source clones fails the controls at **34 → 4,354** and **22 → 4,162**, respectively. These count structural copies, not allocated bytes or elapsed time.
+
+Final display attachment accepts only a public value and resolved evidence. It has no interpreter, context, owner lookup, or host capability. Separate typed, path-addressed presentation diagnostics preserve SI; the scheduling regression also proves failed conversion-only dependencies cannot erase SI before projection. Quantity-literal dependencies remain computational. Canonical label-format accumulation overflow is a typed presentation formatting failure, even for constant literals; it cannot erase a successfully computed SI value. Plot, figure and layer property adapters retain fatal invariant/cancellation classification, including non-executable contextual String facts, while ordinary render failures remain contained.
 
 ## Bare-Wasm numerical boundary regression
 

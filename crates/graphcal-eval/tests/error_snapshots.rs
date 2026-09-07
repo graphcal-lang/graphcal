@@ -32,6 +32,27 @@ fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
     }
 }
 
+fn render_presentation_error(source: &str, name: &str, expected_si: f64) -> String {
+    let result = compile_and_eval_named(source, name).unwrap();
+    let value = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.to_string() == "bad")
+        .unwrap()
+        .1
+        .as_ref()
+        .unwrap();
+    assert_eq!(value.si_value().unwrap().to_bits(), expected_si.to_bits());
+    assert!(result.has_errors());
+    assert!(!result.presentation_diagnostics.is_empty());
+    result
+        .presentation_diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn error_duplicate_name() {
     let source = include_str!("../../../tests/fixtures/invalid/duplicate.gcl");
@@ -667,7 +688,7 @@ fn error_boolean_dim_error() {
 fn error_convert_target_scale_overflow() {
     let source =
         include_str!("../../../tests/fixtures/runtime_error/convert_target_scale_overflow.gcl");
-    let rendered = render_node_error(source, "convert_target_scale_overflow.gcl", "bad");
+    let rendered = render_presentation_error(source, "convert_target_scale_overflow.gcl", 1.0);
     insta::assert_snapshot!(rendered);
 }
 
@@ -675,7 +696,8 @@ fn error_convert_target_scale_overflow() {
 fn error_convert_dynamic_target_zero_scale() {
     let source =
         include_str!("../../../tests/fixtures/runtime_error/convert_dynamic_target_zero_scale.gcl");
-    let rendered = render_node_error(source, "convert_dynamic_target_zero_scale.gcl", "bad");
+    let rendered =
+        render_presentation_error(source, "convert_dynamic_target_zero_scale.gcl", 100.0);
     insta::assert_snapshot!(rendered);
 }
 

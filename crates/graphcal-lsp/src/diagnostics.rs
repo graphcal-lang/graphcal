@@ -87,6 +87,22 @@ pub fn eval_result_to_diagnostics(
         })
         .collect();
 
+    diagnostics.extend(result.presentation_diagnostics.iter().map(|notice| {
+        let key = crate::symbol_identity::SymbolId::Declaration(notice.declaration.clone());
+        let range = symbol_table
+            .definitions
+            .get(&key)
+            .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
+        Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::WARNING),
+            code: Some(NumberOrString::String("graphcal::presentation".to_string())),
+            source: Some("graphcal".to_string()),
+            message: notice.to_string(),
+            ..Default::default()
+        }
+    }));
+
     // Assertion failures
     diagnostics.extend(
         result
@@ -352,6 +368,19 @@ mod tests {
             Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
             Err(e) => compile_error_to_diagnostics(&e),
         }
+    }
+
+    #[test]
+    fn presentation_failures_have_a_separate_visible_diagnostic() {
+        let source = "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;";
+        let diagnostics = produce_diagnostics(source, "presentation.gcl");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].code,
+            Some(NumberOrString::String("graphcal::presentation".to_string()))
+        );
+        assert!(diagnostics[0].message.contains("SI value retained"));
+        assert!(!diagnostics[0].message.contains("dependency failed"));
     }
 
     #[test]

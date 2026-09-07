@@ -694,6 +694,10 @@ fn handle_eval(
                 eprintln!("error: plot `{}` not rendered: {}", err.name, err.message);
             }
 
+            for diagnostic in &result.presentation_diagnostics {
+                eprintln!("presentation: {diagnostic}");
+            }
+
             // Handle --plot output. JSON plot mode has a pipe-friendly stdout
             // contract: the entire stdout stream is the figure array, so normal
             // evaluation output is suppressed above.
@@ -1319,6 +1323,9 @@ fn print_json(
     output.insert("const".to_string(), serde_json::Value::Object(consts));
     output.insert("param".to_string(), serde_json::Value::Object(params));
     output.insert("node".to_string(), serde_json::Value::Object(nodes));
+    if !result.presentation_diagnostics.is_empty() {
+        output.insert("presentation_diagnostics".to_string(), serde_json::json!(result.presentation_diagnostics.iter().map(|diagnostic| serde_json::json!({"kind": "presentation_error", "message": diagnostic.to_string()})).collect::<Vec<_>>()));
+    }
 
     if !result.assertions.is_empty() {
         use graphcal_eval::eval::AssertResult;

@@ -15,8 +15,9 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr_with_presentation};
 use crate::execution_facts::RuntimeValueMap;
+use crate::presentation_evidence::PresentationInstanceMap;
 
 use super::ResolvedDeclKey;
 
@@ -24,9 +25,16 @@ pub(super) fn eval_const_pools_for_dags(
     tir: &TIR,
     dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,
     mut visible_values: RuntimeValueMap,
+    mut presentations: PresentationInstanceMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>, GraphcalError> {
+) -> Result<
+    (
+        HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
+        PresentationInstanceMap,
+    ),
+    GraphcalError,
+> {
     cancellation.checkpoint()?;
     let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
     let mut index_map = HashMap::new();
@@ -99,15 +107,19 @@ pub(super) fn eval_const_pools_for_dags(
                 DiagnosticAnchor::Source(declaration_by_key[key].2),
             )
         })?;
-        if let Some((target, call_span)) = graphcal_compiler::hir::find_dag_call(hir_expr) {
-            return Err(GraphcalError::DagCallInCompileTime {
-                name: target.to_string(),
-                src: src.clone(),
-                span: call_span.into(),
-            });
-        }
-        let value = eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)?;
+        reject_constant_call(hir_expr, src)?;
+        let (value, presentation) = eval_hir_expr_with_presentation(
+            hir_expr,
+            &visible_values,
+            &presentations,
+            &empty_hir_locals,
+            &ctx,
+        )?
+        .into_parts();
         let runtime_key = RuntimeDeclKey::resolved(key.clone());
+        if !presentation.is_none() {
+            presentations.insert(runtime_key.clone(), presentation);
+        }
         visible_values.insert(runtime_key.clone(), value.clone());
         let pool = const_pools.get_mut(dag_id).ok_or_else(|| {
             GraphcalError::internal_error(
@@ -118,7 +130,21 @@ pub(super) fn eval_const_pools_for_dags(
         })?;
         pool.insert(runtime_key, value);
     }
-    Ok(const_pools)
+    Ok((const_pools, presentations))
+}
+
+fn reject_constant_call(
+    expr: &graphcal_compiler::hir::expr::Expr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match graphcal_compiler::hir::find_dag_call(expr) {
+        Some((target, span)) => Err(GraphcalError::DagCallInCompileTime {
+            name: target.to_string(),
+            src: src.clone(),
+            span: span.into(),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.

@@ -16,18 +16,14 @@ use crate::ir::instance::{
     HirInstanceRecord, InstanceIndexBindingTarget, StaticSpecializationId, StaticSubstitution,
 };
 use crate::nat::NatPolyForm;
+use crate::plot_shape::PlotChannelShape;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::type_name::ResolvedStructTypeName;
-use crate::tir::presentation::{
-    DagPresentationFacts, IndexedPresentation, LeafPresentation, PlotChannelPresentation,
-    PresentationCallKey, PresentationIndexSubstitution, PresentationLocalBinder,
-    PresentationMatchArm, PresentationMatchPattern, PresentationProvenance, PresentationSelection,
-    UnitPresentation,
-};
+use crate::tir::presentation::DagPresentationFacts;
 
 fn dimension_substitution<'a>(
     substitution: &'a StaticSubstitution,
@@ -309,16 +305,6 @@ pub fn specialize_expression_type(
     })
 }
 
-fn rebase_runtime_dag(
-    dag: &crate::dag_id::DagId,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> crate::dag_id::DagId {
-    runtime_owner_rebases
-        .get(dag)
-        .cloned()
-        .unwrap_or_else(|| dag.clone())
-}
-
 fn rebase_runtime_decl(
     declaration: &ResolvedDeclName,
     runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
@@ -329,212 +315,12 @@ fn rebase_runtime_decl(
     )
 }
 
-fn specialize_unit_expr(
-    unit: &crate::hir::ResolvedUnitExpr,
-    tir: &TIR,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> crate::hir::ResolvedUnitExpr {
-    crate::hir::ResolvedUnitExpr {
-        terms: unit
-            .terms
-            .iter()
-            .map(|term| {
-                let source = term.name.value.resolved();
-                let resolved = tir.unit_info(source).map_or_else(
-                    || source.clone(),
-                    |info| {
-                        if info.scale.is_dynamic() {
-                            ResolvedUnitName::from_def(
-                                rebase_runtime_dag(source.owner(), runtime_owner_rebases),
-                                source.to_unowned_def_name(),
-                            )
-                        } else {
-                            source.clone()
-                        }
-                    },
-                );
-                crate::hir::ResolvedUnitExprItem {
-                    op: term.op,
-                    name: crate::syntax::span::Spanned::new(
-                        crate::hir::ResolvedUnitRef::new(
-                            term.name.value.spelling().clone(),
-                            resolved,
-                        ),
-                        term.name.span,
-                    ),
-                    power: term.power,
-                }
-            })
-            .collect(),
-        span: unit.span,
-    }
-}
-
-fn specialize_selection(
-    selection: &PresentationSelection,
-    substitution: &StaticSubstitution,
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> Result<PresentationSelection, GraphcalError> {
-    let recurse = |presentation: &PresentationProvenance| {
-        crate::stack::with_stack_growth(|| {
-            specialize_presentation(presentation, substitution, tir, src, runtime_owner_rebases)
-        })
-    };
-    Ok(match selection {
-        PresentationSelection::If {
-            defining_dag,
-            owner,
-            condition,
-            then_presentation,
-            else_presentation,
-        } => PresentationSelection::If {
-            defining_dag: rebase_runtime_dag(defining_dag, runtime_owner_rebases),
-            owner: rebase_runtime_decl(owner, runtime_owner_rebases),
-            condition: condition.clone(),
-            then_presentation: Box::new(recurse(then_presentation)?),
-            else_presentation: Box::new(recurse(else_presentation)?),
-        },
-        PresentationSelection::Match {
-            defining_dag,
-            owner,
-            scrutinee,
-            arms,
-        } => PresentationSelection::Match {
-            defining_dag: rebase_runtime_dag(defining_dag, runtime_owner_rebases),
-            owner: rebase_runtime_decl(owner, runtime_owner_rebases),
-            scrutinee: scrutinee.clone(),
-            arms: arms
-                .iter()
-                .map(|arm| {
-                    let pattern = match &arm.pattern {
-                        PresentationMatchPattern::IndexLabel(variant) => {
-                            PresentationMatchPattern::IndexLabel(variant.clone())
-                        }
-                        PresentationMatchPattern::Constructor {
-                            owning_type,
-                            constructor,
-                        } => PresentationMatchPattern::Constructor {
-                            owning_type: specialize_struct_ref(owning_type, substitution),
-                            constructor: constructor.clone(),
-                        },
-                    };
-                    recurse(&arm.presentation).map(|presentation| PresentationMatchArm {
-                        pattern,
-                        presentation,
-                    })
-                })
-                .collect::<Result<_, _>>()?,
-        },
-    })
-}
-
-fn specialize_presentation(
-    presentation: &PresentationProvenance,
-    substitution: &StaticSubstitution,
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> Result<PresentationProvenance, GraphcalError> {
-    let recurse = |presentation: &PresentationProvenance| {
-        crate::stack::with_stack_growth(|| {
-            specialize_presentation(presentation, substitution, tir, src, runtime_owner_rebases)
-        })
-    };
-    match presentation {
-        PresentationProvenance::None => Ok(PresentationProvenance::None),
-        PresentationProvenance::Leaf(LeafPresentation::Timezone(timezone)) => Ok(
-            PresentationProvenance::Leaf(LeafPresentation::Timezone(timezone.clone())),
-        ),
-        PresentationProvenance::Leaf(LeafPresentation::Unit(unit)) => Ok(
-            PresentationProvenance::Leaf(LeafPresentation::Unit(UnitPresentation::new(
-                rebase_runtime_dag(unit.defining_dag(), runtime_owner_rebases),
-                rebase_runtime_decl(unit.owner(), runtime_owner_rebases),
-                specialize_dimension(unit.dimension(), substitution, tir, src)?,
-                specialize_unit_expr(unit.unit(), tir, runtime_owner_rebases),
-                unit.requires_runtime_values(),
-            ))),
-        ),
-        PresentationProvenance::Struct {
-            owning_type,
-            fields,
-        } => Ok(PresentationProvenance::Struct {
-            owning_type: specialize_struct_ref(owning_type, substitution),
-            fields: fields
-                .iter()
-                .map(|(field, presentation)| recurse(presentation).map(|p| (field.clone(), p)))
-                .collect::<Result<_, _>>()?,
-        }),
-        PresentationProvenance::Indexed { index, elements } => {
-            let elements = match elements {
-                IndexedPresentation::Uniform { binder, element } => IndexedPresentation::Uniform {
-                    binder: binder.as_ref().map(|binder| {
-                        PresentationLocalBinder::new(
-                            rebase_runtime_decl(binder.owner(), runtime_owner_rebases),
-                            binder.local(),
-                        )
-                    }),
-                    element: Box::new(recurse(element)?),
-                },
-                IndexedPresentation::Entries(entries) => IndexedPresentation::Entries(
-                    entries
-                        .iter()
-                        .map(|(key, presentation)| recurse(presentation).map(|p| (key.clone(), p)))
-                        .collect::<Result<_, _>>()?,
-                ),
-            };
-            Ok(PresentationProvenance::Indexed {
-                index: specialize_index_ref(index, substitution),
-                elements,
-            })
-        }
-        PresentationProvenance::DagCall { key, span, output } => {
-            Ok(PresentationProvenance::DagCall {
-                key: PresentationCallKey::new(
-                    rebase_runtime_decl(key.owner(), runtime_owner_rebases),
-                    key.expression().clone(),
-                ),
-                span: *span,
-                output: Box::new(recurse(output)?),
-            })
-        }
-        PresentationProvenance::IndexProjection {
-            defining_dag,
-            owner,
-            substitutions,
-            output,
-        } => Ok(PresentationProvenance::IndexProjection {
-            defining_dag: rebase_runtime_dag(defining_dag, runtime_owner_rebases),
-            owner: rebase_runtime_decl(owner, runtime_owner_rebases),
-            substitutions: substitutions
-                .iter()
-                .map(|item| {
-                    PresentationIndexSubstitution::new(
-                        specialize_index_ref(item.index(), substitution),
-                        PresentationLocalBinder::new(
-                            rebase_runtime_decl(item.binder().owner(), runtime_owner_rebases),
-                            item.binder().local(),
-                        ),
-                        item.argument().clone(),
-                    )
-                })
-                .collect(),
-            output: Box::new(recurse(output)?),
-        }),
-        PresentationProvenance::Select(selection) => Ok(PresentationProvenance::Select(Box::new(
-            specialize_selection(selection, substitution, tir, src, runtime_owner_rebases)?,
-        ))),
-    }
-}
-
 fn specialize_plot_channel(
-    channel: &PlotChannelPresentation,
+    channel: &PlotChannelShape,
     substitution: &StaticSubstitution,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> Result<PlotChannelPresentation, GraphcalError> {
+) -> Result<PlotChannelShape, GraphcalError> {
     let leaf = match channel.leaf() {
         crate::plot_shape::PlotLeafKind::Quantity(dimension) => {
             crate::plot_shape::PlotLeafKind::Quantity(specialize_dimension(
@@ -551,23 +337,13 @@ fn specialize_plot_channel(
     };
     let shape = crate::plot_shape::PlotChannelShape::new(
         channel
-            .shape()
             .axes()
             .iter()
             .map(|index| specialize_index_ref(index, substitution))
             .collect(),
         leaf,
     );
-    Ok(PlotChannelPresentation::new(
-        shape,
-        specialize_presentation(
-            channel.provenance(),
-            substitution,
-            tir,
-            src,
-            runtime_owner_rebases,
-        )?,
-    ))
+    Ok(shape)
 }
 
 fn instance_decl(
@@ -1046,7 +822,6 @@ fn specialize_instance_semantics(
             .runtime_deps
             .insert(instance_port, dependencies);
     }
-    instance.semantic.presentation.declarations.clear();
     instance.semantic.presentation.plot_channels.clear();
     // Concrete Static index bindings can change cardinality. Instance checking
     // specializes the canonical template's retained facts before publication;
@@ -1117,27 +892,6 @@ fn specialize_instance_presentation_facts(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            let declarations = template
-                .semantic
-                .presentation
-                .declarations
-                .iter()
-                .map(|(declaration, presentation)| {
-                    specialize_presentation(
-                        presentation,
-                        &specialization.substitution,
-                        tir,
-                        src,
-                        runtime_owner_rebases,
-                    )
-                    .map(|presentation| {
-                        (
-                            rebase_runtime_decl(declaration, runtime_owner_rebases),
-                            presentation,
-                        )
-                    })
-                })
-                .collect::<Result<_, GraphcalError>>()?;
             let plot_channels = template
                 .semantic
                 .presentation
@@ -1147,14 +901,8 @@ fn specialize_instance_presentation_facts(
                     channels
                         .iter()
                         .map(|(encoding, channel)| {
-                            specialize_plot_channel(
-                                channel,
-                                &specialization.substitution,
-                                tir,
-                                src,
-                                runtime_owner_rebases,
-                            )
-                            .map(|channel| (*encoding, channel))
+                            specialize_plot_channel(channel, &specialization.substitution, tir, src)
+                                .map(|channel| (*encoding, channel))
                         })
                         .collect::<Result<_, _>>()
                         .map(|channels| {
@@ -1162,13 +910,7 @@ fn specialize_instance_presentation_facts(
                         })
                 })
                 .collect::<Result<_, GraphcalError>>()?;
-            Ok((
-                owner.clone(),
-                DagPresentationFacts {
-                    declarations,
-                    plot_channels,
-                },
-            ))
+            Ok((owner.clone(), DagPresentationFacts { plot_channels }))
         })
         .collect()
 }

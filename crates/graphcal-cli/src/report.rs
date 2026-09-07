@@ -197,6 +197,9 @@ pub fn run_build(
         );
     }
 
+    for diagnostic in &result.presentation_diagnostics {
+        eprintln!("presentation: {diagnostic}");
+    }
     if result.has_errors() {
         Ok(ReportStatus::ProgramErrors)
     } else {

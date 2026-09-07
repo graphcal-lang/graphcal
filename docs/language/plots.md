@@ -108,6 +108,10 @@ encode: {
 },
 ```
 
+### Presentation failures
+
+Display-only failures do not discard a valid numeric channel. The evaluator reports a separate presentation diagnostic and uses SI for the **entire channel**, so successfully converted entries cannot be mixed with unconverted SI entries. Incompatible display units within a channel also produce a visible diagnostic and an SI fallback. Shape, domain, and computational failures still prevent the affected plot from rendering.
+
 ### Channel Alignment
 
 `graphcal check` infers every encoding expression before evaluation. It rejects

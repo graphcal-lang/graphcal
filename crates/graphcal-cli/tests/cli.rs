@@ -4654,17 +4654,20 @@ fn eval_plot_dynamic_display_unit_failure_is_reported() {
         .output()
         .expect("failed to run graphcal");
 
-    assert!(!output.status.success(), "invalid display scale must fail");
     assert_eq!(
-        parse_plot_json_stdout(&String::from_utf8(output.stdout).unwrap()),
-        serde_json::json!([])
+        output.status.code(),
+        Some(1),
+        "presentation failure stays visible"
     );
+    let figures = parse_plot_json_stdout(&String::from_utf8(output.stdout).unwrap());
+    assert_eq!(figures[0]["spec"]["data"]["values"][0]["y"], 100.0);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("plot `prices` not rendered")
-            && stderr.contains("encoding channel `y`")
-            && stderr.contains("dynamic unit scale must be greater than zero"),
-        "expected the display-unit resolution error: {stderr}"
+        stderr.contains("presentation:")
+            && stderr.contains("channel y")
+            && stderr.contains("dynamic unit scale must be greater than zero")
+            && stderr.contains("SI value retained"),
+        "expected the display-unit resolution diagnostic: {stderr}"
     );
 }
 

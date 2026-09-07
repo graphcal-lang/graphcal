@@ -26,6 +26,8 @@ pub struct CheckedDagExecutionFacts {
     pub body_revision: graphcal_compiler::body_revision::BodyRevision,
     pub source: NamedSource<Arc<String>>,
     pub const_values: Arc<RuntimeValueMap>,
+    /// Compile-time selections only; dynamic display requests have no invocation state.
+    pub const_presentations: Arc<crate::presentation_evidence::PresentationInstanceMap>,
     pub topo_order: Arc<Vec<RuntimeDeclKey>>,
     pub domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
 }

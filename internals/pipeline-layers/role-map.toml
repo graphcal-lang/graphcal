@@ -1022,11 +1022,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "presentation", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["tir", "template_closure"]
 role = "checking"
 
@@ -1456,15 +1451,27 @@ package = "eval"
 path = ["pipeline_metrics"]
 role = "contracts"
 
+# Shared selected presentation data; neither producer nor consumer capabilities.
 [[module]]
 package = "eval"
-path = ["presentation_calls"]
+path = ["presentation_evidence"]
 role = "contracts"
+
+# Resolves only selected display requests in the live invocation.
+[[module]]
+package = "eval"
+path = ["eval_expr", "presentation"]
+role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["presentation_calls", "tests"]
-role = "contracts"
+path = ["eval", "tests", "presentation_evidence"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "runtime", "tests"]
+role = "facade"
 
 [[module]]
 package = "eval"

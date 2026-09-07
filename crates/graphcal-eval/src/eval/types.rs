@@ -821,6 +821,8 @@ pub struct EvalResult {
     pub plots: Vec<PlotSpec>,
     /// Plots that failed to evaluate, with their reasons (#842).
     pub plot_errors: Vec<PlotError>,
+    /// Display-only failures; SI values remain available.
+    pub presentation_diagnostics: Vec<crate::presentation_evidence::PresentationDiagnostic>,
     /// Evaluated figure specifications in source order.
     pub figures: Vec<FigureSpec>,
     /// Evaluated layer specifications in source order.
@@ -900,6 +902,7 @@ impl EvalResult {
     pub fn has_errors(&self) -> bool {
         self.all.iter().any(|(_, result, _)| result.is_err())
             || !self.plot_errors.is_empty()
+            || !self.presentation_diagnostics.is_empty()
             || self.assertions.iter().any(|(_, r, _)| {
                 matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
             })
@@ -925,6 +928,8 @@ pub struct PlotSpec {
     /// Axis metadata per encoding channel.
     /// Used by the CLI to auto-generate axis titles like "Velocity (km/s)".
     pub encoding_meta: Vec<(EncodingChannel, AxisMeta)>,
+    /// Display failures associated with this plot's channels; data falls back to SI.
+    pub presentation_diagnostics: Vec<crate::presentation_evidence::PresentationDiagnostic>,
     /// Evaluated mark properties (`stroke_width`, `opacity`, etc.).
     pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).
@@ -1091,6 +1096,7 @@ mod tests {
             assertions: Vec::new(),
             plots: Vec::new(),
             plot_errors: Vec::new(),
+            presentation_diagnostics: Vec::new(),
             figures: Vec::new(),
             layers: Vec::new(),
             assumes_map: std::collections::HashMap::new(),
