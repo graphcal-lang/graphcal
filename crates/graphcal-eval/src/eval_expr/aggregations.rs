@@ -183,7 +183,7 @@ fn aggregate_mean(
         .values()
         .map(|value| quantity_entry(value, "mean element"))
         .collect::<Result<Vec<_>, _>>()?;
-    numeric::scaled_mean(&values, "mean()").map_err(AggregationError::from)
+    numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
 }
 
 fn aggregate_count(

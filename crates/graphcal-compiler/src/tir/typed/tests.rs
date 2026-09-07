@@ -349,7 +349,7 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
     ));
     assert_eq!(
         tir.index_def(&finite)
-            .and_then(crate::registry::types::IndexDef::concrete_cardinality)
+            .and_then(|definition| definition.concrete_cardinality())
             .map(crate::registry::types::IndexCardinality::get),
         Some(3)
     );

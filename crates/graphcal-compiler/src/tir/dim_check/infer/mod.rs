@@ -19,7 +19,7 @@ use super::InferredIndex;
 fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     tir: &'a crate::tir::typed::TIR,
-) -> Option<&'a crate::registry::types::IndexDef> {
+) -> Option<std::borrow::Cow<'a, crate::registry::types::IndexDef>> {
     tir.index_def(index.type_ref())
 }
 
@@ -29,6 +29,6 @@ fn concrete_cardinality_for_inferred(
     tir: &crate::tir::typed::TIR,
 ) -> Option<usize> {
     index_def_for_inferred(index, tir)
-        .and_then(crate::registry::types::IndexDef::concrete_cardinality)
+        .and_then(|definition| definition.concrete_cardinality())
         .map(crate::registry::index::IndexCardinality::get)
 }

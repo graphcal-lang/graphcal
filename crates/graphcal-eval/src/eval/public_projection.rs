@@ -236,19 +236,19 @@ fn project_runtime_value(
         (
             RuntimeValue::Struct {
                 type_name,
+                constructor: runtime_constructor,
                 generic_args: runtime_args,
                 fields,
             },
             DeclaredType::Struct(declared_identity, declared_args),
         ) => {
-            if type_name.resolved() != declared_identity.resolved() || runtime_args != declared_args
-            {
+            if type_name != declared_identity.resolved() || runtime_args != declared_args {
                 return Err(projection_error(
                     runtime,
                     declared_type,
                     format!(
                         "runtime nominal identity `{:?}` or its generic arguments do not match checked identity `{:?}`",
-                        type_name.resolved(),
+                        type_name,
                         declared_identity.resolved()
                     ),
                     tir,
@@ -272,13 +272,13 @@ fn project_runtime_value(
             })?;
             let constructor = constructors
                 .into_iter()
-                .find(|constructor| constructor.name().atom() == type_name.name().atom())
+                .find(|constructor| constructor.name() == runtime_constructor)
                 .ok_or_else(|| {
                     projection_error(
                         runtime,
                         declared_type,
                         format!(
-                            "runtime constructor `{type_name}` is absent from its checked nominal type"
+                            "runtime constructor `{runtime_constructor}` is absent from its checked nominal type"
                         ),
                         tir,
                         src,
@@ -312,7 +312,13 @@ fn project_runtime_value(
                 })
                 .collect::<Result<IndexMap<_, _>, _>>()?;
             Ok(Value::Struct {
-                type_name: type_name.clone(),
+                type_name:
+                    graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
+                        graphcal_compiler::syntax::type_name::StructTypeName::from_atom(
+                            runtime_constructor.atom().clone(),
+                        ),
+                        type_name.clone(),
+                    ),
                 fields: projected_fields,
             })
         }
@@ -599,9 +605,9 @@ mod tests {
             panic!("sample must have a concrete nominal type");
         };
         let runtime = RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Missing"),
-                identity.resolved().clone(),
+            type_name: identity.resolved().clone(),
+            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
+                "Missing",
             ),
             generic_args: generic_args.clone(),
             fields: IndexMap::new(),

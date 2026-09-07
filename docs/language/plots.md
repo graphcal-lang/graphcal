@@ -95,7 +95,11 @@ The `encode` block maps data to visual channels:
 | `text` | Text channel |
 | `tooltip` | Tooltip channel |
 
-Channel values are typically `for` comprehensions producing indexed data:
+Channel values are typically `for` comprehensions producing indexed data.
+A structural axis such as `Fin(2)` can be used directly in a plot-only
+comprehension; it needs no separate index declaration or node annotation.
+
+For example:
 
 ```gcl
 encode: {

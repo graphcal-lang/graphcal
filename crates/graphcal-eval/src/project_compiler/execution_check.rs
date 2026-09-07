@@ -18,8 +18,8 @@ mod domain_resolve;
 
 use const_schedule::{build_runtime_dag, eval_const_pools_for_dags};
 use domain_resolve::{
-    check_dag_const_struct_field_constraints_at_compile_time, resolve_domain_constraints_for_dag,
-    resolve_struct_field_constraints_for_dags,
+    DagConstScope, check_dag_const_struct_field_constraints_at_compile_time,
+    resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
 type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
@@ -98,18 +98,47 @@ fn freeze_checked_execution_facts(
     }
 }
 
-fn initialized_const_pool(
-    const_pools: &HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
+fn initialized_const_pool<'a>(
+    const_pools: &'a HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
     dag_id: &graphcal_compiler::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
-) -> Result<RuntimeValueMap, GraphcalError> {
-    const_pools.get(dag_id).cloned().ok_or_else(|| {
+) -> Result<&'a RuntimeValueMap, GraphcalError> {
+    const_pools.get(dag_id).ok_or_else(|| {
         GraphcalError::internal_error(
             format!("checked DAG `{dag_id}` has no initialized const pool"),
             src,
             DiagnosticAnchor::WholeFile,
         )
     })
+}
+
+fn provisional_const_scopes<'a>(
+    inherited: &'a CheckedExecutionFacts,
+    const_pools: &'a HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
+    src: &'a NamedSource<Arc<String>>,
+) -> HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>> {
+    inherited
+        .by_dag
+        .iter()
+        .map(|(id, facts)| {
+            (
+                id.clone(),
+                DagConstScope {
+                    values: &facts.const_values,
+                    source: facts.source(),
+                },
+            )
+        })
+        .chain(const_pools.iter().map(|(id, values)| {
+            (
+                id.clone(),
+                DagConstScope {
+                    values,
+                    source: src,
+                },
+            )
+        }))
+        .collect()
 }
 
 fn check_dag_execution_facts(
@@ -119,8 +148,8 @@ fn check_dag_execution_facts(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CheckedExecutionFacts, GraphcalError> {
     cancellation.checkpoint()?;
-    // Preserve inherited per-DAG facts by Arc. Only DAGs owned by the file
-    // currently being checked are allocated and mutated below.
+    // Inherited artifacts remain shared and immutable. Newly evaluated constants
+    // and constraints are provisional until every mandatory check has succeeded.
     let mut dag_facts = inherited.by_dag.as_ref().clone();
     let dag_ids = tir
         .dag_registry()
@@ -131,56 +160,42 @@ fn check_dag_execution_facts(
     let initial_values = known_const_values(tir, &dag_facts);
     let const_pools = eval_const_pools_for_dags(tir, &dag_ids, initial_values, src, cancellation)?;
 
-    for dag_id in &dag_ids {
-        cancellation.checkpoint()?;
-        let dag = tir.dag_registry().get(dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared from the TIR registry"),
+    let mut all_const_values = known_const_values(tir, &dag_facts);
+    all_const_values.extend(const_pools.values().flat_map(|values| {
+        values
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+    }));
+    let mut schedules = dag_ids
+        .iter()
+        .map(|dag_id| {
+            build_runtime_dag(&tir.dag_registry()[dag_id], src, cancellation)
+                .map(|order| (dag_id.clone(), order))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    let mut constraints = dag_ids
+        .iter()
+        .map(|dag_id| {
+            cancellation.checkpoint()?;
+            resolve_domain_constraints_for_dag(
+                tir,
+                &tir.dag_registry()[dag_id],
+                initialized_const_pool(&const_pools, dag_id, src)?,
+                &all_const_values,
                 src,
-                DiagnosticAnchor::WholeFile,
+                cancellation,
             )
-        })?;
-        let const_values = initialized_const_pool(&const_pools, dag_id, src)?;
-        dag_facts.insert(
-            dag_id.clone(),
-            Arc::new(CheckedDagExecutionFacts {
-                dag_id: dag_id.clone(),
-                source: src.clone(),
-                topo_order: Arc::new(build_runtime_dag(dag, src, cancellation)?),
-                domain_constraints: Arc::new(HashMap::new()),
-                const_values: Arc::new(const_values),
-            }),
-        );
-    }
+            .map(|constraints| (dag_id.clone(), constraints))
+        })
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
-    let all_const_values = known_const_values(tir, &dag_facts);
-    for dag_id in &dag_ids {
-        cancellation.checkpoint()?;
-        let dag = &tir.dag_registry()[dag_id];
-        let facts = dag_facts
-            .get_mut(dag_id)
-            .and_then(Arc::get_mut)
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("newly checked DAG facts for `{dag_id}` were lost or shared early"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        facts.domain_constraints = Arc::new(resolve_domain_constraints_for_dag(
-            tir,
-            dag,
-            &facts.const_values,
-            &all_const_values,
-            facts.source(),
-            cancellation,
-        )?);
-    }
-
+    // Field-bound evaluation only needs provisional constant scopes, not fake
+    // executable artifacts with missing constraints or schedules.
+    let const_scopes = provisional_const_scopes(inherited, &const_pools, src);
     cancellation.checkpoint()?;
     let field_constraints = resolve_struct_field_constraints_for_dags(
         tir,
-        &dag_facts,
+        &const_scopes,
         &all_const_values,
         src,
         cancellation,
@@ -188,16 +203,37 @@ fn check_dag_execution_facts(
     let mut all_field_constraints = inherited.struct_field_constraints.as_ref().clone();
     all_field_constraints.extend(field_constraints.into_values().flatten());
     for dag_id in &dag_ids {
-        let dag = &tir.dag_registry()[dag_id];
-        let facts = &dag_facts[dag_id];
         check_dag_const_struct_field_constraints_at_compile_time(
-            dag,
-            &facts.const_values,
+            &tir.dag_registry()[dag_id],
+            initialized_const_pool(&const_pools, dag_id, src)?,
             &all_field_constraints,
-            facts.source(),
+            src,
         )?;
     }
 
+    // Publication is the last step. No checked artifact is subsequently filled
+    // in with Arc::get_mut or exposed before constant field validation.
+    let completed = const_pools
+        .into_iter()
+        .map(|(dag_id, const_values)| {
+            let missing = || {
+                GraphcalError::internal_error(
+                    format!("DAG `{dag_id}` has incomplete execution checks"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            };
+            let facts = CheckedDagExecutionFacts {
+                dag_id: dag_id.clone(),
+                source: src.clone(),
+                const_values: Arc::new(const_values),
+                topo_order: Arc::new(schedules.remove(&dag_id).ok_or_else(missing)?),
+                domain_constraints: Arc::new(constraints.remove(&dag_id).ok_or_else(missing)?),
+            };
+            Ok((dag_id, Arc::new(facts)))
+        })
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+    dag_facts.extend(completed);
     Ok(freeze_checked_execution_facts(
         dag_facts,
         all_field_constraints,

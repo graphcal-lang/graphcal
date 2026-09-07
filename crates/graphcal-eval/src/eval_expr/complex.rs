@@ -4,6 +4,8 @@ use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::desugar::desugared_ast::BinOp;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueKind};
+use num_rational::BigRational;
+use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -175,32 +177,53 @@ fn complex_binary(
     }
 }
 
-/// Normalize the divisor before Cartesian division, avoiding avoidable
-/// overflow/underflow in `c²+d²` while preserving large finite quotients.
+/// Divide the exact binary input components and round each final component once.
+/// A common floating scale is insufficient: a product or partial quotient can
+/// underflow before a small divisor restores the final value's exponent.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "arbitrary-precision rationals cannot overflow; rejecting a zero divisor makes its exact squared norm positive"
+)]
 fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
-    let (c, d) = (rhs.re(), rhs.im());
-    if c == 0.0 && d == 0.0 {
+    if rhs.re() == 0.0 && rhs.im() == 0.0 {
         return Err(ComplexEvalError::DivisionByZero);
     }
-    let scale = c.abs().max(d.abs());
-    let c = c / scale;
-    let d = d / scale;
-    let denominator = c.mul_add(c, d * d);
-    let (a, b) = (lhs.re(), lhs.im());
-    let result = if scale >= 1.0 {
-        let a = a / scale;
-        let b = b / scale;
-        ComplexValue::new(
-            a.mul_add(c, b * d) / denominator,
-            b.mul_add(c, -(a * d)) / denominator,
-        )
-    } else {
-        ComplexValue::new(
-            ((a * c) / denominator + (b * d) / denominator) / scale,
-            ((b * c) / denominator - (a * d) / denominator) / scale,
-        )
+    let rational = |value| {
+        BigRational::from_float(value).ok_or(ComplexEvalError::NonFinite {
+            operation: "complex division",
+        })
     };
-    finite_complex(result, "complex division")
+    let (a, b, c, d) = (
+        rational(lhs.re())?,
+        rational(lhs.im())?,
+        rational(rhs.re())?,
+        rational(rhs.im())?,
+    );
+    let denominator = &c * &c + &d * &d;
+    let component = |numerator: BigRational, zero_sign: f64| {
+        let exact_zero = numerator.is_zero();
+        let value = (numerator / &denominator)
+            .to_f64()
+            .ok_or(ComplexEvalError::NonFinite {
+                operation: "complex division",
+            })?;
+        // Preserve signed-zero arithmetic where the ordinary numerator is zero;
+        // a nonzero exact numerator keeps the sign of its rounded subnormal.
+        Ok::<_, ComplexEvalError>(if exact_zero && zero_sign == 0.0 {
+            value.copysign(zero_sign)
+        } else {
+            value
+        })
+    };
+    let re = component(
+        &a * &c + &b * &d,
+        lhs.re().mul_add(rhs.re(), lhs.im() * rhs.im()),
+    )?;
+    let im = component(
+        &b * &c - &a * &d,
+        lhs.im().mul_add(rhs.re(), -(lhs.re() * rhs.im())),
+    )?;
+    finite_complex(ComplexValue::new(re, im), "complex division")
 }
 
 fn quantity(value: &RuntimeValue) -> Result<f64, ComplexEvalError> {
@@ -245,6 +268,43 @@ const fn finite_quantity(value: f64, operation: &'static str) -> Result<f64, Com
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn division_preserves_signed_subnormal_components() {
+        let tiny = f64::from_bits(1);
+        for sign in [1.0, -1.0] {
+            let quotient = divide(
+                ComplexValue::new(sign * tiny, 0.0),
+                ComplexValue::new(0.5, 0.5),
+            )
+            .unwrap();
+            assert_eq!(quotient.re().to_bits(), (sign * tiny).to_bits());
+            assert_eq!(quotient.im().to_bits(), (-sign * tiny).to_bits());
+        }
+        let quotient = divide(ComplexValue::new(tiny, tiny), ComplexValue::new(0.5, 0.5)).unwrap();
+        assert_eq!(quotient.re().to_bits(), (2.0 * tiny).to_bits());
+        assert_eq!(quotient.im().to_bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn division_preserves_terms_before_rescaling_and_exact_cancellation() {
+        let quotient = divide(
+            ComplexValue::new(2.0e-308, 0.0),
+            ComplexValue::new(1.0e-250, 1.0e-308),
+        )
+        .unwrap();
+        assert!((quotient.im() / -2.0e-116 - 1.0).abs() < 4.0 * f64::EPSILON);
+        for value in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::MAX] {
+            assert_eq!(
+                divide(
+                    ComplexValue::new(value, value),
+                    ComplexValue::new(value, value)
+                )
+                .unwrap(),
+                ComplexValue::new(1.0, 0.0)
+            );
+        }
+    }
 
     #[test]
     fn multiplication_and_division_round_trip() {

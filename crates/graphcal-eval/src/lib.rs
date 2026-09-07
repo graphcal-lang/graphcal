@@ -12,6 +12,7 @@ pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;
 pub(crate) mod execution_facts;
+pub(crate) mod execution_scope;
 pub mod graph_ir;
 pub mod host_abi;
 pub mod host_fns;

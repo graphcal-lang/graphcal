@@ -5,6 +5,8 @@
 //! `Option`; solve-like operations additionally reject a numerically unsafe
 //! scaled-pivot profile and verify the residual of every returned solution.
 
+use num_rational::BigRational;
+use num_traits::ToPrimitive;
 use thiserror::Error;
 
 use super::work_budget::KernelCheckpoint;
@@ -24,6 +26,8 @@ pub(super) enum LuError {
     },
     #[error("{operation} produced a non-finite intermediate result")]
     NonFinite { operation: &'static str },
+    #[error("det() underflowed to zero")]
+    DeterminantUnderflow,
     #[error(
         "{operation} failed its numerical residual check (residual {residual:e}, tolerance {tolerance:e})"
     )]
@@ -48,6 +52,7 @@ impl LuError {
             | Self::Singular { .. }
             | Self::IllConditioned { .. }
             | Self::NonFinite { .. }
+            | Self::DeterminantUnderflow
             | Self::ResidualTooLarge { .. } => None,
         }
     }
@@ -296,14 +301,32 @@ impl LuDecomposition {
         Ok(solution)
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "multiplication of arbitrary-precision rationals cannot overflow"
+    )]
     fn determinant(&self, control: &mut KernelCheckpoint<'_>) -> Result<f64, LuError> {
-        (0..self.order).try_fold(self.parity, |determinant, diagonal| {
+        // LU itself is binary64. Accumulate its finite pivots exactly so an
+        // intermediate product cannot erase or overflow a representable result.
+        let initial = BigRational::from_float(self.parity)
+            .ok_or(LuError::NonFinite { operation: "det()" })?;
+        let product = (0..self.order).try_fold(initial, |product, diagonal| {
             control.step()?;
-            finite(
-                determinant * dense_value(&self.factors, self.order, diagonal, diagonal)?,
-                "det()",
-            )
-        })
+            let pivot = dense_value(&self.factors, self.order, diagonal, diagonal)?;
+            let pivot =
+                BigRational::from_float(pivot).ok_or(LuError::NonFinite { operation: "det()" })?;
+            Ok::<_, LuError>(product * pivot)
+        })?;
+        let result = product
+            .to_f64()
+            .ok_or(LuError::NonFinite { operation: "det()" })?;
+        let result = finite(result, "det()")?;
+        if result == 0.0 {
+            // Singular matrices take the distinct Factorization::Singular path.
+            Err(LuError::DeterminantUnderflow)
+        } else {
+            Ok(result)
+        }
     }
 }
 
@@ -499,6 +522,37 @@ mod tests {
             LuError::Singular { .. }
         ));
         assert!(determinant(&singular, 2).unwrap().abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn determinant_preserves_representable_products_across_exponent_extremes() {
+        for pivots in [
+            [1.0e-200, 1.0e-200, 1.0e200, 1.0e200],
+            [1.0e200, 1.0e200, 1.0e-200, 1.0e-200],
+            [1.0e-200, 1.0e200, 1.0e-200, 1.0e200],
+        ] {
+            let matrix = (0..16)
+                .map(|i| if i / 4 == i % 4 { pivots[i / 4] } else { 0.0 })
+                .collect::<Vec<_>>();
+            assert!((determinant(&matrix, 4).unwrap() - 1.0).abs() <= 4.0 * f64::EPSILON);
+        }
+        let tiny = f64::from_bits(1);
+        assert_eq!(
+            determinant(&[tiny, 0.0, 0.0, 1.0], 2).unwrap().to_bits(),
+            tiny.to_bits()
+        );
+        assert_eq!(
+            determinant(&[0.0, tiny, 1.0, 0.0], 2).unwrap().to_bits(),
+            (-tiny).to_bits()
+        );
+        assert!(matches!(
+            determinant(&[tiny, 0.0, 0.0, 0.25], 2),
+            Err(LuError::DeterminantUnderflow)
+        ));
+        assert!(matches!(
+            determinant(&[f64::MAX, 0.0, 0.0, 2.0], 2),
+            Err(LuError::NonFinite { .. })
+        ));
     }
 
     #[test]

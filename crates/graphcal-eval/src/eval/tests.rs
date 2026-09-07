@@ -63,6 +63,38 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn numeric_regressions_retain_small_final_values() {
+    let result = compile_and_eval(
+        r"
+node matrix: Dimensionless[Fin(4), Fin(4)] = table[Fin(4), Fin(4)] {
+    1.0e-200, 0.0, 0.0, 0.0;
+    0.0, 1.0e-200, 0.0, 0.0;
+    0.0, 0.0, 1.0e200, 0.0;
+    0.0, 0.0, 0.0, 1.0e200;
+};
+node determinant: Dimensionless = det(@matrix);
+node samples: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0e308; 1.0e-100; -1.0e308; };
+node average: Dimensionless = mean(@samples);
+node quotient: Complex<Dimensionless> = complex(5.0e-324, 0.0) / complex(0.5, 0.5);
+node real_part: Dimensionless = re(@quotient);
+node imaginary_part: Dimensionless = im(@quotient);
+",
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert!((find_value(&result, "determinant") - 1.0).abs() <= 4.0 * f64::EPSILON);
+    assert_eq!(
+        find_value(&result, "average").to_bits(),
+        (1.0e-100_f64 / 3.0).to_bits()
+    );
+    assert_eq!(find_value(&result, "real_part").to_bits(), 1);
+    assert_eq!(
+        find_value(&result, "imaginary_part").to_bits(),
+        (-f64::from_bits(1)).to_bits()
+    );
+}
+
+#[test]
 fn selective_import_rejects_required_static_inputs() {
     for (declaration, import_item, expected_kind) in [
         (
@@ -4006,6 +4038,38 @@ fn nested_instantiated_file_include_reexports_requested_plot() {
 }
 
 #[test]
+fn plot_only_finite_axes_do_not_require_unrelated_declarations() {
+    for prefix in [
+        "",
+        "node unrelated: Dimensionless[Fin(2)] = table[Fin(2)] { 1.0; 1.0; };\n",
+    ] {
+        let source = format!(
+            "{prefix}{}",
+            r"
+param divisor: Dimensionless = 1.0;
+plot curve = {
+    mark: line,
+    encode: {
+        x: for i: Fin(2) { 1.0 },
+        y: for i: Fin(2) { 1.0 / @divisor },
+    },
+};
+"
+        );
+        let result = compile_and_eval(&source).unwrap();
+        assert!(!result.has_errors(), "{result:?}");
+        assert_eq!(result.plots.len(), 1);
+        assert_eq!(result.plots[0].encodings.len(), 2);
+        for (_, values) in &result.plots[0].encodings {
+            match values {
+                PlotFieldValue::Numbers(values) => assert_eq!(values.as_slice(), [1.0, 1.0]),
+                other => panic!("expected numeric plot data, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn requested_plot_specializes_its_required_index_axis() {
     let result = compile_and_eval(
         "index Axis = { One, Two };\n\
@@ -4910,9 +4974,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action"))
             .unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Pick"),
-                b_owner,
+            type_name: b_owner,
+            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
+                "Pick",
             ),
             generic_args: Vec::new(),
             fields,
@@ -4977,9 +5041,9 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let values = HashMap::from([(
         crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")).unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
-            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
-                b_owner,
+            type_name: b_owner,
+            constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
+                "Item",
             ),
             generic_args: Vec::new(),
             fields,

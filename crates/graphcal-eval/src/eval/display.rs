@@ -482,11 +482,6 @@ fn evaluate_index_substitution(
             })?;
             IndexEntryKey::position(position)
         }
-        RuntimeValue::Struct { type_name, .. } => IndexEntryKey::named(
-            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(
-                type_name.as_str(),
-            ),
-        ),
         other => {
             return Err(presentation_error(
                 ctx,
@@ -687,11 +682,12 @@ fn presentation_pattern_matches(pattern: &PresentationMatchPattern, value: &Runt
                 owning_type,
                 constructor,
             },
-            RuntimeValue::Struct { type_name, .. },
-        ) => {
-            type_name.resolved() == owning_type.resolved()
-                && type_name.as_str() == constructor.as_str()
-        }
+            RuntimeValue::Struct {
+                type_name,
+                constructor: value_constructor,
+                ..
+            },
+        ) => type_name == owning_type.resolved() && value_constructor == constructor,
         _ => false,
     }
 }

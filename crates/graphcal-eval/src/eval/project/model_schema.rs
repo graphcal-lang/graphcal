@@ -517,6 +517,6 @@ fn model_index_schema(
 pub(super) fn index_def_for_ref<'tir>(
     index: &IndexTypeRef,
     tir: &'tir graphcal_compiler::tir::typed::TIR,
-) -> Option<&'tir IndexDef> {
+) -> Option<std::borrow::Cow<'tir, IndexDef>> {
     tir.index_def(index)
 }

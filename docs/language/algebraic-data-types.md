@@ -37,6 +37,11 @@ Payload field names must be unique within one constructor. The same field name
 may still appear in different constructors because each payload schema is
 checked independently.
 
+Values retain both their canonical nominal type and their constructor member.
+Equality and `match` use these identities, not display names: changing an import
+alias does not change identity, and identically spelled constructors from
+different nominal types remain distinct.
+
 ## Record-Shaped One-Constructor Types
 
 A type is record-shaped when it has exactly one constructor and that

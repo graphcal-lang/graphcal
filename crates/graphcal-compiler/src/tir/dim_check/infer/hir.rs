@@ -2854,7 +2854,7 @@ fn infer_hir_key_form(
         }
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
             let idx_def = super::index_def_for_inferred(&index_identity, tir);
-            let dimension = match idx_def.map(|def| &def.kind) {
+            let dimension = match idx_def.as_deref().map(|def| &def.kind) {
                 Some(crate::registry::types::IndexKind::Coordinate(data)) => data.dimension.clone(),
                 Some(crate::registry::types::IndexKind::RequiredCoordinate { dimension }) => {
                     dimension.clone()
@@ -3088,7 +3088,7 @@ fn infer_hir_index_access(
                     InferredType::Key(key_index) => {
                         let axis_form = finite_axis_form(
                             &index,
-                            super::index_def_for_inferred(&index, tir),
+                            super::index_def_for_inferred(&index, tir).as_deref(),
                             src,
                             local.span,
                         )?;
@@ -3141,7 +3141,7 @@ fn infer_hir_index_access(
                 )?;
                 let index_form = finite_axis_form(
                     &index,
-                    super::index_def_for_inferred(&index, tir),
+                    super::index_def_for_inferred(&index, tir).as_deref(),
                     src,
                     index_expr.span,
                 )?;

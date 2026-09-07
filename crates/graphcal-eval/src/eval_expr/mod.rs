@@ -102,19 +102,20 @@ pub fn index_ref_matches_resolved(
 }
 
 fn runtime_struct_type_def<'a>(
-    type_name: &StructTypeRef,
+    type_name: &graphcal_compiler::syntax::type_name::ResolvedStructTypeName,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a NominalTypeDef> {
-    ctx.tir.struct_type_def(type_name.resolved())
+    ctx.tir.struct_type_def(type_name)
 }
 
 fn constructor_fields_for_runtime_struct<'a>(
     type_def: &'a NominalTypeDef,
-    type_name: &StructTypeRef,
+    constructor: &ConstructorName,
 ) -> Option<&'a [NominalField]> {
-    type_def.union_members()?.iter().find_map(|member| {
-        (member.name().as_str() == type_name.as_str()).then_some(member.fields())
-    })
+    type_def
+        .union_members()?
+        .iter()
+        .find_map(|member| (member.name() == *constructor).then_some(member.fields()))
 }
 
 fn find_struct_field_constraint<'a>(

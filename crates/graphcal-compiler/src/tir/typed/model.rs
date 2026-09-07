@@ -14,7 +14,7 @@ use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{
-    FiniteIndex, FormattingRegistry, IndexDef, RegistryBuildError, RegistryBuilder, UnitInfo,
+    FormattingRegistry, IndexDef, RegistryBuildError, RegistryBuilder, UnitInfo,
 };
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
@@ -423,7 +423,6 @@ pub struct ProjectTypeStore {
     dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
-    finite_indexes: HashMap<FiniteIndex, Arc<IndexDef>>,
     struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
     constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
 }
@@ -557,14 +556,6 @@ impl ProjectTypeStore {
         }
     }
 
-    fn insert_finite_indexes(&mut self, registry: &crate::registry::types::IndexRegistry) {
-        self.finite_indexes.extend(
-            registry
-                .finite_index_definitions()
-                .map(|(identity, definition)| (identity, Arc::new(definition.clone()))),
-        );
-    }
-
     /// Insert a standalone HIR DAG whose semantic registry contains only its
     /// local non-nominal definitions. The DAG identity comes from the body.
     ///
@@ -598,7 +589,6 @@ impl ProjectTypeStore {
                 index,
             )?;
         }
-        self.insert_finite_indexes(&hir.registry.indexes);
         self.insert_nominal_types(hir)?;
         Ok(())
     }
@@ -667,7 +657,6 @@ impl ProjectTypeStore {
                 })?;
             self.insert_index_definition(identity, index)?;
         }
-        self.insert_finite_indexes(&hir.registry.indexes);
         self.insert_nominal_types(hir)?;
         Ok(())
     }
@@ -757,11 +746,6 @@ impl ProjectTypeStore {
     #[must_use]
     pub(crate) fn get_index_handle(&self, name: &ResolvedIndexName) -> Option<&Arc<IndexDef>> {
         self.indexes.get(name)
-    }
-
-    #[must_use]
-    pub(crate) fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
-        self.finite_indexes.get(&index).map(AsRef::as_ref)
     }
 
     #[must_use]
@@ -1605,12 +1589,16 @@ impl TIR {
         self.project_types.get_index(name)
     }
 
-    /// Look up any concrete declared or structural finite index.
+    /// Resolve a declared axis or derive a structural axis from its cardinality.
+    /// Structural `Fin(N)` definitions never depend on a source-registration scan.
     #[must_use]
-    pub fn index_def(&self, index: &IndexTypeRef) -> Option<&IndexDef> {
+    pub fn index_def(&self, index: &IndexTypeRef) -> Option<std::borrow::Cow<'_, IndexDef>> {
         match index.finite_index() {
-            Some(finite) => self.project_types.get_finite_index(finite),
-            None => self.project_types.get_index(index.declared_resolved()?),
+            Some(finite) => Some(std::borrow::Cow::Owned(IndexDef::finite(finite))),
+            None => self
+                .project_types
+                .get_index(index.declared_resolved()?)
+                .map(std::borrow::Cow::Borrowed),
         }
     }
 

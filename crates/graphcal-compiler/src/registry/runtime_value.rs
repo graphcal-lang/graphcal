@@ -4,9 +4,11 @@ use indexmap::IndexMap;
 
 use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
-use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
-use crate::syntax::type_name::{FieldName, StructTypeName};
+use crate::syntax::type_name::{
+    ConstructorName, FieldName, ResolvedStructTypeName, StructTypeName,
+};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +22,8 @@ pub enum RuntimeValueKind {
         variant: IndexVariantName,
     },
     Struct {
-        type_name: StructTypeRef,
+        type_name: ResolvedStructTypeName,
+        constructor: ConstructorName,
     },
     Indexed {
         index_name: IndexTypeRef,
@@ -45,7 +48,7 @@ impl std::fmt::Display for RuntimeValueKind {
                 let display_index = index_name.display_name();
                 write!(f, "label `{}`", variant.qualified_by(&display_index))
             }
-            Self::Struct { type_name } => write!(f, "struct `{type_name}`"),
+            Self::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
             Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
             Self::CoordinateLabel { index_name } => write!(f, "coordinate label `{index_name}`"),
             Self::Datetime => write!(f, "Datetime"),
@@ -92,12 +95,10 @@ pub enum RuntimeValue {
         variant: IndexVariantName,
     },
     Struct {
-        /// Concrete constructor/type leaf for display plus optional canonical owning struct type.
-        ///
-        /// Tagged-union values keep the constructor leaf here (e.g. `LowThrust`) while
-        /// module-aware evaluation stores the owning union's canonical `StructType` identity
-        /// in the carrier's `resolved` field.
-        type_name: StructTypeRef,
+        /// Canonical nominal identity, independent of source aliases and display spelling.
+        type_name: ResolvedStructTypeName,
+        /// Constructor member identity within `type_name` (not a display leaf).
+        constructor: ConstructorName,
         /// Concrete generic identity needed by field constraints and equality.
         generic_args: Vec<DeclaredGenericArg>,
         fields: IndexMap<FieldName, Self>,
@@ -146,10 +147,12 @@ impl RuntimeValue {
     pub fn struct_with_owner(
         owner: DagId,
         type_name: StructTypeName,
+        constructor: ConstructorName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
         Self::Struct {
-            type_name: StructTypeRef::with_owner(owner, type_name),
+            type_name: ResolvedStructTypeName::from_def(owner, type_name),
+            constructor,
             generic_args: Vec::new(),
             fields,
         }
@@ -183,8 +186,13 @@ impl RuntimeValue {
                 index_name: index_name.clone(),
                 variant: variant.clone(),
             },
-            Self::Struct { type_name, .. } => RuntimeValueKind::Struct {
+            Self::Struct {
+                type_name,
+                constructor,
+                ..
+            } => RuntimeValueKind::Struct {
                 type_name: type_name.clone(),
+                constructor: constructor.clone(),
             },
             Self::Indexed { index_name, .. } => RuntimeValueKind::Indexed {
                 index_name: index_name.clone(),
