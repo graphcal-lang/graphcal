@@ -143,14 +143,13 @@
     return null;
   }
 
-  function baselineExprFor(port, paramView) {
+  function baselineExprFor(port) {
     for (var i = 0; i < baselineBindings.length; i += 1) {
       if (baselineBindings[i].name === port.name) return baselineBindings[i].expr;
     }
-    // No build-time override: derive the literal from the evaluated baseline
-    // value. Never scrape display text — its formatting (`1200 kg`) is not
-    // literal syntax.
-    return exprFromView(paramView);
+    // Displayed defaults are not bindings. Only explicit build-time inputs
+    // belong in the original binding set.
+    return "";
   }
 
   function makeControl(port, paramView) {
@@ -162,12 +161,14 @@
 
     // Empty means "leave unbound": evaluation falls back to the compiled
     // default, so an unedited control never sends a binding.
-    var initialExpr = baselineExprFor(port, paramView) || "";
+    var initialExpr = baselineExprFor(port);
+    var displayedExpr = initialExpr || exprFromView(paramView) || "";
     var control = {
       name: port.name,
       initialExpr: initialExpr,
       currentExpr: initialExpr,
       setSi: function () {},
+      showValue: function () {},
       setError: function (message) {
         errorLine.textContent = message;
         errorLine.hidden = !message;
@@ -184,12 +185,12 @@
     if (kind === "boolean") {
       var checkbox = element("input");
       checkbox.type = "checkbox";
-      checkbox.checked = initialExpr.trim() === "true";
+      checkbox.checked = displayedExpr.trim() === "true";
       checkbox.addEventListener("change", function () {
         commit(checkbox.checked ? "true" : "false");
       });
-      control.restore = function () {
-        checkbox.checked = control.initialExpr.trim() === "true";
+      control.showValue = function (expr) {
+        checkbox.checked = expr.trim() === "true";
       };
       var toggleLabel = element("label", "control-toggle");
       toggleLabel.appendChild(checkbox);
@@ -202,25 +203,25 @@
         option.value = port.control.index + "." + port.control.variants[i];
         select.appendChild(option);
       }
-      select.value = initialExpr.trim();
+      select.value = displayedExpr.trim();
       select.addEventListener("change", function () {
         commit(select.value);
       });
-      control.restore = function () {
-        select.value = control.initialExpr.trim();
+      control.showValue = function (expr) {
+        select.value = expr.trim();
       };
       holder.appendChild(select);
     } else {
       var field = element("input", "control-field");
       field.type = "text";
-      field.value = initialExpr;
+      field.value = displayedExpr;
       field.placeholder = "closed value literal";
       field.spellcheck = false;
       field.addEventListener("input", function () {
         commit(field.value);
       });
-      control.restore = function () {
-        field.value = control.initialExpr;
+      control.showValue = function (expr) {
+        field.value = expr;
       };
       holder.appendChild(field);
 
@@ -258,6 +259,15 @@
       }
     }
 
+    control.restore = function () {
+      control.showValue(displayedExpr);
+    };
+    var clear = element("button", "control-clear", "Use default");
+    clear.type = "button";
+    clear.addEventListener("click", function () {
+      commit("");
+    });
+    holder.appendChild(clear);
     holder.appendChild(errorLine);
     card.appendChild(holder);
     return control;
@@ -286,7 +296,10 @@
   }
 
   function currentBindings() {
-    var bindings = [];
+    // Preserve explicit inputs even when their card has no editable control.
+    var bindings = baselineBindings.filter(function (binding) {
+      return !controls.has(binding.name);
+    });
     controls.forEach(function (control) {
       var expr = control.currentExpr.trim();
       if (expr) bindings.push({ name: control.name, expr: expr });
@@ -444,8 +457,10 @@
       if (declaration.declaration_kind !== "param") continue;
       var control = controls.get(declaration.name);
       if (!control) continue;
-      if (declaration.outcome.status === "value" && declaration.outcome.value.kind === "quantity") {
-        control.setSi(declaration.outcome.value.si_value);
+      if (declaration.outcome.status === "value") {
+        var view = declaration.outcome.value;
+        if (!control.currentExpr.trim()) control.showValue(exprFromView(view) || "");
+        if (view.kind === "quantity") control.setSi(view.si_value);
       }
     }
   }
