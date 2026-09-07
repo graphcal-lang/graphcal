@@ -240,6 +240,9 @@ fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
 /// symbol's namespace/scope. Builtins (`PI`, `sqrt`, unit names) are not
 /// collisions: the compiler allows shadowing them.
 fn collides_with_existing(analysis: &AnalysisResult, key: &SymbolKey, new_name: &str) -> bool {
+    if matches!(key, SymbolKey::Local(_)) {
+        return analysis.symbol_table.local_rename_collides(key, new_name);
+    }
     let Some(candidate) = key_with_new_name(key, new_name) else {
         return false;
     };
@@ -450,6 +453,10 @@ node y: Dimensionless[Step] = unfold(
             .expect("expression local should be renameable");
 
         assert_eq!(edit.changes.unwrap()[&uri].len(), 2);
+        assert!(matches!(
+            rename(&analysis, &uri, cursor, "t"),
+            Err(RenameRefusal::NameCollision { .. })
+        ));
     }
 
     #[test]
@@ -549,6 +556,66 @@ figure f = { plots: [p] };
         assert_eq!(unit_edits.len(), 2);
         assert!(unit_edits.iter().any(|edit| edit.range.start.line == 1));
         assert!(!unit_edits.iter().any(|edit| edit.range.start.line == 0));
+    }
+
+    #[test]
+    fn local_rename_rejects_overlap_and_preserves_independent_scopes() {
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let source = "node grid: Int[Fin(2), Fin(3)] = for row: Fin(2) { for col: Fin(3) { to_int(row) * 10 + to_int(col) } };";
+        let analysis = analysis_from_source(source);
+        for (old, new) in [("row", "col"), ("col", "row")] {
+            assert!(matches!(
+                rename(&analysis, &uri, source.find(old).unwrap(), new),
+                Err(RenameRefusal::NameCollision { .. })
+            ));
+        }
+        let source = "node first: Int[Fin(2)] = for row: Fin(2) { to_int(row) }; node other_values: Int[Fin(2)] = for col: Fin(2) { to_int(col) };";
+        let analysis = analysis_from_source(source);
+        let changes = rename(&analysis, &uri, source.find("row").unwrap(), "col")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        let updated = apply_edits(source, &changes[&uri]);
+        let checked = crate::server::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
+    }
+
+    #[test]
+    fn local_rename_checks_match_payload_and_scan_lambda_scopes() {
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        for (source, old, new) in [
+            (
+                "node samples: Dimensionless[Fin(2)] = for i: Fin(2) { 1.0 }; node totals: Dimensionless[Fin(2)] = scan(@samples, 0.0, |acc, val| acc + val);",
+                "acc",
+                "val",
+            ),
+            (
+                "type Pair { Pair(x: Int, y: Int), } node pair: Pair = Pair(x: 1, y: 2); node total: Int = match @pair { Pair(x: left, y: right) => left + right };",
+                "left",
+                "right",
+            ),
+        ] {
+            let analysis = analysis_from_source(source);
+            assert!(matches!(
+                rename(&analysis, &uri, source.find(old).unwrap(), new),
+                Err(RenameRefusal::NameCollision { .. })
+            ));
+        }
+        let source = "type Choice { A(x: Int), B(x: Int), } node chosen: Choice = A(x: 1); node total: Int = match @chosen { A(x: left) => left, B(x: right) => right };";
+        let analysis = analysis_from_source(source);
+        let changes = rename(&analysis, &uri, source.find("left").unwrap(), "right")
+            .unwrap()
+            .unwrap()
+            .changes
+            .unwrap();
+        let updated = apply_edits(source, &changes[&uri]);
+        let checked = crate::server::run_analysis_for_test(&uri, &updated);
+        assert!(checked.has_no_diagnostics(), "{:?}", checked.diagnostics);
     }
 
     #[test]
