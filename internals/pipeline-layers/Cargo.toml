@@ -16,4 +16,4 @@ thiserror = "2.0.20"
 toml = "1"
 
 [dev-dependencies]
-tempfile = "3.27.0"
+tempfile = "=3.27.0"
