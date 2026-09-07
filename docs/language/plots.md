@@ -6,7 +6,9 @@ icon: material/chart-line
 
 Plot declarations define charts that visualize computed values from the
 computation graph. They are rendered using [Vega-Lite](https://vega.github.io/vega-lite/)
-and produce interactive HTML or JSON output.
+and produce interactive HTML or JSON output. Both browser evaluation APIs return
+figure specifications as ordinary nested JavaScript objects, ready to pass
+directly to Vega-Lite or `vegaEmbed`, including grouped and layered figures.
 
 ## Syntax
 

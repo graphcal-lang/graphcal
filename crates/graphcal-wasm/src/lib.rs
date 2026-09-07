@@ -125,7 +125,7 @@ pub fn evaluate_project_js(
             )));
         }
     };
-    serde_wasm_bindgen::to_value(&outcome).map_err(|error| {
+    output::to_js(&outcome).map_err(|error| {
         wasm_bindgen::JsValue::from_str(&format!("could not serialize playground result: {error}"))
     })
 }

@@ -8,6 +8,15 @@ use graphcal_eval::eval::{
 };
 use serde::Serialize;
 
+/// One browser-output policy for both one-shot and prepared exports. Vega
+/// specifications are JSON objects, not JavaScript Maps, at every nesting level.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn to_js(
+    value: &impl Serialize,
+) -> Result<wasm_bindgen::JsValue, serde_wasm_bindgen::Error> {
+    value.serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+}
+
 /// Browser-facing successful compilation/evaluation result.
 #[derive(Debug, Clone, Serialize)]
 pub struct EvaluationView {
