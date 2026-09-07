@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::TIR;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
@@ -35,11 +35,6 @@ pub struct ExecPlan {
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    /// Resolved domain constraints for struct/union member fields, keyed by
-    /// owner-qualified struct/constructor/field identity. Looked up at every
-    /// `ExprKind::ConstructorCall` evaluation to validate field values.
-    pub(crate) struct_field_constraints:
-        Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
     /// Per-DAG checked facts required by nested callable evaluation.
     pub(crate) checked_execution_facts: CheckedExecutionFacts,
 }
@@ -115,6 +110,7 @@ pub fn combined_runtime_order_for(
     root: &graphcal_compiler::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     let dags = semantic_runtime_dags_from(tir, root, src)?;
     let candidates = dags
         .iter()
@@ -206,6 +202,7 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
     validate_execution_facts(tir, facts, src, cancellation)?;
     let root_scope = checked_scope(tir, facts, tir.root_dag_id(), src)?;
     let root_facts = root_scope.facts();
@@ -284,7 +281,6 @@ pub fn compile_checked_with_cancellation(
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
-        struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
         checked_execution_facts: facts.clone(),
     })
 }
@@ -458,7 +454,7 @@ mod tests {
         ));
         assert!(Arc::ptr_eq(
             &facts.struct_field_constraints,
-            &plan.struct_field_constraints
+            &plan.checked_execution_facts.struct_field_constraints
         ));
     }
 

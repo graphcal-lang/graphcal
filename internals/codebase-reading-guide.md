@@ -582,6 +582,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
+| `eval_expr/context.rs`  | Immutable phase-selected environments and checked scope transitions |
+| `pipeline_metrics.rs`  | Test-only observations of copying, planning, resolution, and presentation work |
 | `eval/display.rs`       | Application of checked structured presentation facts          |
 | `eval/plot_data.rs`     | Runtime plot/figure/layer data extraction                     |
 | `eval/public_projection.rs` | Fallible checked runtime-to-public value projection       |
@@ -1474,6 +1476,7 @@ slices of the generated order.
 33. `crates/graphcal-lsp/src/workspace_revision.rs`
 34. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
 35. `crates/graphcal-cli/src/lib.rs`
+36. `crates/graphcal-eval/src/pipeline_metrics.rs`
 
 ### Stage 14 - Evaluator and project orchestration core
 
@@ -1501,19 +1504,20 @@ slices of the generated order.
 22. `crates/graphcal-eval/src/eval/project/output.rs`
 23. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
 24. `crates/graphcal-eval/src/host_fns.rs`
-25. `crates/graphcal-eval/src/loader.rs`
-26. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-27. `crates/graphcal-eval/src/eval/display.rs`
-28. `crates/graphcal-eval/src/eval/public_projection.rs`
-29. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-30. `crates/graphcal-eval/src/project_compiler/session.rs`
-31. `crates/graphcal-eval/src/eval/runtime.rs`
-32. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-33. `crates/graphcal-eval/src/eval/project/prepared.rs`
-34. `crates/graphcal-eval/src/eval_expr/mod.rs`
-35. `crates/graphcal-eval/src/eval/project/mod.rs`
-36. `crates/graphcal-eval/src/project_compiler/mod.rs`
-37. `crates/graphcal-eval/src/eval/mod.rs`
+25. `crates/graphcal-eval/src/eval_expr/context.rs`
+26. `crates/graphcal-eval/src/loader.rs`
+27. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+28. `crates/graphcal-eval/src/eval/display.rs`
+29. `crates/graphcal-eval/src/eval/public_projection.rs`
+30. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+31. `crates/graphcal-eval/src/project_compiler/session.rs`
+32. `crates/graphcal-eval/src/eval/runtime.rs`
+33. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+34. `crates/graphcal-eval/src/eval/project/prepared.rs`
+35. `crates/graphcal-eval/src/eval_expr/mod.rs`
+36. `crates/graphcal-eval/src/eval/project/mod.rs`
+37. `crates/graphcal-eval/src/project_compiler/mod.rs`
+38. `crates/graphcal-eval/src/eval/mod.rs`
 
 ### Stage 15 - Late project checking, evaluation tests, and graph export
 

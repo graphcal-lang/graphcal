@@ -63,6 +63,227 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn pipeline_cost_baseline_observes_preparation_and_repeated_call_work() {
+    let source = r"
+type Packet { Packet(value: Length), }
+dag worker {
+    param x: Length;
+    pub node out: Length = if @x > 0.0 m { @x -> km } else { 0.0 m -> m };
+}
+node first: Length = @worker(x: 1000.0 m)::out;
+node other_output: Length = @worker(x: 2000.0 m)::out;
+node packet: Packet = Packet(value: @first);
+";
+    let project = crate::loader::LoadedProject::from_source(source, "metrics.gcl").unwrap();
+    let (prepared, preparation) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let row = prepared.binding_builder().finish().unwrap();
+    let (first, first_counts) =
+        crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+    let (second, second_counts) =
+        crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
+    assert!(!first.has_errors(), "{first:?}");
+    assert!(!second.has_errors(), "{second:?}");
+    assert_eq!(
+        first_counts, second_counts,
+        "prepared evaluation costs should be stable"
+    );
+    assert_eq!(
+        preparation.dag_body_copies, 0,
+        "single-file fixture has no ordinary imports"
+    );
+    assert!(preparation.plan_constructions > 0, "{preparation:?}");
+    // These positive counts deliberately document the pre-B/C/D baseline,
+    // not a desirable runtime contract. Migrations must change them to zero.
+    assert!(first_counts.plan_constructions > 0, "{first_counts:?}");
+    assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
+    assert!(
+        first_counts.presentation_evaluations > 0,
+        "{first_counts:?}"
+    );
+    eprintln!("preparation: {preparation:?}; repeated evaluation: {first_counts:?}");
+}
+
+#[test]
+fn pipeline_cost_baseline_observes_ordinary_import_body_copies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("a.gcl", "pub node output: Dimensionless = 1.0;"),
+            (
+                "b.gcl",
+                "import pipeline.a as a; pub node output: Dimensionless = 2.0;",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.b as b; node output: Dimensionless = 3.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let (prepared, counts) =
+        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let row = prepared.binding_builder().finish().unwrap();
+    assert!(!prepared.evaluate(&row).unwrap().has_errors());
+    assert!(
+        counts.dag_body_copies > 0,
+        "ordinary-import copying baseline: {counts:?}"
+    );
+    eprintln!("three-module chain preparation: {counts:?}");
+}
+
+#[test]
+fn pipeline_cost_baseline_import_chains_expose_quadratic_copying() {
+    for size in [2_u64, 4, 8] {
+        let files = (0..size).map(|index| {
+            let body = match index {
+                0 => "pub node output: Dimensionless = 1.0;".to_string(),
+                _ => format!("import pipeline.layer{} as predecessor; pub node output: Dimensionless = 1.0;", index.saturating_sub(1)),
+            };
+            (format!("layer{index}.gcl"), body)
+        }).collect::<Vec<_>>();
+        let borrowed = files
+            .iter()
+            .map(|(path, source)| (path.as_str(), source.as_str()))
+            .collect::<Vec<_>>();
+        let (_directory, root) = write_pipeline_project(&borrowed, borrowed.last().unwrap().0);
+        let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+        let (_, counts) =
+            crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+        assert_eq!(
+            counts.dag_body_copies,
+            size.saturating_mul(size.saturating_sub(1)),
+            "{size}-module chain: {counts:?}"
+        );
+        eprintln!("{size}-module chain: {counts:?}");
+    }
+}
+
+#[test]
+fn pipeline_cost_baseline_replays_native_selector_for_presentation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let source = r#"
+import plugin "graphcal:selector-counter" as probe { fn toggle() -> Bool; }
+node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m };
+"#;
+    let project = crate::loader::LoadedProject::from_source(source, "selector.gcl").unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let mut host = crate::host_fns::HostFunctionRegistry::new();
+    host.register(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:selector-counter"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("toggle"),
+        move |_| {
+            Ok(crate::host_fns::HostFnValue::F64(
+                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                    1.0
+                } else {
+                    0.0
+                },
+            ))
+        },
+    );
+    let prepared = ProjectCompiler::new(&project)
+        .host_fns(&host)
+        .prepare()
+        .unwrap();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "checking must not invoke a host"
+    );
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert_quantity_value(&result, "measured", 1000.0);
+    let (_, value) = result
+        .nodes
+        .iter()
+        .find(|(name, _)| *name == scoped_name("measured"))
+        .unwrap();
+    let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
+        panic!("expected quantity");
+    };
+    // D06 must replace these baseline assertions with one call and "km".
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "presentation replay baseline"
+    );
+    assert_eq!(display_unit.as_ref().unwrap().label, "m");
+}
+
+#[test]
+fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
+    let source = "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node x: Bounded = Bounded(value: 2.0);";
+    let tir = compile_to_tir(source, "capabilities.gcl").unwrap();
+    let src = miette::NamedSource::new("capabilities.gcl", std::sync::Arc::new(source.to_string()));
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    let builtin = graphcal_compiler::registry::builtins::builtin_functions();
+    let provisional = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
+        &src,
+        builtin,
+        cancellation.clone(),
+    )
+    .unwrap();
+    assert!(provisional.host_fns().is_none());
+    assert!(provisional.checked_execution_facts().is_none());
+    assert!(provisional.struct_field_constraints().is_none());
+
+    let checked =
+        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
+            .unwrap();
+    let host = crate::host_fns::HostFunctionRegistry::new();
+    let context = crate::eval_expr::EvalContext::checked(
+        &tir,
+        &checked,
+        tir.root_dag_id(),
+        &src,
+        builtin,
+        &host,
+        cancellation.clone(),
+    )
+    .unwrap();
+    assert!(std::ptr::eq(context.current_dag, tir.root()));
+    assert!(std::ptr::eq(
+        context.struct_field_constraints().unwrap(),
+        checked.struct_field_constraints.as_ref()
+    ));
+    assert!(!context.struct_field_constraints().unwrap().is_empty());
+    assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
+    let empty = crate::execution_facts::CheckedExecutionFacts::empty();
+    assert!(
+        crate::eval_expr::EvalContext::checked(
+            &tir,
+            &empty,
+            tir.root_dag_id(),
+            &src,
+            builtin,
+            &host,
+            cancellation,
+        )
+        .is_err()
+    );
+}
+
+// Compile-time negative API assertion: implementing DerefMut would make the
+// inferred marker ambiguous and fail compilation, allowing unchecked replacement
+// of the selected environment through its read-only field interface.
+const _: fn() = || {
+    trait ReadOnlyUnlessMutable<Marker> {
+        fn probe() {}
+    }
+    impl<T: ?Sized> ReadOnlyUnlessMutable<()> for T {}
+    struct Mutable;
+    impl<T: ?Sized + std::ops::DerefMut> ReadOnlyUnlessMutable<Mutable> for T {}
+    let _ = <crate::eval_expr::EvalContext<'static> as ReadOnlyUnlessMutable<_>>::probe;
+};
+
+#[test]
 fn numeric_regressions_retain_small_final_values() {
     let result = compile_and_eval(
         r"
@@ -4985,23 +5206,16 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext {
-        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
+    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
         src,
-        tir: &tir,
-        current_dag: tir.root(),
-        current_decl: Some(expr_key.clone()),
-        root_values: Some(&values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: None,
-        host_fns: None,
-    };
+        builtin_fns,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap()
+    .with_roots(&values, None)
+    .for_decl(&expr_key);
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
@@ -5052,23 +5266,16 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext {
-        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
+    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
         src,
-        tir: &tir,
-        current_dag: tir.root(),
-        current_decl: Some(expr_key.clone()),
-        root_values: Some(&values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: None,
-        host_fns: None,
-    };
+        builtin_fns,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap()
+    .with_roots(&values, None)
+    .for_decl(&expr_key);
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
@@ -5937,23 +6144,16 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext {
-        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
+    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
         src,
-        tir: &tir,
-        current_dag: tir.root(),
-        current_decl: Some(expr_key.clone()),
-        root_values: Some(&values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: None,
-        host_fns: None,
-    };
+        builtin_fns,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap()
+    .with_roots(&values, None)
+    .for_decl(&expr_key);
 
     let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
     match err {
@@ -6007,23 +6207,16 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     )]);
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
-    let ctx = crate::eval_expr::EvalContext {
-        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
+    let ctx = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
         src,
-        tir: &tir,
-        current_dag: tir.root(),
-        current_decl: Some(expr_key.clone()),
-        root_values: Some(&values),
-        root_presentation_instances: None,
-        checked_execution_facts: None,
-        presentation_calls: None,
-        struct_field_constraints: None,
-        generic_nat_bindings: None,
-        host_fns: None,
-    };
+        builtin_fns,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap()
+    .with_roots(&values, None)
+    .for_decl(&expr_key);
 
     let err =
         crate::eval_expr::eval_hir_expr(match_expr, &values, &local_values, &ctx).unwrap_err();

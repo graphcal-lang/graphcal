@@ -442,23 +442,16 @@ impl PreparedProject {
         let locals = HirLocalValueMap::root();
         let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let context = EvalContext {
-            cancellation,
-            work_budget: crate::eval_expr::fresh_work_budget(),
+        let context = EvalContext::checked(
+            &self.tir,
+            &self.plan.checked_execution_facts,
+            self.tir.root_dag_id(),
+            &self.source,
             builtin_fns,
-            registry: self.tir.registry(),
-            src: &self.source,
-            tir: &self.tir,
-            current_dag: self.tir.root(),
-            current_decl: None,
-            root_values: Some(&values),
-            root_presentation_instances: None,
-            checked_execution_facts: Some(&self.plan.checked_execution_facts),
-            presentation_calls: None,
-            struct_field_constraints: Some(&self.plan.struct_field_constraints),
-            generic_nat_bindings: None,
-            host_fns: Some(&self.host_fns),
-        };
+            &self.host_fns,
+            cancellation,
+        )?
+        .with_roots(&values, None);
         eval_hir_expr(expr, &values, &locals, &context).map_err(CompileError::from)
     }
 

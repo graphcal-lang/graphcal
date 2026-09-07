@@ -274,23 +274,18 @@ pub(super) fn run_eval_loop_with_bindings(
             continue;
         }
 
-        let ctx = EvalContext {
-            cancellation: cancellation.clone(),
-            work_budget: crate::eval_expr::fresh_work_budget(),
-            builtin_fns,
-            registry: tir.registry(),
-            src,
+        let ctx = EvalContext::checked(
             tir,
-            current_dag,
-            current_decl: Some(name.as_resolved().clone()),
-            root_values: Some(&values),
-            root_presentation_instances: Some(&presentation_instances),
-            checked_execution_facts: Some(&plan.checked_execution_facts),
-            presentation_calls: Some(&presentation_calls),
-            struct_field_constraints: Some(&plan.struct_field_constraints),
-            generic_nat_bindings: None,
-            host_fns: Some(host_fns),
-        };
+            &plan.checked_execution_facts,
+            current_dag.dag_id(),
+            src,
+            builtin_fns,
+            host_fns,
+            cancellation.clone(),
+        )?
+        .with_roots(&values, Some(&presentation_instances))
+        .with_presentation_calls(&presentation_calls)
+        .for_decl(name.as_resolved());
 
         let result = current_dag
             .runtime_expr(name.as_resolved())
@@ -447,23 +442,17 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     )?;
 
     cancellation.checkpoint()?;
-    let ctx = EvalContext {
-        cancellation: cancellation.clone(),
-        work_budget: crate::eval_expr::fresh_work_budget(),
-        builtin_fns,
-        registry: tir.registry(),
-        src,
+    let ctx = EvalContext::checked(
         tir,
-        current_dag: tir.root(),
-        current_decl: None,
-        root_values: Some(&values),
-        root_presentation_instances: Some(&presentation_instances),
-        checked_execution_facts: Some(&plan.checked_execution_facts),
-        presentation_calls: Some(&presentation_calls),
-        struct_field_constraints: Some(&plan.struct_field_constraints),
-        generic_nat_bindings: None,
-        host_fns: Some(host_fns),
-    };
+        &plan.checked_execution_facts,
+        tir.root_dag_id(),
+        src,
+        builtin_fns,
+        host_fns,
+        cancellation.clone(),
+    )?
+    .with_roots(&values, Some(&presentation_instances))
+    .with_presentation_calls(&presentation_calls);
 
     let local_key = |name: &ScopedName| {
         tir.root()
@@ -654,7 +643,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     &declared_type,
                     presentation,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration),
+                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
                     &values,
                 )?
             };
@@ -707,7 +696,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     &declared_type,
                     presentation,
                     presentation_instances.get(&key),
-                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration),
+                    &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
                     &values,
                 )?
             };
@@ -817,7 +806,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     expected,
                     &values,
                     &empty_hir_locals,
-                    &ctx.for_checked_decl(instance_dag, src, &owner),
+                    &ctx.for_checked_decl(instance_dag, src, &owner)?,
                 );
                 assertions.push((
                     root_instance_name(
@@ -901,7 +890,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 &values,
                 &presentation_instances,
                 &errors,
-                &ctx.for_checked_decl(plot_dag, src, &owner),
+                &ctx.for_checked_decl(plot_dag, src, &owner)?,
             ) {
                 Ok(mut plot) => {
                     plot.name = projection.exposed_name.clone();

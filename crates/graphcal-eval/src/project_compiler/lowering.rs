@@ -833,6 +833,7 @@ pub(super) fn merge_dep_dag_tirs(
                 // dependencies. Their owning artifacts are visited separately.
                 continue;
             }
+            crate::pipeline_metrics::record(crate::pipeline_metrics::Event::DagBodyCopy);
             let mut cloned = dag_tir.clone();
             // Supply compile-time values imported from this owning dependency.
             // Canonical target and declared type remain on the same binding

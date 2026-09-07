@@ -182,6 +182,11 @@ fn store_module_artifact(
             file_src,
             cancellation,
         )?;
+    #[cfg(test)]
+    crate::pipeline_metrics::record_many(
+        crate::pipeline_metrics::Event::DagBodyCopy,
+        u64::try_from(compiled.tir.dag_registry().keys().count()).expect("test DAG count fits u64"),
+    );
     let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();
 
