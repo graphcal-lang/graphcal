@@ -45,6 +45,9 @@ This safety check applies to the canonical definition regardless of whether
 rename starts at its declaration, an import selector, or a reference in an
 importer. A dependency closure does not prove that closed sibling importers
 are covered; exported API renames are refused until reverse coverage is proven.
+Local renames check overlapping comprehension, recurrence-lambda, and match
+payload scopes, rejecting duplicate bindings and capture rather than returning
+an unsafe edit. Independent scopes may still reuse the same spelling.
 
 Analysis is dependency- and revision-aware and bounded. Each result records the
 exact open-buffer revisions it consumed. Editing, saving, opening, closing, or

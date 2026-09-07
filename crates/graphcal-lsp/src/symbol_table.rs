@@ -38,15 +38,6 @@ use crate::symbol_identity::{
     SourceSymbolPath, UnresolvedSymbol,
 };
 
-/// The kind of expression scope that introduces local variables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExprScopeKind {
-    For,
-    Scan,
-    Unfold,
-    Match,
-}
-
 /// Canonical typed key for symbol-table definitions.
 ///
 /// Re-exported under the historical name while callers migrate; unlike the
@@ -233,8 +224,7 @@ impl<'a> HirRefCollector<'a> {
     fn define_local(
         &mut self,
         local: &hir::LocalDef,
-        _kind: ExprScopeKind,
-        _offset: usize,
+        scope: Span,
         detail: String,
         table: &mut SymbolTable,
     ) {
@@ -256,6 +246,7 @@ impl<'a> HirRefCollector<'a> {
                 visibility: None,
             },
         );
+        table.local_scopes.insert(key.clone(), scope);
         self.locals.insert(local.id, key);
     }
 
@@ -456,13 +447,7 @@ impl<'a> HirRefCollector<'a> {
                             format!("loop variable over Fin({})", nat_expr_label(cardinality))
                         }
                     };
-                    self.define_local(
-                        &binding.local,
-                        ExprScopeKind::For,
-                        binding.local.span.offset(),
-                        detail,
-                        table,
-                    );
+                    self.define_local(&binding.local, body.span, detail, table);
                 }
                 self.walk(body, table);
             }
@@ -491,15 +476,8 @@ impl<'a> HirRefCollector<'a> {
             } => {
                 self.walk(source, table);
                 self.walk(init, table);
-                let offset = expr.span.offset();
-                self.define_local(
-                    acc,
-                    ExprScopeKind::Scan,
-                    offset,
-                    "scan accumulator".into(),
-                    table,
-                );
-                self.define_local(val, ExprScopeKind::Scan, offset, "scan value".into(), table);
+                self.define_local(acc, body.span, "scan accumulator".into(), table);
+                self.define_local(val, body.span, "scan value".into(), table);
                 self.walk(body, table);
             }
             hir::ExprKind::Unfold {
@@ -510,25 +488,21 @@ impl<'a> HirRefCollector<'a> {
                 let axis = &recurrence.axis;
                 Self::reference(table, axis.span, SymbolKey::Index(axis.value.clone()));
                 self.walk(init, table);
-                let offset = expr.span.offset();
                 self.define_local(
                     &recurrence.previous_state,
-                    ExprScopeKind::Unfold,
-                    offset,
+                    body.span,
                     "unfold previous state".into(),
                     table,
                 );
                 self.define_local(
                     &recurrence.previous_index,
-                    ExprScopeKind::Unfold,
-                    offset,
+                    body.span,
                     "unfold previous index".into(),
                     table,
                 );
                 self.define_local(
                     &recurrence.current_index,
-                    ExprScopeKind::Unfold,
-                    offset,
+                    body.span,
                     "unfold current index".into(),
                     table,
                 );
@@ -568,8 +542,7 @@ impl<'a> HirRefCollector<'a> {
                                         );
                                         self.define_local(
                                             local,
-                                            ExprScopeKind::Match,
-                                            arm.span.offset(),
+                                            arm.body.span,
                                             format!("bound from {}", constructor.value),
                                             table,
                                         );
@@ -965,6 +938,8 @@ pub struct SymbolTable {
     /// Populated alongside `definitions` so that `find_definition_key` is O(1)
     /// instead of a linear reverse scan.
     name_span_to_key: HashMap<usize, SymbolKey>,
+    /// Exact lexical body where each comprehension/lambda/payload binder is visible.
+    local_scopes: HashMap<SymbolKey, Span>,
     /// Definition name-spans sorted by offset, each paired with the entry's
     /// `SymbolKey` (refcounted — shared with [`Self::inlay_hint_entries`] so
     /// the keys are allocated once at finalize time). Used by
@@ -998,9 +973,33 @@ impl SymbolTable {
             definition_conflicts: Vec::new(),
             references: Vec::new(),
             name_span_to_key: HashMap::new(),
+            local_scopes: HashMap::new(),
             defs_by_name_span: Vec::new(),
             inlay_hint_entries: Vec::new(),
         }
+    }
+
+    /// Overlapping lexical scopes cannot reuse a binding spelling. Disjoint
+    /// bodies (including separate match arms) may do so safely.
+    pub(crate) fn local_rename_collides(&self, key: &SymbolKey, name: &str) -> bool {
+        let Some(scope) = self.local_scopes.get(key) else {
+            return true;
+        };
+        self.local_scopes.iter().any(|(other, other_scope)| {
+            other != key
+                && scope.offset() < other_scope.offset().saturating_add(other_scope.len())
+                && other_scope.offset() < scope.offset().saturating_add(scope.len())
+                && self
+                    .definitions
+                    .get(other)
+                    .is_some_and(|definition| definition.name == name)
+        }) || self.references.iter().any(|reference| {
+            reference.span.offset() >= scope.offset()
+                && reference.span.offset() < scope.offset().saturating_add(scope.len())
+                && matches!(&reference.target,
+                    ReferenceTarget::Resolved(target @ (SymbolKey::BuiltinConstant(_) | SymbolKey::TimeScale(_)))
+                    if target.leaf_name() == name)
+        })
     }
 
     pub(crate) const fn owner(&self) -> &DagId {
