@@ -230,16 +230,21 @@
         typeof port.control.lower_si === "number" &&
         typeof port.control.upper_si === "number" &&
         port.control.upper_si > port.control.lower_si;
+      // Convert only after checking the decimal transport exists; unsafe
+      // endpoints never become a slider and remain exact text inputs.
+      var integerLower = typeof port.control.lower === "string" ? Number(port.control.lower) : NaN;
+      var integerUpper = typeof port.control.upper === "string" ? Number(port.control.upper) : NaN;
       var isBoundedInteger =
         kind === "integer" &&
-        typeof port.control.lower === "number" &&
-        typeof port.control.upper === "number" &&
-        port.control.upper > port.control.lower;
+        Number.isSafeInteger(integerLower) &&
+        Number.isSafeInteger(integerUpper) &&
+        Number.isSafeInteger(integerUpper - integerLower) &&
+        integerUpper > integerLower;
       if (isBoundedQuantity || isBoundedInteger) {
         var slider = element("input", "control-slider");
         slider.type = "range";
-        var lower = isBoundedQuantity ? port.control.lower_si : port.control.lower;
-        var upper = isBoundedQuantity ? port.control.upper_si : port.control.upper;
+        var lower = isBoundedQuantity ? port.control.lower_si : integerLower;
+        var upper = isBoundedQuantity ? port.control.upper_si : integerUpper;
         slider.min = String(lower);
         slider.max = String(upper);
         slider.step = isBoundedQuantity ? String((upper - lower) / 200) : "1";
@@ -461,6 +466,9 @@
         var view = declaration.outcome.value;
         if (!control.currentExpr.trim()) control.showValue(exprFromView(view) || "");
         if (view.kind === "quantity") control.setSi(view.si_value);
+        if (view.kind === "int" && Number.isSafeInteger(Number(view.decimal))) {
+          control.setSi(Number(view.decimal));
+        }
       }
     }
   }

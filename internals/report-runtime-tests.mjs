@@ -110,3 +110,27 @@ for (const fixture of ["figure_basic", "layer_basic"]) {
   prepared.free();
 }
 console.log("Wasm figure transport: ordinary nested objects compile with vendored Vega-Lite");
+
+for (const [lower, upper, slider] of [
+  ["0", "10", true], ["9007199254740990", "9007199254740991", true],
+  ["-9007199254740991", "-9007199254740990", true],
+  ["9007199254740991", "9007199254740992", false],
+  ["-9007199254740992", "-9007199254740991", false],
+  ["-9007199254740991", "9007199254740991", false],
+  ["-9223372036854775808", "9223372036854775807", false],
+  [null, "9223372036854775807", false], ["-9223372036854775808", null, false],
+]) {
+  const bounds = [lower && `min: ${lower}`, upper && `max: ${upper}`].filter(Boolean).join(", ");
+  const run = runtime(`param iterations: Int(${bounds}) = ${lower || upper}; param enabled: Bool = true;`);
+  const ports = run.prepared.parameterPorts();
+  assert.equal(ports.length, 2, "large bounds must not disable other controls");
+  assert.equal(ports[0].control.lower ?? null, lower);
+  assert.equal(ports[0].control.upper ?? null, upper);
+  assert.equal(run.cards.get("iterations").children[0].children.some(child => child.className === "control-slider"), slider);
+  for (const endpoint of [lower, upper].filter(Boolean)) {
+    run.edit("iterations", endpoint);
+    assert.equal(value(run.evaluate(), "iterations").decimal, endpoint);
+  }
+  run.prepared.free();
+}
+console.log("integer controls: exact i64 bounds, one-sided domains and safe sliders passed");
