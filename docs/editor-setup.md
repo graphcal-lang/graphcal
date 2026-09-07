@@ -41,6 +41,10 @@ including re-exports and includes. A canonical API rename changes unaliased
 imports and uses while preserving authored aliases. The server refuses rename
 when an occurrence is ambiguous, an affected open snapshot is stale, or an
 exported definition may have reverse importers outside the loaded project.
+This safety check applies to the canonical definition regardless of whether
+rename starts at its declaration, an import selector, or a reference in an
+importer. A dependency closure does not prove that closed sibling importers
+are covered; exported API renames are refused until reverse coverage is proven.
 
 Analysis is dependency- and revision-aware and bounded. Each result records the
 exact open-buffer revisions it consumed. Editing, saving, opening, closing, or

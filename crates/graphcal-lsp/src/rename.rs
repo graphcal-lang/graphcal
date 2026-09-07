@@ -55,10 +55,7 @@ fn validate_rename_target(
     }
 
     if let Some(project) = analysis.project_symbols.complete() {
-        if matches!(resolved.location, SymbolLocation::Local(_))
-            && analysis.symbol_table.is_externally_visible(&resolved.key)
-            && !project.covers_reverse_dependencies()
-        {
+        if project.is_externally_visible(&resolved.key) && !project.covers_reverse_dependencies() {
             return Err(RenameRefusal::IncompleteProjectIndex {
                 name: definition.name.clone(),
             });
@@ -570,6 +567,8 @@ figure f = { plots: [p] };
         // Should have 2 edits: the definition and the @x reference.
         assert_eq!(file_edits.len(), 2);
         assert!(file_edits.iter().all(|e| e.new_text == "velocity"));
+        let updated = apply_edits(source, file_edits);
+        assert!(crate::server::run_analysis_for_test(&uri, &updated).has_no_diagnostics());
     }
 
     #[test]
@@ -637,7 +636,7 @@ figure f = { plots: [p] };
     }
 
     #[test]
-    fn rename_imported_symbol_edits_definition_import_and_use() {
+    fn rename_imported_symbol_refuses_unindexed_sibling_importers() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src/helper")).unwrap();
         std::fs::write(
@@ -651,6 +650,8 @@ figure f = { plots: [p] };
         let main_path = dir.path().join("src/helper/main.gcl");
         let main_text = "import helper.lib::{y};\nnode z: Dimensionless = @y + 1.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
+        // This sibling is closed and absent from main's dependency closure.
+        std::fs::write(dir.path().join("src/helper/sibling.gcl"), main_text).unwrap();
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
         let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
@@ -676,25 +677,13 @@ figure f = { plots: [p] };
         );
 
         let cursor = main_text.find("@y").unwrap() + 1;
-        assert!(prepare_rename(&analysis, &main_uri, cursor).is_some());
-        let changes = rename(&analysis, &main_uri, cursor, "renamed")
-            .unwrap()
-            .unwrap()
-            .changes
-            .unwrap();
-        assert_eq!(changes[&main_uri].len(), 2);
-        assert_eq!(changes[&lib_uri].len(), 1);
-
-        let updated_main = apply_edits(main_text, &changes[&main_uri]);
-        let updated_lib = apply_edits(lib_text, &changes[&lib_uri]);
-        std::fs::write(&lib_path, updated_lib).unwrap();
-        std::fs::write(&main_path, &updated_main).unwrap();
-        let updated = crate::server::run_analysis_for_test(&main_uri, &updated_main);
-        assert!(
-            updated.has_no_diagnostics(),
-            "renamed project should compile: {:?}",
-            updated.diagnostics,
-        );
+        for cursor in [cursor, main_text.find("{y}").unwrap() + 1] {
+            assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
+            assert!(matches!(
+                rename(&analysis, &main_uri, cursor, "renamed"),
+                Err(RenameRefusal::IncompleteProjectIndex { .. })
+            ));
+        }
 
         // Issue #829: renaming a local declaration to the name of an
         // imported symbol collides as well — both would be visible.
@@ -741,27 +730,11 @@ figure f = { plots: [p] };
         );
 
         let cursor = main_text.find("@doubled").unwrap() + 1;
-        let changes = rename(&analysis, &main_uri, cursor, "tripled")
-            .unwrap()
-            .unwrap()
-            .changes
-            .unwrap();
-        assert_eq!(changes.values().map(Vec::len).sum::<usize>(), 4);
-        for (uri, edits) in &changes {
-            let path = uri.to_file_path().unwrap();
-            let source = std::fs::read_to_string(&path).unwrap();
-            std::fs::write(path, apply_edits(&source, edits)).unwrap();
-        }
-        let updated_main = std::fs::read_to_string(&main_path).unwrap();
-        let updated_consumer = std::fs::read_to_string(source_dir.join("consumer.gcl")).unwrap();
-        assert!(updated_consumer.contains("tripled as local"));
-        assert!(updated_consumer.contains("@local"));
-        let updated = crate::server::run_analysis_for_test(&main_uri, &updated_main);
-        assert!(
-            updated.has_no_diagnostics(),
-            "renamed include project should compile: {:?}",
-            updated.diagnostics,
-        );
+        assert!(matches!(
+            rename(&analysis, &main_uri, cursor, "tripled"),
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
+        ));
+        assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
     }
 
     #[test]
@@ -812,47 +785,14 @@ figure f = { plots: [p] };
         assert!(prepare_rename(&analysis, &main_uri, alias_cursor).is_none());
         assert!(matches!(
             rename(&analysis, &main_uri, alias_cursor, "surprise"),
-            Err(RenameRefusal::ImportAlias { .. })
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
         ));
-        assert_eq!(
-            rename(&analysis, &main_uri, cursor, "occupied"),
-            Err(RenameRefusal::NameCollision {
-                new_name: "occupied".to_string()
-            }),
-            "every direct-import scope must be collision checked"
-        );
-
-        let changes = rename(&analysis, &main_uri, cursor, "renamed")
-            .unwrap()
-            .unwrap()
-            .changes
-            .unwrap();
-        assert_eq!(
-            changes.values().map(Vec::len).sum::<usize>(),
-            7,
-            "{changes:#?}"
-        );
-        assert_eq!(
-            changes.len(),
-            4,
-            "the same-leaf other module stays untouched"
-        );
-
-        for (uri, edits) in &changes {
-            let path = uri.to_file_path().unwrap();
-            let source = std::fs::read_to_string(&path).unwrap();
-            std::fs::write(path, apply_edits(&source, edits)).unwrap();
+        for proposed in ["occupied", "renamed"] {
+            assert!(matches!(
+                rename(&analysis, &main_uri, cursor, proposed),
+                Err(RenameRefusal::IncompleteProjectIndex { .. })
+            ));
         }
-        let updated_main = std::fs::read_to_string(&main_path).unwrap();
-        assert!(updated_main.contains("renamed as through_a"));
-        assert!(updated_main.contains("+ @through_a"));
-        assert!(updated_main.contains("@other.y"));
-        let updated = crate::server::run_analysis_for_test(&main_uri, &updated_main);
-        assert!(
-            updated.has_no_diagnostics(),
-            "renamed project should compile: {:?}",
-            updated.diagnostics,
-        );
     }
 
     #[test]
