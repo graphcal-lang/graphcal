@@ -2334,6 +2334,54 @@ impl ModuleResolver {
         self.resolve_constructor_path(owner, &ident_path_to_name_path(path))
     }
 
+    /// Find a source-visible spelling for a canonical index. Each candidate
+    /// passes ordinary resolution, so aliases, visibility and shadowing obey
+    /// the same rules as authored bindings. Absence means no offered spelling.
+    #[must_use]
+    pub fn source_index_path(&self, owner: &DagId, target: &ResolvedIndexName) -> Option<NamePath> {
+        let mut candidates = Vec::new();
+        if let Some(symbols) = self.modules.get(owner) {
+            candidates.extend(
+                symbols
+                    .indexes
+                    .keys()
+                    .map(|name| NamePath::local(name.atom().clone())),
+            );
+        }
+        if let Some(scope) = self.scopes.get(owner) {
+            candidates.extend(
+                scope
+                    .selected_indexes
+                    .keys()
+                    .map(|name| NamePath::local(name.atom().clone())),
+            );
+            for (alias, binding) in &scope.module_aliases {
+                let names = self
+                    .modules
+                    .get(binding.target())
+                    .into_iter()
+                    .flat_map(|symbols| symbols.indexes.keys())
+                    .chain(
+                        self.scopes
+                            .get(binding.target())
+                            .into_iter()
+                            .flat_map(|scope| scope.selected_indexes.keys()),
+                    );
+                candidates.extend(names.map(|name| {
+                    NamePath::new(crate::syntax::non_empty::NonEmpty::new(
+                        alias.atom().clone(),
+                        vec![name.atom().clone()],
+                    ))
+                }));
+            }
+        }
+        candidates.sort();
+        candidates.into_iter().find(|candidate| {
+            self.resolve_index_path(owner, candidate)
+                .is_ok_and(|resolved| &resolved == target)
+        })
+    }
+
     /// Resolve a syntactic index path to a canonical owner + leaf.
     pub fn resolve_index_path(
         &self,

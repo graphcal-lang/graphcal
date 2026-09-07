@@ -132,14 +132,20 @@
   // Derive a valid closed-literal expression from one evaluated param view,
   // or null when the value has no single-line literal form (structured
   // values: the reader replaces the field wholesale).
-  function exprFromView(view) {
+  function namedKeyLiteral(index, variant) {
+    return index + "#" + variant;
+  }
+
+  function exprFromView(view, control) {
     if (!view) return null;
     if (view.kind === "quantity") {
       return numberLiteral(view.value) + (view.unit ? " " + view.unit : "");
     }
     if (view.kind === "bool") return String(view.value);
     if (view.kind === "int") return view.decimal;
-    if (view.kind === "label") return view.index + "." + view.variant;
+    if (view.kind === "label" && control && control.kind === "select") {
+      return namedKeyLiteral(control.index, view.variant);
+    }
     return null;
   }
 
@@ -162,9 +168,10 @@
     // Empty means "leave unbound": evaluation falls back to the compiled
     // default, so an unedited control never sends a binding.
     var initialExpr = baselineExprFor(port);
-    var displayedExpr = initialExpr || exprFromView(paramView) || "";
+    var displayedExpr = initialExpr || exprFromView(paramView, port.control) || "";
     var control = {
       name: port.name,
+      schema: port.control,
       initialExpr: initialExpr,
       currentExpr: initialExpr,
       setSi: function () {},
@@ -200,7 +207,7 @@
       var select = element("select", "control-select");
       for (var i = 0; i < port.control.variants.length; i += 1) {
         var option = element("option", "", port.control.variants[i]);
-        option.value = port.control.index + "." + port.control.variants[i];
+        option.value = namedKeyLiteral(port.control.index, port.control.variants[i]);
         select.appendChild(option);
       }
       select.value = displayedExpr.trim();
@@ -464,7 +471,7 @@
       if (!control) continue;
       if (declaration.outcome.status === "value") {
         var view = declaration.outcome.value;
-        if (!control.currentExpr.trim()) control.showValue(exprFromView(view) || "");
+        if (!control.currentExpr.trim()) control.showValue(exprFromView(view, control.schema) || "");
         if (view.kind === "quantity") control.setSi(view.si_value);
         if (view.kind === "int" && Number.isSafeInteger(Number(view.decimal))) {
           control.setSi(Number(view.decimal));
