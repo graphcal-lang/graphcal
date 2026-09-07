@@ -435,12 +435,10 @@ fn type_resolve_impl(
         declared_types: _,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
-    let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
-        &asserts_for_hir,
         src,
         module_ctx.owner,
         module_ctx,
@@ -592,12 +590,10 @@ fn type_resolve_single_impl(
         declared_types: _,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
-    let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
         ir.consts,
         ir.params,
         ir.nodes,
-        &asserts_for_hir,
         src,
         module_ctx.owner,
         module_ctx,
@@ -672,7 +668,6 @@ fn type_resolve_dag(
     mut consts: Vec<crate::ir::lower::ConstEntry>,
     mut params: Vec<crate::ir::lower::ParamEntry>,
     mut nodes: Vec<crate::ir::lower::NodeEntry>,
-    asserts: &[crate::ir::lower::AssertEntry],
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
@@ -686,23 +681,11 @@ fn type_resolve_dag(
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
     cancellation.checkpoint()?;
-    let constructor_refs = collect_resolved_constructor_refs(
-        &consts,
-        &params,
-        &nodes,
-        asserts,
-        &domain_bounds,
-        module_ctx,
-        src,
-    )?;
+    let constructor_refs = ResolvedConstructorRefs::default();
     let override_reconciliations = resolve_override_reconciliations(&params, module_ctx)?;
     cancellation.checkpoint()?;
-    let type_defs = collect_resolved_type_defs(
-        &resolved_decl_types,
-        &constructor_refs,
-        imported_bindings,
-        module_ctx,
-    )?;
+    let type_defs =
+        collect_resolved_type_defs(&resolved_decl_types, imported_bindings, module_ctx)?;
     let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
 
     let semantic = DagSemanticBody {
@@ -714,7 +697,7 @@ fn type_resolve_dag(
         bindable_nominals,
         type_defs,
         decl_bindings: HashMap::new(),
-        materialized_shapes: HashMap::new(),
+        expression_facts: None,
         presentation: crate::tir::presentation::DagPresentationFacts::default(),
     };
 
@@ -863,7 +846,6 @@ fn resolve_override_reconciliations(
 
 fn collect_resolved_type_defs(
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
-    constructor_refs: &ResolvedConstructorRefs,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeDefs, GraphcalError> {
@@ -878,9 +860,6 @@ fn collect_resolved_type_defs(
     }
     for binding in imported_bindings.values() {
         collect_struct_type_defs_from_declared_type(binding.declared_type(), ctx, &mut defs)?;
-    }
-    for target in constructor_refs.constructor_defs.values() {
-        record_resolved_struct_type_def(&target.owning_type, ctx, &mut defs)?;
     }
     Ok(defs)
 }
@@ -1306,64 +1285,6 @@ fn take_declaration_domain_bounds(
         .collect()
 }
 
-/// Collect constructor definitions reached only from dynamic unit scales.
-fn collect_dynamic_unit_refs(
-    ctx: ModuleTypeContext<'_>,
-    semantic: &mut DagSemanticBody,
-) -> Result<(), GraphcalError> {
-    for entry in semantic.dynamic_unit_scales.values() {
-        collect_resolved_constructor_refs_from_expr(
-            &entry.expr,
-            ctx,
-            &entry.src,
-            &mut semantic.constructor_refs,
-        )?;
-    }
-    Ok(())
-}
-
-/// Collect canonical references from the authoritative plot/figure/layer
-/// records without cloning their HIR bodies into side maps.
-fn collect_plot_refs(
-    plots: &[crate::ir::lower::PlotEntry],
-    figures: &[crate::ir::lower::FigureEntry],
-    layers: &[crate::ir::lower::LayerEntry],
-    ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-    semantic: &mut DagSemanticBody,
-) -> Result<(), GraphcalError> {
-    let collect = |expr: &hir::Expr,
-                   expr_src: &NamedSource<Arc<String>>,
-                   constructor_refs: &mut ResolvedConstructorRefs|
-     -> Result<(), GraphcalError> {
-        collect_resolved_constructor_refs_from_expr(expr, ctx, expr_src, constructor_refs)
-    };
-
-    for entry in plots {
-        let body = &entry.body;
-        let body_src = entry.body_src.resolve(src);
-        for (_, expr) in &body.encodings {
-            collect(expr, body_src, &mut semantic.constructor_refs)?;
-        }
-        for field in body.mark_properties.iter().chain(&body.properties) {
-            collect(&field.value, body_src, &mut semantic.constructor_refs)?;
-        }
-    }
-
-    for (fields, body_src) in figures
-        .iter()
-        .map(|entry| (&entry.fields, &entry.body_src))
-        .chain(layers.iter().map(|entry| (&entry.fields, &entry.body_src)))
-    {
-        let body_src = body_src.resolve(src);
-        for field in fields {
-            collect(&field.value, body_src, &mut semantic.constructor_refs)?;
-        }
-    }
-
-    Ok(())
-}
-
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
 ///
 /// Walks every lowered body of one DAG and enforces:
@@ -1599,7 +1520,7 @@ impl HirPolicyChecker<'_> {
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
         let recurse = |inner: &hir::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
-        match &expr.kind {
+        match expr.kind() {
             hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
             hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
@@ -1818,9 +1739,8 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs,
-    collect_resolved_constructor_refs_from_expr, collect_resolved_dag_dependencies,
-    collect_resolved_decl_bindings, resolve_expected_fail_keys,
+    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs_from_expr,
+    collect_resolved_dag_dependencies, collect_resolved_decl_bindings, resolve_expected_fail_keys,
 };
 
 fn install_non_value_decl_bindings<'a>(
@@ -1948,8 +1868,6 @@ impl DagTIRSeed {
                 ));
             }
         }
-        collect_dynamic_unit_refs(module_ctx, &mut semantic)?;
-        collect_plot_refs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
         let mut instances = instances;
         instances.extend(
@@ -1959,6 +1877,7 @@ impl DagTIRSeed {
         );
         let mut dag = DagTIR {
             dag_id: self.dag_id,
+            body_revision: crate::body_revision::BodyRevision::fresh(),
             consts: self.consts,
             params: self.params,
             nodes: self.nodes,
@@ -1981,6 +1900,20 @@ impl DagTIRSeed {
             runtime_owner_rebases: HashMap::new(),
             projectable_outputs: std::collections::HashSet::new(),
         };
+        // The complete owned-root inventory includes nominal bounds, even when
+        // a constructor occurs nowhere in a declaration's ordinary value body.
+        let mut constructors = ResolvedConstructorRefs::default();
+        for root in dag.owned_expression_roots() {
+            collect_resolved_constructor_refs_from_expr(root, module_ctx, src, &mut constructors)?;
+        }
+        for target in constructors.constructor_defs.values() {
+            record_resolved_struct_type_def(
+                &target.owning_type,
+                module_ctx,
+                &mut dag.semantic.type_defs,
+            )?;
+        }
+        dag.semantic.constructor_refs = constructors;
         dag.index_declaration_records().map_err(|error| match error {
             DeclarationIndexError::MissingBinding { name, span } => GraphcalError::InternalError {
                 message: format!(
@@ -2088,7 +2021,7 @@ pub(crate) use ops::{
 use ops::{unify_nat_poly_form, unify_resolved_type};
 
 // ---------------------------------------------------------------------------
-mod specialization;
+pub(crate) mod specialization;
 mod type_expr;
 pub use specialization::instantiate_semantic_edges;
 pub(crate) use specialization::{

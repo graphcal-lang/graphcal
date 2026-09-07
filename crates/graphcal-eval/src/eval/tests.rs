@@ -1,3 +1,5 @@
+mod checked_expressions;
+
 use std::collections::HashSet;
 
 use super::*;
@@ -63,6 +65,67 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn generated_checked_expression_coverage_includes_every_owned_root_family() {
+    use graphcal_compiler::tir::expression_facts::{ExpressionFact, ExpressionShape};
+    let template = r#"
+const node factor: Dimensionless = 2.0;
+param scale: Dimensionless(min: 1.0) = @factor;
+unit step: Length = (@scale) m;
+param x: Length(min: 0.0 m) = 1.0 step;
+type Boxed { Boxed(value: Length(min: 0.0 m)), }
+node boxed: Boxed = Boxed(value: @x);
+node values: Length[Fin(SIZE)] = for p: Fin(SIZE) { @boxed.value };
+assert close = @x ~= 2.0 m +/- 0.01 m;
+plot curve = { mark: line { stroke_width: 2.0 }, encode: { x: @values }, title: "Curve" };
+figure comparison = { plots: [curve], title: "Comparison" };
+layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
+"#;
+    for size in 2..=6 {
+        let source = template.replace("SIZE", &size.to_string());
+        let mut old_ids = Vec::new();
+        for padding in ["", "\n\n    "] {
+            let project = crate::loader::LoadedProject::from_source(
+                &format!("{padding}{source}"),
+                "coverage.gcl",
+            )
+            .unwrap();
+            let checked = ProjectCompiler::new(&project).check().unwrap();
+            let dag = checked.tir().root();
+            let facts = dag.expression_facts().unwrap();
+            let mut ids = std::collections::HashSet::new();
+            dag.owned_expression_roots().for_each(|root| {
+                graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
+                    let id = expr.id().unwrap();
+                    assert_eq!(facts.span(id).unwrap(), expr.span);
+                    facts.get(id).unwrap();
+                    ids.insert(id.clone());
+                });
+            });
+            assert_eq!(ids.len(), facts.records().count());
+            assert!(
+                ids.len() > 20,
+                "coverage fixture must not become vacuous: {} rows",
+                ids.len()
+            );
+            assert!(old_ids.iter().all(|id| facts.get(id).is_err()));
+            assert!(facts.records().any(|(_, record)| matches!(&record.fact, ExpressionFact::Value { shape: ExpressionShape::Concrete(shape), .. } if shape.total().get() == size)));
+            assert_eq!(dag.semantic().dynamic_unit_scales.len(), 1);
+            assert!(
+                facts
+                    .records()
+                    .any(|(_, record)| matches!(record.fact, ExpressionFact::Contextual(_)))
+            );
+            old_ids = ids.into_iter().collect();
+            let prepared = checked
+                .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())
+                .unwrap();
+            let row = prepared.binding_builder().finish().unwrap();
+            assert!(!prepared.evaluate(&row).unwrap().has_errors());
+        }
+    }
+}
+
+#[test]
 fn pipeline_cost_baseline_observes_preparation_and_repeated_call_work() {
     let source = r"
 type Packet { Packet(value: Length), }
@@ -75,8 +138,34 @@ node other_output: Length = @worker(x: 2000.0 m)::out;
 node packet: Packet = Packet(value: @first);
 ";
     let project = crate::loader::LoadedProject::from_source(source, "metrics.gcl").unwrap();
-    let (prepared, preparation) =
-        crate::pipeline_metrics::measure(|| ProjectCompiler::new(&project).prepare().unwrap());
+    let ((prepared, retained_constructors), preparation) = crate::pipeline_metrics::measure(|| {
+        let checked = ProjectCompiler::new(&project).check().unwrap();
+        let retained = checked
+            .tir()
+            .dag_registry()
+            .values()
+            .flat_map(|dag| dag.expression_facts().unwrap().records())
+            .filter(|(_, record)| {
+                matches!(
+                    record.fact,
+                    graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+                        constructor: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        (
+            checked
+                .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())
+                .unwrap(),
+            retained,
+        )
+    });
+    assert_eq!(
+        retained_constructors, 1,
+        "the actual constructor application must have been retained"
+    );
     let row = prepared.binding_builder().finish().unwrap();
     let (first, first_counts) =
         crate::pipeline_metrics::measure(|| prepared.evaluate(&row).unwrap());
@@ -101,8 +190,12 @@ node packet: Packet = Packet(value: @first);
         first_counts.frame_executions, 3,
         "root and both calls must use the shared machine"
     );
-    // Constructor resolution and presentation replay remain C/D work.
-    assert!(first_counts.constructor_resolutions > 0, "{first_counts:?}");
+    // Constructor applications are retained during checking and consumed here.
+    // Presentation replay remains Phase D work.
+    assert!(
+        first_counts.constructor_fact_consumptions > 0,
+        "{first_counts:?}"
+    );
     assert!(
         first_counts.presentation_evaluations > 0,
         "{first_counts:?}"
@@ -311,6 +404,160 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
             cancellation,
         )
         .is_err()
+    );
+}
+
+#[test]
+fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() {
+    use graphcal_compiler::syntax::type_name::{
+        ConstructorName, FieldName, ResolvedStructTypeName, StructTypeName,
+    };
+    let source = "type A<N: Nat> { A(value: Dimensionless(min: sum(for p: Fin(N) { 1.0 }))), } type B<N: Nat> { B(value: Dimensionless), }";
+    let tir = compile_to_tir(source, "nat-scopes.gcl").unwrap();
+    let src = miette::NamedSource::new("nat-scopes.gcl", std::sync::Arc::new(source.to_string()));
+    let type_id = |name| {
+        ResolvedStructTypeName::from_def(
+            tir.root_dag_id().clone(),
+            StructTypeName::expect_valid(name),
+        )
+    };
+    let defs = &tir.root().semantic().type_defs;
+    let a = defs.struct_types[&type_id("A")].generic_params()[0]
+        .id()
+        .clone();
+    let b = defs.struct_types[&type_id("B")].generic_params()[0]
+        .id()
+        .clone();
+    assert_eq!(a.name, b.name);
+    assert_ne!(a, b);
+    let key = graphcal_compiler::tir::typed::model::ResolvedStructFieldTypeKey {
+        owning_type: type_id("A"),
+        constructor: ConstructorName::expect_valid("A"),
+        field: FieldName::expect_valid("value"),
+    };
+    let bound = &defs.field(&key).unwrap().domain_bounds()[0].value;
+    let context = crate::eval_expr::EvalContext::provisional_constants(
+        &tir,
+        tir.root_dag_id(),
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
+    let own = std::collections::HashMap::from([(a, 3)]);
+    let foreign = std::collections::HashMap::from([(b, 3)]);
+    let values = crate::execution_facts::RuntimeValueMap::new();
+    let locals = crate::eval_expr::HirLocalValueMap::root();
+    let facts =
+        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+            &tir,
+            tir.root(),
+            bound,
+            &own,
+            &src,
+        )
+        .unwrap();
+    let value = crate::eval_expr::eval_hir_expr(
+        bound,
+        &values,
+        &locals,
+        &context.clone().with_expression_facts(&facts).unwrap(),
+    )
+    .unwrap();
+    let graphcal_compiler::registry::runtime_value::RuntimeValue::Quantity(value) = value else {
+        panic!("expected a quantity bound, got {value:?}");
+    };
+    assert_eq!(value.get().to_bits(), 3.0_f64.to_bits());
+    assert!(
+        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+            &tir,
+            tir.root(),
+            bound,
+            &foreign,
+            &src
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
+    let source = "node values: Dimensionless[Fin(2)] = for p: Fin(2) { 1.0 };";
+    let tir = compile_to_tir(source, "shape-identities.gcl").unwrap();
+    let src = miette::NamedSource::new(
+        "shape-identities.gcl",
+        std::sync::Arc::new(source.to_string()),
+    );
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    let facts =
+        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
+            .unwrap();
+    let plan =
+        crate::exec_plan::compile_checked_with_cancellation(&tir, &facts, &src, &cancellation)
+            .unwrap();
+    let hosts = crate::host_fns::HostFunctionRegistry::new();
+    let owner = graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+        tir.root_dag_id().clone(),
+        graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
+    );
+    let context = crate::eval_expr::EvalContext::checked(
+        &tir,
+        &plan,
+        tir.root_dag_id(),
+        &src,
+        graphcal_compiler::registry::builtins::builtin_functions(),
+        &hosts,
+        cancellation,
+    )
+    .unwrap()
+    .for_decl(&owner);
+    let original = &tir.root().nodes()[0].expr;
+    let mut shifted = (**original).clone();
+    shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
+    assert_ne!(shifted.span, original.span);
+    assert_eq!(shifted.id().unwrap(), original.id().unwrap());
+    let value = crate::eval_expr::eval_hir_expr(
+        &shifted,
+        &crate::execution_facts::RuntimeValueMap::new(),
+        &crate::eval_expr::HirLocalValueMap::root(),
+        &context,
+    )
+    .unwrap();
+    assert!(
+        matches!(value, graphcal_compiler::registry::runtime_value::RuntimeValue::Indexed { entries, .. } if entries.len() == 2)
+    );
+}
+
+#[test]
+fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shared() {
+    let source = "node x: Dimensionless = 1.0;";
+    let tir = compile_to_tir(source, "revisions.gcl").unwrap();
+    let src = miette::NamedSource::new("revisions.gcl", std::sync::Arc::new(source.to_string()));
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    let facts =
+        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
+            .unwrap();
+    let mut revised = tir.clone();
+    assert!(
+        crate::execution_scope::CheckedExecutionScope::new(&revised, &facts, revised.root_dag_id())
+            .is_ok()
+    );
+    graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut revised, &src).unwrap();
+    assert_eq!(revised.root_dag_id(), tir.root_dag_id());
+    assert_eq!(
+        revised.root().nodes()[0].expr.id().unwrap(),
+        tir.root().nodes()[0].expr.id().unwrap()
+    );
+    assert_ne!(revised.root().body_revision(), tir.root().body_revision());
+    assert!(matches!(
+        crate::execution_scope::CheckedExecutionScope::new(&revised, &facts, revised.root_dag_id()),
+        Err(crate::execution_scope::ExecutionScopeError::WrongRevision(
+            _
+        ))
+    ));
+    assert!(
+        crate::exec_plan::compile_checked_with_cancellation(&revised, &facts, &src, &cancellation)
+            .is_err()
     );
 }
 
@@ -3000,17 +3247,17 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = &tir.root().nodes()[0].expr.kind
+    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = tir.root().nodes()[0].expr.kind()
     else {
         panic!("expected datetime function call");
     };
-    let graphcal_compiler::hir::ExprKind::ZonedDateTimeLiteral(datetime) = &args[0].kind else {
+    let graphcal_compiler::hir::ExprKind::ZonedDateTimeLiteral(datetime) = args[0].kind() else {
         panic!(
             "expected a resolved zoned datetime literal, got {:?}",
             args[0]
         );
     };
-    let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &args[1].kind else {
+    let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = args[1].kind() else {
         panic!("expected a typed IANA timezone literal, got {:?}", args[1]);
     };
     assert_eq!(time_zone_id.as_str(), "Asia/Tokyo");
@@ -6620,7 +6867,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
+    let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = expr.kind() else {
         panic!("expected `code` to be a for-comprehension, got {expr:?}");
     };
     let [binding] = bindings.as_slice() else {

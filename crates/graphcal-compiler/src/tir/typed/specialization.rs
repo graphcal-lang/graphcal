@@ -237,7 +237,10 @@ fn specialize_type(
     }
 }
 
-fn specialize_index_ref(index: &IndexTypeRef, substitution: &StaticSubstitution) -> IndexTypeRef {
+pub fn specialize_index_ref(
+    index: &IndexTypeRef,
+    substitution: &StaticSubstitution,
+) -> IndexTypeRef {
     let Some(source) = index.declared_resolved() else {
         return index.clone();
     };
@@ -260,6 +263,50 @@ fn specialize_struct_ref(
         || struct_type.clone(),
         |target| StructTypeRef::with_display_leaf(struct_type.name().clone(), target.clone()),
     )
+}
+
+pub fn specialize_expression_type(
+    ty: &crate::registry::declared_type::DeclaredType,
+    substitution: &StaticSubstitution,
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
+    use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType};
+    let recurse = |ty: &DeclaredType| specialize_expression_type(ty, substitution, tir, src);
+    Ok(match ty {
+        DeclaredType::Quantity(dimension) => {
+            DeclaredType::Quantity(specialize_dimension(dimension, substitution, tir, src)?)
+        }
+        DeclaredType::Complex(dimension) => {
+            DeclaredType::Complex(specialize_dimension(dimension, substitution, tir, src)?)
+        }
+        DeclaredType::IndexArg(index) => {
+            DeclaredType::IndexArg(specialize_index_ref(index, substitution))
+        }
+        DeclaredType::Key(index) => DeclaredType::Key(specialize_index_ref(index, substitution)),
+        DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
+            element: Box::new(recurse(element)?),
+            index: specialize_index_ref(index, substitution),
+        },
+        DeclaredType::Struct(name, args) => DeclaredType::Struct(
+            specialize_struct_ref(name, substitution),
+            args.iter()
+                .map(|arg| {
+                    Ok(match arg {
+                        DeclaredGenericArg::Dim(dimension) => DeclaredGenericArg::Dim(
+                            specialize_dimension(dimension, substitution, tir, src)?,
+                        ),
+                        DeclaredGenericArg::Index(index) => {
+                            DeclaredGenericArg::Index(specialize_index_ref(index, substitution))
+                        }
+                        DeclaredGenericArg::Type(ty) => DeclaredGenericArg::Type(recurse(ty)?),
+                        DeclaredGenericArg::Nat(_) => arg.clone(),
+                    })
+                })
+                .collect::<Result<_, GraphcalError>>()?,
+        ),
+        DeclaredType::Bool | DeclaredType::Int | DeclaredType::Datetime(_) => ty.clone(),
+    })
 }
 
 fn rebase_runtime_dag(
@@ -442,13 +489,16 @@ fn specialize_presentation(
                 elements,
             })
         }
-        PresentationProvenance::DagCall { key, output } => Ok(PresentationProvenance::DagCall {
-            key: PresentationCallKey::new(
-                rebase_runtime_decl(key.owner(), runtime_owner_rebases),
-                key.span(),
-            ),
-            output: Box::new(recurse(output)?),
-        }),
+        PresentationProvenance::DagCall { key, span, output } => {
+            Ok(PresentationProvenance::DagCall {
+                key: PresentationCallKey::new(
+                    rebase_runtime_decl(key.owner(), runtime_owner_rebases),
+                    key.expression().clone(),
+                ),
+                span: *span,
+                output: Box::new(recurse(output)?),
+            })
+        }
         PresentationProvenance::IndexProjection {
             defining_dag,
             owner,
@@ -573,7 +623,7 @@ fn extend_binding_constructor_refs(
         if result.is_err() {
             return;
         }
-        let constructors = match &expr.kind {
+        let constructors = match expr.kind() {
             crate::hir::ExprKind::ConstructorCall { callee, .. } => vec![callee.value.clone()],
             crate::hir::ExprKind::ConstRef(target) => match &target.value {
                 crate::hir::ConstRef::Constructor(constructor) => vec![constructor.clone()],
@@ -837,6 +887,7 @@ fn initialize_instance_identity(
     let owner = edge.instance.id.owner();
     let specialization = &edge.instance.specialization;
     instance.dag_id = owner.clone();
+    instance.begin_checking_revision();
     instance.semantic_specialization = Some(specialization.clone());
     instance.static_ports.clear();
     instance
@@ -997,10 +1048,10 @@ fn specialize_instance_semantics(
     }
     instance.semantic.presentation.declarations.clear();
     instance.semantic.presentation.plot_channels.clear();
-    // Concrete Static index bindings can change cardinality. The runtime
-    // revalidates semantic-instance comprehensions from their specialized axes
-    // rather than accepting a shape fact checked against an optional default.
-    instance.semantic.materialized_shapes.clear();
+    // Concrete Static index bindings can change cardinality. Instance checking
+    // specializes the canonical template's retained facts before publication;
+    // interpretation must not reconstruct axes from the source defaults.
+    instance.semantic.expression_facts = None;
     instance.semantic.domain_bounds = instance
         .semantic
         .domain_bounds

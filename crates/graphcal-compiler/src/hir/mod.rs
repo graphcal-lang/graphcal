@@ -24,6 +24,7 @@
 //! Module-aware TIR and runtime evaluation consume these canonical definitions
 //! rather than re-resolving source-shaped syntax AST references.
 
+pub mod closed_expr;
 pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;

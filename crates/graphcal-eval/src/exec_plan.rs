@@ -461,6 +461,28 @@ fn validate_execution_facts(
         let invalid = |message: String| {
             GraphcalError::internal_error(message, facts.source(), DiagnosticAnchor::WholeFile)
         };
+        let expressions = dag
+            .expression_facts()
+            .map_err(|error| invalid(error.to_string()))?;
+        for (_, record) in expressions.records() {
+            if let graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+                constructor: Some(application),
+                ..
+            } = &record.fact
+            {
+                for field in &application.required_constraints {
+                    let key = graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
+                        graphcal_compiler::registry::declared_type::StructTypeRef::from_resolved(application.definition.clone()),
+                        application.generic_args.clone(), application.constructor.clone(), field.clone(),
+                    );
+                    if !all_facts.struct_field_constraints.contains_key(&key) {
+                        return Err(invalid(format!(
+                            "constructor application has no required field constraint: {key:?}"
+                        )));
+                    }
+                }
+            }
+        }
         dag.imported_bindings().values().try_for_each(|binding| {
             crate::execution_scope::checked_imported_constant(tir, all_facts, binding)
                 .map(|_| ())
@@ -525,11 +547,20 @@ mod tests {
     }
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
-        let (tir, src) = tir_from_source(source);
+        let (mut tir, src) = resolved_tir_from_source(source);
+        graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut tir, &src)?;
         compile(&tir, &src)
     }
 
     fn tir_from_source(
+        source: &str,
+    ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
+        let (mut tir, src) = resolved_tir_from_source(source);
+        graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut tir, &src).unwrap();
+        (tir, src)
+    }
+
+    fn resolved_tir_from_source(
         source: &str,
     ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
         let raw_file = Parser::new(source).parse_file().unwrap();
@@ -873,6 +904,41 @@ mod tests {
         let error =
             compile_checked_with_cancellation(tir, &facts, &src, &cancellation).unwrap_err();
         assert!(matches!(error, GraphcalError::InternalError { .. }));
+    }
+
+    #[test]
+    fn preparation_rejects_missing_required_constructor_field_contract() {
+        let (tir, src) = tir_from_source(
+            "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node item: Bounded = Bounded(value: 2.0);",
+        );
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let mut facts = crate::project_compiler::check_execution_facts_with_cancellation(
+            &tir,
+            &src,
+            &cancellation,
+        )
+        .unwrap();
+        assert_eq!(facts.struct_field_constraints.len(), 1);
+        let applications = tir
+            .root()
+            .expression_facts()
+            .unwrap()
+            .records()
+            .filter_map(|(_, record)| match &record.fact {
+                graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+                    constructor: Some(application),
+                    ..
+                } => Some(application),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(applications.len(), 1);
+        assert_eq!(applications[0].required_constraints.len(), 1);
+        facts.struct_field_constraints = Arc::new(HashMap::new());
+        assert!(matches!(
+            compile_checked_with_cancellation(&tir, &facts, &src, &cancellation),
+            Err(GraphcalError::InternalError { .. })
+        ));
     }
 
     #[test]

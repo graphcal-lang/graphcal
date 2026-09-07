@@ -4,14 +4,14 @@ use std::sync::Arc;
 use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
-use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
+use graphcal_compiler::tir::typed::model::DagTIR;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
@@ -26,8 +26,7 @@ use super::builtin_call::{
 };
 use super::{
     EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
-    constructor_fields_for_runtime_struct, find_struct_field_constraint, imported_binding_value,
-    index_ref_matches_resolved, resolve_unit_scale, runtime_struct_type_def,
+    imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
 };
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
@@ -108,7 +107,9 @@ fn eval_hir_expr_inner(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    match &expr.kind {
+    // Reject missing, contextual, or deferred facts before any operand work.
+    ctx.expression_fact(expr)?;
+    match expr.kind() {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before evaluation.
         hir::ExprKind::Error { .. } => {
@@ -149,7 +150,7 @@ fn eval_hir_expr_inner(
             ))
         }
         hir::ExprKind::ConstRef(target) => {
-            let value = eval_hir_const_ref(target, values, local_values, ctx)?;
+            let value = eval_hir_const_ref(expr, target, values, local_values, ctx)?;
             let presentation = match &target.value {
                 ConstRef::Decl(target) => presentation_instance_for(
                     presentation_values,
@@ -200,26 +201,17 @@ fn eval_hir_expr_inner(
             let inner_val =
                 eval_hir_expr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             let (inner_val, presentation) = inner_val.into_parts();
-            let value = eval_hir_field_access(inner_val, inner.span, field, ctx)?;
+            let value = eval_hir_field_access(inner_val, inner, field, ctx)?;
             let presentation = presentation
                 .project_field(&field.value)
                 .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
-        hir::ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            fields,
-        } => eval_hir_constructor_call(
-            callee,
-            generic_args,
-            fields,
-            values,
-            presentation_values,
-            local_values,
-            ctx,
-        ),
+        hir::ExprKind::ConstructorCall { fields, .. } => {
+            eval_hir_constructor_call(expr, fields, values, presentation_values, local_values, ctx)
+        }
         hir::ExprKind::MapLiteral { entries } => eval_hir_map_literal(
+            checked_value_type(expr, ctx)?,
             expr.span,
             entries,
             values,
@@ -228,7 +220,7 @@ fn eval_hir_expr_inner(
             ctx,
         ),
         hir::ExprKind::ForComp { bindings, body } => eval_hir_for_comp(
-            expr.span,
+            expr,
             bindings,
             body,
             values,
@@ -262,25 +254,21 @@ fn eval_hir_expr_inner(
             local_values,
             ctx,
         ),
-        hir::ExprKind::Unfold {
-            recurrence,
-            init,
-            body,
-        } => eval_hir_unfold(
-            recurrence,
-            init,
-            body,
+        hir::ExprKind::Unfold { .. } => {
+            eval_hir_unfold(expr, values, presentation_values, local_values, ctx)
+        }
+        hir::ExprKind::KeyForm { kind, arg, .. } => eval_hir_key_form(
+            *kind,
+            checked_key_axis(expr, ctx)?,
+            arg,
+            expr.span,
             values,
-            presentation_values,
             local_values,
             ctx,
-        ),
-        hir::ExprKind::KeyForm {
-            kind, axis, arg, ..
-        } => eval_hir_key_form(*kind, axis, arg, expr.span, values, local_values, ctx)
-            .map(EvaluatedRuntimeValue::plain),
+        )
+        .map(EvaluatedRuntimeValue::plain),
         hir::ExprKind::Match { scrutinee, arms } => eval_hir_match(
-            expr.span,
+            expr,
             scrutinee,
             arms,
             values,
@@ -297,7 +285,7 @@ fn eval_hir_expr_inner(
             output,
             ..
         } => eval_hir_dag_call(
-            expr.span,
+            expr,
             target,
             args,
             output,
@@ -382,6 +370,7 @@ fn take_hir_cloned_runtime_node_count() -> usize {
 }
 
 fn eval_hir_const_ref(
+    expr: &hir::Expr,
     target: &graphcal_compiler::syntax::span::Spanned<ConstRef>,
     values: &RuntimeValueMap,
     _local_values: &HirLocalValueMap<'_>,
@@ -394,9 +383,7 @@ fn eval_hir_const_ref(
             ))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
-        ConstRef::Constructor(constructor) => {
-            eval_hir_nullary_constructor(constructor, target.span, ctx)
-        }
+        ConstRef::Constructor(_) => eval_hir_nullary_constructor(expr, ctx),
         ConstRef::Builtin(builtin) => {
             checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
@@ -407,28 +394,60 @@ fn eval_hir_const_ref(
     }
 }
 
+fn checked_value_type<'a>(
+    expr: &hir::Expr,
+    ctx: &'a EvalContext<'_>,
+) -> Result<&'a DeclaredType, GraphcalError> {
+    match &ctx.expression_fact(expr)?.fact {
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+            checked_type, ..
+        } => Ok(checked_type),
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Contextual(_) => {
+            Err(ctx.internal_error("expression has no retained value type", expr.span))
+        }
+    }
+}
+
+fn checked_key_axis<'a>(
+    expr: &hir::Expr,
+    ctx: &'a EvalContext<'_>,
+) -> Result<&'a IndexTypeRef, GraphcalError> {
+    match checked_value_type(expr, ctx)? {
+        DeclaredType::Key(index) => Ok(index),
+        _ => Err(ctx.internal_error("key expression has no retained axis", expr.span)),
+    }
+}
+
+fn checked_constructor<'a>(
+    expr: &hir::Expr,
+    ctx: &'a EvalContext<'_>,
+) -> Result<&'a graphcal_compiler::tir::expression_facts::ConstructorApplication, GraphcalError> {
+    match &ctx.expression_fact(expr)?.fact {
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+            constructor: Some(application),
+            ..
+        } => {
+            crate::pipeline_metrics::record(
+                crate::pipeline_metrics::Event::ConstructorFactConsumption,
+            );
+            Ok(application)
+        }
+        _ => Err(ctx.internal_error(
+            "constructor expression has no retained application",
+            expr.span,
+        )),
+    }
+}
+
 fn eval_hir_nullary_constructor(
-    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
-    span: Span,
+    expr: &hir::Expr,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let target = constructor_target(ctx, constructor)
-        .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorResolution);
-    let generic_args = graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
-        ctx.tir,
-        ctx.current_dag,
-        constructor,
-        &[],
-        ctx.src,
-        span,
-    )?;
+    let application = checked_constructor(expr, ctx)?;
     Ok(RuntimeValue::Struct {
-        type_name: ctx
-            .current_dag
-            .runtime_struct_type_identity(&target.owning_type),
-        constructor: target.variant.name(),
-        generic_args,
+        type_name: application.runtime_type.clone(),
+        constructor: application.constructor.clone(),
+        generic_args: application.generic_args.clone(),
         fields: IndexMap::new(),
     })
 }
@@ -815,13 +834,9 @@ fn eval_hir_fn_call(
 /// `key` positions are proven in bounds by the checker; `fin_key` performs
 /// its runtime range check here; the coordinate searches scan the axis's
 /// coordinates with the documented policies.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single dispatch over every key-form kind"
-)]
 fn eval_hir_key_form(
     kind: graphcal_compiler::syntax::ast::KeyFormKind,
-    axis: &hir::expr::ForBindingIndex,
+    axis_ref: &IndexTypeRef,
     arg: &hir::Expr,
     span: Span,
     values: &RuntimeValueMap,
@@ -843,23 +858,10 @@ fn eval_hir_key_form(
             let RuntimeValue::Int(position) = arg_val else {
                 return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span));
             };
-            let size = match axis {
-                hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
-                    eval_hir_nat_expr(cardinality, ctx)?
-                }
-                hir::expr::ForBindingIndex::Named(axis_name) => {
-                    let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
-                    let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
-                        ctx.internal_error(
-                            format!("index `{axis_ref}` has no registered definition"),
-                            span,
-                        )
-                    })?;
-                    definition.finite_index_size().ok_or_else(|| {
-                        ctx.internal_error("fin_key() axis is not a Fin axis", span)
-                    })?
-                }
-            };
+            let finite = axis_ref.finite_index().ok_or_else(|| {
+                ctx.internal_error("fin_key() has no retained concrete Fin axis", span)
+            })?;
+            let size = finite.cardinality().get() as u64;
             let in_range = u64::try_from(position).is_ok_and(|position| position < size);
             if !in_range {
                 return Err(ctx.eval_error(
@@ -873,13 +875,7 @@ fn eval_hir_key_form(
             let quantity = arg_val
                 .expect_quantity("coordinate search argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?;
-            let hir::expr::ForBindingIndex::Named(axis_name) = axis else {
-                return Err(
-                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
-                );
-            };
-            let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
-            let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
+            let definition = index_def_for_ref(axis_ref, ctx).ok_or_else(|| {
                 ctx.internal_error(
                     format!("index `{axis_ref}` has no registered definition"),
                     span,
@@ -933,8 +929,12 @@ fn eval_hir_key_form(
                     span,
                 ));
             };
-            RuntimeValue::coordinate_label(axis_ref, position, data.coordinate_value(position))
-                .map_err(|error| ctx.eval_error(error.to_string(), span))
+            RuntimeValue::coordinate_label(
+                axis_ref.clone(),
+                position,
+                data.coordinate_value(position),
+            )
+            .map_err(|error| ctx.eval_error(error.to_string(), span))
         }
     }
 }
@@ -1137,7 +1137,7 @@ fn eval_hir_datetime_constructor(
             }
             let epoch = match args {
                 [arg] => {
-                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = &arg.kind else {
+                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = arg.kind() else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unparsed offset literal".to_string(),
                             src: src.clone(),
@@ -1147,14 +1147,14 @@ fn eval_hir_datetime_constructor(
                     super::datetime::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
-                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = &datetime_arg.kind else {
+                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = datetime_arg.kind() else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unresolved zoned literal".to_string(),
                             src: src.clone(),
                             span: datetime_arg.span.into(),
                         });
                     };
-                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &timezone_arg.kind
+                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = timezone_arg.kind()
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unvalidated timezone argument"
@@ -1194,7 +1194,7 @@ fn eval_hir_datetime_constructor(
                     span: span.into(),
                 });
             };
-            let hir::ExprKind::CivilDateTimeLiteral(datetime) = &arg.kind else {
+            let hir::ExprKind::CivilDateTimeLiteral(datetime) = arg.kind() else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received an unparsed civil literal".to_string(),
                     src: src.clone(),
@@ -1707,7 +1707,7 @@ fn eval_hir_builtin_fn(
 
 fn eval_hir_field_access(
     inner_val: RuntimeValue,
-    inner_span: Span,
+    inner: &hir::Expr,
     field: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::type_name::FieldName,
     >,
@@ -1717,81 +1717,65 @@ fn eval_hir_field_access(
         RuntimeValue::Struct {
             type_name,
             constructor,
+            generic_args,
             fields,
-            ..
         } => {
-            if let Some(type_def) = runtime_struct_type_def(&type_name, ctx) {
-                let constructor_fields =
-                    constructor_fields_for_runtime_struct(type_def, &constructor).ok_or_else(
-                        || {
-                            ctx.eval_error(
-                                format!(
-                                    "constructor `{}` is not a member of struct `{}`",
-                                    constructor,
-                                    type_def.name()
-                                ),
-                                inner_span,
-                            )
-                        },
-                    )?;
-                if !constructor_fields
-                    .iter()
-                    .any(|field_def| field_def.name() == &field.value)
-                {
-                    return Err(ctx.eval_error(
-                        format!("no field `{}` on struct `{type_name}`", field.value),
+            let DeclaredType::Struct(expected, expected_args) = checked_value_type(inner, ctx)?
+            else {
+                return Err(ctx.internal_error(
+                    "field access has no retained struct operand type",
+                    inner.span,
+                ));
+            };
+            let expected_runtime = ctx
+                .current_dag
+                .runtime_struct_type_identity(expected.resolved());
+            // Validate the actual tag against the retained expected type, never
+            // resolve a source name or infer a constructor application here.
+            let definition = ctx
+                .tir
+                .struct_type_def(expected.resolved())
+                .ok_or_else(|| {
+                    ctx.internal_error(
+                        "retained field operand has no nominal definition",
+                        inner.span,
+                    )
+                })?;
+            let exposes_field = definition.union_members().is_some_and(|members| {
+                members.iter().any(|member| {
+                    member.name() == constructor
+                        && member
+                            .fields()
+                            .iter()
+                            .any(|declared| declared.name() == &field.value)
+                })
+            });
+            fields
+                .get(&field.value)
+                .filter(|_| type_name == expected_runtime && generic_args == *expected_args && exposes_field)
+                .cloned()
+                .ok_or_else(|| {
+                    ctx.eval_error(
+                        format!("no field `{}` on `{type_name}::{constructor}`; expected `{expected_runtime}`", field.value),
                         field.span,
-                    ));
-                }
-            }
-            fields.get(field.value.as_str()).cloned().ok_or_else(|| {
-                ctx.eval_error(format!("no field `{}` on struct", field.value), field.span)
-            })
+                    )
+                })
         }
-        _ => Err(ctx.eval_error("field access on non-struct value", inner_span)),
+        _ => Err(ctx.eval_error("field access on non-struct value", inner.span)),
     }
 }
 
-fn constructor_target<'a>(
-    ctx: &'a EvalContext<'_>,
-    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
-) -> Option<&'a ResolvedConstructorTarget> {
-    ctx.current_dag
-        .semantic()
-        .constructor_refs
-        .constructor_defs
-        .get(constructor)
-}
-
 fn eval_hir_constructor_call(
-    callee: &graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::type_name::ResolvedConstructorName,
-    >,
-    applied_generic_args: &[hir::GenericArg],
+    expr: &hir::Expr,
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let target = constructor_target(ctx, &callee.value).ok_or_else(|| {
-        ctx.eval_error(
-            format!("unknown constructor `{}`", callee.value),
-            callee.span,
-        )
-    })?;
-    let constructor_name = target.variant.name();
-    let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorResolution);
-    let concrete_generic_args =
-        graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
-            ctx.tir,
-            ctx.current_dag,
-            &callee.value,
-            applied_generic_args,
-            ctx.src,
-            callee.span,
-        )?;
+    let application = checked_constructor(expr, ctx)?;
+    let constructor_name = &application.constructor;
+    let owning_type = StructTypeRef::from_resolved(application.definition.clone());
     let mut field_map = IndexMap::new();
     let mut field_presentations = HashMap::new();
     for field_init in fields {
@@ -1803,23 +1787,36 @@ fn eval_hir_constructor_call(
             ctx,
         )?;
         let (val, presentation) = evaluated.into_parts();
-        if let Some(field_constraints) = ctx.struct_field_constraints()
-            && let Some(constraint) = find_struct_field_constraint(
-                field_constraints,
-                Some(&owning_type),
-                &concrete_generic_args,
-                &constructor_name,
-                &field_init.name.value,
-            )
-            && let Err(violation) = crate::domain_check::check_domain_constraint(&val, constraint)
+        if application
+            .required_constraints
+            .contains(&field_init.name.value)
+            && let Some(field_constraints) = ctx.struct_field_constraints()
         {
-            return Err(ctx.eval_error(
-                format!(
-                    "field `{}.{}` {}",
-                    constructor_name, field_init.name.value, violation.message
-                ),
-                field_init.value.span,
-            ));
+            let key =
+                graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
+                    owning_type.clone(),
+                    application.generic_args.clone(),
+                    constructor_name.clone(),
+                    field_init.name.value.clone(),
+                );
+            let constraint = field_constraints.get(&key).ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "required field constraint `{constructor_name}.{}` is missing",
+                        field_init.name.value
+                    ),
+                    field_init.value.span,
+                )
+            })?;
+            if let Err(violation) = crate::domain_check::check_domain_constraint(&val, constraint) {
+                return Err(ctx.eval_error(
+                    format!(
+                        "field `{constructor_name}.{}` {}",
+                        field_init.name.value, violation.message
+                    ),
+                    field_init.value.span,
+                ));
+            }
         }
         field_map.insert(field_init.name.value.clone(), val);
         if !presentation.is_none() {
@@ -1828,11 +1825,9 @@ fn eval_hir_constructor_call(
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Struct {
-            type_name: ctx
-                .current_dag
-                .runtime_struct_type_identity(&target.owning_type),
-            constructor: constructor_name,
-            generic_args: concrete_generic_args,
+            type_name: application.runtime_type.clone(),
+            constructor: constructor_name.clone(),
+            generic_args: application.generic_args.clone(),
             fields: field_map,
         },
         PresentationInstance::fields(field_presentations),
@@ -1865,22 +1860,6 @@ fn ensure_index_ref_matches_resolved(
     ))
 }
 
-fn map_entry_index_ref(
-    key: &hir::expr::MapEntryKey,
-    ctx: &EvalContext<'_>,
-) -> Result<IndexTypeRef, GraphcalError> {
-    match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => {
-            Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
-        }
-        hir::expr::MapEntryKey::FinitePosition { size, position } => {
-            let finite_index = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(*size)
-                .map_err(|err| ctx.eval_error(err.to_string(), position.span))?;
-            Ok(IndexTypeRef::from_finite_index(finite_index))
-        }
-    }
-}
-
 fn map_entry_variant_for_axis(
     key: &hir::expr::MapEntryKey,
     axis: &IndexTypeRef,
@@ -1902,20 +1881,6 @@ fn map_entry_variant_for_axis(
     }
 }
 
-fn map_entry_index_def<'a>(
-    key: &hir::expr::MapEntryKey,
-    index_ref: &IndexTypeRef,
-    ctx: &'a EvalContext<'_>,
-) -> Option<std::borrow::Cow<'a, IndexDef>> {
-    match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => ctx
-            .tir
-            .declared_index_def(variant.variant.index())
-            .map(std::borrow::Cow::Borrowed),
-        hir::expr::MapEntryKey::FinitePosition { .. } => index_def_for_ref(index_ref, ctx),
-    }
-}
-
 fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => variant.path_span(),
@@ -1928,6 +1893,7 @@ fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
     reason = "recursive map evaluation keeps values and sparse presentation entries reordered atomically"
 )]
 fn eval_hir_map_literal(
+    checked_type: &DeclaredType,
     map_span: Span,
     entries: &[hir::expr::MapEntry],
     values: &RuntimeValueMap,
@@ -1940,10 +1906,13 @@ fn eval_hir_map_literal(
         .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let idx_name = map_entry_index_ref(first_key, ctx)?;
+    let DeclaredType::Indexed { element, index } = checked_type else {
+        return Err(ctx.internal_error("map has no retained indexed type", map_span));
+    };
+    let idx_name = index.clone();
 
     if arity == 1 {
-        let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
+        let idx_def = index_def_for_ref(&idx_name, ctx).ok_or_else(|| {
             ctx.internal_error(
                 format!("unknown index `{idx_name}`"),
                 map_entry_key_span(first_key),
@@ -1988,7 +1957,7 @@ fn eval_hir_map_literal(
         ));
     }
 
-    let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
+    let idx_def = index_def_for_ref(&idx_name, ctx).ok_or_else(|| {
         ctx.internal_error(
             format!("unknown index `{idx_name}`"),
             map_entry_key_span(first_key),
@@ -2027,6 +1996,7 @@ fn eval_hir_map_literal(
             ));
         }
         let evaluated = eval_hir_map_literal(
+            element,
             map_span,
             &sub_entries,
             values,
@@ -2049,45 +2019,8 @@ fn eval_hir_map_literal(
     ))
 }
 
-/// Generic Nat parameters are substituted during TIR construction, so a
-/// `Param` reaching evaluation is an internal invariant violation.
-fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, GraphcalError> {
-    match expr {
-        hir::NatExpr::Literal(n, _) => Ok(*n),
-        hir::NatExpr::Param(param) => ctx
-            .generic_nat_bindings
-            .and_then(|bindings| bindings.get(&param.value.name))
-            .copied()
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!(
-                        "unbound generic Nat parameter `{}` — Nat parameters must be \
-                         substituted before evaluation",
-                        param.value.name
-                    ),
-                    param.span,
-                )
-            }),
-        hir::NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
-            let value = eval_hir_nat_expr(operand, ctx)?;
-            sum.checked_add(value).ok_or_else(|| {
-                ctx.eval_error(format!("nat arithmetic overflow: {sum} + {value}"), *span)
-            })
-        }),
-        hir::NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
-            let value = eval_hir_nat_expr(operand, ctx)?;
-            product.checked_mul(value).ok_or_else(|| {
-                ctx.eval_error(
-                    format!("nat arithmetic overflow: {product} * {value}"),
-                    *span,
-                )
-            })
-        }),
-    }
-}
-
 fn eval_hir_for_comp(
-    span: Span,
+    expr: &hir::Expr,
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
@@ -2095,53 +2028,20 @@ fn eval_hir_for_comp(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    if let Some(owner) = &ctx.current_decl
-        && ctx.current_dag.materialized_shape(owner, span).is_none()
-    {
-        if !ctx.current_dag.is_semantic_instance() {
+    match &ctx.expression_fact(expr)?.fact {
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+            shape: graphcal_compiler::tir::expression_facts::ExpressionShape::Concrete(_),
+            ..
+        } => {}
+        _ => {
             return Err(ctx.internal_error(
-                format!("materialized expression in `{owner}` has no checked shape fact"),
-                span,
+                "materialized expression has no concrete checked shape",
+                expr.span,
             ));
         }
-        let total = bindings.iter().try_fold(1_usize, |total, binding| {
-            let cardinality = match &binding.index {
-                hir::expr::ForBindingIndex::Named(index) => {
-                    let index = ctx.current_dag.runtime_index_type_ref(&index.value);
-                    index_def_for_ref(&index, ctx)
-                        .and_then(|definition| definition.concrete_cardinality())
-                        .map(graphcal_compiler::registry::types::IndexCardinality::get)
-                        .ok_or_else(|| {
-                            ctx.internal_error(
-                                format!("semantic instance index `{index}` is not concrete"),
-                                span,
-                            )
-                        })?
-                }
-                hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
-                    usize::try_from(eval_hir_nat_expr(cardinality, ctx)?).map_err(|_| {
-                        ctx.eval_error("finite index cardinality is too large", span)
-                    })?
-                }
-            };
-            total
-                .checked_mul(cardinality)
-                .filter(|total| {
-                    *total <= graphcal_compiler::tir::materialized_shape::MAX_EAGER_CARDINALITY
-                })
-                .ok_or_else(|| {
-                    ctx.eval_error(
-                        format!(
-                            "materialized shape exceeds limit {}",
-                            graphcal_compiler::tir::materialized_shape::MAX_EAGER_CARDINALITY
-                        ),
-                        span,
-                    )
-                })
-        })?;
-        let _ = total;
     }
     eval_hir_for_comp_bindings(
+        checked_value_type(expr, ctx)?,
         bindings,
         body,
         values,
@@ -2152,6 +2052,7 @@ fn eval_hir_for_comp(
 }
 
 fn eval_hir_for_comp_bindings(
+    checked_type: &DeclaredType,
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
@@ -2160,18 +2061,14 @@ fn eval_hir_for_comp_bindings(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let binding = &bindings[0];
-    let (idx_name, error_span) = match &binding.index {
-        hir::expr::ForBindingIndex::Named(index) => (
-            ctx.current_dag.runtime_index_type_ref(&index.value),
-            index.span,
-        ),
-        hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-            let size = eval_hir_nat_expr(cardinality, ctx)?;
-            let finite_index = graphcal_compiler::registry::types::FiniteIndex::try_from_u64(size)
-                .map_err(|err| ctx.eval_error(err.to_string(), *span))?;
-            (IndexTypeRef::from_finite_index(finite_index), *span)
-        }
+    let DeclaredType::Indexed { element, index } = checked_type else {
+        return Err(ctx.internal_error(
+            "comprehension binding has no retained indexed type",
+            binding.local.span,
+        ));
     };
+    let idx_name = index.clone();
+    let error_span = binding.local.span;
 
     let idx_def = index_def_for_ref(&idx_name, ctx)
         .ok_or_else(|| ctx.internal_error(format!("unknown index `{idx_name}`"), error_span))?;
@@ -2223,6 +2120,7 @@ fn eval_hir_for_comp_bindings(
             eval_hir_expr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
         } else {
             eval_hir_for_comp_bindings(
+                element,
                 remaining,
                 body,
                 values,
@@ -2260,7 +2158,7 @@ fn eval_hir_index_access(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let (base_value, base_presentation) = match &inner.kind {
+    let (base_value, base_presentation) = match inner.kind() {
         hir::ExprKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
             // `eval_hir_expr(inner, ...)` while retaining a reference to the
@@ -2465,16 +2363,25 @@ fn eval_hir_scan(
 }
 
 fn eval_hir_unfold(
-    recurrence: &hir::expr::UnfoldRecurrence,
-    init: &hir::Expr,
-    body: &hir::Expr,
+    expr: &hir::Expr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let hir::ExprKind::Unfold {
+        recurrence,
+        init,
+        body,
+    } = expr.kind()
+    else {
+        return Err(ctx.internal_error("unfold evaluator received another operation", expr.span));
+    };
     let axis = &recurrence.axis;
-    let index_ref = IndexTypeRef::from_resolved(axis.value.clone());
+    let DeclaredType::Indexed { index, .. } = checked_value_type(expr, ctx)? else {
+        return Err(ctx.internal_error("unfold has no retained indexed type", expr.span));
+    };
+    let index_ref = index.clone();
     let idx_def = index_def_for_ref(&index_ref, ctx).ok_or_else(|| {
         ctx.internal_error(
             format!("missing resolved unfold axis `{}`", axis.value),
@@ -2542,7 +2449,7 @@ fn eval_hir_unfold(
 }
 
 fn eval_hir_match(
-    span: Span,
+    expr: &hir::Expr,
     scrutinee: &hir::Expr,
     arms: &[hir::expr::MatchArm],
     values: &RuntimeValueMap,
@@ -2550,6 +2457,8 @@ fn eval_hir_match(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let span = expr.span;
+    let constructor_matches = &ctx.expression_fact(expr)?.constructor_matches;
     let scrutinee_val = eval_hir_expr(scrutinee, values, local_values, ctx)?;
     match &scrutinee_val {
         RuntimeValue::Label {
@@ -2584,18 +2493,25 @@ fn eval_hir_match(
         } => {
             let matched_arm = arms
                 .iter()
-                .find(|arm| match &arm.pattern {
+                .find_map(|arm| match &arm.pattern {
                     hir::expr::MatchPattern::Constructor { constructor, .. } => {
-                        constructor_target(ctx, &constructor.value).is_some_and(|target| {
-                            *value_constructor == target.variant.name()
-                                && *type_name
-                                    == ctx
-                                        .current_dag
-                                        .runtime_struct_type_identity(&target.owning_type)
-                        })
+                        constructor_matches.get(&constructor.value).map_or_else(
+                            || {
+                                Some(Err(ctx.internal_error(
+                                    "match arm has no retained constructor target",
+                                    arm.span,
+                                )))
+                            },
+                            |target| {
+                                (*value_constructor == target.constructor
+                                    && *type_name == target.runtime_type)
+                                    .then_some(Ok(arm))
+                            },
+                        )
                     }
-                    hir::expr::MatchPattern::IndexLabel { .. } => false,
+                    hir::expr::MatchPattern::IndexLabel { .. } => None,
                 })
+                .transpose()?
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), span)
                 })?;
@@ -2640,7 +2556,7 @@ fn eval_hir_match(
     reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
 )]
 fn eval_hir_dag_call(
-    call_span: Span,
+    call: &hir::Expr,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,
@@ -2649,6 +2565,7 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let call_span = call.span;
     let plan = ctx.execution_plan()?;
     let callable = plan
         .callable(&target.value)
@@ -2745,7 +2662,7 @@ fn eval_hir_dag_call(
     let presentation = retain_called_dag_presentation_values(
         dag_tir,
         &output.value,
-        call_span,
+        call,
         dag_values,
         output_presentation,
         ctx,
@@ -2756,11 +2673,12 @@ fn eval_hir_dag_call(
 fn retain_called_dag_presentation_values(
     dag: &DagTIR,
     output: &ResolvedDeclKey,
-    call_span: Span,
+    call: &hir::Expr,
     values: RuntimeValueMap,
     output_presentation: PresentationInstance,
     ctx: &EvalContext<'_>,
 ) -> Result<PresentationInstance, GraphcalError> {
+    let call_span = call.span;
     let requires_values = dag.declaration_presentation(output).is_some_and(
         graphcal_compiler::tir::presentation::PresentationProvenance::requires_runtime_values,
     );
@@ -2783,7 +2701,9 @@ fn retain_called_dag_presentation_values(
         .record(
             graphcal_compiler::tir::presentation::PresentationCallKey::new(
                 owner.clone(),
-                call_span,
+                call.id()
+                    .map_err(|error| ctx.internal_error(error.to_string(), call_span))?
+                    .clone(),
             ),
             values,
         )

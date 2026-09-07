@@ -255,6 +255,35 @@ impl NatPolyForm {
         Some(result)
     }
 
+    /// Evaluate with a lexical resolver supplied by the owning semantic layer.
+    /// Ownership never crosses this algebra boundary as a flattened name map.
+    pub fn evaluate_with<E: From<NatOverflowError>>(
+        &self,
+        mut binding: impl FnMut(&GenericParamName) -> Result<u64, E>,
+    ) -> Result<u64, E> {
+        self.terms
+            .iter()
+            .try_fold(0_u64, |sum, (monomial, coefficient)| {
+                let term =
+                    monomial
+                        .0
+                        .iter()
+                        .try_fold(*coefficient, |product, (name, exponent)| {
+                            let value = binding(name)?;
+                            let exponent =
+                                u32::try_from(*exponent).map_err(|_| E::from(NatOverflowError))?;
+                            let factor = value
+                                .checked_pow(exponent)
+                                .ok_or_else(|| E::from(NatOverflowError))?;
+                            product
+                                .checked_mul(factor)
+                                .ok_or_else(|| E::from(NatOverflowError))
+                        })?;
+                sum.checked_add(term)
+                    .ok_or_else(|| E::from(NatOverflowError))
+            })
+    }
+
     /// Format as a human-readable string.
     ///
     /// Examples: `"3"`, `"N"`, `"N + 1"`, `"M * N"`, `"2 * N^2 + N + 1"`.

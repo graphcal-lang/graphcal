@@ -10,7 +10,7 @@ use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use super::visible_values_with_imports;
@@ -85,7 +85,10 @@ pub(super) fn resolve_domain_constraints_for_dag(
             &name.to_string(),
             target,
             &visible_const_values,
-            &ctx.for_decl(&resolved_key).with_src(constraint_src),
+            BoundCheckingContext {
+                evaluation: &ctx.for_decl(&resolved_key).with_src(constraint_src),
+                bindings: &HashMap::new(),
+            },
             constraint_src,
         )?;
         let runtime_key = RuntimeDeclKey::resolved(resolved_key);
@@ -114,6 +117,13 @@ enum ConstraintTarget {
     Datetime(graphcal_compiler::registry::time_scale::TimeScale),
 }
 
+/// Checking-only substitution services never enter the interpreter context.
+#[derive(Clone, Copy)]
+struct BoundCheckingContext<'a, 'b> {
+    evaluation: &'a EvalContext<'b>,
+    bindings: &'a HashMap<graphcal_compiler::hir::types::GenericParamId, u64>,
+}
+
 /// Evaluate a declaration's or field's stored HIR domain bounds into the
 /// representation selected by its constrained value family.
 fn resolve_constraint_from_bounds(
@@ -121,7 +131,7 @@ fn resolve_constraint_from_bounds(
     display_name: &str,
     target: ConstraintTarget,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: BoundCheckingContext<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDomainConstraint, GraphcalError> {
     match target {
@@ -205,7 +215,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
     display_name: &str,
     values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
+    ctx: BoundCheckingContext<'_, '_>,
     src: &NamedSource<Arc<String>>,
     convert: impl Fn(
         &RuntimeValue,
@@ -224,7 +234,11 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     let evaluated = bounds
         .iter()
         .map(|bound| {
-            let runtime_value = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
+            let facts = graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+                ctx.evaluation.tir, ctx.evaluation.current_dag, &bound.value, ctx.bindings, &bound.src,
+            )?;
+            let bound_ctx = ctx.evaluation.clone().with_expression_facts(&facts)?;
+            let runtime_value = eval_hir_expr(&bound.value, values, &empty_locals, &bound_ctx)?;
             let value = convert(&runtime_value, bound)?;
             let display = format_display(&bound.value, &value);
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
@@ -336,7 +350,7 @@ fn generic_nat_bindings(
     generic_args: &[DeclaredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<HashMap<GenericParamName, u64>, GraphcalError> {
+) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
     if type_def.generic_params().len() != generic_args.len() {
         return Err(GraphcalError::InternalError {
             message: format!(
@@ -361,7 +375,7 @@ fn generic_nat_bindings(
         })
         .map(|(param, form)| {
             form.constant_value()
-                .map(|value| (param.name().clone(), value))
+                .map(|value| (param.id().clone(), value))
                 .ok_or_else(|| GraphcalError::InternalError {
                     message: format!(
                         "concrete Nat argument `{}` for `{}` remained symbolic",
@@ -488,8 +502,7 @@ fn resolve_application_field_constraints(
         ctx.builtin_fns,
         ctx.cancellation.clone(),
     )?
-    .with_roots(&visible_const_values, None)
-    .with_generic_nat_bindings(&nat_bindings);
+    .with_roots(&visible_const_values, None);
     let mut constraints = Vec::new();
     for (key, field_semantics) in dag
         .semantic()
@@ -519,7 +532,10 @@ fn resolve_application_field_constraints(
             &display_name,
             target,
             &visible_const_values,
-            &application_ctx.with_src(constraint_src),
+            BoundCheckingContext {
+                evaluation: &application_ctx.with_src(constraint_src),
+                bindings: &nat_bindings,
+            },
             constraint_src,
         )?;
         constraints.push((
@@ -539,13 +555,20 @@ fn collect_field_constraint_applications(
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
     }
     for dag in tir.dag_registry().values() {
-        for application in
-            graphcal_compiler::tir::dim_check::concrete_constructor_applications(tir, dag, src)?
-        {
-            applications.insert(ConcreteNominalApplication {
-                identity: application.identity().clone(),
-                generic_args: application.generic_args().to_vec(),
-            });
+        let facts = dag.expression_facts().map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+        for (_, record) in facts.records() {
+            if let graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+                constructor: Some(application),
+                ..
+            } = &record.fact
+            {
+                applications.insert(ConcreteNominalApplication {
+                    identity: StructTypeRef::from_resolved(application.definition.clone()),
+                    generic_args: application.generic_args.clone(),
+                });
+            }
         }
         for (identity, type_def) in &dag.semantic().type_defs.struct_types {
             if type_def.generic_params().is_empty() {
@@ -871,7 +894,7 @@ fn exact_domain_int_bound(
 
 fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
     use graphcal_compiler::hir::ExprKind;
-    match &expr.kind {
+    match expr.kind() {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::QuantityLiteral { value, unit } => {

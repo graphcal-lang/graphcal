@@ -127,6 +127,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["body_revision"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["expression_id"]
 role = "contracts"
 
@@ -174,6 +179,16 @@ role = "facade"
 package = "compiler"
 path = ["hir", "diagnostics"]
 role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "closed_expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "closed_expr", "tests"]
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -872,6 +887,41 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "dim_check", "expression_facts"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "concrete_obligations"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "expression_axes"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "expression_facts", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "expression_facts", "static_index"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "builtins"]
 role = "checking"
 
@@ -968,6 +1018,11 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "presentation"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "presentation", "tests"]
 role = "contracts"
 
 [[module]]
@@ -1124,6 +1179,11 @@ role = "facade"
 [[module]]
 package = "eval"
 path = ["eval", "tests"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["eval", "tests", "checked_expressions"]
 role = "facade"
 
 [[module]]

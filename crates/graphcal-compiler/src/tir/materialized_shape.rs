@@ -9,9 +9,7 @@ use std::num::NonZeroUsize;
 use thiserror::Error;
 
 use crate::registry::types::{IndexCardinality, MAX_INDEX_CARDINALITY};
-use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
-use crate::syntax::span::Span;
 
 /// Largest number of scalar leaves that one indexed value may materialize.
 ///
@@ -44,37 +42,6 @@ impl EagerCardinality {
     #[must_use]
     pub const fn get(self) -> usize {
         self.0.get()
-    }
-}
-
-/// Stable identity of one materialized expression within a checked DAG.
-///
-/// Source spans alone are not identities: instantiated declarations can retain
-/// the same definition-site offsets. Pairing the canonical owning declaration
-/// with the span keeps repeated instances distinct without string conventions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MaterializedExpressionKey {
-    owner: ResolvedDeclName,
-    span: Span,
-}
-
-impl MaterializedExpressionKey {
-    /// Pair a canonical declaration owner with one expression span.
-    #[must_use]
-    pub const fn new(owner: ResolvedDeclName, span: Span) -> Self {
-        Self { owner, span }
-    }
-
-    /// Canonical declaration whose body owns the expression.
-    #[must_use]
-    pub const fn owner(&self) -> &ResolvedDeclName {
-        &self.owner
-    }
-
-    /// Definition-site expression span within the owner's source.
-    #[must_use]
-    pub const fn span(&self) -> Span {
-        self.span
     }
 }
 

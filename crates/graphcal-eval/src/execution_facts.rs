@@ -18,11 +18,12 @@ pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 ///
 /// A callable DAG cannot be evaluated without this value: its constants,
 /// declaration constraints, schedule, and diagnostic source are produced as
-/// one atomic checked artifact. The canonical `dag_id` prevents facts from one
-/// body being paired with another body by convention.
+/// one atomic checked artifact. Canonical owner and body revision are both
+/// required: equal names or shared source trees cannot authorize stale facts.
 #[derive(Debug, Clone)]
 pub struct CheckedDagExecutionFacts {
     pub dag_id: DagId,
+    pub body_revision: graphcal_compiler::body_revision::BodyRevision,
     pub source: NamedSource<Arc<String>>,
     pub const_values: Arc<RuntimeValueMap>,
     pub topo_order: Arc<Vec<RuntimeDeclKey>>,

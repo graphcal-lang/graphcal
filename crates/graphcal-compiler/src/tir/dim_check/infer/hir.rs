@@ -8,7 +8,7 @@
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,20 +17,21 @@ use miette::NamedSource;
 use crate::builtin::{AggregationFn, BuiltinFnName};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
+use crate::expression_id::ExprId;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{FormattingRegistry, IndexCardinality, TypeGenericConstraint};
+use crate::registry::types::{FormattingRegistry, TypeGenericConstraint};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
-use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
-use crate::tir::materialized_shape::{
-    MaterializedExpressionKey, MaterializedShape, MaterializedShapeError,
+use crate::tir::expression_facts::{
+    CheckedExpressionRecord, ConstructorApplication, ContextualOperand, ExpressionFact,
+    NominalObservation,
 };
 use crate::tir::typed::{
     NatPolyForm, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
@@ -44,44 +45,11 @@ use super::super::helpers::{
 };
 use super::super::{
     DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType,
-    NominalOverrideIdentity,
 };
 use super::builtin_call::{
     BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
 };
 use super::linear_algebra::{LinearAlgebraTypeError, infer_linear_algebra_type};
-
-#[derive(Clone, Default)]
-struct NominalDependencyCollector {
-    dependencies: Rc<RefCell<HashSet<NominalOverrideIdentity>>>,
-}
-
-impl NominalDependencyCollector {
-    fn record_type(&self, identity: &ResolvedStructTypeName) {
-        self.dependencies
-            .borrow_mut()
-            .insert(NominalOverrideIdentity::Type(identity.clone()));
-    }
-
-    fn record_index(&self, identity: &IndexTypeRef) {
-        if let Some(resolved) = identity.declared_resolved() {
-            self.dependencies
-                .borrow_mut()
-                .insert(NominalOverrideIdentity::Index(resolved.clone()));
-        }
-    }
-
-    fn snapshot(&self) -> HashSet<NominalOverrideIdentity> {
-        self.dependencies.borrow().clone()
-    }
-}
-
-#[derive(Clone, Default)]
-enum NominalDependencyTracking {
-    #[default]
-    Disabled,
-    Collect(NominalDependencyCollector),
-}
 
 /// One executable use that observes a nominal type's concrete definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,128 +104,260 @@ impl TypeDefinitionDependencyTracking {
     }
 }
 
-#[derive(Clone, Default)]
-pub(in crate::tir::dim_check) struct MaterializedShapeCollector {
-    shapes: Rc<RefCell<HashMap<MaterializedExpressionKey, MaterializedShape>>>,
+#[cfg(test)]
+thread_local! {
+    pub(in crate::tir::dim_check) static CONTEXTUAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-impl MaterializedShapeCollector {
-    pub(in crate::tir::dim_check) fn snapshot(
-        &self,
-    ) -> HashMap<MaterializedExpressionKey, MaterializedShape> {
-        self.shapes.borrow().clone()
+#[derive(Clone)]
+pub(in crate::tir::dim_check) struct ExpressionFactCollector {
+    environment: Arc<crate::tir::expression_facts::CheckingEnvironment>,
+    records: Rc<RefCell<HashMap<ExprId, Box<CheckedExpressionRecord>>>>,
+    observations: Rc<RefCell<HashMap<ExprId, Vec<NominalObservation>>>>,
+    static_indexes:
+        Rc<RefCell<HashMap<ExprId, Vec<crate::tir::expression_facts::StaticIndexRequirement>>>>,
+}
+
+impl ExpressionFactCollector {
+    pub(in crate::tir::dim_check) fn new(dag: &crate::tir::typed::DagTIR) -> Self {
+        Self {
+            environment: crate::tir::expression_facts::CheckingEnvironment::new(
+                dag.dag_id().clone(),
+                dag.body_revision().clone(),
+            ),
+            records: Rc::default(),
+            observations: Rc::default(),
+            static_indexes: Rc::default(),
+        }
     }
 
-    fn record(
+    pub(in crate::tir::dim_check) fn finish(self) -> HashMap<ExprId, Box<CheckedExpressionRecord>> {
+        let mut records = self.records.take();
+        for (id, observations) in self.observations.take() {
+            if let Some(record) = records.get_mut(&id) {
+                record.nominal_observations = Some(observations.into());
+            }
+        }
+        records
+    }
+
+    fn observe(&self, root: &ExprId, observation: NominalObservation) {
+        self.observations
+            .borrow_mut()
+            .entry(root.clone())
+            .or_default()
+            .push(observation);
+    }
+
+    pub(in crate::tir::dim_check) fn retain_nat_scope(
         &self,
-        owner: Option<&ResolvedDeclName>,
+        root: &hir::Expr,
+        parameters: &[crate::hir::nominal::NominalGenericParam],
+    ) {
+        let scope: HashMap<_, _> = parameters
+            .iter()
+            .map(|parameter| (parameter.name().clone(), parameter.id().clone()))
+            .collect();
+        let scope = (!scope.is_empty()).then(|| Arc::new(scope));
+        hir::visit_expr(root, &mut |expr| {
+            if let Ok(id) = expr.id()
+                && let Some(record) = self.records.borrow_mut().get_mut(id)
+            {
+                record.nat_parameters.clone_from(&scope);
+            }
+        });
+    }
+
+    fn insert(
+        &self,
+        expr: &hir::Expr,
+        fact: ExpressionFact,
+        constructor_matches: HashMap<
+            ResolvedConstructorName,
+            crate::tir::expression_facts::ConstructorMatch,
+        >,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        let diagnostic = |error: String| {
+            GraphcalError::internal_error(error, src, DiagnosticAnchor::Source(expr.span))
+        };
+        let id = expr
+            .id()
+            .map_err(|error| diagnostic(error.to_string()))?
+            .clone();
+        let mut record = CheckedExpressionRecord::new(expr, fact, Arc::clone(&self.environment))
+            .map_err(|error| diagnostic(error.to_string()))?;
+        record.constructor_matches = constructor_matches;
+        record.static_indexes.extend(
+            self.static_indexes
+                .borrow_mut()
+                .remove(&id)
+                .into_iter()
+                .flatten(),
+        );
+        match self.records.borrow_mut().entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(record);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get() == &record => Ok(()),
+            std::collections::hash_map::Entry::Occupied(_) => Err(diagnostic(
+                "expression inferred with inconsistent facts".into(),
+            )),
+        }
+    }
+
+    pub(in crate::tir::dim_check) fn record_contextual(
+        &self,
+        root: &hir::Expr,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        let mut result = Ok(());
+        hir::visit_expr(root, &mut |expr| {
+            #[cfg(test)]
+            CONTEXTUAL_VISITS.with(|visits| {
+                visits.set(
+                    visits
+                        .get()
+                        .checked_add(1)
+                        .expect("contextual visit counter overflow"),
+                );
+            });
+            if result.is_err()
+                || expr
+                    .id()
+                    .is_ok_and(|id| self.records.borrow().contains_key(id))
+            {
+                return;
+            }
+            let kind = match expr.kind() {
+                hir::ExprKind::StringLiteral(_) => ContextualOperand::String,
+                hir::ExprKind::OffsetDateTimeLiteral(_) => ContextualOperand::OffsetDateTime,
+                hir::ExprKind::CivilDateTimeLiteral(_) => ContextualOperand::CivilDateTime,
+                hir::ExprKind::ZonedDateTimeLiteral(_) => ContextualOperand::ZonedDateTime,
+                hir::ExprKind::IanaTimeZoneLiteral(_) => ContextualOperand::TimeZone,
+                hir::ExprKind::TypeSystemRef(_) => ContextualOperand::TypeSystem,
+                _ => return,
+            };
+            result = self.insert(expr, ExpressionFact::Contextual(kind), HashMap::new(), src);
+        });
+        result
+    }
+
+    pub(in crate::tir::dim_check) fn record(
+        &self,
         expr: &hir::Expr,
         inferred: &InferredType,
+        dag: &crate::tir::typed::DagTIR,
         tir: &crate::tir::typed::TIR,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let Some(shape) = validate_inferred_materialized_shape(inferred, tir, src, expr.span)?
-        else {
-            return Ok(());
-        };
-        let Some(owner) = owner else {
-            return Ok(());
-        };
-        let key = MaterializedExpressionKey::new(owner.clone(), expr.span);
-        match self.shapes.borrow_mut().entry(key) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(shape);
-                Ok(())
-            }
-            std::collections::hash_map::Entry::Occupied(entry) if entry.get() == &shape => Ok(()),
-            std::collections::hash_map::Entry::Occupied(_) => Err(GraphcalError::InternalError {
-                message: format!(
-                    "materialized expression in `{owner}` inferred with inconsistent concrete shapes"
-                ),
-                src: src.clone(),
-                span: expr.span.into(),
-            }),
+        let checked_type = DeclaredType::from(inferred);
+        let shape = super::super::expression_axes::checked_expression_shape(
+            &checked_type,
+            tir,
+            src,
+            expr.span,
+        )?;
+        let constructor = match expr.kind() {
+            hir::ExprKind::ConstructorCall { callee, .. } => Some(&callee.value),
+            hir::ExprKind::ConstRef(target) => match &target.value {
+                ConstRef::Constructor(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
         }
-    }
-}
-
-pub(in crate::tir::dim_check) fn validate_inferred_materialized_shape(
-    inferred: &InferredType,
-    tir: &crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Option<MaterializedShape>, GraphcalError> {
-    let mut axes = Vec::new();
-    let mut current = inferred;
-    while let InferredType::Indexed { element, index } = current {
-        let Some(cardinality) = concrete_index_cardinality(index, tir, src, span)? else {
-            return Ok(None);
-        };
-        axes.push(cardinality);
-        current = element;
-    }
-    let Ok(axes) = NonEmpty::try_from_vec(axes) else {
-        return Ok(None);
-    };
-    MaterializedShape::try_new(axes).map(Some).map_err(
-        |MaterializedShapeError::ExceedsLimit { maximum }| {
-            GraphcalError::MaterializedShapeTooLarge {
-                maximum,
-                src: src.clone(),
-                span: span.into(),
-            }
-        },
-    )
-}
-
-fn concrete_index_cardinality(
-    index: &InferredIndex,
-    tir: &crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Option<IndexCardinality>, GraphcalError> {
-    if let Some(index) = index.concrete_finite_index() {
-        return Ok(Some(index.cardinality()));
-    }
-    let Some(resolved) = index.declared_resolved() else {
-        return Ok(None);
-    };
-    tir.declared_index_def(resolved)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("concrete index definition `{resolved}` is missing from checked TIR"),
-            src: src.clone(),
-            span: span.into(),
+        .map(|name| {
+            let target = dag
+                .semantic
+                .constructor_refs
+                .constructor_defs
+                .get(name)
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("checked constructor `{name}` has no definition"),
+                        src,
+                        DiagnosticAnchor::Source(expr.span),
+                    )
+                })?;
+            let DeclaredType::Struct(_, args) = &checked_type else {
+                return Err(GraphcalError::internal_error(
+                    "constructor inferred a non-nominal type",
+                    src,
+                    DiagnosticAnchor::Source(expr.span),
+                ));
+            };
+            Ok(ConstructorApplication {
+                definition: target.owning_type.clone(),
+                runtime_type: dag.runtime_struct_type_identity(&target.owning_type),
+                constructor: target.variant.name(),
+                generic_args: args.clone(),
+                required_constraints: target
+                    .variant
+                    .fields()
+                    .iter()
+                    .filter(|field| !field.type_annotation().domain_bounds.is_empty())
+                    .map(|field| field.name().clone())
+                    .collect(),
+            })
         })
-        .map(crate::registry::types::IndexDef::concrete_cardinality)
-}
-
-impl NominalDependencyTracking {
-    fn record_type(&self, identity: &ResolvedStructTypeName) {
-        match self {
-            Self::Disabled => {}
-            Self::Collect(collector) => collector.record_type(identity),
-        }
-    }
-
-    fn record_index(&self, identity: &IndexTypeRef) {
-        match self {
-            Self::Disabled => {}
-            Self::Collect(collector) => collector.record_index(identity),
-        }
+        .transpose()?;
+        let constructor_matches = match expr.kind() {
+            hir::ExprKind::Match { arms, .. } => arms
+                .iter()
+                .filter_map(|arm| match &arm.pattern {
+                    hir::expr::MatchPattern::Constructor { constructor, .. } => {
+                        Some(&constructor.value)
+                    }
+                    hir::expr::MatchPattern::IndexLabel { .. } => None,
+                })
+                .map(|name| {
+                    let target = dag
+                        .semantic
+                        .constructor_refs
+                        .constructor_defs
+                        .get(name)
+                        .ok_or_else(|| {
+                            GraphcalError::internal_error(
+                                format!("checked match constructor `{name}` has no definition"),
+                                src,
+                                DiagnosticAnchor::Source(expr.span),
+                            )
+                        })?;
+                    Ok((
+                        name.clone(),
+                        crate::tir::expression_facts::ConstructorMatch {
+                            definition: target.owning_type.clone(),
+                            runtime_type: dag.runtime_struct_type_identity(&target.owning_type),
+                            constructor: target.variant.name(),
+                        },
+                    ))
+                })
+                .collect::<Result<_, GraphcalError>>()?,
+            _ => HashMap::new(),
+        };
+        self.insert(
+            expr,
+            ExpressionFact::Value {
+                checked_type,
+                shape,
+                constructor: constructor.map(Box::new),
+            },
+            constructor_matches,
+            src,
+        )
     }
 }
 
 /// Lexical inference environment plus operation-scoped control state.
 ///
 /// Every recursive inference path already carries the local environment. Keeping
-/// cancellation, generic substitutions, and nominal-use tracking in the same
+/// cancellation and nominal-use tracking in the same
 /// typed context prevents nested helpers from silently dropping any policy.
 struct HirInferenceControl {
     cancellation: crate::cancellation::CancellationToken,
-    generic_substitutions: Option<ConcreteGenericSubstitutions>,
-    nominal_dependencies: NominalDependencyTracking,
     type_definition_dependencies: TypeDefinitionDependencyTracking,
-    materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
+    expression_facts: Option<(ExpressionFactCollector, ExprId)>,
 }
 
 struct HirLocalTypes<'a> {
@@ -266,76 +366,41 @@ struct HirLocalTypes<'a> {
 }
 
 impl HirLocalTypes<'_> {
-    fn root(
-        cancellation: &crate::cancellation::CancellationToken,
-        generic_substitutions: Option<ConcreteGenericSubstitutions>,
-    ) -> Self {
-        Self::root_with_tracking(
-            cancellation,
-            generic_substitutions,
-            NominalDependencyTracking::Disabled,
-            TypeDefinitionDependencyTracking::Disabled,
-            None,
-        )
-    }
-
-    fn collecting_root(
-        cancellation: &crate::cancellation::CancellationToken,
-    ) -> (Self, NominalDependencyCollector) {
-        let collector = NominalDependencyCollector::default();
-        let locals = Self::root_with_tracking(
-            cancellation,
-            None,
-            NominalDependencyTracking::Collect(collector.clone()),
-            TypeDefinitionDependencyTracking::Disabled,
-            None,
-        );
-        (locals, collector)
-    }
-
     fn collecting_type_definition_dependencies(
         cancellation: &crate::cancellation::CancellationToken,
     ) -> (Self, TypeDefinitionDependencyCollector) {
         let collector = TypeDefinitionDependencyCollector::default();
         let locals = Self::root_with_tracking(
             cancellation,
-            None,
-            NominalDependencyTracking::Disabled,
             TypeDefinitionDependencyTracking::Collect(collector.clone()),
             None,
         );
         (locals, collector)
     }
 
-    fn root_with_materialized_shapes(
+    fn root_with_expression_facts(
         cancellation: &crate::cancellation::CancellationToken,
-        collector: MaterializedShapeCollector,
-        owner: Option<ResolvedDeclName>,
+        collector: ExpressionFactCollector,
+        root: ExprId,
     ) -> Self {
         Self::root_with_tracking(
             cancellation,
-            None,
-            NominalDependencyTracking::Disabled,
             TypeDefinitionDependencyTracking::Disabled,
-            Some((collector, owner)),
+            Some((collector, root)),
         )
     }
 
     fn root_with_tracking(
         cancellation: &crate::cancellation::CancellationToken,
-        generic_substitutions: Option<ConcreteGenericSubstitutions>,
-        nominal_dependencies: NominalDependencyTracking,
         type_definition_dependencies: TypeDefinitionDependencyTracking,
-        materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
+        expression_facts: Option<(ExpressionFactCollector, ExprId)>,
     ) -> Self {
         Self {
             bindings: hir::LocalEnv::root(),
             control: Rc::new(HirInferenceControl {
                 cancellation: cancellation.clone(),
-                generic_substitutions,
-                nominal_dependencies,
                 type_definition_dependencies,
-                materialized_shapes,
+                expression_facts,
             }),
         }
     }
@@ -347,8 +412,38 @@ impl HirLocalTypes<'_> {
             .map_err(GraphcalError::from)
     }
 
-    fn generic_substitutions(&self) -> Option<&ConcreteGenericSubstitutions> {
-        self.control.generic_substitutions.as_ref()
+    fn retain_static_index(
+        &self,
+        expr: &hir::Expr,
+        operand: &hir::Expr,
+        axis: &IndexTypeRef,
+        position: u64,
+        usage: crate::tir::expression_facts::StaticIndexUse,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        if let Some((collector, _)) = &self.control.expression_facts {
+            let id = |expr: &hir::Expr| {
+                expr.id().cloned().map_err(|error| {
+                    GraphcalError::internal_error(
+                        error.to_string(),
+                        src,
+                        DiagnosticAnchor::Source(expr.span),
+                    )
+                })
+            };
+            collector
+                .static_indexes
+                .borrow_mut()
+                .entry(id(expr)?)
+                .or_default()
+                .push(crate::tir::expression_facts::StaticIndexRequirement {
+                    operand: id(operand)?,
+                    axis: axis.clone(),
+                    position,
+                    usage,
+                });
+        }
+        Ok(())
     }
 
     fn get(&self, id: hir::LocalId) -> Option<&InferredType> {
@@ -398,7 +493,24 @@ fn check_type_override_dependency(
     actual: &ResolvedStructTypeName,
     nominal_use: TypeNominalUse<'_>,
 ) -> Result<(), GraphcalError> {
-    local_types.control.nominal_dependencies.record_type(actual);
+    if let Some((collector, root)) = &local_types.control.expression_facts {
+        collector.observe(
+            root,
+            match nominal_use {
+                TypeNominalUse::Field { field, .. } => NominalObservation::Field {
+                    identity: actual.clone(),
+                    field: field.clone(),
+                },
+                TypeNominalUse::Constructor { constructor, .. } => {
+                    NominalObservation::Constructor {
+                        identity: actual.clone(),
+                        constructor: constructor.clone(),
+                    }
+                }
+                TypeNominalUse::TypeArgument => NominalObservation::TypeArgument(actual.clone()),
+            },
+        );
+    }
     if let Some(span) = nominal_use.definition_span() {
         local_types
             .control
@@ -461,10 +573,18 @@ fn check_index_override_dependency(
     actual: &IndexTypeRef,
     nominal_use: IndexNominalUse<'_>,
 ) -> Result<(), GraphcalError> {
-    local_types
-        .control
-        .nominal_dependencies
-        .record_index(actual);
+    if let Some((collector, root)) = &local_types.control.expression_facts {
+        collector.observe(
+            root,
+            match nominal_use {
+                IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
+                    identity: actual.clone(),
+                    variant: variant.clone(),
+                },
+                IndexNominalUse::TypeArgument => NominalObservation::IndexArgument(actual.clone()),
+            },
+        );
+    }
     let Some(owner_decl) = owner_decl else {
         return Ok(());
     };
@@ -592,31 +712,7 @@ fn check_hir_type_override_dependencies(
     }
 }
 
-/// Infer a HIR expression.
-pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    infer_hir_type_with_owner_and_cancellation(
-        expr,
-        owner_decl_name,
-        declared_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
+pub(in crate::tir::dim_check) fn infer_hir_type_with_expression_facts_and_cancellation(
     expr: &hir::Expr,
     owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -626,37 +722,18 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
+    collector: ExpressionFactCollector,
 ) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::root(cancellation, None);
-    infer_hir_type(
-        expr,
-        owner_decl_name,
-        declared_types,
-        &locals,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )
-}
-
-pub(in crate::tir::dim_check) fn infer_hir_type_with_materialized_shapes_and_cancellation(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-    collector: MaterializedShapeCollector,
-) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::root_with_materialized_shapes(
+    let locals = HirLocalTypes::root_with_expression_facts(
         cancellation,
         collector,
-        owner_decl_name.cloned(),
+        expr.id()
+            .map_err(|error| GraphcalError::InternalError {
+                message: error.to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            })?
+            .clone(),
     );
     infer_hir_type(
         expr,
@@ -671,39 +748,13 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_materialized_shapes_and_can
     )
 }
 
-pub(in crate::tir::dim_check) fn infer_hir_type_with_nominal_dependencies_and_cancellation(
-    expr: &hir::Expr,
-    owner_decl_name: &ResolvedDeclName,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(InferredType, HashSet<NominalOverrideIdentity>), GraphcalError> {
-    let (locals, collector) = HirLocalTypes::collecting_root(cancellation);
-    let inferred = infer_hir_type(
-        expr,
-        Some(owner_decl_name),
-        declared_types,
-        &locals,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-    Ok((inferred, collector.snapshot()))
-}
-
 fn contains_type_definition_observation(expr: &hir::Expr) -> bool {
     let mut found = false;
     hir::visit_expr(expr, &mut |candidate| {
         if found {
             return;
         }
-        found = match &candidate.kind {
+        found = match candidate.kind() {
             hir::ExprKind::FieldAccess { .. } | hir::ExprKind::ConstructorCall { .. } => true,
             hir::ExprKind::ConstRef(target) => {
                 matches!(&target.value, hir::ConstRef::Constructor(_))
@@ -804,7 +855,7 @@ fn infer_hir_type_inner(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let inferred = match &expr.kind {
+    let inferred = match expr.kind() {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before TIR, so inference never sees one.
         hir::ExprKind::Error { .. } => {
@@ -1097,6 +1148,7 @@ fn infer_hir_type_inner(
             axis_span,
             arg,
         } => infer_hir_key_form(
+            expr,
             *kind,
             axis,
             *axis_span,
@@ -1144,8 +1196,8 @@ fn infer_hir_type_inner(
             src,
         )?,
     };
-    if let Some((collector, owner)) = &local_types.control.materialized_shapes {
-        collector.record(owner.as_ref(), expr, &inferred, tir, src)?;
+    if let Some((collector, _)) = &local_types.control.expression_facts {
+        collector.record(expr, &inferred, dag, tir, src)?;
     }
     Ok(inferred)
 }
@@ -1289,7 +1341,6 @@ fn infer_hir_const_ref(
                 registry,
                 src,
                 target.span,
-                None,
             )?;
             Ok(InferredType::Struct(
                 InferredStructType::from_resolved(target_def.owning_type.clone()),
@@ -2329,8 +2380,8 @@ fn infer_hir_datetime_constructor(
                 });
             }
             let first_is_valid = match args.len() {
-                1 => matches!(args[0].kind, hir::ExprKind::OffsetDateTimeLiteral(_)),
-                2 => matches!(args[0].kind, hir::ExprKind::ZonedDateTimeLiteral(_)),
+                1 => matches!(args[0].kind(), hir::ExprKind::OffsetDateTimeLiteral(_)),
+                2 => matches!(args[0].kind(), hir::ExprKind::ZonedDateTimeLiteral(_)),
                 _ => false,
             };
             if !first_is_valid {
@@ -2352,7 +2403,7 @@ fn infer_hir_datetime_constructor(
                     span: args[0].span.into(),
                 });
             }
-            if args.len() == 2 && !matches!(args[1].kind, hir::ExprKind::IanaTimeZoneLiteral(_)) {
+            if args.len() == 2 && !matches!(args[1].kind(), hir::ExprKind::IanaTimeZoneLiteral(_)) {
                 let found = infer_arg(
                     &args[1],
                     declared_types,
@@ -2372,16 +2423,13 @@ fn infer_hir_datetime_constructor(
                 });
             }
             let resolved_timezone_matches_argument = match args {
-                [
-                    hir::Expr {
-                        kind: hir::ExprKind::ZonedDateTimeLiteral(datetime),
-                        ..
-                    },
-                    hir::Expr {
-                        kind: hir::ExprKind::IanaTimeZoneLiteral(time_zone),
-                        ..
-                    },
-                ] => datetime.time_zone() == time_zone,
+                [datetime, time_zone] => match (datetime.kind(), time_zone.kind()) {
+                    (
+                        hir::ExprKind::ZonedDateTimeLiteral(datetime),
+                        hir::ExprKind::IanaTimeZoneLiteral(time_zone),
+                    ) => datetime.time_zone() == time_zone,
+                    _ => true,
+                },
                 _ => true,
             };
             if !resolved_timezone_matches_argument {
@@ -2406,7 +2454,7 @@ fn infer_hir_datetime_constructor(
                     span: span.into(),
                 });
             }
-            if !matches!(args[0].kind, hir::ExprKind::CivilDateTimeLiteral(_)) {
+            if !matches!(args[0].kind(), hir::ExprKind::CivilDateTimeLiteral(_)) {
                 let found = infer_arg(
                     &args[0],
                     declared_types,
@@ -2569,7 +2617,7 @@ use super::rules::{self, Operand};
 
 fn try_const_int(expr: &hir::Expr) -> Option<i64> {
     use crate::desugar::desugared_ast::BinOp;
-    match &expr.kind {
+    match expr.kind() {
         hir::ExprKind::Integer(n) => Some(*n),
         hir::ExprKind::UnaryOp {
             op: UnaryOp::Neg,
@@ -2677,24 +2725,9 @@ pub(in crate::tir::dim_check) fn hir_nat_to_linear_form(
 
 fn resolve_hir_nat_form(
     expr: &hir::NatExpr,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<NatPolyForm, GraphcalError> {
-    let form = hir_nat_to_linear_form(expr)
-        .map_err(|error| nat_overflow_error(error, src, expr.span()))?;
-    let Some(substitutions) = substitutions else {
-        return Ok(form);
-    };
-    form.evaluate(&substitutions.bindings().nats)
-        .map(NatPolyForm::from_constant)
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "Nat expression `{}` could not be concretely instantiated",
-                form.format()
-            ),
-            src: src.clone(),
-            span: expr.span().into(),
-        })
+    hir_nat_to_linear_form(expr).map_err(|error| nat_overflow_error(error, src, expr.span()))
 }
 
 fn nat_overflow_error(
@@ -2729,6 +2762,7 @@ fn finite_index_error(
 /// quantity argument.
 #[expect(clippy::too_many_arguments, reason = "expression inference context")]
 fn infer_hir_key_form(
+    expr: &hir::Expr,
     kind: crate::syntax::ast::KeyFormKind,
     axis: &hir::expr::ForBindingIndex,
     axis_span: Span,
@@ -2770,7 +2804,7 @@ fn infer_hir_key_form(
             (identity, finite_form)
         }
         hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-            let form = resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
+            let form = resolve_hir_nat_form(cardinality, src)?;
             let identity = InferredIndex::from_finite_index_form(form.clone())
                 .map_err(|err| finite_index_error(err, src, *span))?;
             (identity, Some(form))
@@ -2826,6 +2860,20 @@ fn infer_hir_key_form(
                     });
                 }
             }
+            local_types.retain_static_index(
+                expr,
+                arg,
+                index_identity.type_ref(),
+                u64::try_from(position).map_err(|_| {
+                    GraphcalError::internal_error(
+                        "checked position is negative",
+                        src,
+                        DiagnosticAnchor::Source(arg.span),
+                    )
+                })?,
+                crate::tir::expression_facts::StaticIndexUse::Key,
+                src,
+            )?;
             Ok(InferredType::Key(index_identity))
         }
         KeyFormKind::Fin => {
@@ -2916,8 +2964,7 @@ fn infer_hir_for_comp(
                 InferredType::Key(index_identity)
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form =
-                    resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
+                let form = resolve_hir_nat_form(cardinality, src)?;
                 InferredType::Key(
                     InferredIndex::from_finite_index_form(form)
                         .map_err(|err| finite_index_error(err, src, *span))?,
@@ -2943,8 +2990,7 @@ fn infer_hir_for_comp(
                 InferredIndex::from_resolved(index.value.clone())
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form =
-                    resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
+                let form = resolve_hir_nat_form(cardinality, src)?;
                 InferredIndex::from_finite_index_form(form)
                     .map_err(|err| finite_index_error(err, src, *span))?
             }
@@ -3190,7 +3236,16 @@ fn infer_hir_index_access(
                                 span: index_expr.span.into(),
                             });
                         }
-                        check_constant_finite_index_index(index_expr, &index_form, src)?;
+                        let position =
+                            check_constant_finite_index_index(index_expr, &index_form, src)?;
+                        local_types.retain_static_index(
+                            expr,
+                            index_expr,
+                            index.type_ref(),
+                            position,
+                            crate::tir::expression_facts::StaticIndexUse::Selection,
+                            src,
+                        )?;
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -3214,10 +3269,14 @@ fn check_constant_finite_index_index(
     index_expr: &hir::Expr,
     index_form: &NatPolyForm,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let Some(index) = try_const_int(index_expr) else {
-        return Ok(());
-    };
+) -> Result<u64, GraphcalError> {
+    let index = try_const_int(index_expr).ok_or_else(|| {
+        GraphcalError::internal_error(
+            "static selection has no checked constant position",
+            src,
+            DiagnosticAnchor::Source(index_expr.span),
+        )
+    })?;
     let Ok(index_u64) = u64::try_from(index) else {
         return Err(GraphcalError::EvalError {
             message: format!("index expression evaluated to negative value: {index}"),
@@ -3226,7 +3285,7 @@ fn check_constant_finite_index_index(
         });
     };
     if !index_form.is_constant() {
-        return Ok(());
+        return Ok(index_u64);
     }
     let size = index_form.constant();
     if index_u64 >= size {
@@ -3239,7 +3298,7 @@ fn check_constant_finite_index_index(
             span: index_expr.span.into(),
         });
     }
-    Ok(())
+    Ok(index_u64)
 }
 
 /// Reject `(expr -> u) -> v` and its timezone-display analogues (#648 B2).
@@ -3254,7 +3313,7 @@ fn reject_nested_conversion(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     if matches!(
-        inner.kind,
+        inner.kind(),
         hir::ExprKind::Convert { .. } | hir::ExprKind::DisplayTimezone { .. }
     ) {
         return Err(GraphcalError::NestedConversion {
@@ -3446,7 +3505,7 @@ fn generic_substitution_prefix(
     Ok(subs)
 }
 
-fn concrete_generic_substitutions(
+pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
     type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     src: &NamedSource<Arc<String>>,
@@ -3464,7 +3523,17 @@ fn concrete_generic_substitutions(
             span: span.into(),
         });
     }
-    generic_substitution_prefix(type_def, type_args, src, span).map(ConcreteGenericSubstitutions)
+    let values = generic_substitution_prefix(type_def, type_args, src, span)?;
+    let nats = type_def
+        .generic_params()
+        .iter()
+        .zip(type_args)
+        .filter_map(|(parameter, arg)| match arg {
+            InferredGenericArg::Nat(form) => Some((parameter.id().clone(), form.constant())),
+            _ => None,
+        })
+        .collect();
+    Ok(ConcreteGenericSubstitutions { values, nats })
 }
 
 fn inferred_index_is_concrete(index: &InferredIndex) -> bool {
@@ -3534,14 +3603,30 @@ struct GenericSubstitutions {
 /// Complete, sort-checked, concrete bindings for one nominal application.
 ///
 /// This wrapper can only be constructed after exact arity, sort, and
-/// concreteness validation, so instantiated field-bound inference cannot be
-/// called with a partial generic environment.
+/// concreteness validation. Nat substitutions retain their lexical owner.
 #[derive(Clone)]
-struct ConcreteGenericSubstitutions(GenericSubstitutions);
+pub(in crate::tir::dim_check) struct ConcreteGenericSubstitutions {
+    values: GenericSubstitutions,
+    nats: HashMap<crate::hir::types::GenericParamId, u64>,
+}
 
 impl ConcreteGenericSubstitutions {
     const fn bindings(&self) -> &GenericSubstitutions {
-        &self.0
+        &self.values
+    }
+
+    pub(in crate::tir::dim_check) const fn nats(
+        &self,
+    ) -> &HashMap<crate::hir::types::GenericParamId, u64> {
+        &self.nats
+    }
+
+    pub(in crate::tir::dim_check) fn field_type(
+        &self,
+        resolved: &crate::tir::typed::ResolvedTypeExpr,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<InferredType, GraphcalError> {
+        substitute_resolved_type_with_type_params(resolved, self.bindings(), src)
     }
 }
 
@@ -3602,273 +3687,6 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
             })?;
     let subs = concrete_generic_substitutions(type_def, type_args, src, span)?;
     substitute_resolved_type_with_type_params(resolved, subs.bindings(), src)
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct ConcreteStructApplicationKey {
-    type_name: InferredStructType,
-    type_args: Vec<InferredGenericArg>,
-}
-
-struct ConcreteStructApplication<'a> {
-    key: ConcreteStructApplicationKey,
-    type_def: &'a NominalTypeDef,
-    substitutions: ConcreteGenericSubstitutions,
-}
-
-impl<'a> ConcreteStructApplication<'a> {
-    fn new(
-        type_name: &InferredStructType,
-        type_args: &[InferredGenericArg],
-        type_def: &'a NominalTypeDef,
-        src: &NamedSource<Arc<String>>,
-        span: Span,
-    ) -> Result<Self, GraphcalError> {
-        Ok(Self {
-            key: ConcreteStructApplicationKey {
-                type_name: type_name.clone(),
-                type_args: type_args.to_vec(),
-            },
-            type_def,
-            substitutions: concrete_generic_substitutions(type_def, type_args, src, span)?,
-        })
-    }
-}
-
-struct ConcreteObligationContext<'a> {
-    dag: &'a crate::tir::typed::DagTIR,
-    tir: &'a crate::tir::typed::TIR,
-    registry: &'a FormattingRegistry,
-    builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
-    src: &'a NamedSource<Arc<String>>,
-    span: Span,
-    cancellation: &'a crate::cancellation::CancellationToken,
-}
-
-pub(in crate::tir::dim_check) fn validate_concrete_type_obligations(
-    inferred: &InferredType,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
-    let ctx = ConcreteObligationContext {
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-        span,
-        cancellation,
-    };
-    validate_concrete_type_obligations_inner(inferred, &ctx, &mut Vec::new())
-}
-
-fn validate_concrete_type_obligations_inner(
-    inferred: &InferredType,
-    ctx: &ConcreteObligationContext<'_>,
-    stack: &mut Vec<ConcreteStructApplicationKey>,
-) -> Result<(), GraphcalError> {
-    ctx.cancellation.checkpoint()?;
-    validate_inferred_materialized_shape(inferred, ctx.tir, ctx.src, ctx.span)?;
-    match inferred {
-        InferredType::Struct(type_name, type_args) => {
-            for arg in type_args {
-                if let InferredGenericArg::Type(type_arg) = arg {
-                    validate_concrete_type_obligations_inner(type_arg, ctx, stack)?;
-                }
-            }
-            let type_def = ctx
-                .tir
-                .struct_type_def(type_name.resolved())
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: ctx.src.clone(),
-                    span: ctx.span.into(),
-                })?;
-            let application =
-                ConcreteStructApplication::new(type_name, type_args, type_def, ctx.src, ctx.span)?;
-            let field_types = validate_concrete_field_obligations(&application, ctx)?;
-
-            if let Some(ancestor) = stack
-                .iter()
-                .find(|ancestor| ancestor.type_name == application.key.type_name)
-            {
-                if ancestor == &application.key {
-                    return Ok(());
-                }
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "recursive generic type `{}` changes its arguments; concrete field obligations cannot be discharged finitely",
-                        application.key.type_name
-                    ),
-                    src: ctx.src.clone(),
-                    span: ctx.span.into(),
-                });
-            }
-
-            stack.push(application.key);
-            for field_type in field_types {
-                validate_concrete_type_obligations_inner(&field_type, ctx, stack)?;
-            }
-            stack.pop();
-            Ok(())
-        }
-        InferredType::Indexed { element, index } => {
-            validate_concrete_index(index, ctx)?;
-            validate_concrete_type_obligations_inner(element, ctx, stack)
-        }
-        InferredType::Key(index) | InferredType::IndexArg(index) => {
-            validate_concrete_index(index, ctx)
-        }
-        InferredType::Quantity(_)
-        | InferredType::Complex(_)
-        | InferredType::Bool
-        | InferredType::Int
-        | InferredType::Datetime(_) => Ok(()),
-    }
-}
-
-fn validate_concrete_index(
-    index: &InferredIndex,
-    ctx: &ConcreteObligationContext<'_>,
-) -> Result<(), GraphcalError> {
-    let Some(form) = index.finite_index_form() else {
-        return Ok(());
-    };
-    if !form.is_constant() {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "unresolved finite-index obligation `Fin({})`",
-                form.format()
-            ),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        });
-    }
-    if form.constant() == 0 {
-        return Err(GraphcalError::EvalError {
-            message: "Fin(0) is invalid: finite indexes must contain at least one key".to_string(),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        });
-    }
-    Ok(())
-}
-
-fn validate_concrete_field_obligations(
-    application: &ConcreteStructApplication<'_>,
-    ctx: &ConcreteObligationContext<'_>,
-) -> Result<Vec<InferredType>, GraphcalError> {
-    let Some(members) = application.type_def.union_members() else {
-        return Ok(Vec::new());
-    };
-    members
-        .iter()
-        .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
-        .map(|(member, field)| {
-            ctx.cancellation.checkpoint()?;
-            let key =
-                resolved_type_field_key(application.key.type_name.resolved(), member, field.name());
-            let field_semantics = ctx.dag.semantic.type_defs.field(&key).ok_or_else(|| {
-                GraphcalError::InternalError {
-                    message: format!(
-                        "semantic type metadata missing field `{}.{}`",
-                        member.name(),
-                        field.name()
-                    ),
-                    src: ctx.src.clone(),
-                    span: ctx.span.into(),
-                }
-            })?;
-            let field_type = substitute_resolved_type_with_type_params(
-                field_semantics.resolved_type(),
-                application.substitutions.bindings(),
-                ctx.src,
-            )?;
-            if !field_semantics.domain_bounds().is_empty() {
-                validate_instantiated_field_bounds(
-                    application,
-                    member,
-                    field,
-                    field_semantics.domain_bounds(),
-                    &field_type,
-                    ctx,
-                )?;
-            }
-            Ok(field_type)
-        })
-        .collect()
-}
-
-fn validate_instantiated_field_bounds(
-    application: &ConcreteStructApplication<'_>,
-    member: &NominalConstructor,
-    field: &crate::hir::NominalField,
-    bounds: &[crate::tir::typed::ResolvedDomainBound],
-    field_type: &InferredType,
-    ctx: &ConcreteObligationContext<'_>,
-) -> Result<(), GraphcalError> {
-    let expected = super::super::expected_bound_from_inferred(field_type).ok_or_else(|| {
-        GraphcalError::InvalidDomainTarget {
-            type_kind: format_inferred_type(field_type, ctx.registry),
-            src: bounds
-                .first()
-                .map_or_else(|| ctx.src.clone(), |bound| bound.src.clone()),
-            span: bounds.first().map_or(ctx.span, |bound| bound.span).into(),
-        }
-    })?;
-    let display_name = if member.name().as_str() == application.type_def.name().as_str() {
-        format!("{}.{}", application.type_def.name(), field.name())
-    } else {
-        format!(
-            "{}.{}.{}",
-            application.type_def.name(),
-            member.name(),
-            field.name()
-        )
-    };
-
-    let definition_dag = ctx
-        .tir
-        .dag_registry()
-        .get(application.key.type_name.resolved().owner())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "field-constraint owner `{}` has no checked DAG",
-                application.key.type_name.resolved().owner()
-            ),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        })?;
-    for bound in bounds {
-        ctx.cancellation.checkpoint()?;
-        let definition_types = definition_dag.build_declared_types(&bound.src)?;
-        let locals = HirLocalTypes::root(ctx.cancellation, Some(application.substitutions.clone()));
-        let inferred = infer_hir_type(
-            &bound.value,
-            None,
-            &definition_types,
-            &locals,
-            definition_dag,
-            ctx.tir,
-            ctx.registry,
-            ctx.builtin_fns,
-            &bound.src,
-        )?;
-        super::super::check_one_bound_with_display_name(
-            &display_name,
-            bound,
-            &inferred,
-            &expected,
-            ctx.registry,
-            &bound.src,
-        )?;
-    }
-    Ok(())
 }
 
 fn record_member(type_def: &NominalTypeDef) -> Option<&NominalConstructor> {
@@ -3974,7 +3792,6 @@ fn infer_hir_generic_type_arg(
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredType, GraphcalError> {
     match &type_expr.kind {
         hir::TypeExprKind::Builtin(hir::BuiltinType::Dimensionless) => {
@@ -3986,37 +3803,32 @@ fn infer_hir_generic_type_arg(
             Ok(InferredType::Datetime(*scale))
         }
         hir::TypeExprKind::DimExpr(dim_expr) => {
-            infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredType::Quantity)
+            infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Quantity)
         }
         hir::TypeExprKind::Complex(dimension) => match dimension {
             hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
             hir::DimArg::Expr(dim_expr) => {
-                infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredType::Complex)
+                infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Complex)
             }
         },
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
-            inferred_index_from_type_arg(index, src, substitutions)?,
+            inferred_index_from_type_arg(index, src)?,
         )),
-        hir::TypeExprKind::Key(index) => Ok(InferredType::Key(inferred_index_from_type_arg(
-            index,
-            src,
-            substitutions,
-        )?)),
+        hir::TypeExprKind::Key(index) => {
+            Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
+        }
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
             InferredStructType::from_resolved(name.value.clone()),
             vec![],
         )),
-        hir::TypeExprKind::GenericTypeParam(param) => substitutions
-            .and_then(|substitutions| substitutions.bindings().types.get(&param.value.name))
-            .cloned()
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "generic type parameter `{}` is not concretely bound",
-                    param.value.name
-                ),
-                src: src.clone(),
-                span: param.span.into(),
-            }),
+        hir::TypeExprKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic type parameter `{}` is not concretely bound",
+                param.value.name
+            ),
+            src: src.clone(),
+            span: param.span.into(),
+        }),
         hir::TypeExprKind::TypeApplication { name, generic_args } => {
             let type_def = dag
                 .semantic
@@ -4042,15 +3854,13 @@ fn infer_hir_generic_type_arg(
                     registry,
                     src,
                     name.span,
-                    substitutions,
                 )?,
             ))
         }
         hir::TypeExprKind::Indexed { base, indexes } => {
-            let mut result =
-                infer_hir_generic_type_arg(base, dag, tir, registry, src, substitutions)?;
+            let mut result = infer_hir_generic_type_arg(base, dag, tir, registry, src)?;
             for index in indexes.iter().rev() {
-                let inferred_index = inferred_index_from_type_arg(index, src, substitutions)?;
+                let inferred_index = inferred_index_from_type_arg(index, src)?;
                 result = InferredType::Indexed {
                     element: Box::new(result),
                     index: inferred_index,
@@ -4067,23 +3877,20 @@ fn infer_hir_sorted_generic_arg(
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredGenericArg, GraphcalError> {
     match arg {
         hir::GenericArg::Dim(hir::DimArg::Dimensionless(_)) => {
             Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
         }
         hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
-            infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredGenericArg::Dim)
+            infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredGenericArg::Dim)
         }
         hir::GenericArg::Index(index) => {
-            inferred_index_from_type_arg(index, src, substitutions).map(InferredGenericArg::Index)
+            inferred_index_from_type_arg(index, src).map(InferredGenericArg::Index)
         }
-        hir::GenericArg::Nat(nat) => {
-            resolve_hir_nat_form(nat, substitutions, src).map(InferredGenericArg::Nat)
-        }
+        hir::GenericArg::Nat(nat) => resolve_hir_nat_form(nat, src).map(InferredGenericArg::Nat),
         hir::GenericArg::Type(type_expr) => {
-            infer_hir_generic_type_arg(type_expr, dag, tir, registry, src, substitutions)
+            infer_hir_generic_type_arg(type_expr, dag, tir, registry, src)
                 .map(InferredGenericArg::Type)
         }
     }
@@ -4092,24 +3899,19 @@ fn infer_hir_sorted_generic_arg(
 fn inferred_index_from_type_arg(
     index: &hir::IndexRef,
     src: &NamedSource<Arc<String>>,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredIndex, GraphcalError> {
     match index {
         hir::IndexRef::Concrete(name) => Ok(InferredIndex::from_resolved(name.value.clone())),
-        hir::IndexRef::GenericParam(param) => substitutions
-            .and_then(|substitutions| substitutions.bindings().indexes.get(&param.value.name))
-            .cloned()
-            .map(InferredIndex::from_ref)
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "generic index parameter `{}` is not concretely bound",
-                    param.value.name
-                ),
-                src: src.clone(),
-                span: param.span.into(),
-            }),
+        hir::IndexRef::GenericParam(param) => Err(GraphcalError::EvalError {
+            message: format!(
+                "generic index parameter `{}` is not concretely bound",
+                param.value.name
+            ),
+            src: src.clone(),
+            span: param.span.into(),
+        }),
         hir::IndexRef::Finite(nat_expr) => {
-            let form = resolve_hir_nat_form(nat_expr, substitutions, src)?;
+            let form = resolve_hir_nat_form(nat_expr, src)?;
             InferredIndex::from_finite_index_form(form)
                 .map_err(|err| finite_index_error(err, src, nat_expr.span()))
         }
@@ -4120,7 +3922,6 @@ fn infer_hir_dim_expr_arg(
     dim_expr: &hir::DimExpr,
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<Dimension, GraphcalError> {
     dim_expr
         .terms
@@ -4138,20 +3939,14 @@ fn infer_hir_dim_expr_arg(
                     (dim, item.term.power, item.term.span)
                 }
                 hir::DimTermTarget::GenericParam(param) => {
-                    let dim = substitutions
-                        .and_then(|substitutions| {
-                            substitutions.bindings().dims.get(&param.value.name)
-                        })
-                        .cloned()
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!(
-                                "generic dimension parameter `{}` is not concretely bound",
-                                param.value.name
-                            ),
-                            src: src.clone(),
-                            span: param.span.into(),
-                        })?;
-                    (dim, item.term.power, item.term.span)
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "generic dimension parameter `{}` is not concretely bound",
+                            param.value.name
+                        ),
+                        src: src.clone(),
+                        span: param.span.into(),
+                    });
                 }
             };
             let powered = dim
@@ -4237,7 +4032,6 @@ fn infer_hir_constructor_call(
         registry,
         src,
         callee.span,
-        local_types.generic_substitutions(),
     )?;
 
     let def_field_names: std::collections::HashSet<&str> = variant
@@ -4349,34 +4143,6 @@ fn infer_hir_constructor_call(
     ))
 }
 
-pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
-    owning_type: &ResolvedStructTypeName,
-    type_def: &NominalTypeDef,
-    applied_generic_args: &[hir::GenericArg],
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Vec<crate::registry::declared_type::DeclaredGenericArg>, GraphcalError> {
-    resolve_applied_generic_args(
-        owning_type,
-        type_def,
-        applied_generic_args,
-        dag,
-        tir,
-        registry,
-        src,
-        span,
-        None,
-    )
-    .map(|args| {
-        args.iter()
-            .map(crate::registry::declared_type::DeclaredGenericArg::from)
-            .collect()
-    })
-}
-
 fn resolve_applied_generic_args(
     owning_type: &ResolvedStructTypeName,
     type_def: &NominalTypeDef,
@@ -4386,7 +4152,6 @@ fn resolve_applied_generic_args(
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
-    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<Vec<InferredGenericArg>, GraphcalError> {
     if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
         return Ok(Vec::new());
@@ -4415,7 +4180,7 @@ fn resolve_applied_generic_args(
     }
     let mut args = Vec::with_capacity(total_params);
     for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
-        let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src, substitutions)?;
+        let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src)?;
         let matches_sort = matches!(
             (param.constraint(), &inferred),
             (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))

@@ -577,6 +577,11 @@ impl<V> Default for LocalEnv<'_, V> {
 /// An HIR assertion body proven not to contain tolerant-lowering error nodes.
 #[derive(Debug, Clone)]
 pub struct CheckedAssertBody {
+    data: std::sync::Arc<FinishedAssertion>,
+}
+
+#[derive(Debug)]
+struct FinishedAssertion {
     body: AssertBody,
     source_map: crate::expression_source::ExpressionSourceMap,
 }
@@ -585,7 +590,7 @@ impl std::ops::Deref for CheckedAssertBody {
     type Target = AssertBody;
 
     fn deref(&self) -> &Self::Target {
-        &self.body
+        &self.data.body
     }
 }
 
@@ -599,6 +604,13 @@ impl CheckedAssertBody {
 /// An HIR expression proven not to contain tolerant-lowering error nodes.
 #[derive(Debug, Clone)]
 pub struct CheckedExpr {
+    data: std::sync::Arc<FinishedExpression>,
+}
+
+/// Immutable expression and its diagnostic projection travel together. Inherited
+/// defaults can share this source product while specializing independent facts.
+#[derive(Debug)]
+struct FinishedExpression {
     expr: Expr,
     source_map: crate::expression_source::ExpressionSourceMap,
 }
@@ -607,31 +619,49 @@ impl std::ops::Deref for CheckedExpr {
     type Target = Expr;
 
     fn deref(&self) -> &Self::Target {
-        &self.expr
+        &self.data.expr
     }
 }
 
 #[cfg(test)]
 impl CheckedExpr {
     pub(crate) fn into_expr_for_test(self) -> Expr {
-        self.expr
+        self.data.expr.clone()
     }
 
-    pub(crate) fn expr_mut_for_test(&mut self) -> &mut Expr {
-        &mut self.expr
+    pub(crate) fn replace_kind_for_test(&mut self, kind: ExprKind) {
+        *self = Self::finish(Expr::new(kind, self.data.expr.span)).unwrap();
+    }
+
+    /// Change diagnostic projections without changing any semantic node identity.
+    pub(crate) fn map_spans_for_test(&mut self, project: impl Fn(Span) -> Span) {
+        fn apply(expr: &mut Expr, project: &impl Fn(Span) -> Span) {
+            crate::stack::with_stack_growth(|| {
+                expr.span = project(expr.span);
+                visit_expr_children_mut(expr, &mut |child| apply(child, project));
+            });
+        }
+        let mut expr = self.data.expr.clone();
+        apply(&mut expr, &project);
+        let source_map = expression_source_map(std::iter::once(&expr)).unwrap();
+        self.data = std::sync::Arc::new(FinishedExpression { expr, source_map });
     }
 }
 
 impl CheckedExpr {
-    fn finish(mut expr: Expr) -> Result<Self, crate::expression_source::ExpressionSourceError> {
+    pub(super) fn finish(
+        mut expr: Expr,
+    ) -> Result<Self, crate::expression_source::ExpressionSourceError> {
         assign_expression_ids(&mut expr, &mut crate::expression_id::ExprIds::default())?;
         let source_map = expression_source_map(std::iter::once(&expr))?;
-        Ok(Self { expr, source_map })
+        Ok(Self {
+            data: std::sync::Arc::new(FinishedExpression { expr, source_map }),
+        })
     }
 
     #[must_use]
-    pub const fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
-        &self.source_map
+    pub fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+        &self.data.source_map
     }
 }
 
@@ -643,12 +673,14 @@ impl CheckedAssertBody {
         body.expressions_mut()
             .try_for_each(|expr| assign_expression_ids(expr, &mut ids))?;
         let source_map = expression_source_map(body.expressions())?;
-        Ok(Self { body, source_map })
+        Ok(Self {
+            data: std::sync::Arc::new(FinishedAssertion { body, source_map }),
+        })
     }
 
     #[must_use]
-    pub const fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
-        &self.source_map
+    pub fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+        &self.data.source_map
     }
 }
 
@@ -669,10 +701,19 @@ fn expression_source_map<'a>(
     )
 }
 
-/// HIR expression node.
+/// HIR expression node. Identity-bearing clones cannot change their semantics.
+///
+/// ```compile_fail,E0616
+/// use graphcal_compiler::hir::expr::{Expr, ExprKind};
+/// use graphcal_compiler::syntax::span::Span;
+/// let mut expr = Expr::new(ExprKind::Bool(true), Span::new(0, 4));
+/// expr.kind = ExprKind::Bool(false);
+/// ```
 #[derive(Debug)]
 pub struct Expr {
-    pub kind: ExprKind,
+    // Keep the identity/span handle small: the heterogeneous operation payload
+    // must not be copied through every lowering and checking return value.
+    kind: Box<ExprKind>,
     pub span: Span,
     id: Option<crate::expression_id::ExprId>,
 }
@@ -694,12 +735,24 @@ impl Clone for Expr {
 
 impl Expr {
     #[must_use]
-    pub const fn new(kind: ExprKind, span: Span) -> Self {
+    pub fn new(kind: ExprKind, span: Span) -> Self {
         Self {
-            kind,
+            kind: Box::new(kind),
             span,
             id: None,
         }
+    }
+
+    /// Inspect semantics without allowing an identity-bearing clone to be rewritten.
+    #[must_use]
+    pub const fn kind(&self) -> &ExprKind {
+        &self.kind
+    }
+
+    /// Consume the node for reconstruction. `Expr::new` starts without an identity.
+    #[must_use]
+    pub fn into_kind(self) -> ExprKind {
+        *self.kind
     }
 
     /// Identity is available after strict body lowering, never derived from a span.
@@ -948,107 +1001,18 @@ pub fn collect_expr_dependencies(expr: &Expr) -> ExprDependencies {
 }
 
 fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
-    // Recursion choke point: recurses once per tree level (unbounded for
-    // left-nested operator chains).
-    crate::stack::with_stack_growth(|| collect_expr_dependencies_into_inner(expr, deps));
-}
-
-fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies) {
-    match &expr.kind {
-        ExprKind::Error { children } => {
-            for child in children {
-                collect_expr_dependencies_into(child, deps);
-            }
-        }
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::OffsetDateTimeLiteral(_)
-        | ExprKind::CivilDateTimeLiteral(_)
-        | ExprKind::ZonedDateTimeLiteral(_)
-        | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
-        | ExprKind::LocalRef(_)
-        | ExprKind::VariantLiteral(_)
-        | ExprKind::QuantityLiteral { .. } => {}
+    visit_expr(expr, &mut |node| match node.kind() {
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
         }
-        ExprKind::ConstRef(target) => {
-            if let ConstRef::Decl(resolved) = &target.value {
-                deps.const_refs.insert(resolved.clone());
-            }
+        ExprKind::ConstRef(Spanned {
+            value: ConstRef::Decl(target),
+            ..
+        }) => {
+            deps.const_refs.insert(target.clone());
         }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_expr_dependencies_into(lhs, deps);
-            collect_expr_dependencies_into(rhs, deps);
-        }
-        ExprKind::UnaryOp { operand, .. }
-        | ExprKind::Convert { expr: operand, .. }
-        | ExprKind::DisplayTimezone { expr: operand, .. }
-        | ExprKind::FieldAccess { expr: operand, .. } => {
-            collect_expr_dependencies_into(operand, deps);
-        }
-        ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                collect_expr_dependencies_into(arg, deps);
-            }
-        }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_expr_dependencies_into(condition, deps);
-            collect_expr_dependencies_into(then_branch, deps);
-            collect_expr_dependencies_into(else_branch, deps);
-        }
-        ExprKind::ConstructorCall { fields, .. } => {
-            for field in fields {
-                collect_expr_dependencies_into(&field.value, deps);
-            }
-        }
-        ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                collect_expr_dependencies_into(&entry.value, deps);
-            }
-        }
-        ExprKind::ForComp { body, .. } => collect_expr_dependencies_into(body, deps),
-        ExprKind::IndexAccess { expr, args } => {
-            collect_expr_dependencies_into(expr, deps);
-            for arg in args {
-                if let IndexArg::Expr(expr) = arg {
-                    collect_expr_dependencies_into(expr, deps);
-                }
-            }
-        }
-        ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_expr_dependencies_into(source, deps);
-            collect_expr_dependencies_into(init, deps);
-            collect_expr_dependencies_into(body, deps);
-        }
-        ExprKind::Unfold { init, body, .. } => {
-            collect_expr_dependencies_into(init, deps);
-            collect_expr_dependencies_into(body, deps);
-        }
-        ExprKind::KeyForm { arg, .. } => {
-            collect_expr_dependencies_into(arg, deps);
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            collect_expr_dependencies_into(scrutinee, deps);
-            for arm in arms {
-                collect_expr_dependencies_into(&arm.body, deps);
-            }
-        }
-        ExprKind::DagCall { args, .. } => {
-            for arg in args {
-                collect_expr_dependencies_into(&arg.value, deps);
-            }
-        }
-    }
+        _ => {}
+    });
 }
 
 /// One exhaustive child inventory serves both inspection and construction-time walks.
@@ -1086,19 +1050,28 @@ macro_rules! expression_children {
 }
 
 /// Visit immediate expression children, in structural order.
-pub fn visit_expr_children(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
-    expression_children!(&expr.kind, iter, visitor, [&]);
+pub fn visit_expr_children<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+    expression_children!(expr.kind(), iter, visitor, [&]);
 }
 
 fn visit_expr_children_mut(expr: &mut Expr, visitor: &mut impl FnMut(&mut Expr)) {
-    expression_children!(&mut expr.kind, iter_mut, visitor, [&mut]);
+    expression_children!(&mut *expr.kind, iter_mut, visitor, [&mut]);
 }
 
 /// Visit all expression occurrences in pre-order. This does not model evaluation order.
-pub fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+pub fn visit_expr<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
     crate::stack::with_stack_growth(|| {
         visitor(expr);
         visit_expr_children(expr, &mut |child| visit_expr(child, visitor));
+    });
+}
+
+/// Visit descendants before their parent, so dependency facts can be composed
+/// in one pass without cloning an intermediate occurrence-ID ordering.
+pub fn visit_expr_postorder<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+    crate::stack::with_stack_growth(|| {
+        visit_expr_children(expr, &mut |child| visit_expr_postorder(child, visitor));
+        visitor(expr);
     });
 }
 
@@ -1124,7 +1097,7 @@ pub fn find_dag_call(expr: &Expr) -> Option<(DagId, Span)> {
     let mut found = None;
     visit_expr(expr, &mut |candidate| {
         if found.is_none()
-            && let ExprKind::DagCall { target, .. } = &candidate.kind
+            && let ExprKind::DagCall { target, .. } = candidate.kind()
         {
             found = Some((target.value.clone(), candidate.span));
         }
@@ -1252,73 +1225,16 @@ impl std::fmt::Display for ExternFnRef {
 /// scales) use this to reject them with a spanned diagnostic.
 #[must_use]
 pub(crate) fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
-    // Recursion choke point: recurses once per tree level.
-    crate::stack::with_stack_growth(|| find_extern_call_inner(expr))
-}
-
-fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
-    match &expr.kind {
-        ExprKind::Error { children } => children.iter().find_map(find_extern_call),
-        ExprKind::Number(_)
-        | ExprKind::Integer(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::OffsetDateTimeLiteral(_)
-        | ExprKind::CivilDateTimeLiteral(_)
-        | ExprKind::ZonedDateTimeLiteral(_)
-        | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
-        | ExprKind::GraphRef(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::LocalRef(_)
-        | ExprKind::QuantityLiteral { .. }
-        | ExprKind::VariantLiteral(_) => None,
-        ExprKind::FnCall { callee, args, .. } => {
-            if let FunctionRef::External(ext) = &callee.value {
-                return Some((ext, callee.span));
-            }
-            args.iter().find_map(find_extern_call)
+    let mut found = None;
+    visit_expr(expr, &mut |candidate| {
+        if found.is_none()
+            && let ExprKind::FnCall { callee, .. } = candidate.kind()
+            && let FunctionRef::External(function) = &callee.value
+        {
+            found = Some((function, callee.span));
         }
-        ExprKind::BinOp { lhs, rhs, .. } => find_extern_call(lhs).or_else(|| find_extern_call(rhs)),
-        ExprKind::UnaryOp { operand, .. }
-        | ExprKind::Convert { expr: operand, .. }
-        | ExprKind::DisplayTimezone { expr: operand, .. }
-        | ExprKind::FieldAccess { expr: operand, .. } => find_extern_call(operand),
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => find_extern_call(condition)
-            .or_else(|| find_extern_call(then_branch))
-            .or_else(|| find_extern_call(else_branch)),
-        ExprKind::ConstructorCall { fields, .. } => fields
-            .iter()
-            .find_map(|field| find_extern_call(&field.value)),
-        ExprKind::MapLiteral { entries } => entries
-            .iter()
-            .find_map(|entry| find_extern_call(&entry.value)),
-        ExprKind::ForComp { body, .. } => find_extern_call(body),
-        ExprKind::IndexAccess { expr: inner, args } => find_extern_call(inner).or_else(|| {
-            args.iter().find_map(|arg| match arg {
-                IndexArg::Expr(e) => find_extern_call(e),
-                IndexArg::Variant(_) | IndexArg::Var(_) => None,
-            })
-        }),
-        ExprKind::Scan {
-            source, init, body, ..
-        } => find_extern_call(source)
-            .or_else(|| find_extern_call(init))
-            .or_else(|| find_extern_call(body)),
-        ExprKind::Unfold { init, body, .. } => {
-            find_extern_call(init).or_else(|| find_extern_call(body))
-        }
-        ExprKind::KeyForm { arg, .. } => find_extern_call(arg),
-        ExprKind::Match { scrutinee, arms } => find_extern_call(scrutinee)
-            .or_else(|| arms.iter().find_map(|arm| find_extern_call(&arm.body))),
-        ExprKind::DagCall { args, .. } => args
-            .iter()
-            .find_map(|binding| find_extern_call(&binding.value)),
-    }
+    });
+    found
 }
 
 /// A lowered assertion body.
@@ -2538,7 +2454,7 @@ impl<'a> ExprLowerer<'a> {
             _ => self.lower_expr(time_zone_arg),
         };
 
-        let resolution_inputs = match (&datetime.kind, &time_zone.kind) {
+        let resolution_inputs = match (datetime.kind(), time_zone.kind()) {
             (
                 ExprKind::CivilDateTimeLiteral(datetime),
                 ExprKind::IanaTimeZoneLiteral(time_zone),
@@ -3141,7 +3057,7 @@ mod tests {
             assert_eq!(body.source_map().span(expr.id().unwrap()).unwrap(), span);
         });
         assert_eq!(ids.len(), 4);
-        let mut shifted = body.expr.clone();
+        let mut shifted = (*body).clone();
         shifted.span = Span::new(99, 1);
         assert_eq!(shifted.id().unwrap(), body.id().unwrap());
         assert_eq!(body.source_map().span(shifted.id().unwrap()).unwrap(), span);
@@ -3243,7 +3159,7 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::VariantLiteral(variant) = expr.kind else {
+        let ExprKind::VariantLiteral(variant) = expr.kind() else {
             panic!("expected variant literal, got {expr:?}");
         };
         assert_eq!(variant.variant.index().owner(), &lib_id);
@@ -3278,7 +3194,7 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::QuantityLiteral { unit, .. } = expr.kind else {
+        let ExprKind::QuantityLiteral { unit, .. } = expr.kind() else {
             panic!("expected quantity literal, got {expr:?}");
         };
         let [term] = unit.terms.as_slice() else {
@@ -3307,10 +3223,10 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::ConstRef(target) = expr.kind else {
+        let ExprKind::ConstRef(target) = expr.kind() else {
             panic!("expected const-like ref, got {expr:?}");
         };
-        let ConstRef::Constructor(constructor) = target.value else {
+        let ConstRef::Constructor(constructor) = &target.value else {
             panic!("expected constructor, got {target:?}");
         };
         assert_eq!(constructor.owner(), &lib_id);
@@ -3336,19 +3252,14 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::FnCall { args, .. } = expr.kind else {
+        let ExprKind::FnCall { args, .. } = expr.kind() else {
             panic!("expected function call, got {expr:?}");
         };
-        let [
-            Expr {
-                kind: ExprKind::ZonedDateTimeLiteral(datetime),
-                ..
-            },
-            Expr {
-                kind: ExprKind::IanaTimeZoneLiteral(time_zone),
-                ..
-            },
-        ] = args.as_slice()
+        let [datetime, time_zone] = args.as_slice() else {
+            panic!("expected two arguments, got {args:?}");
+        };
+        let (ExprKind::ZonedDateTimeLiteral(datetime), ExprKind::IanaTimeZoneLiteral(time_zone)) =
+            (datetime.kind(), time_zone.kind())
         else {
             panic!("expected resolved datetime and timezone arguments, got {args:?}");
         };
@@ -3376,20 +3287,15 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::FnCall { callee, args } = expr.kind else {
+        let ExprKind::FnCall { callee, args } = expr.kind() else {
             panic!("expected function call, got {expr:?}");
         };
-        let FunctionRef::Epoch { scale } = callee.value else {
+        let FunctionRef::Epoch { scale } = &callee.value else {
             panic!("expected typed epoch reference, got {callee:?}");
         };
         assert_eq!(scale.value, TimeScale::TT);
-        assert!(matches!(
-            args.as_slice(),
-            [Expr {
-                kind: ExprKind::CivilDateTimeLiteral(_),
-                ..
-            }]
-        ));
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind(), ExprKind::CivilDateTimeLiteral(_)));
     }
 
     #[test]
@@ -3411,13 +3317,13 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::ForComp { bindings, body } = expr.kind else {
+        let ExprKind::ForComp { bindings, body } = expr.kind() else {
             panic!("expected for comp, got {expr:?}");
         };
         let [binding] = bindings.as_slice() else {
             panic!("expected one binding, got {bindings:?}");
         };
-        let ExprKind::LocalRef(local) = body.kind else {
+        let ExprKind::LocalRef(local) = body.kind() else {
             panic!("expected local ref, got {body:?}");
         };
         assert_eq!(binding.local.id, local.value);
@@ -3443,7 +3349,7 @@ mod tests {
         .unwrap()
         .into_expr_for_test();
 
-        let ExprKind::Match { arms, .. } = expr.kind else {
+        let ExprKind::Match { arms, .. } = expr.kind() else {
             panic!("expected match, got {expr:?}");
         };
         let [first, _second] = arms.as_slice() else {
@@ -3462,7 +3368,7 @@ mod tests {
         let [PatternBinding::Bind { local, .. }] = bindings.as_slice() else {
             panic!("expected one field binding, got {bindings:?}");
         };
-        let ExprKind::LocalRef(body_ref) = &first.body.kind else {
+        let ExprKind::LocalRef(body_ref) = first.body.kind() else {
             panic!("expected local ref body, got {:?}", first.body);
         };
         assert_eq!(local.id, body_ref.value);
@@ -3567,7 +3473,7 @@ mod tests {
 
         for (source, expected_children, expected_dependencies) in cases {
             let (expr, diagnostics) = lower_tolerant_node(source, "out");
-            let ExprKind::Error { children } = &expr.kind else {
+            let ExprKind::Error { children } = expr.kind() else {
                 panic!("expected failed parent node, got {expr:?}");
             };
             assert_eq!(children.len(), expected_children, "source: {source}");
@@ -3585,7 +3491,7 @@ mod tests {
         let (expr, diagnostics) =
             lower_tolerant_node("node out: Dimensionless = mystery(also_missing);", "out");
 
-        assert!(matches!(expr.kind, ExprKind::Error { .. }));
+        assert!(matches!(expr.kind(), ExprKind::Error { .. }));
         assert_eq!(diagnostics.len(), 2, "diagnostics: {diagnostics:?}");
         assert!(matches!(
             diagnostics[0],
@@ -3608,7 +3514,7 @@ mod tests {
             "out",
         );
 
-        assert!(matches!(expr.kind, ExprKind::Error { .. }));
+        assert!(matches!(expr.kind(), ExprKind::Error { .. }));
         assert!(diagnostics.iter().any(|error| matches!(
             error,
             ExprLowerError::ModuleResolve {

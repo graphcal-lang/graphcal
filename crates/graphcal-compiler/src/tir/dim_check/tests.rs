@@ -105,6 +105,58 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     (tir, src)
 }
 
+#[test]
+fn contextual_completion_visits_each_owned_or_independent_root_once() {
+    let measurements = [0, 8, 16, 32].map(|depth| {
+        let source = format!(
+            "node value: Dimensionless = {}1.0{};",
+            "-(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let (mut tir, src) = module_aware_tir(&source);
+        infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
+        check_dimensions_tir(&mut tir, &src).unwrap();
+        let visits = infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get);
+        assert_eq!(
+            tir.root().expression_facts().unwrap().records().count(),
+            depth + 1
+        );
+        eprintln!(
+            "unary depth {depth}: {} expressions, {visits} contextual visits",
+            depth + 1
+        );
+        (depth + 1, visits)
+    });
+    assert_eq!(
+        measurements.map(|(_, visits)| visits),
+        measurements.map(|(nodes, _)| nodes)
+    );
+    let (mut tir, src) =
+        module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
+    infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    let count_contextual = |facts: &crate::tir::expression_facts::CheckedExpressionFacts| {
+        facts
+            .records()
+            .filter(|(_, record)| {
+                matches!(
+                    record.fact,
+                    crate::tir::expression_facts::ExpressionFact::Contextual(_)
+                )
+            })
+            .count()
+    };
+    assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
+    assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
+    let types = tir.build_declared_types(&src).unwrap();
+    let node = &tir.root().nodes[0];
+    infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
+    let independent =
+        check_external_value_expr_type(&tir, &types, &node.expr, &types[&node.name], &src).unwrap();
+    assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
+    assert_eq!(count_contextual(&independent), 1);
+}
+
 fn model_port_application(
     source: &str,
 ) -> (
@@ -319,10 +371,56 @@ fn cycle_detection_uses_semantic_dependencies() {
 }
 
 #[test]
+fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
+    let source =
+        "node result: Dimensionless = sum(for p: Fin(2) { 1.0 }) + sum(for q: Fin(3) { 1.0 });";
+    let (mut tir, src) = module_aware_tir(source);
+    let mut ids = Vec::new();
+    crate::hir::visit_expr(&tir.root().nodes()[0].expr, &mut |expr| {
+        if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
+            ids.push(expr.id().unwrap().clone());
+        }
+    });
+    assert_eq!(ids.len(), 2);
+    tir.root_mut().nodes[0]
+        .expr
+        .map_spans_for_test(|_| Span::new(0, 1));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    let totals = |body: &crate::tir::typed::DagTIR| {
+        ids.iter()
+            .map(
+                |id| match &body.expression_facts().unwrap().get(id).unwrap().fact {
+                    crate::tir::expression_facts::ExpressionFact::Value {
+                        shape: crate::tir::expression_facts::ExpressionShape::Concrete(shape),
+                        ..
+                    } => shape.total().get(),
+                    fact => panic!("expected concrete checked shape: {fact:?}"),
+                },
+            )
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(totals(tir.root()), vec![2, 3]);
+    tir.root_mut().nodes[0]
+        .expr
+        .map_spans_for_test(|_| Span::new(2, 3));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    assert_eq!(totals(tir.root()), vec![2, 3]);
+    let (mut rebuilt, rebuilt_src) = module_aware_tir(source);
+    check_dimensions_tir(&mut rebuilt, &rebuilt_src).unwrap();
+    assert!(
+        ids.iter()
+            .all(|id| rebuilt.root().expression_facts().unwrap().get(id).is_err())
+    );
+}
+
+#[test]
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
-        crate::hir::ExprKind::StringLiteral("not dimensionless".to_string());
+    tir.root_mut().nodes[0]
+        .expr
+        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+            "not dimensionless".to_string(),
+        ));
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -333,8 +431,11 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         "index Phase = { Burn };\n\
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
-    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
-        crate::hir::ExprKind::StringLiteral("not indexed".to_string());
+    tir.root_mut().nodes[0]
+        .expr
+        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+            "not indexed".to_string(),
+        ));
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -1202,7 +1303,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
     );
 
     let expression = &param.default.as_ref().unwrap().expr;
-    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = &expression.kind else {
+    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = expression.kind() else {
         panic!("expected quantity literal");
     };
     assert_eq!(unit.terms[0].power, crate::dimension::Rational::ONE);
@@ -1213,13 +1314,13 @@ fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
     let expression = &tir.root().nodes().first().unwrap().expr;
     assert!(matches!(
-        expression.kind,
+        expression.kind(),
         crate::hir::ExprKind::BinOp {
             op: crate::syntax::ast::BinOp::Pow(
                 crate::syntax::ast::PowerExponent::Exact(exponent)
             ),
             ..
-        } if exponent == crate::exact_rational::ExactRational::try_new(3, 2).unwrap()
+        } if *exponent == crate::exact_rational::ExactRational::try_new(3, 2).unwrap()
     ));
 }
 
@@ -2501,9 +2602,12 @@ fn model_schema_rejects_undischarged_generic_field_obligation() {
 pub type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
 param port: Box<Time>;
 ";
-    let (tir, src, identity, generic_args) = model_port_application(source);
-
-    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap_err();
+    let (_, _, _, invalid_args) = model_port_application(source);
+    let (mut tir, src, identity, valid_args) =
+        model_port_application(&source.replace("Box<Time>", "Box<Length>"));
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    ConcreteModelType::try_new(&tir, &identity, &valid_args, &src).unwrap();
+    let error = ConcreteModelType::try_new(&tir, &identity, &invalid_args, &src).unwrap_err();
     assert!(
         matches!(
             error,

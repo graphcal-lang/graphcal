@@ -1393,11 +1393,8 @@ pub struct DagSemanticBody {
     /// Canonical identities for every declaration record and imported value
     /// binding visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    /// Checked total-cardinality facts for every concrete indexed expression.
-    pub materialized_shapes: HashMap<
-        crate::tir::materialized_shape::MaterializedExpressionKey,
-        crate::tir::materialized_shape::MaterializedShape,
-    >,
+    /// Absent only during assembly; publication requires complete coverage.
+    pub(crate) expression_facts: Option<crate::tir::expression_facts::CheckedExpressionFacts>,
     /// Checked structured display and plot-channel presentation facts.
     pub presentation: crate::tir::presentation::DagPresentationFacts,
 }
@@ -1703,15 +1700,14 @@ impl TIR {
                     crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
                 )
             })?;
-        let resolved = match dag.resolved_decl_types.get(name) {
-            Some(resolved) => resolved.clone(),
-            None => super::type_expr::resolve_hir_type_expr_with_project_types(
-                &annotation.type_expr,
+        let resolved = dag.resolved_decl_types.get(name).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("runtime declaration `{declaration}` has no retained checked type"),
                 src,
-                &self.project_types,
-            )?,
-        };
-        super::ops::resolved_to_declared_type(&resolved, src)
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(annotation.span),
+            )
+        })?;
+        super::ops::resolved_to_declared_type(resolved, src)
     }
 
     /// Borrow resolved extern function signatures.
@@ -1898,6 +1894,12 @@ pub(crate) struct ResolvedExpectedFailMetadata {
     pub(crate) attribute_span: Span,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExpressionRootScope {
+    ThisBody,
+    ReferencedBody,
+}
+
 /// The per-DAG compiled body — every field that's specific to one DAG (the
 /// file's own top-level body or an inline `dag X { ... }` child).
 ///
@@ -1907,6 +1909,7 @@ pub(crate) struct ResolvedExpectedFailMetadata {
 #[derive(Debug, Clone)]
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,
+    pub(crate) body_revision: crate::body_revision::BodyRevision,
     pub(crate) consts: Vec<crate::ir::lower::ConstEntry>,
     pub(crate) params: Vec<crate::ir::lower::ParamEntry>,
     pub(crate) nodes: Vec<crate::ir::lower::NodeEntry>,
@@ -1931,6 +1934,17 @@ pub struct DagTIR {
 }
 
 impl DagTIR {
+    #[must_use]
+    pub const fn body_revision(&self) -> &crate::body_revision::BodyRevision {
+        &self.body_revision
+    }
+
+    pub(crate) fn begin_checking_revision(&mut self) {
+        self.body_revision = crate::body_revision::BodyRevision::fresh();
+        self.semantic.expression_facts = None;
+        self.semantic.presentation = crate::tir::presentation::DagPresentationFacts::default();
+    }
+
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id
@@ -1999,16 +2013,19 @@ impl DagTIR {
         self.semantic.presentation.plot_channels.get(plot)
     }
 
-    /// Look up the checked eager shape of one indexed expression.
-    #[must_use]
-    pub fn materialized_shape(
+    pub fn expression_facts(
         &self,
-        owner: &ResolvedDeclName,
-        span: Span,
-    ) -> Option<&crate::tir::materialized_shape::MaterializedShape> {
-        self.semantic.materialized_shapes.get(
-            &crate::tir::materialized_shape::MaterializedExpressionKey::new(owner.clone(), span),
-        )
+    ) -> Result<
+        &crate::tir::expression_facts::CheckedExpressionFacts,
+        crate::tir::expression_facts::ExpressionFactsError,
+    > {
+        let facts = self
+            .semantic
+            .expression_facts
+            .as_ref()
+            .ok_or(crate::tir::expression_facts::ExpressionFactsError::WrongEnvironment)?;
+        facts.validate_environment(self.dag_id(), self.body_revision())?;
+        Ok(facts)
     }
 
     /// Explicit template-instance edges owned by this DAG.
@@ -2205,7 +2222,7 @@ impl DagTIR {
 
     /// Visit every source unit reference used by this DAG.
     pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
-        self.visit_expressions(&mut |expr| match &expr.kind {
+        self.visit_expressions(&mut |expr| match expr.kind() {
             hir::ExprKind::QuantityLiteral { unit, .. } => unit
                 .terms
                 .iter()
@@ -2218,10 +2235,48 @@ impl DagTIR {
         });
     }
 
-    /// Visit every semantic HIR expression node in this DAG.
-    pub(crate) fn visit_expressions(&self, visitor: &mut impl FnMut(&hir::Expr)) {
-        let visit_root = |expr: &hir::Expr, visitor: &mut _| hir::visit_expr(expr, visitor);
+    /// Visit semantic expressions, including referenced nominal bounds for dependency analysis.
+    pub(crate) fn visit_expressions<'a>(&'a self, visitor: &mut dyn FnMut(&'a hir::Expr)) {
+        self.owned_expression_roots()
+            .chain(self.field_bound_roots(ExpressionRootScope::ReferencedBody))
+            .for_each(|root| hir::visit_expr(root, visitor));
+    }
 
+    /// Expression roots checked in this body's environment, not foreign nominal definitions.
+    #[must_use]
+    pub fn owned_expression_roots(&self) -> std::vec::IntoIter<&hir::Expr> {
+        // Materialize the root inventory here, rather than specializing this large
+        // heterogeneous iterator pipeline in every checking/publication consumer.
+        self.declaration_expression_roots()
+            .chain(self.field_bound_roots(ExpressionRootScope::ThisBody))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    fn field_bound_roots(&self, scope: ExpressionRootScope) -> impl Iterator<Item = &hir::Expr> {
+        self.semantic
+            .type_defs
+            .constrained_fields()
+            .filter(move |(key, _)| self.field_bound_scope(key) == scope)
+            .flat_map(|(_, field)| field.domain_bounds().iter())
+            .map(|bound| &*bound.value)
+    }
+
+    fn field_bound_scope(&self, key: &ResolvedStructFieldTypeKey) -> ExpressionRootScope {
+        let owner = key.owning_type.owner();
+        if self.runtime_owner_rebases.get(owner).unwrap_or(owner) == self.dag_id()
+            || self
+                .semantic_specialization
+                .as_ref()
+                .is_some_and(|specialization| &specialization.template == owner)
+        {
+            ExpressionRootScope::ThisBody
+        } else {
+            ExpressionRootScope::ReferencedBody
+        }
+    }
+
+    fn declaration_expression_roots(&self) -> impl Iterator<Item = &hir::Expr> {
         self.consts
             .iter()
             .map(|entry| &*entry.expr)
@@ -2236,13 +2291,6 @@ impl DagTIR {
                     .domain_bounds
                     .values()
                     .flatten()
-                    .map(|bound| &*bound.value),
-            )
-            .chain(
-                self.semantic
-                    .type_defs
-                    .constrained_fields()
-                    .flat_map(|(_, field)| field.domain_bounds().iter())
                     .map(|bound| &*bound.value),
             )
             .chain(self.plots.iter().flat_map(|entry| {
@@ -2267,12 +2315,11 @@ impl DagTIR {
                     .values()
                     .map(|entry| &*entry.expr),
             )
-            .for_each(|expr| visit_root(expr, visitor));
-
-        self.asserts
-            .iter()
-            .flat_map(|entry| entry.body.expressions())
-            .for_each(|expr| visit_root(expr, visitor));
+            .chain(
+                self.asserts
+                    .iter()
+                    .flat_map(|entry| entry.body.expressions()),
+            )
     }
 
     #[must_use]

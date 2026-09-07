@@ -115,6 +115,51 @@ fn quantity_si(evaluation: &JsValue, name: &str) -> f64 {
 }
 
 #[wasm_bindgen_test]
+fn javascript_boundary_consumes_checked_generic_bounds_and_nominal_roots() {
+    for cardinality in [
+        "N * 18446744073709551615 * 0 + 1",
+        "0 * N * 18446744073709551615 + 1",
+        "N * 0 * 18446744073709551615 + 1",
+    ] {
+        let source = format!(
+            r"
+type Marker {{ Marker(value: Dimensionless), }}
+type Gate<N: Nat> {{
+    Gate(value: Dimensionless(min: sum(for i: Fin({cardinality}) {{ Marker(value: 1.0).value }}))),
+}}
+node accepted: Gate<2> = Gate<2>(value: 1.0);
+node too_small: Gate<2> = Gate<2>(value: 0.5);
+node result: Dimensionless = @accepted.value;
+"
+        );
+        let files = Array::new();
+        files.push(&js_file(
+            &JsValue::from_str("main.gcl"),
+            &JsValue::from_str(&source),
+        ));
+        let outcome =
+            evaluate_project_js(js_request(&JsValue::from_str("main.gcl"), &files)).unwrap();
+        assert_eq!(
+            property(&outcome, "status").as_string().as_deref(),
+            Some("evaluated"),
+            "checked bound failed for {cardinality}: {outcome:?}"
+        );
+        let evaluation = property(&outcome, "evaluation");
+        assert_eq!(
+            quantity_si(&evaluation, "result").to_bits(),
+            1.0_f64.to_bits()
+        );
+        assert_eq!(
+            property(&declaration_outcome(&evaluation, "too_small"), "status")
+                .as_string()
+                .as_deref(),
+            Some("error"),
+            "the retained field contract must still reject the actual value"
+        );
+    }
+}
+
+#[wasm_bindgen_test]
 fn javascript_boundary_preserves_numeric_edges_and_contains_non_finite_results() {
     let source = r"
 node matrix: Dimensionless[Fin(4), Fin(4)] = table[Fin(4), Fin(4)] {

@@ -329,7 +329,7 @@ impl PresentationResolver<'_> {
         src: &NamedSource<Arc<String>>,
     ) -> Result<PresentationProvenance, GraphcalError> {
         self.cancellation.checkpoint()?;
-        match &expr.kind {
+        match expr.kind() {
             ExprKind::QuantityLiteral { unit, .. } | ExprKind::Convert { target: unit, .. } => {
                 let dimension = infer::resolve_unit_dimension_or_diagnose(unit, self.tir, src)?;
                 let requires_runtime_values = unit.terms.iter().any(|term| {
@@ -365,7 +365,17 @@ impl PresentationResolver<'_> {
                 let output = self.declaration(&output.value)?;
                 if output.requires_runtime_values() {
                     Ok(PresentationProvenance::DagCall {
-                        key: PresentationCallKey::new(owner.clone(), expr.span),
+                        key: PresentationCallKey::new(
+                            owner.clone(),
+                            expr.id()
+                                .map_err(|error| GraphcalError::InternalError {
+                                    message: error.to_string(),
+                                    src: src.clone(),
+                                    span: expr.span.into(),
+                                })?
+                                .clone(),
+                        ),
+                        span: expr.span,
                         output: Box::new(output),
                     })
                 } else {
@@ -763,8 +773,9 @@ fn project_field(
             Some(presentation) => presentation,
             None => PresentationProvenance::None,
         },
-        PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
+        PresentationProvenance::DagCall { key, span, output } => PresentationProvenance::DagCall {
             key,
+            span,
             output: Box::new(project_field(*output, field)),
         },
         PresentationProvenance::IndexProjection {
@@ -892,8 +903,9 @@ fn project_index_layers(
         return provenance;
     };
     match provenance {
-        PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
+        PresentationProvenance::DagCall { key, span, output } => PresentationProvenance::DagCall {
             key,
+            span,
             output: Box::new(project_index_layers(*output, args, substitutions)),
         },
         PresentationProvenance::IndexProjection {
@@ -937,9 +949,9 @@ fn static_index_key(arg: &hir::expr::IndexArg) -> Option<IndexEntryKey> {
         hir::expr::IndexArg::Variant(variant) => {
             Some(IndexEntryKey::named(variant.variant.variant().clone()))
         }
-        hir::expr::IndexArg::Expr(expr) => match expr.kind {
+        hir::expr::IndexArg::Expr(expr) => match expr.kind() {
             ExprKind::Integer(position) => {
-                u64::try_from(position).ok().map(IndexEntryKey::position)
+                u64::try_from(*position).ok().map(IndexEntryKey::position)
             }
             _ => None,
         },
