@@ -1,0 +1,2 @@
+const unit identity_scale: Length/Length = 1.0 m/m;
+const node value: Dimensionless = 1.0 identity_scale^(1/2147483647)*identity_scale^(1/2147483629)*identity_scale^(1/2147483587)*identity_scale^(1/2147483579)*identity_scale^(1/2147483563);

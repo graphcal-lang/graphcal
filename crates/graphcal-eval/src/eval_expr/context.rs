@@ -20,8 +20,7 @@ use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::execution_scope::CheckedExecutionScope;
 use crate::host_fns::HostFunctionRegistry;
-use crate::presentation_calls::EvaluatedPresentationCalls;
-use crate::runtime_presentation::PresentationInstanceMap;
+use crate::presentation_evidence::PresentationInstanceMap;
 
 use super::work_budget::WorkBudget;
 
@@ -52,7 +51,6 @@ pub struct EvalEnvironment<'a> {
     pub current_decl: Option<ResolvedDeclName>,
     pub root_values: Option<&'a RuntimeValueMap>,
     pub root_presentation_instances: Option<&'a PresentationInstanceMap>,
-    pub presentation_calls: Option<&'a EvaluatedPresentationCalls>,
 }
 
 /// An immutable environment whose capabilities can only be selected by phase.
@@ -91,7 +89,6 @@ impl<'a> EvalContext<'a> {
             current_decl: None,
             root_values: None,
             root_presentation_instances: None,
-            presentation_calls: None,
         }
     }
 
@@ -160,19 +157,53 @@ impl<'a> EvalContext<'a> {
         expr: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionRecord, GraphcalError>
     {
-        let facts = match self.independent_expressions {
-            Some(facts) => facts,
-            None => self
-                .current_dag
-                .expression_facts()
-                .map_err(|error| self.internal_error(error.to_string(), expr.span))?,
-        };
-        facts
+        self.expression_facts(expr.span)?
             .executable_value(
                 expr.id()
                     .map_err(|error| self.internal_error(error.to_string(), expr.span))?,
             )
             .map_err(|error| self.internal_error(error.to_string(), expr.span))
+    }
+
+    fn expression_facts(
+        &self,
+        span: graphcal_compiler::syntax::span::Span,
+    ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionFacts, GraphcalError>
+    {
+        self.independent_expressions.map_or_else(
+            || {
+                self.current_dag
+                    .expression_facts()
+                    .map_err(|error| self.internal_error(error.to_string(), span))
+            },
+            Ok,
+        )
+    }
+
+    /// Contextual literals are checked operands, never executable runtime values.
+    pub fn validate_contextual_operand(
+        &self,
+        expr: &graphcal_compiler::hir::expr::Expr,
+        expected: graphcal_compiler::tir::expression_facts::ContextualOperand,
+    ) -> Result<(), GraphcalError> {
+        let id = expr
+            .id()
+            .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
+        let record = self
+            .expression_facts(expr.span)?
+            .get(id)
+            .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
+        match record.fact {
+            graphcal_compiler::tir::expression_facts::ExpressionFact::Contextual(actual)
+                if actual == expected =>
+            {
+                Ok(())
+            }
+            _ => Err(self.internal_error(
+                format!("expected checked contextual operand {expected:?}"),
+                expr.span,
+            )),
+        }
     }
 
     pub const fn checked_execution_facts(&self) -> Option<&'a CheckedExecutionFacts> {
@@ -214,12 +245,6 @@ impl<'a> EvalContext<'a> {
     ) -> Self {
         self.environment.root_values = Some(values);
         self.environment.root_presentation_instances = instances;
-        self
-    }
-
-    #[must_use]
-    pub const fn with_presentation_calls(mut self, calls: &'a EvaluatedPresentationCalls) -> Self {
-        self.environment.presentation_calls = Some(calls);
         self
     }
 

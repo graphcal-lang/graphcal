@@ -2,4 +2,4 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-dynamic unit scale must be greater than zero, got 0
+convert_dynamic_target_zero_scale.bad: display scale unavailable in convert_dynamic_target_zero_scale.gcl: dynamic unit scale must be greater than zero, got 0 (SI value retained)

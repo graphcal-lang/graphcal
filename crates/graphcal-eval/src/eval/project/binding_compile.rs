@@ -5,8 +5,8 @@ use super::{
     Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, HirLocalValueMap,
     ModelSchemaGraph, ModelSchemaGraphBuilder, ModelValueSchema, ParameterBindingBuilder,
     ParameterPort, ParameterPosition, ParameterValue, PreludeTypeScope, PreparedProject,
-    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValue, RuntimeValueMap, Span,
-    builtin_functions, eval_hir_expr, parameter_domain,
+    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, Span, builtin_functions,
+    parameter_domain,
 };
 
 impl PreparedProject {
@@ -36,15 +36,7 @@ impl PreparedProject {
                     })
                 })?;
         let (hir, facts) = self.lower_closed_binding(port, &normalized)?;
-        let value = self.evaluate_closed_binding(&hir, &facts)?;
-        let presentation = graphcal_compiler::tir::dim_check::checked_expression_presentation(
-            &self.tir,
-            port.runtime_key.as_resolved(),
-            &hir,
-            &self.source,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-        .map_err(CompileError::Eval)?;
+        let (value, presentation) = self.evaluate_closed_binding(&hir, &facts)?.into_parts();
         Ok(ParameterValue {
             plan_id: self.plan_id,
             position,
@@ -450,7 +442,7 @@ impl PreparedProject {
         &self,
         expr: &graphcal_compiler::hir::closed_expr::ClosedExpr,
         facts: &graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
-    ) -> Result<RuntimeValue, CompileError> {
+    ) -> Result<crate::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
         let builtin_fns = builtin_functions();
@@ -466,7 +458,14 @@ impl PreparedProject {
         )?
         .with_roots(&values, None)
         .with_expression_facts(facts)?;
-        eval_hir_expr(expr, &values, &locals, &context).map_err(CompileError::from)
+        crate::eval_expr::eval_hir_expr_with_presentation(
+            expr,
+            &values,
+            &crate::presentation_evidence::PresentationInstanceMap::new(),
+            &locals,
+            &context,
+        )
+        .map_err(CompileError::from)
     }
 
     pub(super) fn binding_kind_error(&self, port: &ParameterPort, actual: &str) -> CompileError {

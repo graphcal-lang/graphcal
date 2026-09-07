@@ -82,6 +82,8 @@ pub fn render_report_html(
         body.push_str("</section>\n");
     }
 
+    push_presentation_diagnostics(&mut body, &document.presentation_diagnostics);
+
     if !document.checks.is_empty() {
         body.push_str("<section id=\"checks\">\n<h2>Checks</h2>\n<ul class=\"checks\">\n");
         for check in &document.checks {
@@ -131,6 +133,16 @@ pub fn render_report_html(
     format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n{vega_scripts}\n<style>{REPORT_CSS}</style>\n</head>\n<body>\n<main>\n{body}</main>\n{hydration_block}</body>\n</html>\n"
     )
+}
+
+fn push_presentation_diagnostics(out: &mut String, diagnostics: &[String]) {
+    if !diagnostics.is_empty() {
+        out.push_str("<section id=\"presentation\"><h2>Presentation diagnostics</h2>\n");
+        for diagnostic in diagnostics {
+            let _ = writeln!(out, "<p class=\"notice\">{}</p>", html_escape(diagnostic));
+        }
+        out.push_str("</section>\n");
+    }
 }
 
 fn push_value_card(out: &mut String, card: &ValueCard) {

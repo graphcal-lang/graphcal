@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
+use crate::presentation_evidence::PresentationInstance;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::tir::presentation::PresentationProvenance;
 
 use crate::decl_key::RuntimeDeclKey;
 
@@ -16,7 +16,7 @@ pub(super) struct RuntimeParameterBinding {
     ///
     /// Arrow-originated model values use the model boundary's canonical unit
     /// and therefore carry no authored presentation preference here.
-    pub(crate) presentation: PresentationProvenance,
+    pub(crate) presentation: PresentationInstance,
 }
 
 /// Plan-keyed parameter bindings for one evaluation row.

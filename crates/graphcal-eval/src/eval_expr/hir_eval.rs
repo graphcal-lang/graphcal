@@ -16,9 +16,8 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use crate::decl_key::RuntimeDeclKey;
-use crate::runtime_presentation::{
-    EvaluatedRuntimeValue, PresentationInstance, PresentationInstanceMap,
-};
+use crate::presentation_evidence::{PresentationInstance, PresentationInstanceMap};
+use crate::runtime_presentation::EvaluatedRuntimeValue;
 
 use super::builtin_call::{
     DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
@@ -29,7 +28,7 @@ use super::{
     imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
 };
 
-pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
+pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
 
 type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
@@ -136,8 +135,9 @@ fn eval_hir_expr_inner(
         )),
         hir::ExprKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
-            checked_unit_scaled_value(*value, scale, expr.span, ctx)
-                .map(EvaluatedRuntimeValue::plain)
+            let value = checked_unit_scaled_value(*value, scale, expr.span, ctx)?;
+            let presentation = super::presentation::scaled(unit, scale, ctx)?;
+            Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
         hir::ExprKind::GraphRef(target) => {
             let runtime_target = ctx.current_dag.runtime_decl_identity(&target.value);
@@ -165,7 +165,6 @@ fn eval_hir_expr_inner(
         hir::ExprKind::LocalRef(local) => local_values
             .get(local.value)
             .cloned()
-            .map(EvaluatedRuntimeValue::plain)
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
         hir::ExprKind::BinOp { op, lhs, rhs } => {
             eval_hir_binop(expr.span, *op, lhs, rhs, values, local_values, ctx)
@@ -193,9 +192,25 @@ fn eval_hir_expr_inner(
                 eval_hir_expr_evaluated(else_branch, values, presentation_values, local_values, ctx)
             }
         }
-        hir::ExprKind::Convert { expr: inner, .. }
-        | hir::ExprKind::DisplayTimezone { expr: inner, .. } => {
-            eval_hir_expr(inner, values, local_values, ctx).map(EvaluatedRuntimeValue::plain)
+        hir::ExprKind::Convert {
+            expr: inner,
+            target,
+        } => {
+            let value = eval_hir_expr(inner, values, local_values, ctx)?;
+            Ok(EvaluatedRuntimeValue::new(
+                value,
+                super::presentation::pending(target, ctx),
+            ))
+        }
+        hir::ExprKind::DisplayTimezone {
+            expr: inner,
+            timezone,
+        } => {
+            let value = eval_hir_expr(inner, values, local_values, ctx)?;
+            Ok(EvaluatedRuntimeValue::new(
+                value,
+                PresentationInstance::Timezone(timezone.clone()),
+            ))
         }
         hir::ExprKind::FieldAccess { expr: inner, field } => {
             let inner_val =
@@ -2115,7 +2130,10 @@ fn eval_hir_for_comp_bindings(
                 ));
             }
         };
-        inner_locals.bind(binding.local.id, binding_value);
+        inner_locals.bind(
+            binding.local.id,
+            EvaluatedRuntimeValue::plain(binding_value),
+        );
         let evaluated = if remaining.is_empty() {
             eval_hir_expr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
         } else {
@@ -2207,7 +2225,7 @@ fn eval_hir_index_access(
                 let var_val = local_values
                     .get(local.value)
                     .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
-                match var_val {
+                match var_val.value() {
                     RuntimeValue::Label {
                         index_name: label_index,
                         variant,
@@ -2319,7 +2337,9 @@ fn eval_hir_scan(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let source_val = eval_hir_expr(source, values, local_values, ctx)?;
+    let (source_val, source_presentation) =
+        eval_hir_expr_evaluated(source, values, presentation_values, local_values, ctx)?
+            .into_parts();
     let RuntimeValue::Indexed {
         index_name,
         entries: source_entries,
@@ -2339,19 +2359,29 @@ fn eval_hir_scan(
     }
     let evaluated_init =
         eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
-    let (mut acc_val, init_presentation) = evaluated_init.into_parts();
+    let (_, initial_presentation) = evaluated_init.clone().into_parts();
+    let mut accumulated = evaluated_init;
     let mut result_entries = IndexMap::new();
     let mut presentations = IndexMap::new();
     let mut scan_locals = local_values.child(Vec::new());
     for (variant, item) in &source_entries {
-        scan_locals.bind(acc.id, acc_val);
-        scan_locals.bind(val.id, item.clone());
-        let body_val = eval_hir_expr(body, values, &scan_locals, ctx)?;
-        result_entries.insert(variant.clone(), body_val.clone());
-        if !init_presentation.is_none() {
-            presentations.insert(variant.clone(), init_presentation.clone());
+        scan_locals.bind(acc.id, accumulated);
+        let item_presentation = source_presentation
+            .project_indexes_ref(std::slice::from_ref(variant))
+            .cloned()
+            .map_err(|error| ctx.internal_error(error.to_string(), source.span))?;
+        scan_locals.bind(
+            val.id,
+            EvaluatedRuntimeValue::new(item.clone(), item_presentation),
+        );
+        accumulated =
+            eval_hir_expr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
+                .with_default_presentation(&initial_presentation);
+        let (value, evidence) = accumulated.clone().into_parts();
+        result_entries.insert(variant.clone(), value);
+        if !evidence.is_none() {
+            presentations.insert(variant.clone(), evidence);
         }
-        acc_val = body_val;
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Indexed {
@@ -2399,8 +2429,8 @@ fn eval_hir_unfold(
     })?;
     let evaluated_init =
         eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
+    let mut previous_state = evaluated_init.clone();
     let (init_value, init_presentation) = evaluated_init.into_parts();
-    let mut previous_state = init_value.clone();
     let mut result_entries = IndexMap::new();
     let mut presentations = IndexMap::new();
     if !init_presentation.is_none() {
@@ -2416,28 +2446,34 @@ fn eval_hir_unfold(
         unfold_locals.bind(recurrence.previous_state.id, previous_state);
         unfold_locals.bind(
             recurrence.previous_index.id,
-            RuntimeValue::coordinate_label(
-                index_ref.clone(),
-                previous_position,
-                coordinate_data.coordinate_value(previous_position),
-            )
-            .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
+            EvaluatedRuntimeValue::plain(
+                RuntimeValue::coordinate_label(
+                    index_ref.clone(),
+                    previous_position,
+                    coordinate_data.coordinate_value(previous_position),
+                )
+                .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
+            ),
         );
         unfold_locals.bind(
             recurrence.current_index.id,
-            RuntimeValue::coordinate_label(
-                index_ref.clone(),
-                position,
-                coordinate_data.coordinate_value(position),
-            )
-            .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
+            EvaluatedRuntimeValue::plain(
+                RuntimeValue::coordinate_label(
+                    index_ref.clone(),
+                    position,
+                    coordinate_data.coordinate_value(position),
+                )
+                .map_err(|error| ctx.internal_error(error.to_string(), axis.span))?,
+            ),
         );
-        let body_value = eval_hir_expr(body, values, &unfold_locals, ctx)?;
-        result_entries.insert(variant.clone(), body_value.clone());
-        if !init_presentation.is_none() {
-            presentations.insert(variant.clone(), init_presentation.clone());
+        previous_state =
+            eval_hir_expr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
+                .with_default_presentation(&init_presentation);
+        let (value, evidence) = previous_state.clone().into_parts();
+        result_entries.insert(variant.clone(), value);
+        if !evidence.is_none() {
+            presentations.insert(variant.clone(), evidence);
         }
-        previous_state = body_value;
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Indexed {
@@ -2446,6 +2482,28 @@ fn eval_hir_unfold(
         },
         PresentationInstance::entries(presentations),
     ))
+}
+
+fn evaluated_match_field(
+    field: &graphcal_compiler::syntax::span::Spanned<
+        graphcal_compiler::syntax::type_name::FieldName,
+    >,
+    type_name: &graphcal_compiler::syntax::type_name::ResolvedStructTypeName,
+    fields: &IndexMap<graphcal_compiler::syntax::type_name::FieldName, RuntimeValue>,
+    presentation: &PresentationInstance,
+    ctx: &EvalContext<'_>,
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let value = fields.get(&field.value).ok_or_else(|| {
+        ctx.eval_error(
+            format!("no field `{}` on type `{type_name}`", field.value),
+            field.span,
+        )
+    })?;
+    let evidence = presentation
+        .project_field_ref(&field.value)
+        .cloned()
+        .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
+    Ok(EvaluatedRuntimeValue::new(value.clone(), evidence))
 }
 
 fn eval_hir_match(
@@ -2459,7 +2517,9 @@ fn eval_hir_match(
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let span = expr.span;
     let constructor_matches = &ctx.expression_fact(expr)?.constructor_matches;
-    let scrutinee_val = eval_hir_expr(scrutinee, values, local_values, ctx)?;
+    let (scrutinee_val, scrutinee_presentation) =
+        eval_hir_expr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?
+            .into_parts();
     match &scrutinee_val {
         RuntimeValue::Label {
             index_name,
@@ -2524,14 +2584,16 @@ fn eval_hir_match(
             for binding in bindings {
                 match binding {
                     hir::expr::PatternBinding::Bind { field, local } => {
-                        let field_val =
-                            scrutinee_fields.get(field.value.as_str()).ok_or_else(|| {
-                                ctx.eval_error(
-                                    format!("no field `{}` on type `{type_name}`", field.value),
-                                    field.span,
-                                )
-                            })?;
-                        arm_locals.bind(local.id, field_val.clone());
+                        arm_locals.bind(
+                            local.id,
+                            evaluated_match_field(
+                                field,
+                                type_name,
+                                scrutinee_fields,
+                                &scrutinee_presentation,
+                                ctx,
+                            )?,
+                        );
                     }
                     hir::expr::PatternBinding::Wildcard { .. } => {}
                 }
@@ -2573,18 +2635,8 @@ fn eval_hir_dag_call(
     let checked = &plan.checked_execution_facts;
     let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, &target.value)
         .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
-    let dag_tir = scope.dag();
     let dag_facts = scope.facts();
 
-    let call_dags = callable
-        .execution_dags
-        .iter()
-        .map(|owner| {
-            crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, owner)
-                .map(crate::execution_scope::CheckedExecutionScope::dag)
-                .map_err(|error| ctx.internal_error(error.to_string(), target.span))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
     let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
         &target.value,
@@ -2593,8 +2645,18 @@ fn eval_hir_dag_call(
     .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for binding in args {
         let key = super::dag_decl_runtime_key(&binding.target.value);
-        let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
+        let (value, evidence) = eval_hir_expr_evaluated(
+            &binding.value,
+            caller_values,
+            caller_presentations,
+            caller_locals,
+            ctx,
+        )?
+        .into_parts();
         frame.bind(&key, value, ctx.src, binding.value.span)?;
+        if !evidence.is_none() {
+            frame.presentations.insert(key, evidence);
+        }
     }
     seed_inline_dag_imported_values(
         &callable.imports.runtime,
@@ -2626,26 +2688,13 @@ fn eval_hir_dag_call(
     let mut dag_presentations = frame.presentations;
     let dag_values = frame.values;
 
-    for called_dag in &call_dags {
-        let called_facts = checked.for_dag(called_dag.dag_id()).ok_or_else(|| {
-            ctx.internal_error(
-                format!(
-                    "DAG `{}` has no checked execution facts",
-                    called_dag.dag_id()
-                ),
-                output.span,
-            )
-        })?;
-        let called_ctx = ctx.for_dag(called_dag, called_facts.source())?;
-        check_inline_dag_asserts(
-            called_dag,
-            &dag_values,
-            &called_ctx,
-            target,
-            output.span,
-            ctx,
-        )?;
-    }
+    check_inline_plan_asserts(
+        &callable.execution_dags,
+        &dag_values,
+        target,
+        output.span,
+        ctx,
+    )?;
 
     let output_key = super::dag_decl_runtime_key(&output.value);
     let output_value = dag_values.get(&output_key).cloned().ok_or_else(|| {
@@ -2659,64 +2708,34 @@ fn eval_hir_dag_call(
         )
     })?;
     let output_presentation = take_presentation_instance(&mut dag_presentations, &output_key);
-    let presentation = retain_called_dag_presentation_values(
-        dag_tir,
-        &output.value,
-        call,
-        dag_values,
+    let presentation = super::presentation::resolve_frame(
         output_presentation,
+        &dag_values,
         ctx,
+        &callable.execution_dags,
     )?;
+    #[cfg(test)]
+    record_call_retention(&dag_values, &presentation);
     Ok(EvaluatedRuntimeValue::new(output_value, presentation))
 }
 
-fn retain_called_dag_presentation_values(
-    dag: &DagTIR,
-    output: &ResolvedDeclKey,
-    call: &hir::Expr,
-    values: RuntimeValueMap,
-    output_presentation: PresentationInstance,
-    ctx: &EvalContext<'_>,
-) -> Result<PresentationInstance, GraphcalError> {
-    let call_span = call.span;
-    let requires_values = dag.declaration_presentation(output).is_some_and(
-        graphcal_compiler::tir::presentation::PresentationProvenance::requires_runtime_values,
+#[cfg(test)]
+fn record_call_retention(values: &RuntimeValueMap, presentation: &PresentationInstance) {
+    use crate::pipeline_metrics::{Event, record_many};
+    record_many(
+        Event::CallFrameValueNodes,
+        u64::try_from(
+            values
+                .values()
+                .map(runtime_value_tree_node_count)
+                .sum::<usize>(),
+        )
+        .unwrap_or(u64::MAX),
     );
-    if !requires_values {
-        return Ok(output_presentation);
-    }
-    let calls = ctx.presentation_calls.ok_or_else(|| {
-        ctx.internal_error(
-            "presentation-relevant inline call has no evaluated call store",
-            call_span,
-        )
-    })?;
-    let owner = ctx.current_decl.as_ref().ok_or_else(|| {
-        ctx.internal_error(
-            "presentation-relevant inline call has no declaration owner",
-            call_span,
-        )
-    })?;
-    let invocation = calls
-        .record(
-            graphcal_compiler::tir::presentation::PresentationCallKey::new(
-                owner.clone(),
-                call.id()
-                    .map_err(|error| ctx.internal_error(error.to_string(), call_span))?
-                    .clone(),
-            ),
-            values,
-        )
-        .map_err(|error| {
-            ctx.internal_error(
-                format!("failed to retain inline-call presentation values: {error}"),
-                call_span,
-            )
-        })?;
-    Ok(PresentationInstance::dag_call(
-        invocation,
-        output_presentation,
-    ))
+    record_many(
+        Event::CallOutputEvidenceNodes,
+        u64::try_from(presentation.retained_nodes()).unwrap_or(u64::MAX),
+    );
 }
 
 /// Only explicit prepared runtime imports may consult the caller or root frame.
@@ -2750,6 +2769,22 @@ fn seed_inline_dag_imported_values(
             }
         }
     }
+}
+
+fn check_inline_plan_asserts(
+    owners: &[graphcal_compiler::dag_id::DagId],
+    values: &RuntimeValueMap,
+    target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    let checked = &ctx.execution_plan()?.checked_execution_facts;
+    owners.iter().try_for_each(|owner| {
+        let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, owner)
+            .map_err(|error| ctx.internal_error(error.to_string(), span))?;
+        let context = ctx.for_dag(scope.dag(), scope.facts().source())?;
+        check_inline_dag_asserts(scope.dag(), values, &context, target, span, ctx)
+    })
 }
 
 /// Check the asserts of an inline-instantiated dag body (#812).

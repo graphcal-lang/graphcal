@@ -172,7 +172,7 @@ node far_mjd: Datetime = from_mjd(-1.0e300);
 }
 
 #[test]
-fn overflowing_display_conversion_is_a_node_and_plot_error() {
+fn overflowing_display_conversion_preserves_si_and_reports_presentation_errors() {
     let result = compile_and_eval(
         r"
 const unit tiny: Length = 1.0e-300 m;
@@ -182,10 +182,28 @@ plot p = { mark: point, encode: { x: 1.0e300 m -> tiny } };
     )
     .unwrap();
 
-    assert_node_failed(&result, "huge");
-    assert!(result.plots.is_empty());
-    assert_eq!(result.plot_errors.len(), 1);
-    assert!(result.plot_errors[0].message.contains("non-finite"));
+    let value = result.nodes[0].1.as_ref().unwrap();
+    assert_eq!(value.si_value().unwrap().to_bits(), 1.0e300_f64.to_bits());
+    assert!(matches!(
+        value,
+        graphcal_eval::eval::Value::Quantity {
+            display_unit: None,
+            ..
+        }
+    ));
+    assert_eq!(result.plots.len(), 1);
+    assert!(result.plot_errors.is_empty());
+    assert_eq!(result.presentation_diagnostics.len(), 2);
+    assert!(
+        result
+            .presentation_diagnostics
+            .iter()
+            .all(|diagnostic| matches!(
+                diagnostic.detail.failure,
+                graphcal_eval::presentation_evidence::PresentationFailure::Projection { .. }
+            ))
+    );
+    assert!(result.has_errors());
 }
 
 #[test]

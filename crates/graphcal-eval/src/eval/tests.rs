@@ -1,4 +1,5 @@
 mod checked_expressions;
+mod presentation_evidence;
 
 use std::collections::HashSet;
 
@@ -295,7 +296,7 @@ fn pipeline_cost_baseline_diamond_keeps_constant_pools_and_shared_call_bodies() 
 }
 
 #[test]
-fn pipeline_cost_baseline_replays_pure_native_selector_for_presentation() {
+fn presentation_selects_pure_native_branch_once_and_rendering_never_replays() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -336,13 +337,27 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
     let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
         panic!("expected quantity");
     };
-    // D06 must remove the extra invocation while preserving this pure result.
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "presentation replay baseline"
+        1,
+        "selector is evaluated exactly once"
     );
     assert_eq!(display_unit.as_ref().unwrap().label, "km");
+    for _ in 0..4 {
+        assert_eq!(
+            value
+                .as_ref()
+                .unwrap()
+                .format_display(Some(&result.base_dim_symbols))
+                .unwrap(),
+            "1 [km]"
+        );
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "rendering has no host capability"
+    );
 }
 
 #[test]
@@ -882,7 +897,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                 Ok(crate::runtime_presentation::EvaluatedRuntimeValue::new(
                     graphcal_compiler::registry::runtime_value::RuntimeValue::quantity(2.0)
                         .unwrap(),
-                    crate::runtime_presentation::PresentationInstance::None,
+                    crate::presentation_evidence::PresentationInstance::None,
                 ))
             });
             if fatal || matches!(policy, FailurePolicy::Propagate) {
@@ -6881,12 +6896,16 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let values = HashMap::new();
     let local_values = crate::eval_expr::HirLocalValueMap::from_bindings(vec![(
         binding.local.id,
-        crate::eval_expr::RuntimeValue::Label {
-            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
-                b_owner,
-            ),
-            variant: graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
-        },
+        crate::runtime_presentation::EvaluatedRuntimeValue::plain(
+            crate::eval_expr::RuntimeValue::Label {
+                index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                    b_owner,
+                ),
+                variant: graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(
+                    "Burn",
+                ),
+            },
+        ),
     )]);
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();

@@ -1990,26 +1990,13 @@ impl DagTIR {
         &self.semantic
     }
 
-    /// Look up checked structured presentation for one declaration.
-    #[must_use]
-    pub fn declaration_presentation(
-        &self,
-        declaration: &ResolvedDeclName,
-    ) -> Option<&crate::tir::presentation::PresentationProvenance> {
-        self.semantic.presentation.declarations.get(declaration)
-    }
-
     /// Look up checked plot-channel presentation facts.
     #[must_use]
     pub fn plot_channel_presentations(
         &self,
         plot: &ResolvedDeclName,
-    ) -> Option<
-        &HashMap<
-            crate::syntax::ast::EncodingChannel,
-            crate::tir::presentation::PlotChannelPresentation,
-        >,
-    > {
+    ) -> Option<&HashMap<crate::syntax::ast::EncodingChannel, crate::plot_shape::PlotChannelShape>>
+    {
         self.semantic.presentation.plot_channels.get(plot)
     }
 

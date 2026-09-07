@@ -84,6 +84,11 @@ impl From<&EvalResult> for EvaluationView {
                 }),
         );
 
+        notices.extend(result.presentation_diagnostics.iter().map(|diagnostic| {
+            NoticeView::PresentationError {
+                message: diagnostic.to_string(),
+            }
+        }));
         Self {
             compiler_version: env!("CARGO_PKG_VERSION"),
             values,
@@ -443,6 +448,10 @@ impl From<&AssertResult> for AssertionOutcomeView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NoticeView {
+    /// Display failed, but the computational SI value is still present.
+    PresentationError {
+        message: String,
+    },
     PlotError {
         name: String,
         message: String,

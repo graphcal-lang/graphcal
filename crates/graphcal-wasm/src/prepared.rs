@@ -354,6 +354,70 @@ mod js {
         }
     }
 
+    #[cfg(test)]
+    #[wasm_bindgen_test::wasm_bindgen_test]
+    fn node_prepared_binding_failure_recovery_and_reset_preserve_si_and_notices() {
+        use js_sys::{Array, Object, Reflect};
+        fn set(value: &JsValue, name: &str, item: &JsValue) {
+            assert!(Reflect::set(value, &JsValue::from_str(name), item).unwrap());
+        }
+        fn get(value: &JsValue, name: &str) -> JsValue {
+            Reflect::get(value, &JsValue::from_str(name)).unwrap()
+        }
+        fn request(source: &str) -> JsValue {
+            let file = Object::new();
+            set(&file, "path", &JsValue::from_str("main.gcl"));
+            set(&file, "content", &JsValue::from_str(source));
+            let files = Array::new();
+            files.push(&file);
+            let request = Object::new();
+            set(&request, "entry", &JsValue::from_str("main.gcl"));
+            set(&request, "files", &files);
+            request.into()
+        }
+        let source = "param rate: Dimensionless = 0.0; unit scaled: Length = (@rate) m; node out: Length = 12.0 m -> scaled;";
+        let handle = prepare_project_js(request(source)).unwrap();
+        for rate in [None, Some("3.0"), Some("0.0"), Some("6.0"), None] {
+            let bindings = Array::new();
+            if let Some(rate) = rate {
+                let binding = Object::new();
+                set(&binding, "name", &JsValue::from_str("rate"));
+                set(&binding, "expr", &JsValue::from_str(rate));
+                bindings.push(&binding);
+            }
+            let result = handle.evaluate_bindings(bindings.into()).unwrap();
+            assert_eq!(
+                get(&result, "status").as_string().as_deref(),
+                Some("evaluated")
+            );
+            let evaluation = get(&result, "evaluation");
+            let fresh = crate::evaluate_project_js(request(
+                &source.replace("= 0.0;", &format!("= {};", rate.unwrap_or("0.0"))),
+            ))
+            .unwrap();
+            let fresh = get(&fresh, "evaluation");
+            assert_eq!(get(&evaluation, "has_errors"), get(&fresh, "has_errors"));
+            let notices = Array::from(&get(&evaluation, "notices"));
+            assert_eq!(
+                notices.length(),
+                Array::from(&get(&fresh, "notices")).length()
+            );
+            let output = Array::from(&get(&evaluation, "values"))
+                .iter()
+                .find(|value| get(value, "name").as_string().as_deref() == Some("out"))
+                .unwrap();
+            let outcome = get(&output, "outcome");
+            assert_eq!(
+                get(&outcome, "status").as_string().as_deref(),
+                Some("value")
+            );
+            assert_eq!(
+                get(&get(&outcome, "value"), "si_value").as_f64(),
+                Some(12.0)
+            );
+        }
+    }
+
     #[wasm_bindgen]
     impl PreparedProjectHandle {
         /// Typed entry parameter ports in source declaration order.

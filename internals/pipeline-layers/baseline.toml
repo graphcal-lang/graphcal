@@ -202,14 +202,6 @@ reason = "Observed compiler::tir::dim_check::plot -> compiler::hir (production) 
 
 [[exception]]
 from_package = "compiler"
-from_path = ["tir", "dim_check", "presentation"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::tir::dim_check::presentation -> compiler::hir (production) at ./crates/graphcal-compiler/src/tir/dim_check/presentation.rs:10 (use import); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["tir", "dim_check", "template_closure"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -223,14 +215,6 @@ to_package = "compiler"
 to_path = ["hir"]
 test_only = true
 reason = "Observed compiler::tir::dim_check::tests -> compiler::hir (test-only) at ./crates/graphcal-compiler/src/tir/dim_check/tests.rs:324 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "presentation"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::tir::presentation -> compiler::hir (production) at ./crates/graphcal-compiler/src/tir/presentation.rs:13 (use import); roles are contracts -> facade. Planned deletion seam: replace facade reach-through with a stable contracts API."
 
 [[exception]]
 from_package = "compiler"

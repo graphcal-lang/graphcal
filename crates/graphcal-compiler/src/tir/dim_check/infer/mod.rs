@@ -12,8 +12,6 @@ pub(super) mod hir;
 mod linear_algebra;
 mod rules;
 
-pub(in crate::tir::dim_check) use rules::resolve_unit_dimension_or_diagnose;
-
 use super::InferredIndex;
 /// Look up an inferred index through the project-wide semantic authority.
 fn index_def_for_inferred<'a>(

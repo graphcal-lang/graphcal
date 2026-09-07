@@ -16,6 +16,12 @@ pub enum Event {
     FrameExecution,
     ConstructorFactConsumption,
     PresentationEvaluation,
+    #[cfg(test)]
+    CallFrameValueNodes,
+    #[cfg(test)]
+    CallOutputEvidenceNodes,
+    #[cfg(test)]
+    PresentationEvidenceCopyNode,
 }
 
 #[cfg(not(test))]
@@ -54,6 +60,9 @@ mod observer {
         pub frame_executions: u64,
         pub constructor_fact_consumptions: u64,
         pub presentation_evaluations: u64,
+        pub call_frame_value_nodes: u64,
+        pub call_output_evidence_nodes: u64,
+        pub presentation_evidence_copy_nodes: u64,
     }
 
     thread_local! { static COUNTS: Cell<Counts> = Cell::new(Counts::default()); }
@@ -70,6 +79,9 @@ mod observer {
                 Event::FrameExecution => &mut counts.frame_executions,
                 Event::ConstructorFactConsumption => &mut counts.constructor_fact_consumptions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
+                Event::CallFrameValueNodes => &mut counts.call_frame_value_nodes,
+                Event::CallOutputEvidenceNodes => &mut counts.call_output_evidence_nodes,
+                Event::PresentationEvidenceCopyNode => &mut counts.presentation_evidence_copy_nodes,
             };
             *count = count.saturating_add(amount);
             cell.set(counts);
@@ -107,6 +119,15 @@ mod observer {
                 presentation_evaluations: after
                     .presentation_evaluations
                     .saturating_sub(before.presentation_evaluations),
+                call_frame_value_nodes: after
+                    .call_frame_value_nodes
+                    .saturating_sub(before.call_frame_value_nodes),
+                call_output_evidence_nodes: after
+                    .call_output_evidence_nodes
+                    .saturating_sub(before.call_output_evidence_nodes),
+                presentation_evidence_copy_nodes: after
+                    .presentation_evidence_copy_nodes
+                    .saturating_sub(before.presentation_evidence_copy_nodes),
             },
         )
     }

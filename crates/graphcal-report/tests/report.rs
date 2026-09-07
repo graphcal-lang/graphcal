@@ -42,6 +42,21 @@ plot dv_plot = {
 };
 ";
 
+#[test]
+fn static_reports_keep_si_and_separate_presentation_notices() {
+    let document = build_document(
+        "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",
+    );
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let markdown = render_report_markdown(&document);
+    for rendered in [html, markdown] {
+        assert!(rendered.contains("Presentation diagnostics"));
+        assert!(rendered.contains("SI value retained"));
+        assert!(rendered.contains("output"));
+        assert!(rendered.contains('6'));
+    }
+}
+
 fn build_document(source: &str) -> ReportDocument {
     let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
     let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();

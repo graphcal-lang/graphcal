@@ -52,7 +52,7 @@ fn resolve_dynamic_unit_scale(
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
     let unit_dag = ctx.tir.dag_registry().get(unit.owner()).ok_or_else(|| {
-        ctx.eval_error(
+        ctx.internal_error(
             format!("dynamic unit owner for `{spelling}` could not be resolved"),
             span,
         )
@@ -62,16 +62,16 @@ fn resolve_dynamic_unit_scale(
         .dynamic_unit_scales
         .get(unit)
         .ok_or_else(|| {
-            ctx.eval_error(
+            ctx.internal_error(
                 format!("dynamic unit scale for `{spelling}` could not be resolved"),
                 span,
             )
         })?;
     let scale_ctx = ctx.for_dag(unit_dag, &scale_hir.src)?;
     if scale_hir.declared_dimension != scale_hir.base_unit_dimension {
-        return Err(scale_ctx.eval_error(
+        return Err(scale_ctx.internal_error(
             format!(
-                "internal: dynamic unit `{}` has mismatched declared and base-unit dimensions",
+                "dynamic unit `{}` has mismatched declared and base-unit dimensions",
                 scale_hir.spelling
             ),
             scale_hir.span,
@@ -80,7 +80,7 @@ fn resolve_dynamic_unit_scale(
     let empty_locals = HirLocalValueMap::root();
     let scale_val = eval_hir_expr(&scale_hir.expr, values, &empty_locals, &scale_ctx)?;
     let RuntimeValue::Quantity(scale_f64) = scale_val else {
-        return Err(scale_ctx.eval_error(
+        return Err(scale_ctx.internal_error(
             "dynamic unit scale expression must evaluate to a quantity",
             scale_hir.expr.span,
         ));
@@ -129,8 +129,8 @@ pub fn resolve_unit_scale(
             source_unit.clone()
         };
         let info = ctx.tir.unit_info(&resolved_unit).ok_or_else(|| {
-            ctx.eval_error(
-                format!("unknown unit `{}`", item.name.value.spelling()),
+            ctx.internal_error(
+                format!("unknown checked unit `{}`", item.name.value.spelling()),
                 item.name.span,
             )
         })?;

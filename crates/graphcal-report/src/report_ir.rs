@@ -26,6 +26,7 @@ pub struct ReportDocument {
     pub figures: Vec<FigureCard>,
     /// Plot declarations that failed to evaluate.
     pub(crate) plot_errors: Vec<CheckMessage>,
+    pub(crate) presentation_diagnostics: Vec<String>,
     /// Assertion results in declaration order.
     pub checks: Vec<CheckRow>,
     /// Build provenance rendered in the footer.
@@ -220,6 +221,11 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
         values,
         figures,
         plot_errors,
+        presentation_diagnostics: result
+            .presentation_diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
         checks,
         provenance: inputs.provenance,
     })

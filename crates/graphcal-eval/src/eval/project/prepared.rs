@@ -29,7 +29,7 @@ use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstrain
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
-use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
 
 use crate::host_fns::HostFunctionRegistry;
 use crate::project_compiler::{
@@ -159,7 +159,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value,
-                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
+                presentation: crate::presentation_evidence::PresentationInstance::None,
             },
         )
     }
@@ -178,7 +178,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Int(value),
-                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
+                presentation: crate::presentation_evidence::PresentationInstance::None,
             },
         )
     }
@@ -197,7 +197,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Bool(value),
-                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
+                presentation: crate::presentation_evidence::PresentationInstance::None,
             },
         )
     }
@@ -238,11 +238,17 @@ impl ParameterBindingBuilder<'_> {
                     index_name: index.clone(),
                     variant: variant.clone(),
                 },
-                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
+                presentation: crate::presentation_evidence::PresentationInstance::None,
             },
         )
     }
 }
+struct ImportedConstantOutput {
+    declaration: RuntimeDeclKey,
+    value: RuntimeValue,
+    declared_type: DeclaredType,
+}
+
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     include_debug_names: IncludeDebugNameMap,
@@ -250,7 +256,7 @@ struct ProjectOutputAssembly {
         ScopedName,
         graphcal_compiler::declaration_category::DeclCategory,
     )>,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_values: HashMap<ScopedName, ImportedConstantOutput>,
 }
 
 /// A checked, value-independent Graphcal project ready for repeated evaluation.
@@ -300,6 +306,26 @@ impl PreparedProject {
             include_debug_names,
         } = compiled;
 
+        let imported_values = imported_values
+            .into_iter()
+            .map(|(name, (value, declared_type))| {
+                let binding = tir.root().imported_bindings().get(&name).ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::internal_error(
+                        format!("imported output `{name}` has no checked binding"),
+                        &source,
+                        DiagnosticAnchor::WholeFile,
+                    ))
+                })?;
+                Ok((
+                    name,
+                    ImportedConstantOutput {
+                        declaration: RuntimeDeclKey::resolved(binding.target().clone()),
+                        value,
+                        declared_type,
+                    },
+                ))
+            })
+            .collect::<Result<_, CompileError>>()?;
         let mut schema_builder = ModelSchemaGraphBuilder::new(&tir, &source);
         let parameter_ports =
             build_parameter_ports(plan_id, &entry_interface, &plan, &mut schema_builder)?;
@@ -380,15 +406,16 @@ impl PreparedProject {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<EvalResult, CompileError> {
         self.validate_row_identity(row)?;
-        let eval_result = super::super::runtime::evaluate_plan_with_bindings_and_cancellation(
-            &self.tir,
-            &self.plan,
-            &row.bindings,
-            &self.declared_types,
-            &self.source,
-            &self.host_fns,
-            cancellation,
-        )?;
+        let eval_result =
+            super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
+                &self.tir,
+                &self.plan,
+                &row.bindings,
+                &self.declared_types,
+                &self.source,
+                &self.host_fns,
+                cancellation,
+            )?;
         self.assemble_normal_result(eval_result, cancellation)
     }
 
@@ -458,9 +485,10 @@ impl PreparedProject {
 
     fn assemble_normal_result(
         &self,
-        mut eval_result: EvalResult,
+        evaluation: super::super::runtime::RuntimeEvaluation,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<EvalResult, CompileError> {
+        let mut eval_result = evaluation.result;
         apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
         let assertions = eval_result.assertions;
 
@@ -478,11 +506,33 @@ impl PreparedProject {
             let Some(decl_type) = output_decl_type(*category) else {
                 continue;
             };
-            if let Some((runtime, declared_type)) = self.output_assembly.imported_values.get(name) {
-                let value =
-                    crate::eval::public_projection::EvaluatedValue::new(runtime, declared_type)
-                        .project(&self.tir, &self.source)
-                        .map_err(CompileError::from)?;
+            if let Some(imported) = self.output_assembly.imported_values.get(name) {
+                let mut value = crate::eval::public_projection::EvaluatedValue::new(
+                    &imported.value,
+                    &imported.declared_type,
+                )
+                .project(&self.tir, &self.source)
+                .map_err(CompileError::from)?;
+                let diagnostics = crate::eval::display::attach_presentation(
+                    &mut value,
+                    evaluation.presentation_instances.get(&imported.declaration),
+                )
+                .map_err(|error| {
+                    CompileError::Eval(GraphcalError::internal_error(
+                        error.to_string(),
+                        &self.source,
+                        DiagnosticAnchor::WholeFile,
+                    ))
+                })?;
+                eval_result
+                    .presentation_diagnostics
+                    .extend(diagnostics.into_iter().map(|detail| {
+                        crate::presentation_evidence::PresentationDiagnostic {
+                            declaration: imported.declaration.as_resolved().clone(),
+                            channel: None,
+                            detail,
+                        }
+                    }));
                 push_output_value(
                     (name.clone(), Ok(value), decl_type),
                     &mut consts,
@@ -506,6 +556,7 @@ impl PreparedProject {
             assertions,
             plots: eval_result.plots,
             plot_errors: eval_result.plot_errors,
+            presentation_diagnostics: eval_result.presentation_diagnostics,
             figures: eval_result.figures,
             layers: eval_result.layers,
             assumes_map: eval_result.assumes_map,
