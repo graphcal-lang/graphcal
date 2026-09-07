@@ -309,7 +309,7 @@ mod js {
     }
 
     fn outcome_js(outcome: &PlaygroundOutcome) -> JsValue {
-        serde_wasm_bindgen::to_value(outcome).unwrap_or_else(|error| {
+        crate::output::to_js(outcome).unwrap_or_else(|error| {
             JsValue::from_str(&format!("could not serialize prepare outcome: {error}"))
         })
     }
@@ -423,8 +423,7 @@ mod js {
         /// Typed entry parameter ports in source declaration order.
         #[wasm_bindgen(js_name = parameterPorts)]
         pub fn parameter_ports(&self) -> Result<JsValue, JsValue> {
-            serde_wasm_bindgen::to_value(&self.inner.ports())
-                .map_err(|error| serialization_error(&error))
+            crate::output::to_js(&self.inner.ports()).map_err(|error| serialization_error(&error))
         }
 
         /// Evaluate with `[{name, expr}]` closed-value bindings; unbound
@@ -438,7 +437,7 @@ mod js {
         pub fn evaluate_bindings(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
             let bindings: Vec<BindingRequest> = serde_wasm_bindgen::from_value(bindings)
                 .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
-            serde_wasm_bindgen::to_value(&self.inner.evaluate(&bindings))
+            crate::output::to_js(&self.inner.evaluate(&bindings))
                 .map_err(|error| serialization_error(&error))
         }
     }

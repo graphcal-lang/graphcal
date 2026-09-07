@@ -84,3 +84,29 @@ for (const baseline of [[], [{ name: "doubled", expr: "8.0" }]]) {
   run.prepared.free();
 }
 console.log("report runtime: reactive defaults, explicit bindings, clear and reset passed");
+
+const vegaContext = { console, structuredClone };
+runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
+runInNewContext(readFileSync("crates/graphcal-report/assets/vega-lite.min.js", "utf8"), vegaContext);
+function assertJsonObjects(item) {
+  assert.ok(!(item instanceof Map), "Vega JSON must not contain Maps");
+  if (item && typeof item === "object") {
+    if (!Array.isArray(item)) assert.equal(Object.getPrototypeOf(item), Object.prototype);
+    for (const child of Object.values(item)) assertJsonObjects(child);
+  }
+}
+for (const fixture of ["figure_basic", "layer_basic"]) {
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content: readFileSync(`tests/fixtures/valid/${fixture}.gcl`, "utf8") }] };
+  const prepared = reportEngine.prepareProject(project);
+  for (const outcome of [reportEngine.evaluateProject(project), prepared.evaluateBindings([])]) {
+    assert.equal(outcome.status, "evaluated");
+    assert.ok(outcome.evaluation.figures.length >= 1);
+    assert.ok(outcome.evaluation.figures.some(figure => figure.spec.hconcat || figure.spec.vconcat || figure.spec.concat || figure.spec.layer));
+    for (const figure of outcome.evaluation.figures) {
+      assertJsonObjects(figure.spec);
+      assert.ok(vegaContext.vegaLite.compile(figure.spec).spec);
+    }
+  }
+  prepared.free();
+}
+console.log("Wasm figure transport: ordinary nested objects compile with vendored Vega-Lite");
