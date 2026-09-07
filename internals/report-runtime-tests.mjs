@@ -17,8 +17,8 @@ class Element {
   setAttribute(name, value) { this[name] = value; }
   replaceChildren(...children) { this.children = children; }
 }
-function runtime(source, baseline = []) {
-  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content: source }] };
+function runtime(source, baseline = [], files = []) {
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content: source }, ...files] };
   const prepared = reportEngine.prepareProject(project);
   const cards = new Map(prepared.parameterPorts().map(port => [port.name, new Element()]));
   const payloads = {
@@ -134,3 +134,26 @@ for (const [lower, upper, slider] of [
   run.prepared.free();
 }
 console.log("integer controls: exact i64 bounds, one-sided domains and safe sliders passed");
+
+for (const [prefix, index, files] of [
+  ["pub index Mode = { Nominal, Safe };", "Mode", []],
+  ["import modes as config;", "config::Mode", [{ path: "modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
+  ["import modes::{ Mode as Setting };", "Setting", [{ path: "modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
+]) {
+  const run = runtime(`${prefix} param mode: Key<${index}> = ${index}#Nominal; param enabled: Bool = true;`, [], files);
+  const select = run.cards.get("mode").children[0].children.find(child => child.tag === "select");
+  assert.equal(select.value, `${index}#Nominal`);
+  assert.deepEqual(select.children.map(child => child.value), [`${index}#Nominal`, `${index}#Safe`]);
+  const checkbox = run.cards.get("enabled").children[0].children[0].children[0];
+  checkbox.checked = false;
+  checkbox.events.change();
+  assert.equal(value(run.evaluate(), "mode").variant, "Nominal");
+  assert.deepEqual(run.bindings(), [{ name: "enabled", expr: "false" }]);
+  for (const option of select.children) {
+    select.value = option.value;
+    select.events.change();
+    assert.equal(value(run.evaluate(), "mode").variant, option.textContent);
+  }
+  run.prepared.free();
+}
+console.log("named-key controls: actual default and option expressions bind, including qualified and aliased indexes");

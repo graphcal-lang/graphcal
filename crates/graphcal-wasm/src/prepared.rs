@@ -174,7 +174,7 @@ impl PreparedPlayground {
         self.prepared
             .parameter_ports()
             .iter()
-            .map(parameter_port_view)
+            .map(|port| parameter_port_view(port, &self.prepared))
             .collect()
     }
 
@@ -237,15 +237,15 @@ fn bind_one(
         .map_err(|error| error.to_string())
 }
 
-fn parameter_port_view(port: &ParameterPort) -> ParameterPortView {
+fn parameter_port_view(port: &ParameterPort, prepared: &PreparedProject) -> ParameterPortView {
     ParameterPortView {
         name: port.name().to_string(),
         has_default: port.has_default(),
-        control: control_view(port),
+        control: control_view(port, prepared),
     }
 }
 
-fn control_view(port: &ParameterPort) -> ControlView {
+fn control_view(port: &ParameterPort, prepared: &PreparedProject) -> ControlView {
     match port.value_schema() {
         ModelValueSchema::Quantity(quantity) => {
             let (lower_si, upper_si) = match port.domain() {
@@ -274,9 +274,16 @@ fn control_view(port: &ParameterPort) -> ControlView {
         }
         ModelValueSchema::Bool => ControlView::Boolean,
         ModelValueSchema::Key(index) => match index.kind() {
-            ModelIndexKind::Named { variants } => ControlView::Select {
-                index: index.identity().display_name().to_string(),
-                variants: variants.iter().map(ToString::to_string).collect(),
+            ModelIndexKind::Named { variants } => match index
+                .identity()
+                .declared_resolved()
+                .and_then(|index| prepared.source_index_path(index))
+            {
+                Some(path) => ControlView::Select {
+                    index: path.to_string(),
+                    variants: variants.iter().map(ToString::to_string).collect(),
+                },
+                None => ControlView::Expression,
             },
             ModelIndexKind::Coordinate { .. } | ModelIndexKind::Finite { .. } => {
                 ControlView::Expression

@@ -287,6 +287,16 @@ impl std::fmt::Debug for PreparedProject {
 }
 
 impl PreparedProject {
+    /// Source-visible index spelling for closed entry bindings, when available.
+    #[must_use]
+    pub fn source_index_path(
+        &self,
+        index: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    ) -> Option<graphcal_compiler::syntax::names::NamePath> {
+        self.module_resolver
+            .source_index_path(self.tir.root_dag_id(), index)
+    }
+
     pub(in crate::eval::project) fn from_compiled(
         compiled: CompiledFile,
         plan: crate::execution_plan::ExecPlan,

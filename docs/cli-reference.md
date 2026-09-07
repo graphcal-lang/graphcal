@@ -607,7 +607,9 @@ not bind its parameter, and dependent defaults refresh after evaluation. Editing
 a control creates an explicit reader binding. Clearing its text or choosing
 **Use default** removes that binding (including a build-time override). Reset
 restores precisely the original build-time binding set, not literal copies of
-all displayed defaults.
+all displayed defaults. Named-key selects emit `Index#Variant` literals using
+a source-visible index spelling (including imported aliases and qualification),
+not the display-only canonical name.
 
 The artifact is a single file with everything inlined — engine, sources,
 Vega bundles, styles: it works offline, from `file://` paths, and as an
