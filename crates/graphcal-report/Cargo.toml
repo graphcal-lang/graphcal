@@ -14,6 +14,7 @@ categories.workspace = true
 base64.workspace = true
 graphcal-compiler = { workspace = true }
 graphcal-eval = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 

@@ -2067,6 +2067,7 @@ dependencies = [
  "base64 0.23.1",
  "graphcal-compiler",
  "graphcal-eval",
+ "serde",
  "serde_json",
  "thiserror",
 ]

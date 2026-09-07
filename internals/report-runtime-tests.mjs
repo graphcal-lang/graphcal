@@ -1,7 +1,10 @@
 // Exercise the production report functions with a minimal DOM adapter and the
 // actual embedded Wasm exports. DOM layout is not modeled by this Node suite.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 
 const glue = readFileSync("crates/graphcal-cli/assets/report-engine/graphcal_wasm.js", "utf8");
@@ -158,3 +161,32 @@ for (const [prefix, index, files] of [
   run.prepared.free();
 }
 console.log("named-key controls: actual default and option expressions bind, including qualified and aliased indexes");
+
+const rankSource = Array.from({ length: 6 }, (_, rank) => {
+  const axes = Array(rank).fill("Fin(2)").join(", ");
+  const expression = Array.from({ length: rank }, (_, i) => `for i${i}: Fin(2) { `).join("") + "7.0" + " }".repeat(rank);
+  return `node rank${rank}: Dimensionless${rank ? `[${axes}]` : ""} = ${expression};`;
+}).join("\n") + `\ntype Reading { Reading(samples: Int[Fin(2)]), }
+node nested: Reading[Fin(2)] = for i: Fin(2) { Reading(samples: table[Fin(2)] { 11; 12; }) };`;
+const temporary = mkdtempSync(join(tmpdir(), "graphcal-value-body-"));
+try {
+  const sourcePath = join(temporary, "main.gcl");
+  const output = join(temporary, "report.html");
+  writeFileSync(sourcePath, rankSource);
+  const cli = spawnSync("target/debug/graphcal", ["report", "build", sourcePath, "--static", "--output", output], { encoding: "utf8", timeout: 20000 });
+  assert.equal(cli.status, 0, cli.stderr);
+  const html = readFileSync(output, "utf8");
+  const run = runtime(rankSource);
+  function texts(element) { return [element.textContent, ...element.children.flatMap(texts)].filter(Boolean); }
+  for (const declaration of run.evaluate()) {
+    const rendered = texts(run.api.renderView(declaration.outcome.body));
+    const card = html.split(`data-decl="${declaration.name}"`)[1].split("</article>")[0];
+    const native = card.slice(card.indexOf("</h3>") + 5).replace(/<[^>]*>/g, "\n").split("\n").map(text => text.trim()).filter(Boolean);
+    assert.deepEqual(rendered, native, `static/hydrated labels and leaves: ${declaration.name}`);
+    if (declaration.name.startsWith("rank")) {
+      assert.equal(rendered.filter(text => text === "7").length, 2 ** Number(declaration.name.slice(4)));
+    }
+  }
+  run.prepared.free();
+} finally { rmSync(temporary, { recursive: true, force: true }); }
+console.log("value body: static and hydrated ranks 0–5 and nested structures have identical labels/leaves");

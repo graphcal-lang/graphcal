@@ -328,27 +328,6 @@
   }
 
   // --- Result rendering ----------------------------------------------------
-  function viewDepth(view) {
-    if (view.kind !== "indexed") return 0;
-    var first = view.entries.length > 0 ? view.entries[0].value : null;
-    return 1 + (first ? viewDepth(first) : 0);
-  }
-
-  function flattenView(prefix, view, out) {
-    if (view.kind === "struct" && view.fields.length > 0) {
-      for (var i = 0; i < view.fields.length; i += 1) {
-        flattenView(prefix + "." + view.fields[i].name, view.fields[i].value, out);
-      }
-    } else if (view.kind === "indexed") {
-      for (var j = 0; j < view.entries.length; j += 1) {
-        var entry = view.entries[j];
-        flattenView(prefix + "[" + entry.display_key + "]", entry.value, out);
-      }
-    } else {
-      out.push([prefix, view.display]);
-    }
-  }
-
   function buildEntriesTable(entries) {
     var table = element("table", "entries");
     table.setAttribute("data-role", "value");
@@ -368,22 +347,9 @@
     return table;
   }
 
-  function buildGrid(view) {
-    var columns = [];
-    var rows = [];
-    for (var i = 0; i < view.entries.length; i += 1) {
-      var outer = view.entries[i];
-      var cells = {};
-      var inner = outer.value;
-      if (inner.kind === "indexed") {
-        for (var j = 0; j < inner.entries.length; j += 1) {
-          var cell = inner.entries[j];
-          if (columns.indexOf(cell.display_key) < 0) columns.push(cell.display_key);
-          cells[cell.display_key] = cell.value.display;
-        }
-      }
-      rows.push([outer.display_key, cells]);
-    }
+  function buildGrid(grid) {
+    var columns = grid.columns;
+    var rows = grid.rows;
     var table = element("table", "grid");
     var thead = document.createElement("thead");
     var headRow = document.createElement("tr");
@@ -405,7 +371,7 @@
       tr.appendChild(rowTh);
       for (var c2 = 0; c2 < columns.length; c2 += 1) {
         var td = document.createElement("td");
-        td.textContent = rows[r][1][columns[c2]] || "";
+        td.textContent = rows[r][1][c2];
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -414,30 +380,25 @@
     return table;
   }
 
+  // Shape and leaf formatting come from the exact native report projection.
+  // JavaScript is only the DOM shell for the shared ValueBody contract.
   function renderView(view) {
-    var depth = viewDepth(view);
-    if (depth === 2) {
-      var grid = buildGrid(view);
-      grid.setAttribute("data-role", "value");
-      return grid;
+    var result;
+    switch (view.kind) {
+      case "scalar": result = element("p", "card-value", view.body); break;
+      case "entries": result = buildEntriesTable(view.body); break;
+      case "grid": result = buildGrid(view.body); break;
+      case "slices":
+        result = element("div", "slices");
+        for (var slice of view.body) {
+          result.appendChild(element("h4", "slice-label", "[" + slice[0] + "]"));
+          result.appendChild(buildGrid(slice[1]));
+        }
+        break;
+      default: throw new Error("unknown report value body: " + view.kind);
     }
-    if (depth === 1 || (view.kind === "struct" && view.fields.length > 0)) {
-      var entries = [];
-      flattenView("", view, entries);
-      return buildEntriesTable(entries);
-    }
-    if (depth >= 3) {
-      var slices = element("div", "slices");
-      slices.setAttribute("data-role", "value");
-      for (var i = 0; i < view.entries.length; i += 1) {
-        slices.appendChild(element("h4", "slice-label", "[" + view.entries[i].display_key + "]"));
-        slices.appendChild(buildGrid(view.entries[i].value));
-      }
-      return slices;
-    }
-    var scalar = element("p", "card-value", view.display);
-    scalar.setAttribute("data-role", "value");
-    return scalar;
+    result.setAttribute("data-role", "value");
+    return result;
   }
 
   function patchValues(evaluation) {
@@ -449,7 +410,7 @@
       if (!slot) continue;
       var replacement;
       if (declaration.outcome.status === "value") {
-        replacement = renderView(declaration.outcome.value);
+        replacement = renderView(declaration.outcome.body);
       } else {
         var error = declaration.outcome.error;
         var message =

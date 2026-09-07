@@ -138,8 +138,13 @@ impl From<DeclType> for DeclarationKindView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DeclarationOutcomeView {
-    Value { value: ValueView },
-    Error { error: NodeErrorView },
+    Value {
+        value: ValueView,
+        body: graphcal_report::value_display::ValueBody,
+    },
+    Error {
+        error: NodeErrorView,
+    },
 }
 
 impl DeclarationOutcomeView {
@@ -148,14 +153,16 @@ impl DeclarationOutcomeView {
         symbols: &BTreeMap<BaseDimId, String>,
     ) -> Self {
         match result {
-            Ok(value) => ValueView::from_value(value, symbols).map_or_else(
-                |error| Self::Error {
+            Ok(value) => ValueView::from_value(value, symbols)
+                .and_then(|view| {
+                    graphcal_report::value_display::project_value_body(value, symbols)
+                        .map(|body| Self::Value { value: view, body })
+                })
+                .unwrap_or_else(|error| Self::Error {
                     error: NodeErrorView::EvaluationFailed {
                         message: error.to_string(),
                     },
-                },
-                |value| Self::Value { value },
-            ),
+                }),
             Err(error) => Self::Error {
                 error: NodeErrorView::from(error),
             },
@@ -505,7 +512,7 @@ mod tests {
         assert!(matches!(
             value,
             DeclarationOutcomeView::Value {
-                value: ValueView::Indexed { entries, .. }
+                value: ValueView::Indexed { entries, .. }, ..
             } if entries.len() == 2 && entries[0].display_key == "A"
         ));
     }
@@ -521,43 +528,50 @@ mod tests {
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Quantity { .. }
+                value: ValueView::Quantity { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Bool { .. }
+                value: ValueView::Bool { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Int { .. }
+                value: ValueView::Int { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Label { .. }
+                value: ValueView::Label { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Complex { .. }
+                value: ValueView::Complex { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Struct { .. }
+                value: ValueView::Struct { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Value {
-                value: ValueView::Datetime { .. }
+                value: ValueView::Datetime { .. },
+                ..
             }
         )));
     }
