@@ -1285,6 +1285,7 @@ slices of the generated order.
 21. `crates/graphcal-compiler/src/syntax/dimension.rs`
 22. `crates/graphcal-compiler/src/syntax/type_name.rs`
 23. `crates/graphcal-compiler/src/nat.rs`
+24. `crates/graphcal-compiler/src/finite_value.rs`
 
 ### Stage 2 - Core AST, parser entry, and traversal
 

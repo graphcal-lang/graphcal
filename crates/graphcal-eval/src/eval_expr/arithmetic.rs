@@ -36,10 +36,6 @@ mod tests {
 
 fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
     match lhs {
-        #[expect(
-            clippy::float_cmp,
-            reason = "Graphcal equality uses exact IEEE quantity equality"
-        )]
         RuntimeValue::Quantity(lhs) => {
             matches!(rhs, RuntimeValue::Quantity(rhs) if lhs == rhs)
         }

@@ -139,37 +139,17 @@ fn project_runtime_value(
 ) -> Result<Value, GraphcalError> {
     match (runtime, declared_type) {
         (RuntimeValue::Quantity(si_value), DeclaredType::Quantity(dimension)) => {
-            if !si_value.is_finite() {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    "runtime quantity is not finite",
-                    tir,
-                    src,
-                ));
-            }
             Ok(Value::Quantity {
-                si_value: *si_value,
+                si_value: si_value.get(),
                 dimension: dimension.clone(),
                 display_unit: None,
             })
         }
-        (RuntimeValue::Complex(si_value), DeclaredType::Complex(dimension)) => {
-            if !si_value.re().is_finite() || !si_value.im().is_finite() {
-                return Err(projection_error(
-                    runtime,
-                    declared_type,
-                    "runtime complex quantity is not finite",
-                    tir,
-                    src,
-                ));
-            }
-            Ok(Value::Complex {
-                si_value: *si_value,
-                dimension: dimension.clone(),
-                display_unit: None,
-            })
-        }
+        (RuntimeValue::Complex(si_value), DeclaredType::Complex(dimension)) => Ok(Value::Complex {
+            si_value: *si_value,
+            dimension: dimension.clone(),
+            display_unit: None,
+        }),
         (RuntimeValue::Bool(value), DeclaredType::Bool) => Ok(Value::Bool(*value)),
         (RuntimeValue::Int(value), DeclaredType::Int) => Ok(Value::Int(*value)),
         (RuntimeValue::Int(position), DeclaredType::Key(index)) => {
@@ -434,7 +414,7 @@ fn project_runtime_value(
                 reason = "coordinate runtime values are copied exactly from the checked axis"
             )]
             let coordinate_mismatch =
-                !position_out_of_bounds && data.coordinate_value(*position) != *value;
+                !position_out_of_bounds && data.coordinate_value(*position) != value.get();
             if position_out_of_bounds || coordinate_mismatch {
                 return Err(projection_error(
                     runtime,
@@ -477,7 +457,7 @@ fn project_runtime_value(
                 }
             };
             Ok(Value::Quantity {
-                si_value: *value,
+                si_value: value.get(),
                 dimension,
                 display_unit,
             })
@@ -552,7 +532,7 @@ mod tests {
     fn mismatched_checked_type_is_an_internal_projection_error() {
         let tir = crate::eval::compile_to_tir("", "projection.gcl").unwrap();
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
-        let runtime = RuntimeValue::Quantity(1.0);
+        let runtime = RuntimeValue::quantity(1.0).unwrap();
         let error = EvaluatedValue::new(&runtime, &DeclaredType::Bool)
             .project(&tir, &src)
             .unwrap_err();
@@ -564,7 +544,7 @@ mod tests {
     fn checked_quantity_dimension_is_required_and_preserved() {
         let tir = crate::eval::compile_to_tir("", "projection.gcl").unwrap();
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
-        let runtime = RuntimeValue::Quantity(1.0);
+        let runtime = RuntimeValue::quantity(1.0).unwrap();
         let declared =
             DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
         let projected = EvaluatedValue::new(&runtime, &declared)
@@ -578,17 +558,8 @@ mod tests {
     }
 
     #[test]
-    fn projection_rejects_non_finite_runtime_quantities() {
-        let tir = crate::eval::compile_to_tir("", "projection.gcl").unwrap();
-        let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
-        let declared =
-            DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
-        let runtime = RuntimeValue::Quantity(f64::INFINITY);
-
-        assert!(matches!(
-            EvaluatedValue::new(&runtime, &declared).project(&tir, &src),
-            Err(GraphcalError::InternalError { .. })
-        ));
+    fn runtime_ingress_rejects_non_finite_quantities_before_projection() {
+        assert!(RuntimeValue::quantity(f64::INFINITY).is_err());
     }
 
     #[test]
@@ -637,11 +608,7 @@ mod tests {
             tir.root_dag_id().clone(),
             graphcal_compiler::syntax::index_name::IndexName::expect_valid("Step"),
         );
-        let runtime = RuntimeValue::CoordinateLabel {
-            index_name: index,
-            position: 0,
-            value: 0.0,
-        };
+        let runtime = RuntimeValue::coordinate_label(index, 0, 0.0).unwrap();
         let declared =
             DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
 
@@ -665,8 +632,14 @@ mod tests {
         let runtime = RuntimeValue::Indexed {
             index_name: index.clone(),
             entries: IndexMap::from([
-                (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0)),
-                (IndexEntryKey::position(1), RuntimeValue::Quantity(2.0)),
+                (
+                    IndexEntryKey::position(0),
+                    RuntimeValue::quantity(1.0).unwrap(),
+                ),
+                (
+                    IndexEntryKey::position(1),
+                    RuntimeValue::quantity(2.0).unwrap(),
+                ),
             ]),
         };
 

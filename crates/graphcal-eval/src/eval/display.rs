@@ -583,11 +583,10 @@ fn presentation_index_binding(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            Ok(RuntimeValue::CoordinateLabel {
-                index_name: index.clone(),
-                position,
-                value: data.coordinate_value(position),
-            })
+            RuntimeValue::coordinate_label(index.clone(), position, data.coordinate_value(position))
+                .map_err(|error| {
+                    presentation_error(ctx, error.to_string(), DiagnosticAnchor::WholeFile)
+                })
         }
         (IndexKind::Finite { .. }, IndexEntryKey::Position(position)) => i64::try_from(*position)
             .map(RuntimeValue::Int)

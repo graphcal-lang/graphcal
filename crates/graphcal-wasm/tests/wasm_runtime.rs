@@ -87,6 +87,85 @@ fn javascript_boundary_evaluates_a_valid_bounded_request() {
     assert_eq!(status, "evaluated");
 }
 
+fn property(value: &JsValue, name: &str) -> JsValue {
+    Reflect::get(value, &JsValue::from_str(name)).unwrap()
+}
+
+fn declaration_outcome(evaluation: &JsValue, name: &str) -> JsValue {
+    let values: Array = property(evaluation, "values").dyn_into().unwrap();
+    let declaration = (0..values.length())
+        .map(|index| values.get(index))
+        .find(|value| property(value, "name").as_string().as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("missing declaration {name}"));
+    property(&declaration, "outcome")
+}
+
+fn quantity_si(evaluation: &JsValue, name: &str) -> f64 {
+    let outcome = declaration_outcome(evaluation, name);
+    assert_eq!(
+        property(&outcome, "status").as_string().as_deref(),
+        Some("value")
+    );
+    let value = property(&outcome, "value");
+    assert_eq!(
+        property(&value, "kind").as_string().as_deref(),
+        Some("quantity")
+    );
+    property(&value, "si_value").as_f64().unwrap()
+}
+
+#[wasm_bindgen_test]
+fn javascript_boundary_preserves_numeric_edges_and_contains_non_finite_results() {
+    let source = r"
+node matrix: Dimensionless[Fin(4), Fin(4)] = table[Fin(4), Fin(4)] {
+    1.0e-200, 0.0, 0.0, 0.0;
+    0.0, 1.0e-200, 0.0, 0.0;
+    0.0, 0.0, 1.0e200, 0.0;
+    0.0, 0.0, 0.0, 1.0e200;
+};
+node determinant: Dimensionless = det(@matrix);
+node samples: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0e308; 1.0e-100; -1.0e308; };
+node average: Dimensionless = mean(@samples);
+node quotient: Complex<Dimensionless> = complex(5.0e-324, 0.0) / complex(0.5, 0.5);
+node real_part: Dimensionless = re(@quotient);
+node imaginary_part: Dimensionless = im(@quotient);
+node signed_zero: Dimensionless = -0.0;
+node overflow: Dimensionless = 1.0e308 * 2.0;
+";
+    let files = Array::new();
+    files.push(&js_file(
+        &JsValue::from_str("main.gcl"),
+        &JsValue::from_str(source),
+    ));
+    let outcome = evaluate_project_js(js_request(&JsValue::from_str("main.gcl"), &files)).unwrap();
+    assert_eq!(
+        property(&outcome, "status").as_string().as_deref(),
+        Some("evaluated")
+    );
+    let evaluation = property(&outcome, "evaluation");
+    assert!((quantity_si(&evaluation, "determinant") - 1.0).abs() <= 4.0 * f64::EPSILON);
+    assert_eq!(
+        quantity_si(&evaluation, "average").to_bits(),
+        (1.0e-100_f64 / 3.0).to_bits()
+    );
+    assert_eq!(quantity_si(&evaluation, "real_part").to_bits(), 1);
+    assert_eq!(
+        quantity_si(&evaluation, "imaginary_part").to_bits(),
+        (-f64::from_bits(1)).to_bits()
+    );
+    assert_eq!(
+        quantity_si(&evaluation, "signed_zero").to_bits(),
+        (-0.0_f64).to_bits()
+    );
+    assert_eq!(
+        property(&declaration_outcome(&evaluation, "overflow"), "status")
+            .as_string()
+            .as_deref(),
+        Some("error")
+    );
+    assert_eq!(property(&evaluation, "has_errors").as_bool(), Some(true));
+}
+
 #[wasm_bindgen_test]
 fn javascript_boundary_rejects_file_count_before_reading_elements() {
     let files = Array::new_with_length(u32::try_from(MAX_PLAYGROUND_FILES + 1).unwrap());

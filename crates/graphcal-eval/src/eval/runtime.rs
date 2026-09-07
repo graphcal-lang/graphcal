@@ -1678,7 +1678,7 @@ fn tolerance_entry_or_broadcast<'a>(
 
 fn tolerance_quantity_operand(value: &RuntimeValue, role: &str) -> Result<f64, String> {
     match value {
-        RuntimeValue::Quantity(v) => Ok(*v),
+        RuntimeValue::Quantity(v) => Ok(v.get()),
         other => Err(format!("expected quantity {role}, got {other:?}")),
     }
 }
@@ -2024,7 +2024,7 @@ fn check_positive_property(
 /// placeholder or by index variant names (#840).
 fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
-        RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(*v)),
+        RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(v.get())),
         RuntimeValue::Complex(_) => Err(
             "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
                 .to_string(),
@@ -2043,6 +2043,6 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
         RuntimeValue::Datetime(epoch) => super::types::epoch_to_rfc3339(epoch)
             .map(PlotFieldValue::Datetime)
             .map_err(|error| error.to_string()),
-        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
+        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotFieldValue::Number(value.get())),
     }
 }

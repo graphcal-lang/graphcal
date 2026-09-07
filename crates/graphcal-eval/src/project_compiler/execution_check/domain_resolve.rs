@@ -132,7 +132,7 @@ fn resolve_constraint_from_bounds(
             ctx,
             src,
             |value, bound| match value {
-                RuntimeValue::Quantity(value) => Ok(*value),
+                RuntimeValue::Quantity(value) => Ok(value.get()),
                 RuntimeValue::Int(value) => exact_domain_int_bound(*value, src, bound.value.span),
                 other => Err(domain_bound_value_error(
                     display_name,
@@ -762,7 +762,7 @@ fn check_const_struct_field_constraints(
 /// Format a runtime value for inclusion in a `DomainViolation` error message.
 fn format_runtime_value(rv: &RuntimeValue) -> String {
     match rv {
-        RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(*v),
+        RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(v.get()),
         RuntimeValue::Int(i) => format!("{i}"),
         RuntimeValue::Datetime(epoch) => epoch.to_string(),
         RuntimeValue::Indexed { entries, .. } => {

@@ -3,10 +3,31 @@
 use graphcal_compiler::builtin::ComplexFn;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::desugar::desugared_ast::BinOp;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueKind};
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RawComplex {
+    re: f64,
+    im: f64,
+}
+
+impl RawComplex {
+    const fn new(re: f64, im: f64) -> Self {
+        Self { re, im }
+    }
+
+    const fn re(self) -> f64 {
+        self.re
+    }
+
+    const fn im(self) -> f64 {
+        self.im
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub(super) enum ComplexEvalError {
@@ -53,8 +74,8 @@ pub(super) fn evaluate_builtin(
         ComplexFn::Rectangular => {
             let re = quantity(&arguments[0])?;
             let im = quantity(&arguments[1])?;
-            finite_complex(ComplexValue::new(re, im), "complex() construction")
-                .map(RuntimeValue::Complex)
+            finite_complex(RawComplex::new(re, im), "complex() construction")
+                .and_then(|value| runtime_complex(value, "complex() construction"))
         }
         ComplexFn::Polar => {
             let magnitude = quantity(&arguments[0])?;
@@ -63,43 +84,44 @@ pub(super) fn evaluate_builtin(
                 return Err(ComplexEvalError::NegativeMagnitude { value: magnitude });
             }
             finite_complex(
-                ComplexValue::new(magnitude * phase.cos(), magnitude * phase.sin()),
+                RawComplex::new(magnitude * phase.cos(), magnitude * phase.sin()),
                 "polar()",
             )
-            .map(RuntimeValue::Complex)
+            .and_then(|value| runtime_complex(value, "polar()"))
         }
         ComplexFn::ToComplex => quantity(&arguments[0])
-            .map(|value| RuntimeValue::Complex(ComplexValue::new(value, 0.0))),
-        ComplexFn::Real => complex(&arguments[0]).map(|value| RuntimeValue::Quantity(value.re())),
+            .and_then(|value| runtime_complex(RawComplex::new(value, 0.0), "to_complex()")),
+        ComplexFn::Real => {
+            complex(&arguments[0]).and_then(|value| runtime_quantity(value.re(), "real()"))
+        }
         ComplexFn::Imaginary => {
-            complex(&arguments[0]).map(|value| RuntimeValue::Quantity(value.im()))
+            complex(&arguments[0]).and_then(|value| runtime_quantity(value.im(), "imaginary()"))
         }
         ComplexFn::Phase => complex(&arguments[0])
             .and_then(|value| finite_quantity(value.im().atan2(value.re()), "phase()"))
-            .map(RuntimeValue::Quantity),
+            .and_then(|value| runtime_quantity(value, "phase()")),
         ComplexFn::Conjugate => complex(&arguments[0])
-            .and_then(|value| finite_complex(ComplexValue::new(value.re(), -value.im()), "conj()"))
-            .map(RuntimeValue::Complex),
+            .and_then(|value| finite_complex(RawComplex::new(value.re(), -value.im()), "conj()"))
+            .and_then(|value| runtime_complex(value, "conj()")),
         ComplexFn::Absolute => match &arguments[0] {
-            RuntimeValue::Complex(value) => {
-                finite_quantity(value.re().hypot(value.im()), "abs()").map(RuntimeValue::Quantity)
-            }
+            RuntimeValue::Complex(value) => finite_quantity(value.re().hypot(value.im()), "abs()")
+                .and_then(|value| runtime_quantity(value, "abs()")),
             value => quantity(value)
                 .and_then(|value| finite_quantity(value.abs(), "abs()"))
-                .map(RuntimeValue::Quantity),
+                .and_then(|value| runtime_quantity(value, "abs()")),
         },
         ComplexFn::Exponential => match &arguments[0] {
             RuntimeValue::Complex(value) => {
                 let scale = value.re().exp();
                 finite_complex(
-                    ComplexValue::new(scale * value.im().cos(), scale * value.im().sin()),
+                    RawComplex::new(scale * value.im().cos(), scale * value.im().sin()),
                     "exp()",
                 )
-                .map(RuntimeValue::Complex)
+                .and_then(|value| runtime_complex(value, "exp()"))
             }
             value => quantity(value)
                 .and_then(|value| finite_quantity(value.exp(), "exp()"))
-                .map(RuntimeValue::Quantity),
+                .and_then(|value| runtime_quantity(value, "exp()")),
         },
     }
 }
@@ -110,34 +132,41 @@ pub(super) fn evaluate_binary(
     rhs: &RuntimeValue,
 ) -> Result<RuntimeValue, ComplexEvalError> {
     match (lhs, rhs) {
-        (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => {
-            complex_binary(operator, *lhs, *rhs).map(RuntimeValue::Complex)
-        }
+        (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => complex_binary(
+            operator,
+            RawComplex::new(lhs.re(), lhs.im()),
+            RawComplex::new(rhs.re(), rhs.im()),
+        )
+        .and_then(|value| runtime_complex(value, "complex binary operation")),
         (RuntimeValue::Complex(lhs), RuntimeValue::Quantity(rhs)) => match operator {
             BinOp::Mul => finite_complex(
-                ComplexValue::new(lhs.re() * rhs, lhs.im() * rhs),
+                RawComplex::new(lhs.re() * rhs.get(), lhs.im() * rhs.get()),
                 "complex scalar multiplication",
             )
-            .map(RuntimeValue::Complex),
+            .and_then(|value| runtime_complex(value, "complex scalar multiplication")),
             BinOp::Div => {
-                if *rhs == 0.0 {
+                if rhs.get() == 0.0 {
                     return Err(ComplexEvalError::DivisionByZero);
                 }
                 finite_complex(
-                    ComplexValue::new(lhs.re() / rhs, lhs.im() / rhs),
+                    RawComplex::new(lhs.re() / rhs.get(), lhs.im() / rhs.get()),
                     "complex scalar division",
                 )
-                .map(RuntimeValue::Complex)
+                .and_then(|value| runtime_complex(value, "complex scalar division"))
             }
             _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
         },
         (RuntimeValue::Quantity(lhs), RuntimeValue::Complex(rhs)) => match operator {
             BinOp::Mul => finite_complex(
-                ComplexValue::new(lhs * rhs.re(), lhs * rhs.im()),
+                RawComplex::new(lhs.get() * rhs.re(), lhs.get() * rhs.im()),
                 "scalar complex multiplication",
             )
-            .map(RuntimeValue::Complex),
-            BinOp::Div => divide(ComplexValue::new(*lhs, 0.0), *rhs).map(RuntimeValue::Complex),
+            .and_then(|value| runtime_complex(value, "scalar complex multiplication")),
+            BinOp::Div => divide(
+                RawComplex::new(lhs.get(), 0.0),
+                RawComplex::new(rhs.re(), rhs.im()),
+            )
+            .and_then(|value| runtime_complex(value, "complex division")),
             _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
         },
         _ => Err(ComplexEvalError::UnsupportedOperands { operator }),
@@ -146,27 +175,28 @@ pub(super) fn evaluate_binary(
 
 pub(super) fn negate(value: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
     finite_complex(
-        ComplexValue::new(-value.re(), -value.im()),
+        RawComplex::new(-value.re(), -value.im()),
         "complex negation",
     )
+    .and_then(|value| finite_complex_value(value, "complex negation"))
 }
 
 fn complex_binary(
     operator: BinOp,
-    lhs: ComplexValue,
-    rhs: ComplexValue,
-) -> Result<ComplexValue, ComplexEvalError> {
+    lhs: RawComplex,
+    rhs: RawComplex,
+) -> Result<RawComplex, ComplexEvalError> {
     match operator {
         BinOp::Add => finite_complex(
-            ComplexValue::new(lhs.re() + rhs.re(), lhs.im() + rhs.im()),
+            RawComplex::new(lhs.re() + rhs.re(), lhs.im() + rhs.im()),
             "complex addition",
         ),
         BinOp::Sub => finite_complex(
-            ComplexValue::new(lhs.re() - rhs.re(), lhs.im() - rhs.im()),
+            RawComplex::new(lhs.re() - rhs.re(), lhs.im() - rhs.im()),
             "complex subtraction",
         ),
         BinOp::Mul => finite_complex(
-            ComplexValue::new(
+            RawComplex::new(
                 lhs.im().mul_add(-rhs.im(), lhs.re() * rhs.re()),
                 lhs.im().mul_add(rhs.re(), lhs.re() * rhs.im()),
             ),
@@ -184,7 +214,7 @@ fn complex_binary(
     clippy::arithmetic_side_effects,
     reason = "arbitrary-precision rationals cannot overflow; rejecting a zero divisor makes its exact squared norm positive"
 )]
-fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
+fn divide(lhs: RawComplex, rhs: RawComplex) -> Result<RawComplex, ComplexEvalError> {
     if rhs.re() == 0.0 && rhs.im() == 0.0 {
         return Err(ComplexEvalError::DivisionByZero);
     }
@@ -223,12 +253,14 @@ fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexE
         &b * &c - &a * &d,
         lhs.im().mul_add(rhs.re(), -(lhs.re() * rhs.im())),
     )?;
-    finite_complex(ComplexValue::new(re, im), "complex division")
+    finite_complex(RawComplex::new(re, im), "complex division")
 }
 
 fn quantity(value: &RuntimeValue) -> Result<f64, ComplexEvalError> {
     match value {
-        RuntimeValue::Quantity(value) | RuntimeValue::CoordinateLabel { value, .. } => Ok(*value),
+        RuntimeValue::Quantity(value) | RuntimeValue::CoordinateLabel { value, .. } => {
+            Ok(value.get())
+        }
         other => Err(ComplexEvalError::TypeMismatch {
             expected: "a quantity",
             actual: other.kind(),
@@ -236,9 +268,9 @@ fn quantity(value: &RuntimeValue) -> Result<f64, ComplexEvalError> {
     }
 }
 
-fn complex(value: &RuntimeValue) -> Result<ComplexValue, ComplexEvalError> {
+fn complex(value: &RuntimeValue) -> Result<RawComplex, ComplexEvalError> {
     match value {
-        RuntimeValue::Complex(value) => Ok(*value),
+        RuntimeValue::Complex(value) => Ok(RawComplex::new(value.re(), value.im())),
         other => Err(ComplexEvalError::TypeMismatch {
             expected: "a complex quantity",
             actual: other.kind(),
@@ -246,10 +278,31 @@ fn complex(value: &RuntimeValue) -> Result<ComplexValue, ComplexEvalError> {
     }
 }
 
-const fn finite_complex(
-    value: ComplexValue,
+fn runtime_complex(
+    value: RawComplex,
+    operation: &'static str,
+) -> Result<RuntimeValue, ComplexEvalError> {
+    finite_complex_value(value, operation).map(RuntimeValue::Complex)
+}
+
+fn finite_complex_value(
+    value: RawComplex,
     operation: &'static str,
 ) -> Result<ComplexValue, ComplexEvalError> {
+    ComplexValue::try_new(value.re(), value.im())
+        .map_err(|_| ComplexEvalError::NonFinite { operation })
+}
+
+fn runtime_quantity(value: f64, operation: &'static str) -> Result<RuntimeValue, ComplexEvalError> {
+    FiniteQuantity::try_new(value)
+        .map(RuntimeValue::Quantity)
+        .map_err(|_| ComplexEvalError::NonFiniteQuantity { operation })
+}
+
+const fn finite_complex(
+    value: RawComplex,
+    operation: &'static str,
+) -> Result<RawComplex, ComplexEvalError> {
     if value.re().is_finite() && value.im().is_finite() {
         Ok(value)
     } else {
@@ -273,15 +326,12 @@ mod tests {
     fn division_preserves_signed_subnormal_components() {
         let tiny = f64::from_bits(1);
         for sign in [1.0, -1.0] {
-            let quotient = divide(
-                ComplexValue::new(sign * tiny, 0.0),
-                ComplexValue::new(0.5, 0.5),
-            )
-            .unwrap();
+            let quotient =
+                divide(RawComplex::new(sign * tiny, 0.0), RawComplex::new(0.5, 0.5)).unwrap();
             assert_eq!(quotient.re().to_bits(), (sign * tiny).to_bits());
             assert_eq!(quotient.im().to_bits(), (-sign * tiny).to_bits());
         }
-        let quotient = divide(ComplexValue::new(tiny, tiny), ComplexValue::new(0.5, 0.5)).unwrap();
+        let quotient = divide(RawComplex::new(tiny, tiny), RawComplex::new(0.5, 0.5)).unwrap();
         assert_eq!(quotient.re().to_bits(), (2.0 * tiny).to_bits());
         assert_eq!(quotient.im().to_bits(), 0.0_f64.to_bits());
     }
@@ -289,32 +339,28 @@ mod tests {
     #[test]
     fn division_preserves_terms_before_rescaling_and_exact_cancellation() {
         let quotient = divide(
-            ComplexValue::new(2.0e-308, 0.0),
-            ComplexValue::new(1.0e-250, 1.0e-308),
+            RawComplex::new(2.0e-308, 0.0),
+            RawComplex::new(1.0e-250, 1.0e-308),
         )
         .unwrap();
         assert!((quotient.im() / -2.0e-116 - 1.0).abs() < 4.0 * f64::EPSILON);
         for value in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::MAX] {
             assert_eq!(
-                divide(
-                    ComplexValue::new(value, value),
-                    ComplexValue::new(value, value)
-                )
-                .unwrap(),
-                ComplexValue::new(1.0, 0.0)
+                divide(RawComplex::new(value, value), RawComplex::new(value, value)).unwrap(),
+                RawComplex::new(1.0, 0.0)
             );
         }
     }
 
     #[test]
     fn multiplication_and_division_round_trip() {
-        let lhs = RuntimeValue::Complex(ComplexValue::new(3.0, 4.0));
-        let rhs = RuntimeValue::Complex(ComplexValue::new(5.0, 6.0));
+        let lhs = RuntimeValue::complex(3.0, 4.0).unwrap();
+        let rhs = RuntimeValue::complex(5.0, 6.0).unwrap();
         let product = evaluate_binary(BinOp::Mul, &lhs, &rhs).unwrap();
         let RuntimeValue::Complex(product_value) = product else {
             panic!("expected complex product");
         };
-        assert_eq!(product_value, ComplexValue::new(-9.0, 38.0));
+        assert_eq!(product_value, ComplexValue::try_new(-9.0, 38.0).unwrap());
         let product = RuntimeValue::Complex(product_value);
         let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &product, &rhs).unwrap()
         else {
@@ -326,18 +372,18 @@ mod tests {
 
     #[test]
     fn division_avoids_overflow_for_large_equal_operands() {
-        let large = RuntimeValue::Complex(ComplexValue::new(f64::MAX, f64::MAX));
+        let large = RuntimeValue::complex(f64::MAX, f64::MAX).unwrap();
         let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &large, &large).unwrap()
         else {
             panic!("expected complex quotient");
         };
-        assert_eq!(quotient, ComplexValue::new(1.0, 0.0));
+        assert_eq!(quotient, ComplexValue::try_new(1.0, 0.0).unwrap());
     }
 
     #[test]
     fn division_preserves_large_finite_quotient() {
-        let lhs = RuntimeValue::Complex(ComplexValue::new(1.0e208, 0.0));
-        let rhs = RuntimeValue::Complex(ComplexValue::new(1.0e-100, 1.0e-100));
+        let lhs = RuntimeValue::complex(1.0e208, 0.0).unwrap();
+        let rhs = RuntimeValue::complex(1.0e-100, 1.0e-100).unwrap();
         let RuntimeValue::Complex(quotient) = evaluate_binary(BinOp::Div, &lhs, &rhs).unwrap()
         else {
             panic!("expected complex quotient");
@@ -350,25 +396,25 @@ mod tests {
     fn absolute_value_uses_stable_hypot() {
         let result = evaluate_builtin(
             ComplexFn::Absolute,
-            &[RuntimeValue::Complex(ComplexValue::new(3.0, 4.0))],
+            &[RuntimeValue::complex(3.0, 4.0).unwrap()],
         );
         let RuntimeValue::Quantity(magnitude) = result.unwrap() else {
             panic!("expected quantity magnitude");
         };
-        assert!((magnitude - 5.0).abs() < f64::EPSILON);
+        assert!((magnitude.get() - 5.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn non_finite_result_is_rejected() {
-        let value = RuntimeValue::Complex(ComplexValue::new(f64::MAX, 0.0));
+        let value = RuntimeValue::complex(f64::MAX, 0.0).unwrap();
         assert!(matches!(
-            evaluate_binary(BinOp::Mul, &value, &RuntimeValue::Quantity(2.0)),
+            evaluate_binary(BinOp::Mul, &value, &RuntimeValue::quantity(2.0).unwrap()),
             Err(ComplexEvalError::NonFinite { .. })
         ));
         assert!(matches!(
             evaluate_builtin(
                 ComplexFn::Exponential,
-                &[RuntimeValue::Complex(ComplexValue::new(1_000.0, 0.0))],
+                &[RuntimeValue::complex(1_000.0, 0.0).unwrap()],
             ),
             Err(ComplexEvalError::NonFinite { .. })
         ));
@@ -379,8 +425,8 @@ mod tests {
         assert!(matches!(
             evaluate_binary(
                 BinOp::Div,
-                &RuntimeValue::Complex(ComplexValue::new(1.0, 2.0)),
-                &RuntimeValue::Complex(ComplexValue::new(0.0, 0.0)),
+                &RuntimeValue::complex(1.0, 2.0).unwrap(),
+                &RuntimeValue::complex(0.0, 0.0).unwrap(),
             ),
             Err(ComplexEvalError::DivisionByZero)
         ));

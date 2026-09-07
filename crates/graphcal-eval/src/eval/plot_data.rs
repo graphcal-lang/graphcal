@@ -97,7 +97,7 @@ fn plot_datum_from_leaf(
     display_unit: Option<&DisplayUnit>,
 ) -> Result<PlotDatum, String> {
     match rv {
-        RuntimeValue::Quantity(v) => quantity_display_value(*v, display_unit)
+        RuntimeValue::Quantity(v) => quantity_display_value(v.get(), display_unit)
             .map(PlotDatum::Number)
             .map_err(|error| error.to_string()),
         RuntimeValue::Complex(_) => Err(
@@ -113,7 +113,7 @@ fn plot_datum_from_leaf(
             }),
         // A coordinate-index loop variable surfacing as a value
         // (e.g. `x: for t: T { t }`) is numeric data (#839).
-        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotDatum::Number(*value)),
+        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotDatum::Number(value.get())),
         RuntimeValue::Bool(b) => Ok(PlotDatum::Label(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotDatum::Label(variant.to_string())),
         RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
@@ -423,7 +423,6 @@ fn incompatible_axes_message(channels: &[(EncodingChannel, ChannelData)]) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_compiler::complex_value::ComplexValue;
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use indexmap::IndexMap;
@@ -448,8 +447,8 @@ mod tests {
 
     #[test]
     fn rejects_complex_plot_data_with_projection_guidance() {
-        let error = channel_data_from_runtime(&RuntimeValue::Complex(ComplexValue::new(1.0, 2.0)))
-            .unwrap_err();
+        let error =
+            channel_data_from_runtime(&RuntimeValue::complex(1.0, 2.0).unwrap()).unwrap_err();
         assert!(error.contains("use re(), im(), abs(), or phase()"));
     }
 
@@ -457,7 +456,7 @@ mod tests {
     fn display_unit_scales_scalar_and_indexed_quantity_leaves() {
         let kilometres = DisplayUnit::try_new("km", 1000.0).unwrap();
         let scalar = channel_data_from_runtime_with_display_unit(
-            &RuntimeValue::Quantity(3000.0),
+            &RuntimeValue::quantity(3000.0).unwrap(),
             Some(&kilometres),
         )
         .unwrap();
@@ -465,8 +464,8 @@ mod tests {
             &indexed(
                 "Sample",
                 vec![
-                    ("A", RuntimeValue::Quantity(1000.0)),
-                    ("B", RuntimeValue::Quantity(2000.0)),
+                    ("A", RuntimeValue::quantity(1000.0).unwrap()),
+                    ("B", RuntimeValue::quantity(2000.0).unwrap()),
                 ],
             ),
             Some(&kilometres),
@@ -486,17 +485,17 @@ mod tests {
         let x = channel_data_from_runtime(&indexed(
             "P",
             vec![
-                ("P1", RuntimeValue::Quantity(1.0)),
-                ("P2", RuntimeValue::Quantity(2.0)),
-                ("P3", RuntimeValue::Quantity(3.0)),
+                ("P1", RuntimeValue::quantity(1.0).unwrap()),
+                ("P2", RuntimeValue::quantity(2.0).unwrap()),
+                ("P3", RuntimeValue::quantity(3.0).unwrap()),
             ],
         ))
         .unwrap();
         let y = channel_data_from_runtime(&indexed(
             "T",
             vec![
-                ("T1", RuntimeValue::Quantity(10.0)),
-                ("T2", RuntimeValue::Quantity(20.0)),
+                ("T1", RuntimeValue::quantity(10.0).unwrap()),
+                ("T2", RuntimeValue::quantity(20.0).unwrap()),
             ],
         ))
         .unwrap();
@@ -508,8 +507,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Quantity(0.1)),
-                            ("T2", RuntimeValue::Quantity(0.2)),
+                            ("T1", RuntimeValue::quantity(0.1).unwrap()),
+                            ("T2", RuntimeValue::quantity(0.2).unwrap()),
                         ],
                     ),
                 ),
@@ -518,8 +517,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Quantity(0.3)),
-                            ("T2", RuntimeValue::Quantity(0.4)),
+                            ("T1", RuntimeValue::quantity(0.3).unwrap()),
+                            ("T2", RuntimeValue::quantity(0.4).unwrap()),
                         ],
                     ),
                 ),
@@ -528,8 +527,8 @@ mod tests {
                     indexed(
                         "T",
                         vec![
-                            ("T1", RuntimeValue::Quantity(0.5)),
-                            ("T2", RuntimeValue::Quantity(0.6)),
+                            ("T1", RuntimeValue::quantity(0.5).unwrap()),
+                            ("T2", RuntimeValue::quantity(0.6).unwrap()),
                         ],
                     ),
                 ),
@@ -566,16 +565,16 @@ mod tests {
         let x = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Quantity(1.0)),
-                ("B", RuntimeValue::Quantity(2.0)),
+                ("A", RuntimeValue::quantity(1.0).unwrap()),
+                ("B", RuntimeValue::quantity(2.0).unwrap()),
             ],
         ))
         .unwrap();
         let y = channel_data_from_runtime(&indexed(
             "Pair",
             vec![
-                ("L", RuntimeValue::Quantity(10.0)),
-                ("R", RuntimeValue::Quantity(20.0)),
+                ("L", RuntimeValue::quantity(10.0).unwrap()),
+                ("R", RuntimeValue::quantity(20.0).unwrap()),
             ],
         ))
         .unwrap();
@@ -594,12 +593,12 @@ mod tests {
         let x = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Quantity(1.0)),
-                ("B", RuntimeValue::Quantity(2.0)),
+                ("A", RuntimeValue::quantity(1.0).unwrap()),
+                ("B", RuntimeValue::quantity(2.0).unwrap()),
             ],
         ))
         .unwrap();
-        let y = channel_data_from_runtime(&RuntimeValue::Quantity(7.0)).unwrap();
+        let y = channel_data_from_runtime(&RuntimeValue::quantity(7.0).unwrap()).unwrap();
 
         let aligned =
             align_encoding_channels(&[(EncodingChannel::X, x), (EncodingChannel::Y, y)]).unwrap();
@@ -640,7 +639,7 @@ mod tests {
         let mixed = channel_data_from_runtime(&indexed(
             "Step",
             vec![
-                ("A", RuntimeValue::Quantity(1.0)),
+                ("A", RuntimeValue::quantity(1.0).unwrap()),
                 ("B", RuntimeValue::Bool(true)),
             ],
         ))
@@ -661,8 +660,8 @@ mod tests {
                     indexed(
                         "P",
                         vec![
-                            ("P1", RuntimeValue::Quantity(11.0)),
-                            ("P2", RuntimeValue::Quantity(12.0)),
+                            ("P1", RuntimeValue::quantity(11.0).unwrap()),
+                            ("P2", RuntimeValue::quantity(12.0).unwrap()),
                         ],
                     ),
                 ),
@@ -671,8 +670,8 @@ mod tests {
                     indexed(
                         "P",
                         vec![
-                            ("P1", RuntimeValue::Quantity(21.0)),
-                            ("P2", RuntimeValue::Quantity(22.0)),
+                            ("P1", RuntimeValue::quantity(21.0).unwrap()),
+                            ("P2", RuntimeValue::quantity(22.0).unwrap()),
                         ],
                     ),
                 ),
@@ -682,8 +681,8 @@ mod tests {
         let line = channel_data_from_runtime(&indexed(
             "P",
             vec![
-                ("P1", RuntimeValue::Quantity(1.0)),
-                ("P2", RuntimeValue::Quantity(2.0)),
+                ("P1", RuntimeValue::quantity(1.0).unwrap()),
+                ("P2", RuntimeValue::quantity(2.0).unwrap()),
             ],
         ))
         .unwrap();

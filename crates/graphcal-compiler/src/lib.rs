@@ -13,6 +13,7 @@ pub mod desugar;
 pub mod diagnostic_anchor;
 pub mod dimension;
 pub mod exact_rational;
+pub mod finite_value;
 pub mod function_signature;
 pub mod hir;
 pub mod ir;

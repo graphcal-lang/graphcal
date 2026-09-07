@@ -777,7 +777,7 @@ fn parse_dense_array(
                         .as_f64()
                         .ok_or_else(|| "quantity array leaves must be JSON numbers".to_string())?;
                     validate_quantity(value)
-                        .map(graphcal_eval::host_abi::FiniteHostQuantity::get)
+                        .map(graphcal_compiler::finite_value::FiniteQuantity::get)
                         .map_err(|error| error.to_string())?
                 }
                 ScalarValueKind::Bool => value

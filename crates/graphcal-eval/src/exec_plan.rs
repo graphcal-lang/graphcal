@@ -396,7 +396,7 @@ mod tests {
 
     fn quantity(rv: &RuntimeValue) -> f64 {
         match rv {
-            RuntimeValue::Quantity(v) => *v,
+            RuntimeValue::Quantity(v) => v.get(),
             other => panic!("expected quantity, got {other:?}"),
         }
     }
