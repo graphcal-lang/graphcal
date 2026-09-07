@@ -31,6 +31,7 @@ lint: formal pipeline-layers-lint
 
 test: formal-conformance pipeline-layers
     cargo test --workspace
+    node internals/report-runtime-tests.mjs
 
 # Audit the closed-world CLI surface while preserving documented external crate
 # and ABI boundaries that Hawk cannot observe from the shipped binary.

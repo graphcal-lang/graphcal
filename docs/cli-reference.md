@@ -596,7 +596,12 @@ prepared model. Edits re-evaluate the embedded engine (the same compiler and
 evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
 patch values, grids, badges, and charts in place. The moment any input
 differs from the as-published baseline, a persistent banner appears with a
-one-click reset.
+one-click reset. Displayed defaults remain reactive: an untouched control does
+not bind its parameter, and dependent defaults refresh after evaluation. Editing
+a control creates an explicit reader binding. Clearing its text or choosing
+**Use default** removes that binding (including a build-time override). Reset
+restores precisely the original build-time binding set, not literal copies of
+all displayed defaults.
 
 The artifact is a single file with everything inlined — engine, sources,
 Vega bundles, styles: it works offline, from `file://` paths, and as an
