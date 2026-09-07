@@ -18,7 +18,8 @@ class Element {
   replaceChildren(...children) { this.children = children; }
 }
 function runtime(source, baseline = [], files = []) {
-  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content: source }, ...files] };
+  const entry = files.length ? "src/demo/main.gcl" : "main.gcl";
+  const project = { entry, files: [{ path: entry, content: source }, ...files] };
   const prepared = reportEngine.prepareProject(project);
   const cards = new Map(prepared.parameterPorts().map(port => [port.name, new Element()]));
   const payloads = {
@@ -137,8 +138,8 @@ console.log("integer controls: exact i64 bounds, one-sided domains and safe slid
 
 for (const [prefix, index, files] of [
   ["pub index Mode = { Nominal, Safe };", "Mode", []],
-  ["import modes as config;", "config::Mode", [{ path: "modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
-  ["import modes::{ Mode as Setting };", "Setting", [{ path: "modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
+  ["import demo.modes as config;", "config::Mode", [{ path: "graphcal.toml", content: '[package]\nname = "demo"' }, { path: "src/demo/modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
+  ["import demo.modes::{ index Mode as Setting };", "Setting", [{ path: "graphcal.toml", content: '[package]\nname = "demo"' }, { path: "src/demo/modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
 ]) {
   const run = runtime(`${prefix} param mode: Key<${index}> = ${index}#Nominal; param enabled: Bool = true;`, [], files);
   const select = run.cards.get("mode").children[0].children.find(child => child.tag === "select");

@@ -274,17 +274,14 @@ fn control_view(port: &ParameterPort, prepared: &PreparedProject) -> ControlView
         }
         ModelValueSchema::Bool => ControlView::Boolean,
         ModelValueSchema::Key(index) => match index.kind() {
-            ModelIndexKind::Named { variants } => match index
+            ModelIndexKind::Named { variants } => index
                 .identity()
                 .declared_resolved()
                 .and_then(|index| prepared.source_index_path(index))
-            {
-                Some(path) => ControlView::Select {
+                .map_or(ControlView::Expression, |path| ControlView::Select {
                     index: path.to_string(),
                     variants: variants.iter().map(ToString::to_string).collect(),
-                },
-                None => ControlView::Expression,
-            },
+                }),
             ModelIndexKind::Coordinate { .. } | ModelIndexKind::Finite { .. } => {
                 ControlView::Expression
             }
