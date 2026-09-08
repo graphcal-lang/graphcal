@@ -133,6 +133,19 @@ test("diagnostics, assertions, plugins and source text remain safe", async ({ pa
   await expect(page.locator("#output")).toContainText("plugin");
 });
 
+test("parameter edits update unit-aware results without stale output", async ({ page }) => {
+  await ready(page);
+  await source(page, "param distance: Length = 3.0 m; node doubled: Length = @distance * 2.0;");
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator("#status")).toHaveText("Up to date");
+  await expect(page.locator("#output")).toContainText("6 m");
+  await source(page, "param distance: Length = 4.0 m; node doubled: Length = @distance * 2.0;");
+  await expect(page.locator("#output")).not.toContainText("6 m");
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator("#status")).toHaveText("Up to date");
+  await expect(page.locator("#output")).toContainText("8 m");
+});
+
 test("dirty example replacement and Reset require confirmation", async ({ page }) => {
   await ready(page);
   await source(page, "node edited: Int = 3;");

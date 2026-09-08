@@ -42,8 +42,17 @@ jobs:
         with:
           python-version: 3.x
       - run: pip install zensical==0.0.52
-      - name: Build and verify documentation and standalone playground
-        run: just docs-build
+      - name: Install browser test engines
+        run: vp -C web/playground exec playwright install --with-deps chromium firefox webkit
+      - name: Build and verify documentation and standalone playground in real browsers
+        run: just playground-browser-test
+      - name: Upload browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playground-browser-failures
+          path: web/playground/test-results
+          if-no-files-found: ignore
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site

@@ -109,6 +109,10 @@ docs-build: playground-build
     zensical build --clean
     just docs-assemble
 
+# Run against the assembled artifact, with real workers in all three engines.
+playground-browser-test: docs-build
+    cd web/playground && vp exec playwright test
+
 # Documentation-only development; use site-serve to preview /playground/ too.
 docs-serve:
     zensical serve

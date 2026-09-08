@@ -19,8 +19,9 @@ createServer(async (request, response) => {
       response.writeHead(301, { Location: `${url.pathname}/${url.search}` }).end(); return;
     }
     const file = info.isDirectory() ? resolve(path, "index.html") : path;
+    const content = await readFile(file);
     response.writeHead(200, { "Content-Type": mime[extname(file)] ?? "application/octet-stream", "Cache-Control": "no-store" });
-    response.end(await readFile(file));
+    response.end(content);
   } catch {
     if (!response.headersSent) response.writeHead(404);
     response.end("Not found");

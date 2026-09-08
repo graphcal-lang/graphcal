@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { z } from "zod";
 import { beforeAll, expect, it } from "vite-plus/test";
 import catalog from "../examples/catalog.json";
 import { evaluationRequest } from "./document";
@@ -11,6 +13,25 @@ beforeAll(async () => {
   const bytes = await readFile(new URL("../public/pkg/graphcal_wasm_bg.wasm", import.meta.url));
   await engine.default({ module_or_path: new Uint8Array(bytes).buffer });
   evaluate = engine.evaluateProject;
+});
+it("ships the current workspace compiler version, not a stale cached Wasm artifact", () => {
+  const metadata = z
+    .object({ packages: z.array(z.object({ name: z.string(), version: z.string() })) })
+    .parse(
+      JSON.parse(
+        execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
+          cwd: new URL("../../../", import.meta.url),
+          encoding: "utf8",
+        }),
+      ),
+    );
+  const version = metadata.packages.find((entry) => entry.name === "graphcal-wasm")?.version;
+  expect(version).toBeDefined();
+  const result = outcomeSchema.parse(
+    evaluate(evaluationRequest({ filename: "main.gcl", source: "" })),
+  );
+  if (result.status !== "evaluated") throw new Error("Empty document did not evaluate");
+  expect(result.evaluation.compiler_version).toBe(version);
 });
 it.each(catalog)(
   "evaluates $id with real Wasm and validates its presentation contract",

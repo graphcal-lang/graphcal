@@ -52,6 +52,13 @@ describe("sharing contract v1", () => {
   it("decodes a gzip fixture produced independently of the browser codec", async () => {
     expect(await decodeFragment(payload(JSON.stringify(document)))).toEqual(document);
   });
+  it("keeps the published v1 decode format stable", async () => {
+    expect(
+      await decodeFragment(
+        "#v=1&code=H4sIAAAAAAAAE6tWSsvMSc1LzE1VslLKTczM00tPzlHSUSrOLy1KBokp1QIABYuCeyMAAAA",
+      ),
+    ).toEqual({ filename: "main.gcl", source: "" });
+  });
   it("constructs a canonical source-only fragment URL", async () => {
     const url = new URL(await shareUrl(document, "https://graphcal.org/docs/?example=no"));
     expect(url.pathname).toBe("/playground/");

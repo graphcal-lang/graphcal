@@ -1,5 +1,6 @@
 import { evaluationRequest, validateDocument } from "./document";
-import { outcomeSchema, type WorkerReply } from "./protocol";
+import type { WorkerReply } from "./protocol";
+import { boundedOutcome } from "./output-budget";
 
 function reply(message: WorkerReply) {
   self.postMessage(message);
@@ -44,7 +45,7 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
     reply({
       kind: "result",
       id: data.id as number,
-      outcome: outcomeSchema.parse(engine.evaluateProject(request)),
+      outcome: boundedOutcome(engine.evaluateProject(request)),
     });
   })().catch(failure);
 });

@@ -39,6 +39,12 @@ for manual copying. Syntax highlighting and full LSP integration are deferred.
   the combined `site/` artifact. GitHub Pages CI uses this exact recipe.
 - `just site-serve`: build and preview the whole site at localhost:4173.
 - `just docs-serve`: documentation only; it no longer builds or embeds Wasm.
+- `vp -C web/playground exec playwright install chromium firefox webkit`: install
+  browser engines once (CI uses `--with-deps` for Linux system libraries).
+- `just playground-browser-test`: rebuild the entire site and run Playwright
+  against the production artifact in Chromium, Firefox, and WebKit. This also
+  runs in the Pages workflow before artifact upload. Browser binaries are not
+  required for the ordinary `just lint` / `just test` commands.
 
 `examples/catalog.json` names canonical repository sources and expected outputs.
 `stage-examples.mjs` copies them into ignored public assets. The native catalog
@@ -52,4 +58,30 @@ identity, a 5 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
 Vega bundles are vendored from `graphcal-report` and loaded only for figures.
 `protocol.ts` validates the rendered Rust output fields; real-Wasm tests cover its
 value, assertion, diagnostic, and error variants. Plot loaders deny external
-resources and embed metadata cannot override this policy.
+resources and embed metadata cannot override this policy. `output-budget.ts`
+rejects projected results above 8 MiB inside the worker before they reach the UI.
+
+## Release verification
+
+Frontend checks include Unicode/CRLF and empty-source sharing, malformed and
+oversized payloads, a fixed v1 decode fixture, incremental decompression limits,
+worker deadlines/cancellation, UTF-16 diagnostic positions, and real-Wasm
+transport variants. The real-Wasm suite compares the engine's reported compiler
+version with Cargo metadata to catch a stale local build artifact. If that check
+fails despite a successful build, clean the `graphcal-wasm` package for the
+`wasm32-unknown-unknown` target and `wasm-release` profile, then rebuild. This is
+separate from the embedded report-engine freshness check; if that build check
+fails, use `just wasm-report-update` as usual.
+
+Browser tests cover the full catalog/plots, source-only network behavior,
+shared-link restoration in a fresh context without auto-execution, clipboard
+denial, source replacement/history confirmation, racing loads, worker failure
+and Stop/retry, unit-aware parameter edits, desktop/mobile layout, slash redirects,
+keyboard navigation, and automated light/dark WCAG accessibility scans. These
+checks do not replace a human screen-reader audit or testing on physical mobile
+devices. Actual GitHub Pages deployment and its redirects still require a
+post-merge smoke check; local tests use the assembled artifact and preview server.
+
+No production grammar, Rust compiler dependency, or LSP/editor-extension protocol
+changed. Syntax highlighting, full LSP, and the optional Download feature remain
+deferred.

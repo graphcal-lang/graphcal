@@ -14,7 +14,7 @@ The compiler and evaluator run locally in a Web Worker using WebAssembly. Your s
 
 The playground edits exactly one `.gcl` file, up to 256 KiB of UTF-8 source. Its filename is included in shared snippets because it determines the virtual package name used in self-imports. Filenames use an identifier stem (letters, digits, underscores, not starting with a digit) and `.gcl`, up to 128 characters total.
 
-Values, expandable structured/indexed values, compiler diagnostics, runtime errors, assertions, and plots are supported. Click a diagnostic location to select its source. Large output collections have **Show more** controls.
+Values, expandable structured/indexed values, compiler diagnostics, runtime errors, assertions, and plots are supported. Click a diagnostic location to select its source. Large output collections have **Show more** controls. Results exceeding the 8 MiB browser display budget are rejected before reaching the UI rather than silently truncated; use the CLI for larger calculations.
 
 Multi-file projects, package dependencies, external plugins, remote data, CLI input files, syntax highlighting, and LSP features are not available. For these workflows, [install Graphcal](installation.md). The [multi-file tutorial](tutorial/step5-multi-file-projects.md) uses the CLI.
 

@@ -87,7 +87,14 @@ function edited() {
   updateShareStatus();
   if (auto.checked) timer = setTimeout(run, 400);
 }
+function cancelLoad() {
+  if (!pendingLoad) return;
+  pendingLoad.abort();
+  pendingLoad = undefined;
+  revision++;
+}
 function run() {
+  cancelLoad();
   clearTimeout(timer);
   try {
     client.run(validateDocument(current));
@@ -131,6 +138,7 @@ async function open(location: DocumentLocation, url: string, push: boolean) {
             AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
           );
     if (token !== revision || controller.signal.aborted) return;
+    pendingLoad = undefined;
     shared = location.kind === "shared" ? document : undefined;
     load(document);
     if (push) history.pushState(null, "", url);
@@ -149,6 +157,8 @@ async function open(location: DocumentLocation, url: string, push: boolean) {
     // Keep both the document and last accepted URL when navigation fails.
     if (window.location.href !== lastLocation) history.replaceState(null, "", lastLocation);
     observedLocation = window.location.href;
+  } finally {
+    if (pendingLoad === controller) pendingLoad = undefined;
   }
 }
 filename.addEventListener("input", () => {
@@ -181,6 +191,10 @@ required("#load-example").addEventListener("click", () => {
   void open({ kind: "example", id: chooser.value }, url.href, true);
 });
 required("#share").addEventListener("click", () => {
+  if (pendingLoad) {
+    cancelLoad();
+    status.textContent = "Loading cancelled — sharing the current document";
+  }
   const snapshot = current;
   const token = revision;
   void (async () => {
@@ -243,6 +257,14 @@ window.addEventListener("pagehide", () => {
   clearTimeout(timer);
   client.stop();
   output.clear();
+});
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    stop.disabled = true;
+    auto.checked = false;
+    editor.diagnostics([]);
+    status.textContent = "Restored — press Run to evaluate";
+  }
 });
 if (import.meta.hot)
   import.meta.hot.dispose(() => {
