@@ -1,9 +1,11 @@
-import rocket from "../../../tests/fixtures/valid/rocket.gcl?raw";
 import { validateDocument, sameDocument, type SourceDocument } from "./document";
-import { required } from "./dom";
+import { element, required } from "./dom";
 import { SourceEditor } from "./editor";
+import { examples, loadExample } from "./examples";
 import { setupLayout } from "./layout";
+import { documentLocation, type DocumentLocation } from "./location";
 import { Output } from "./output";
+import { decodeFragment, shareUrl, WARN_URL_LENGTH } from "./share-codec";
 import { WorkerClient } from "./worker-client";
 import "./styles.css";
 
@@ -11,8 +13,16 @@ const filename = required<HTMLInputElement>("#filename");
 const status = required("#status");
 const stop = required<HTMLButtonElement>("#stop");
 const auto = required<HTMLInputElement>("#auto");
-let current: SourceDocument = { filename: "rocket.gcl", source: rocket };
+const chooser = required<HTMLSelectElement>("#examples");
+const shareStatus = required("#share-status");
+const shareLink = required<HTMLInputElement>("#share-link");
+let current: SourceDocument = { filename: "main.gcl", source: "" };
 let original = current;
+let shared: SourceDocument | undefined;
+let revision = 0;
+let lastLocation = window.location.href;
+let observedLocation = lastLocation;
+let pendingLoad: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 const layout = setupLayout();
 const output = new Output(required("#output"), (range) => {
@@ -48,7 +58,25 @@ const editor = new SourceEditor(
   run,
 );
 filename.value = current.filename;
+auto.checked = false;
+for (const example of examples) {
+  const option = element("option", example.title);
+  option.value = example.id;
+  chooser.append(option);
+}
+function message(error: unknown) {
+  return error instanceof Error ? error.message : "Unexpected browser error";
+}
+function updateShareStatus() {
+  shareStatus.textContent =
+    shared && sameDocument(shared, current)
+      ? "URL includes the current source."
+      : "Edits are not saved in the URL. Use Share to create a snapshot.";
+  shareLink.hidden = true;
+}
 function edited() {
+  revision++;
+  pendingLoad?.abort();
   clearTimeout(timer);
   client.invalidate();
   stop.disabled = true;
@@ -56,6 +84,7 @@ function edited() {
   queueMicrotask(() => editor.diagnostics([]));
   status.textContent = "Edited — results are stale";
   output.clear("Source changed. Run to see current results.");
+  updateShareStatus();
   if (auto.checked) timer = setTimeout(run, 400);
 }
 function run() {
@@ -63,8 +92,13 @@ function run() {
   try {
     client.run(validateDocument(current));
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : "Invalid document";
+    status.textContent = message(error);
   }
+}
+function mayReplace() {
+  return (
+    sameDocument(current, original) || confirm("Discard edits and replace the current document?")
+  );
 }
 function load(document: SourceDocument) {
   clearTimeout(timer);
@@ -76,6 +110,46 @@ function load(document: SourceDocument) {
   editor.diagnostics([]);
   output.clear();
   status.textContent = "Ready";
+  updateShareStatus();
+}
+async function open(location: DocumentLocation, url: string, push: boolean) {
+  pendingLoad?.abort();
+  const controller = new AbortController();
+  pendingLoad = controller;
+  const token = ++revision;
+  clearTimeout(timer);
+  client.stop();
+  stop.disabled = true;
+  auto.checked = false;
+  status.textContent = "Loading snippet…";
+  try {
+    const document =
+      location.kind === "shared"
+        ? await decodeFragment(location.fragment)
+        : await loadExample(
+            location.id,
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+          );
+    if (token !== revision || controller.signal.aborted) return;
+    shared = location.kind === "shared" ? document : undefined;
+    load(document);
+    if (push) history.pushState(null, "", url);
+    lastLocation = observedLocation = window.location.href;
+    chooser.value = location.kind === "example" ? location.id : "";
+    required("#example-description").textContent =
+      location.kind === "example"
+        ? examples.find((example) => example.id === location.id)!.description
+        : "Shared source — review it, then press Run. Graphcal versions may change results.";
+    auto.checked = location.kind === "example";
+    if (auto.checked) run();
+    else status.textContent = "Shared snippet loaded — press Run to evaluate";
+  } catch (error) {
+    if (token !== revision || controller.signal.aborted) return;
+    status.textContent = message(error);
+    // Keep both the document and last accepted URL when navigation fails.
+    if (window.location.href !== lastLocation) history.replaceState(null, "", lastLocation);
+    observedLocation = window.location.href;
+  }
 }
 filename.addEventListener("input", () => {
   current = { ...current, filename: filename.value };
@@ -94,27 +168,93 @@ auto.addEventListener("change", () => {
   if (auto.checked) run();
 });
 required("#reset").addEventListener("click", () => {
-  if (!sameDocument(current, original) && !confirm("Discard edits and restore the loaded snippet?"))
-    return;
+  if (!mayReplace()) return;
+  revision++;
+  pendingLoad?.abort();
   load(original);
   if (auto.checked) run();
 });
+required("#load-example").addEventListener("click", () => {
+  if (!mayReplace()) return;
+  const url = new URL("/playground/", window.location.origin);
+  url.searchParams.set("example", chooser.value);
+  void open({ kind: "example", id: chooser.value }, url.href, true);
+});
+required("#share").addEventListener("click", () => {
+  const snapshot = current;
+  const token = revision;
+  void (async () => {
+    try {
+      const url = await shareUrl(snapshot, window.location.origin);
+      if (revision !== token) {
+        shareStatus.textContent = "Source changed while sharing. Press Share again.";
+        return;
+      }
+      history.replaceState(null, "", url);
+      lastLocation = observedLocation = url;
+      shared = snapshot;
+      shareLink.value = url;
+      shareLink.hidden = false;
+      shareStatus.textContent =
+        url.length > WARN_URL_LENGTH
+          ? "Long link: some messaging apps may truncate it. Copy the full link below."
+          : "URL includes the current source. Copy the link below.";
+      try {
+        await navigator.clipboard.writeText(url);
+        if (revision === token) shareStatus.textContent += " Link copied.";
+      } catch {
+        if (revision === token) {
+          shareLink.focus();
+          shareLink.select();
+        }
+      }
+    } catch (error) {
+      if (revision === token) shareStatus.textContent = message(error);
+    }
+  })();
+});
+function navigated() {
+  if (window.location.href === observedLocation) return;
+  observedLocation = window.location.href;
+  if (!mayReplace()) {
+    history.replaceState(null, "", lastLocation);
+    observedLocation = lastLocation;
+    return;
+  }
+  try {
+    void open(documentLocation(new URL(window.location.href)), window.location.href, false);
+  } catch (error) {
+    status.textContent = message(error);
+    history.replaceState(null, "", lastLocation);
+    observedLocation = lastLocation;
+  }
+}
+window.addEventListener("popstate", navigated);
+window.addEventListener("hashchange", navigated);
 window.addEventListener("beforeunload", (event) => {
-  if (!sameDocument(current, original)) {
+  if (!sameDocument(current, original) && !(shared && sameDocument(current, shared))) {
     event.preventDefault();
     event.returnValue = "";
   }
 });
 window.addEventListener("pagehide", () => {
+  revision++;
+  pendingLoad?.abort();
   clearTimeout(timer);
   client.stop();
   output.clear();
 });
 if (import.meta.hot)
   import.meta.hot.dispose(() => {
+    revision++;
+    pendingLoad?.abort();
     clearTimeout(timer);
     client.stop();
     editor.destroy();
     output.clear();
   });
-run();
+try {
+  void open(documentLocation(new URL(window.location.href)), window.location.href, false);
+} catch (error) {
+  status.textContent = message(error);
+}

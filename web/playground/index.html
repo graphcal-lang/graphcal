@@ -14,10 +14,18 @@
     <header>
       <h1>Graphcal <span>Playground</span></h1>
       <nav aria-label="Playground controls">
+        <label
+          >Examples
+          <select id="examples">
+            <option value="" disabled>Select an example</option>
+          </select></label
+        >
+        <button id="load-example" type="button">Load example</button>
         <button id="run" type="button" title="Ctrl/Cmd+Enter">Run</button>
         <button id="stop" type="button" disabled>Stop</button>
         <label><input id="auto" type="checkbox" checked /> Auto-run</label>
         <button id="reset" type="button">Reset</button>
+        <button id="share" type="button">Share</button>
         <a href="/docs/">Docs</a>
         <button id="theme" type="button">Toggle theme</button>
       </nav>
@@ -27,6 +35,18 @@
         >Filename <input id="filename" value="main.gcl" spellcheck="false" aria-label="Filename"
       /></label>
       <span id="status" role="status">Starting…</span>
+    </div>
+    <div class="sharing-bar">
+      <span id="example-description"></span>
+      <span id="share-status" role="status"></span>
+      <input id="share-link" aria-label="Shareable URL" readonly hidden />
+      <details>
+        <summary>Sharing privacy and limits</summary>
+        Links contain readable source, not encrypted data. Anyone with the link can read it;
+        browsers and messaging apps may retain it. Do not share secrets. Source runs locally. URLs
+        are limited to 16 KiB; copy larger snippets manually. Links restore source, not a historical
+        Graphcal compiler.
+      </details>
     </div>
     <div class="mobile-tabs" aria-label="Visible pane">
       <button id="editor-tab" type="button" aria-pressed="true">Editor</button>

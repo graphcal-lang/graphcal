@@ -3,7 +3,6 @@ export interface Example {
   readonly title: string;
   readonly description: string;
   readonly filename: string;
-  readonly source: string;
 }
 
 /** URL inputs select an existing entry, never a URL/path to fetch. */

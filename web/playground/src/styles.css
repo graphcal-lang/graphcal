@@ -192,6 +192,24 @@ footer {
 .mobile-tabs {
   display: none;
 }
+.sharing-bar {
+  display: flex;
+  gap: 0.4rem 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 0.3rem 1rem;
+  font-size: 0.75rem;
+}
+#share-link {
+  width: 100%;
+  font-size: 0.8rem;
+}
+.sharing-bar details {
+  max-width: 50rem;
+}
+[hidden] {
+  display: none !important;
+}
 .cm-editor {
   font-size: 16px;
   background: var(--bg);

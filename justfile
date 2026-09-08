@@ -22,6 +22,7 @@ pipeline-layers-lint: pipeline-layers
 
 # Independent browser app assets (legacy docs embed is removed in migration).
 playground-assets:
+    vp -C web/playground exec node stage-examples.mjs
     wasm-pack build crates/graphcal-wasm --target web --out-dir ../../web/playground/public/pkg --profile wasm-release --no-typescript --no-pack
     mkdir -p web/playground/public/vega
     cp crates/graphcal-report/assets/vega.min.js crates/graphcal-report/assets/vega-lite.min.js crates/graphcal-report/assets/vega-embed.min.js web/playground/public/vega/
@@ -35,7 +36,7 @@ playground-serve: playground-assets
 playground-check:
     cd web/playground && vp check
 
-playground-test:
+playground-test: playground-assets
     cd web/playground && vp test
 
 lint: formal pipeline-layers-lint playground-check

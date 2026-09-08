@@ -1,0 +1,5 @@
+// Increase payload above 100.0 kg to make within_capacity fail.
+param payload: Mass = 40.0 kg;
+param capacity: Mass = 100.0 kg;
+node remaining_capacity: Mass = @capacity - @payload;
+assert within_capacity = @payload <= @capacity;
