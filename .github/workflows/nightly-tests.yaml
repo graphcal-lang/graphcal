@@ -30,5 +30,7 @@ jobs:
         with:
           key: nightly-release-profile
 
+      - uses: $/.github/actions/report-engine-tools
+
       - name: Test optimized workspace with overflow checks
         run: cargo test --workspace --release

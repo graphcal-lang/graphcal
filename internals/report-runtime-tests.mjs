@@ -7,10 +7,11 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 
-const glue = readFileSync("crates/graphcal-cli/assets/report-engine/graphcal_wasm.js", "utf8");
+// `just wasm-report` exports the bundle from the native build's OUT_DIR.
+const glue = readFileSync("target/wasm-report/pkg/graphcal_wasm.js", "utf8");
 globalThis.self = globalThis;
 (0, eval)(`${glue}\nglobalThis.reportEngine = wasm_bindgen;`);
-await reportEngine({ module_or_path: readFileSync("crates/graphcal-cli/assets/report-engine/graphcal_wasm_bg.wasm") });
+await reportEngine({ module_or_path: readFileSync("target/wasm-report/pkg/graphcal_wasm_bg.wasm") });
 
 class Element {
   constructor(tag = "div") { this.tag = tag; this.children = []; this.events = {}; this.textContent = ""; }

@@ -27,6 +27,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - uses: $/.github/actions/report-engine-tools
+
       - name: Clippy (all features)
         run: cargo clippy --workspace --all-targets --all-features --keep-going
 
@@ -60,6 +62,8 @@ jobs:
       - uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3 # v2.87.3
         with:
           tool: cargo-hawk@0.1.13
+
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Check closed-world public surface
         run: >-
@@ -113,6 +117,8 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Test
         run: cargo test --workspace
@@ -184,6 +190,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - uses: $/.github/actions/report-engine-tools
+
       - name: Build Graphcal
         run: cargo build --locked --package graphcal
 
@@ -233,6 +241,8 @@ jobs:
         with:
           key: windows
 
+      - uses: $/.github/actions/report-engine-tools
+
       # `--no-fail-fast` so a failure in one crate does not mask the remaining
       # crates. Windows is the newest platform here, so a round of CI should
       # report every portability gap at once rather than one per push.
@@ -271,23 +281,29 @@ jobs:
       - name: Test browser evaluator on Wasm
         run: wasm-pack test --node crates/graphcal-wasm
 
-      - name: Smoke-test hydrated report artifacts
+      - uses: $/.github/actions/report-engine-tools
+
+      - name: Smoke-test the automatically embedded report engine
         run: |
-          # Mirrors the `report-smoke` recipe in the justfile: build the
-          # no-modules engine, build a hydrated report with it, and drive
-          # the embedded payload through the prepared-project API in Node.
-          rm -rf target/wasm-report/pkg
-          wasm-pack build crates/graphcal-wasm \
-            --target no-modules \
-            --out-dir ../../target/wasm-report/pkg \
-            --profile wasm-release \
-            --no-typescript \
-            --no-pack
-          rm -f target/wasm-report/pkg/.gitignore
+          cargo run --locked -p graphcal --example export_report_engine -- target/wasm-report/pkg
           test "$(wc -c < target/wasm-report/pkg/graphcal_wasm_bg.wasm)" -le 5242880
           cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl \
             --output target/wasm-report/rocket.report.html
           node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
+          node internals/report-runtime-tests.mjs
+
+      - name: Verify release packaging includes ignored engine assets
+        run: |
+          cargo run --locked -p graphcal --example export_report_engine -- crates/graphcal-cli/assets/report-engine
+          cargo package --workspace --locked --allow-dirty --no-verify
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "graphcal") | .version')
+          tar -tzf "target/package/graphcal-$version.crate" > target/wasm-report/package-files.txt
+          for file in graphcal_wasm.js graphcal_wasm_bg.wasm bundle.json; do
+            grep -Fx "graphcal-$version/assets/report-engine/$file" target/wasm-report/package-files.txt
+          done
+
+      - name: Verify source builds do not modify tracked files
+        run: git diff --exit-code
 
   coverage:
     runs-on: ubuntu-latest
@@ -305,6 +321,8 @@ jobs:
         uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3 # v2.87.3
         with:
           tool: cargo-llvm-cov
+
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Generate coverage
         run: >-
@@ -334,6 +352,8 @@ jobs:
       - uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3 # v2.87.3
         with:
           tool: cargo-hack
+
+      - uses: $/.github/actions/report-engine-tools
 
       - name: Check MSRV
         run: cargo hack check --workspace --rust-version --ignore-private

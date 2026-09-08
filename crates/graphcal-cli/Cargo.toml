@@ -9,6 +9,8 @@ repository.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Release CI stages the generated bundle here; it is packaged, never committed.
+include = ["src/**", "build.rs", "build_support/**", "examples/**", "tests/**", "assets/report-engine/**", "Cargo.toml"]
 
 [dependencies]
 clap = { workspace = true }
@@ -43,6 +45,7 @@ graphcal-plugin-abi.workspace = true
 indexmap.workspace = true
 insta.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 wat.workspace = true
 
 [lints]
@@ -53,3 +56,6 @@ gix = { workspace = true, default-features = false, features = ["sha1"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+toml.workspace = true

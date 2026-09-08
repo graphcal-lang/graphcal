@@ -1,0 +1,46 @@
+name: Report engine tools
+description: Install explicit source-build prerequisites without build-script downloads
+runs:
+  using: composite
+  steps:
+    - name: Install Wasm standard library
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Read locked wasm-bindgen version
+      id: bindgen
+      shell: bash
+      run: |
+        version=$(cargo metadata --locked --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
+    - uses: taiki-e/install-action@0758d235715de2f3551eacc980d9ae8fce9342c3 # v2.87.3
+      with:
+        tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+
+    - name: Install checksum-pinned Binaryen
+      shell: bash
+      env:
+        RUNNER_PLATFORM: ${{ runner.os }}
+      # Only a runner-owned path containing checksum-verified binaries is added.
+      run: | # zizmor: ignore[github-env]
+        case "$RUNNER_PLATFORM" in
+          Linux)
+            platform=x86_64-linux
+            checksum=3dc677006555b355ea2da5e82602065a161d5e83eaefd3f759afa00b96e83212
+            ;;
+          Windows)
+            platform=x86_64-windows
+            checksum=b09f260176483bd30194303ccb15ac81c2247e4e566894f9d931e4313cb36d58
+            ;;
+          *) echo "Unsupported report-engine CI platform: $RUNNER_PLATFORM" >&2; exit 1 ;;
+        esac
+        mkdir -p "$RUNNER_TEMP/report-engine-tools"
+        cd "$RUNNER_TEMP/report-engine-tools"
+        archive="binaryen-version_117-$platform.tar.gz"
+        curl --fail --location --retry 3 --output "$archive" "https://github.com/WebAssembly/binaryen/releases/download/version_117/$archive"
+        echo "$checksum  $archive" | sha256sum --check
+        tar -xzf "$archive"
+        bin="$(pwd)/binaryen-version_117/bin"
+        if [ "$RUNNER_PLATFORM" = Windows ]; then bin=$(cygpath -w "$bin"); fi
+        echo "$bin" >> "$GITHUB_PATH"

@@ -27,8 +27,12 @@ use crate::overrides::{JsonOverrideSource, ParameterArgs, ParameterJsonSource, P
 /// Environment variable overriding the browser engine bundled with the CLI.
 const ENGINE_DIR_ENV: &str = "GRAPHCAL_REPORT_ENGINE_DIR";
 /// Browser engine generated from this release's `graphcal-wasm` crate.
-const EMBEDDED_ENGINE_GLUE_JS: &str = include_str!("../assets/report-engine/graphcal_wasm.js");
-const EMBEDDED_ENGINE_WASM: &[u8] = include_bytes!("../assets/report-engine/graphcal_wasm_bg.wasm");
+const EMBEDDED_ENGINE_GLUE_JS: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/report-engine/graphcal_wasm.js"));
+const EMBEDDED_ENGINE_WASM: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/report-engine/graphcal_wasm_bg.wasm"
+));
 
 #[derive(Subcommand)]
 pub enum ReportCommands {
