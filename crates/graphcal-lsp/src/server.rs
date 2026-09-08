@@ -9,8 +9,9 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentChanges,
+    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentChanges,
     DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
     DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
     Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
@@ -27,6 +28,7 @@ use crate::analysis_schedule_state::AnalysisScheduleState;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
+use crate::filesystem_events::TrackingFileSystem;
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
 use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex, ProjectSymbols};
 use crate::symbol_identity::{
@@ -35,7 +37,7 @@ use crate::symbol_identity::{
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use crate::workspace_revision::{
     AnalysisFreshness, AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity,
-    DocumentRevision, RevisionClock, RevisionExhausted,
+    DocumentRevision, RevisionClock, RevisionExhausted, current_revisions,
 };
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
@@ -361,6 +363,9 @@ pub struct Backend {
     formatting_scheduler: Arc<FormattingScheduler>,
     /// Monotonic revision allocator shared by all document identities.
     revision_clock: Arc<RevisionClock>,
+    /// Latest client-reported revision for each closed filesystem input.
+    /// Open-buffer revisions override these entries when snapshots are built.
+    filesystem_revisions: Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
     /// Reverse dependency edges from the latest accepted analyses.
     dependency_graph: Arc<RwLock<DependencyGraph>>,
     /// WASM plugin host shared across analysis passes, so re-analysis on
@@ -465,17 +470,13 @@ fn select_semantic_analysis<'a>(
 
 fn open_revisions(
     snapshots: &HashMap<Url, OpenDocumentSnapshot>,
-) -> HashMap<DocumentIdentity, DocumentRevision> {
+) -> impl Iterator<Item = (DocumentIdentity, DocumentRevision)> + '_ {
     snapshots
         .values()
         .map(|snapshot| (snapshot.identity.clone(), snapshot.revision))
-        .collect()
 }
 
-fn document_identity(uri: &Url) -> DocumentIdentity {
-    let Ok(path) = uri.to_file_path() else {
-        return DocumentIdentity::virtual_uri(uri.clone());
-    };
+fn file_identity(path: &std::path::Path) -> DocumentIdentity {
     let canonical = path.canonicalize().or_else(|_| {
         let parent = path
             .parent()
@@ -486,7 +487,14 @@ fn document_identity(uri: &Url) -> DocumentIdentity {
             |name| Ok(canonical_parent.join(name)),
         )
     });
-    DocumentIdentity::file(canonical.unwrap_or(path))
+    DocumentIdentity::file(canonical.unwrap_or_else(|_| path.to_path_buf()))
+}
+
+fn document_identity(uri: &Url) -> DocumentIdentity {
+    uri.to_file_path().map_or_else(
+        |()| DocumentIdentity::virtual_uri(uri.clone()),
+        |path| file_identity(&path),
+    )
 }
 
 impl Backend {
@@ -516,7 +524,8 @@ impl Backend {
         F: FnOnce(CurrentAnalysis<'_>) -> Option<R>,
     {
         let snapshots = self.latest_text.read().await;
-        let revisions = open_revisions(&snapshots);
+        let disk_revisions = self.filesystem_revisions.read().await;
+        let revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
         let docs = self.documents.read().await;
         let Some(analysis) = docs.get(uri) else {
             return Ok(None);
@@ -525,6 +534,7 @@ impl Backend {
             return Ok(None);
         };
         drop(snapshots);
+        drop(disk_revisions);
         let result = f(current);
         drop(docs);
         Ok(result)
@@ -537,7 +547,8 @@ impl Backend {
         F: FnOnce(SemanticAnalysis<'_>, &str) -> Option<R>,
     {
         let snapshots = self.latest_text.read().await;
-        let revisions = open_revisions(&snapshots);
+        let disk_revisions = self.filesystem_revisions.read().await;
+        let revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
         let Some(current_source) = snapshots
             .get(uri)
             .map(|snapshot| Arc::clone(&snapshot.text))
@@ -552,6 +563,7 @@ impl Backend {
             return Ok(None);
         };
         drop(snapshots);
+        drop(disk_revisions);
         let result = f(semantic, &current_source);
         drop(docs);
         Ok(result)
@@ -591,29 +603,93 @@ impl Backend {
         Ok(RecordedDocument { identity, revision })
     }
 
-    /// Cancel and debounce every open analysis that consumes `changed`.
-    async fn schedule_transitive_importers(&self, changed_uri: &Url, changed: &DocumentIdentity) {
-        let importers = self
-            .dependency_graph
-            .read()
-            .await
-            .transitive_importers(changed);
+    /// Cancel and debounce the open roots identified by an invalidation plan.
+    async fn schedule_open_roots(&self, affected: &HashSet<DocumentIdentity>) {
         let pending: Vec<_> = self
             .latest_text
             .read()
             .await
             .iter()
-            .filter(|(uri, snapshot)| *uri != changed_uri && importers.contains(&snapshot.identity))
+            .filter(|(_, snapshot)| affected.contains(&snapshot.identity))
             .map(|(uri, snapshot)| (uri.clone(), Arc::clone(&snapshot.text), snapshot.revision))
             .collect();
         if !pending.is_empty() {
             self.request_inlay_hint_refresh();
         }
         for (uri, text, revision) in pending {
-            self.analysis_scheduler.cancel_document(&uri);
             let generation = self.bump_generation(&uri).await;
             self.spawn_debounced_analysis(uri, text.as_ref().clone(), revision, generation);
         }
+    }
+
+    /// Cancel and debounce every open analysis that consumes `changed`.
+    async fn schedule_transitive_importers(&self, changed: &DocumentIdentity) {
+        let mut importers = self
+            .dependency_graph
+            .read()
+            .await
+            .transitive_importers(changed);
+        importers.remove(changed);
+        self.schedule_open_roots(&importers).await;
+    }
+
+    /// Record and schedule one client-reported external filesystem change.
+    async fn handle_filesystem_change(&self, uri: Url) {
+        let Ok(path) = uri.to_file_path() else {
+            return;
+        };
+        let Some(kind) = crate::filesystem_events::WatchedArtifactKind::from_path(&path) else {
+            return;
+        };
+        let identity = file_identity(&path);
+        if self
+            .latest_text
+            .read()
+            .await
+            .values()
+            .any(|snapshot| snapshot.identity == identity)
+        {
+            // The editor snapshot is authoritative. This also coalesces the
+            // watcher event commonly emitted for an LSP didSave notification.
+            return;
+        }
+        let revision = match self.revision_clock.next() {
+            Ok(revision) => revision,
+            Err(error) => {
+                self.client
+                    .log_message(MessageType::ERROR, error.to_string())
+                    .await;
+                return;
+            }
+        };
+        self.filesystem_revisions
+            .write()
+            .await
+            .insert(identity.clone(), revision);
+
+        let mut affected = self
+            .dependency_graph
+            .read()
+            .await
+            .transitive_importers(&identity);
+        if kind == crate::filesystem_events::WatchedArtifactKind::Manifest
+            && let Some(parent) = identity.file_path().and_then(std::path::Path::parent)
+        {
+            affected.extend(
+                self.latest_text
+                    .read()
+                    .await
+                    .values()
+                    .filter(|snapshot| {
+                        snapshot
+                            .identity
+                            .file_path()
+                            .is_some_and(|root| root.starts_with(parent))
+                    })
+                    .map(|snapshot| snapshot.identity.clone()),
+            );
+        }
+        self.schedule_open_roots(&affected).await;
     }
 
     /// Latest editor text for `uri`, falling back to the analyzed snapshot.
@@ -643,8 +719,7 @@ impl Backend {
                 return;
             }
         };
-        self.schedule_transitive_importers(&uri, &recorded.identity)
-            .await;
+        self.schedule_transitive_importers(&recorded.identity).await;
 
         // Bump the generation so any in-flight debounced analysis for this URI
         // becomes stale and refuses to overwrite fresh results.
@@ -655,6 +730,7 @@ impl Backend {
             &self.documents,
             &self.change_generations,
             &self.latest_text,
+            &self.filesystem_revisions,
             &self.dependency_graph,
             self.client_features(),
             Arc::clone(&self.plugin_host),
@@ -683,6 +759,7 @@ impl Backend {
         let documents = self.documents.clone();
         let generations = self.change_generations.clone();
         let latest_text = self.latest_text.clone();
+        let filesystem_revisions = Arc::clone(&self.filesystem_revisions);
         let dependency_graph = Arc::clone(&self.dependency_graph);
         let plugin_host = Arc::clone(&self.plugin_host);
         let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
@@ -701,6 +778,7 @@ impl Backend {
                 &documents,
                 &generations,
                 &latest_text,
+                &filesystem_revisions,
                 &dependency_graph,
                 client_features,
                 plugin_host,
@@ -740,6 +818,7 @@ async fn analyze_store_publish(
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
     dependency_graph: &Arc<RwLock<DependencyGraph>>,
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
@@ -755,6 +834,7 @@ async fn analyze_store_publish(
             documents,
             generations,
             latest_text,
+            filesystem_revisions,
             dependency_graph,
             client_features,
             Arc::clone(&plugin_host),
@@ -789,6 +869,7 @@ async fn analyze_store_publish_once(
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    filesystem_revisions: &Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
     dependency_graph: &Arc<RwLock<DependencyGraph>>,
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
@@ -856,12 +937,14 @@ async fn analyze_store_publish_once(
     // see the editor state, not stale disk content. The analyzed document
     // itself uses `text` (this analysis pass's snapshot).
     let snapshots = latest_text.read().await;
+    let disk_revisions = filesystem_revisions.read().await;
     let root_identity = snapshots.get(&uri).map_or_else(
         || document_identity(&uri),
         |snapshot| snapshot.identity.clone(),
     );
+    let observed_revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
     let input_snapshot =
-        AnalysisInputSnapshot::new(root_identity, root_revision, open_revisions(&snapshots));
+        AnalysisInputSnapshot::new(root_identity, root_revision, observed_revisions);
     let open_buffers: Vec<OpenBuffer> = snapshots
         .iter()
         .filter(|(open_uri, _)| **open_uri != uri)
@@ -873,6 +956,7 @@ async fn analyze_store_publish_once(
         })
         .collect();
     drop(snapshots);
+    drop(disk_revisions);
     if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
         scheduler.finish(&uri, generation);
         return AnalysisCompletion::Done;
@@ -932,10 +1016,11 @@ async fn analyze_store_publish_once(
         degradations,
     } = analysis_run;
     let latest_guard = latest_text.read().await;
-    let current_revisions = open_revisions(&latest_guard);
+    let filesystem_guard = filesystem_revisions.read().await;
+    let current_revisions = current_revisions(&filesystem_guard, open_revisions(&latest_guard));
     if !analysis.inputs.is_current(&current_revisions) {
         let root_is_current = analysis.inputs.root_is_current(&current_revisions);
-        if analysis.inputs.has_complete_dependencies() {
+        if analysis.inputs.has_complete_dependencies() || analysis.buffer_parsed {
             dependency_graph.write().await.update(
                 analysis.inputs.root().clone(),
                 analysis.inputs.dependencies().cloned().collect(),
@@ -947,7 +1032,7 @@ async fn analyze_store_publish_once(
         drop(latest_guard);
         return retry.map_or(AnalysisCompletion::Done, AnalysisCompletion::Retry);
     }
-    let graph_update = analysis.inputs.has_complete_dependencies().then(|| {
+    let graph_update = (analysis.inputs.has_complete_dependencies() || analysis.buffer_parsed).then(|| {
         (
             analysis.inputs.root().clone(),
             analysis.inputs.dependencies().cloned().collect(),
@@ -983,6 +1068,7 @@ async fn analyze_store_publish_once(
         dependency_graph.write().await.update(root, dependencies);
     }
     drop(latest_guard);
+    drop(filesystem_guard);
     for degradation in degradations {
         client
             .log_message(MessageType::WARNING, degradation.message(&uri))
@@ -1191,53 +1277,87 @@ struct OpenBuffer {
 /// is reachable from the buffer's directory) — keeping the LSP's filesystem
 /// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
 /// single-file project from the in-memory text alone.
+struct ProjectBuild {
+    project: std::result::Result<LoadedProject, Box<CompileError>>,
+    filesystem_inputs: HashSet<DocumentIdentity>,
+}
+
+impl ProjectBuild {
+    fn failed(error: CompileError) -> Self {
+        Self {
+            project: Err(Box::new(error)),
+            filesystem_inputs: HashSet::new(),
+        }
+    }
+}
+
 fn build_project(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     cancellation: &CancellationToken,
-) -> std::result::Result<LoadedProject, Box<CompileError>> {
+) -> ProjectBuild {
     let name = uri.as_str();
-    match uri.to_file_path() {
-        Ok(path) => {
-            // OverlayFileSystem validates existing identities and proves
-            // unsaved buffers are below a base-authorized canonical parent.
-            // The analyzed snapshot comes first so it wins over any (possibly
-            // newer) latest-text entry for the same file: the produced
-            // `AnalysisResult` must stay consistent with `text`.
-            let base =
-                graphcal_eval::loader::build_rooted_filesystem(&path, None).map_err(Box::new)?;
-            let overlays = std::iter::once((path.clone(), text.to_string()))
-                .chain(
-                    open_buffers
-                        .iter()
-                        // The editor may have documents from unrelated workspace
-                        // roots open. Only buffers independently proven to fit the
-                        // active project's base capability belong in this snapshot.
-                        .filter(|buffer| {
-                            graphcal_io::OverlayFileSystem::new(
-                                base.clone(),
-                                buffer.path.clone(),
-                                String::new(),
-                            )
-                            .is_ok()
-                        })
-                        .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
-                )
-                .collect::<Vec<_>>();
-            let fs =
-                graphcal_io::OverlayFileSystem::with_overlays(base, overlays).map_err(|error| {
-                    Box::new(CompileError::Eval(GraphcalError::InvalidSourcePath {
-                        path: error.path().display().to_string(),
-                        reason: error.to_string(),
-                    }))
-                })?;
-            graphcal_eval::loader::load_project_with_cancellation(&path, None, &fs, cancellation)
-                .map_err(Box::new)
+    let Ok(path) = uri.to_file_path() else {
+        return ProjectBuild {
+            project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
+                .map_err(Box::new),
+            filesystem_inputs: HashSet::new(),
+        };
+    };
+
+    // OverlayFileSystem validates existing identities and proves unsaved
+    // buffers are below a base-authorized canonical parent. The analyzed
+    // snapshot comes first so it wins over any newer latest-text entry for the
+    // same file.
+    let base = match graphcal_eval::loader::build_rooted_filesystem(&path, None) {
+        Ok(base) => base,
+        Err(error) => return ProjectBuild::failed(error),
+    };
+    let overlays = std::iter::once((path.clone(), text.to_string()))
+        .chain(
+            open_buffers
+                .iter()
+                .filter(|buffer| {
+                    graphcal_io::OverlayFileSystem::new(
+                        base.clone(),
+                        buffer.path.clone(),
+                        String::new(),
+                    )
+                    .is_ok()
+                })
+                .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
+        )
+        .collect::<Vec<_>>();
+    let fs = match graphcal_io::OverlayFileSystem::with_overlays(base, overlays) {
+        Ok(fs) => fs,
+        Err(error) => {
+            return ProjectBuild::failed(CompileError::Eval(
+                GraphcalError::InvalidSourcePath {
+                    path: error.path().display().to_string(),
+                    reason: error.to_string(),
+                },
+            ));
         }
-        Err(()) => {
-            LoadedProject::from_source_with_cancellation(text, name, cancellation).map_err(Box::new)
-        }
+    };
+    let tracking_fs = TrackingFileSystem::new(fs);
+    let project = graphcal_eval::loader::load_project_with_cancellation(
+        &path,
+        None,
+        &tracking_fs,
+        cancellation,
+    )
+    .map_err(Box::new);
+    let root_identity = file_identity(&path);
+    let filesystem_inputs = tracking_fs
+        .accessed_paths()
+        .into_iter()
+        .map(|input| file_identity(&input))
+        .filter(|identity| *identity != root_identity)
+        .collect();
+    ProjectBuild {
+        project,
+        filesystem_inputs,
     }
 }
 
@@ -1321,7 +1441,9 @@ fn run_analysis_with_cancellation(
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
-    let project = match build_project(uri, text, open_buffers, cancellation) {
+    let project_build = build_project(uri, text, open_buffers, cancellation);
+    let mut filesystem_inputs = project_build.filesystem_inputs;
+    let project = match project_build.project {
         Ok(project) => project,
         Err(error) if error.is_cancelled() => return Err(Cancelled),
         Err(error) => {
@@ -1352,7 +1474,8 @@ fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             return Ok(AnalysisRun {
                 analysis: AnalysisResult {
-                    inputs: input_snapshot.finish_incomplete(),
+                    inputs: input_snapshot
+                        .finish_partially_loaded_project(filesystem_inputs),
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     project_symbols: ProjectSymbols::Incomplete,
@@ -1372,8 +1495,8 @@ fn run_analysis_with_cancellation(
     };
 
     cancellation.checkpoint()?;
-    let analysis_inputs =
-        input_snapshot.finish_loaded_project(project_dependency_identities(&project));
+    filesystem_inputs.extend(project_dependency_identities(&project));
+    let analysis_inputs = input_snapshot.finish_loaded_project(filesystem_inputs);
     let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
     cancellation.checkpoint()?;
@@ -2604,6 +2727,35 @@ impl LanguageServer for Backend {
         self.client
             .log_message(MessageType::INFO, "graphcal-lsp initialized")
             .await;
+        if self
+            .client_features()
+            .watched_files_dynamic_registration
+            .is_supported()
+        {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                let registration = match crate::filesystem_events::watcher_registration() {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        client
+                            .log_message(
+                                MessageType::ERROR,
+                                format!("could not serialize filesystem watcher registration: {error}"),
+                            )
+                            .await;
+                        return;
+                    }
+                };
+                if let Err(error) = client.register_capability(vec![registration]).await {
+                    client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("could not register filesystem watchers: {error}"),
+                        )
+                        .await;
+                }
+            });
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -2648,8 +2800,7 @@ impl LanguageServer for Backend {
         // Cached hint coordinates became stale as soon as the root revision
         // changed; ask capable clients to clear/re-request them before debounce.
         self.request_inlay_hint_refresh();
-        self.schedule_transitive_importers(&uri, &recorded.identity)
-            .await;
+        self.schedule_transitive_importers(&recorded.identity).await;
         let generation = self.bump_generation(&uri).await;
         self.spawn_debounced_analysis(uri, change.text, recorded.revision, generation);
     }
@@ -2658,6 +2809,15 @@ impl LanguageServer for Backend {
         if let Some(text) = params.text {
             self.analyze_and_publish(params.text_document.uri, text, None)
                 .await;
+        }
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut seen = HashSet::new();
+        for change in params.changes {
+            if seen.insert(change.uri.clone()) {
+                self.handle_filesystem_change(change.uri).await;
+            }
         }
     }
 
@@ -2694,7 +2854,7 @@ impl LanguageServer for Backend {
         };
         self.latest_text.write().await.remove(&uri);
         self.dependency_graph.write().await.remove(&identity);
-        self.schedule_transitive_importers(&uri, &identity).await;
+        self.schedule_transitive_importers(&identity).await;
         let features = self.client_features();
         for (target_uri, diags) in publish {
             self.client
@@ -2944,6 +3104,7 @@ pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
         latest_text: Arc::new(RwLock::new(HashMap::new())),
         formatting_scheduler: Arc::new(FormattingScheduler::new()),
         revision_clock: Arc::new(RevisionClock::default()),
+        filesystem_revisions: Arc::new(RwLock::new(HashMap::new())),
         dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),

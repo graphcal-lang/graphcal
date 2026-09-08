@@ -374,6 +374,46 @@ async fn rich_client_dispatches_every_advertised_request_shape() {
 }
 
 #[tokio::test]
+async fn initialized_registers_supported_filesystem_watchers() {
+    let (mut service, socket) = service();
+    initialize(
+        &mut service,
+        json!({
+            "workspace": {
+                "didChangeWatchedFiles": { "dynamicRegistration": true }
+            }
+        }),
+    )
+    .await;
+    let (mut requests, mut responses) = socket.split();
+    notify(&mut service, "initialized", json!({})).await;
+
+    loop {
+        let message = timeout(Duration::from_secs(5), requests.next())
+            .await
+            .expect("watcher registration timeout")
+            .expect("client socket closed");
+        if message.method() == "window/logMessage" {
+            continue;
+        }
+        assert_eq!(message.method(), "client/registerCapability");
+        let registration = &message.params().expect("registration params")["registrations"][0];
+        assert_eq!(registration["method"], "workspace/didChangeWatchedFiles");
+        let watchers = registration["registerOptions"]["watchers"]
+            .as_array()
+            .expect("watchers array");
+        assert_eq!(watchers.len(), 4);
+        assert!(watchers.iter().all(|watcher| watcher["kind"] == 7));
+        let id = message.id().cloned().expect("registration request id");
+        responses
+            .send(Response::from_ok(id, json!(null)))
+            .await
+            .expect("registration response");
+        break;
+    }
+}
+
+#[tokio::test]
 async fn coordinate_requests_reject_stale_snapshots() {
     let (mut service, mut socket) = service();
     initialize(&mut service, json!({})).await;

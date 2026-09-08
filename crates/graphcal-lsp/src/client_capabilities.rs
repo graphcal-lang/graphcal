@@ -62,6 +62,7 @@ pub struct ClientFeatureSupport {
     pub diagnostic_related_information: OptionalFeatureSupport,
     pub diagnostic_data: OptionalFeatureSupport,
     pub inlay_hint_refresh: OptionalFeatureSupport,
+    pub watched_files_dynamic_registration: OptionalFeatureSupport,
 }
 
 impl Default for ClientFeatureSupport {
@@ -75,6 +76,7 @@ impl Default for ClientFeatureSupport {
             diagnostic_related_information: OptionalFeatureSupport::Unsupported,
             diagnostic_data: OptionalFeatureSupport::Unsupported,
             inlay_hint_refresh: OptionalFeatureSupport::Unsupported,
+            watched_files_dynamic_registration: OptionalFeatureSupport::Unsupported,
         }
     }
 }
@@ -140,6 +142,11 @@ impl ClientFeatureSupport {
                 .and_then(|caps| caps.refresh_support)
                 .unwrap_or(false)
                 .into(),
+            watched_files_dynamic_registration: workspace
+                .and_then(|caps| caps.did_change_watched_files.as_ref())
+                .and_then(|caps| caps.dynamic_registration)
+                .unwrap_or(false)
+                .into(),
         }
     }
 }
@@ -149,9 +156,9 @@ mod tests {
     use tower_lsp::lsp_types::{
         CodeActionClientCapabilities, CodeActionKindLiteralSupport, CodeActionLiteralSupport,
         DocumentSymbolClientCapabilities, HoverClientCapabilities,
-        InlayHintWorkspaceClientCapabilities, PublishDiagnosticsClientCapabilities,
-        TextDocumentClientCapabilities, WorkspaceClientCapabilities,
-        WorkspaceEditClientCapabilities,
+        DidChangeWatchedFilesClientCapabilities, InlayHintWorkspaceClientCapabilities,
+        PublishDiagnosticsClientCapabilities, TextDocumentClientCapabilities,
+        WorkspaceClientCapabilities, WorkspaceEditClientCapabilities,
     };
 
     use super::*;
@@ -174,6 +181,10 @@ mod tests {
                 }),
                 inlay_hint: Some(InlayHintWorkspaceClientCapabilities {
                     refresh_support: Some(true),
+                }),
+                did_change_watched_files: Some(DidChangeWatchedFilesClientCapabilities {
+                    dynamic_registration: Some(true),
+                    relative_pattern_support: Some(false),
                 }),
                 ..Default::default()
             }),
@@ -216,6 +227,7 @@ mod tests {
                 diagnostic_related_information: OptionalFeatureSupport::Supported,
                 diagnostic_data: OptionalFeatureSupport::Supported,
                 inlay_hint_refresh: OptionalFeatureSupport::Supported,
+                watched_files_dynamic_registration: OptionalFeatureSupport::Supported,
             }
         );
     }
