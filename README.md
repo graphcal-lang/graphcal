@@ -31,7 +31,7 @@ graphcal eval rocket.gcl
 # delta_v = 3778.221 m/s
 ```
 
-[Try the example in the browser playground](https://graphcal.org/docs/playground/) without installing anything.
+[Try the example in the browser playground](https://graphcal.org/playground/?example=rocket) without installing anything.
 
 ## Why Graphcal?
 
