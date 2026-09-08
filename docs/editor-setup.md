@@ -62,10 +62,15 @@ payload scopes, rejecting duplicate bindings and capture rather than returning
 an unsafe edit. Independent scopes may still reuse the same spelling.
 
 Analysis is dependency- and revision-aware and bounded. Each result records the
-exact open-buffer revisions it consumed. Editing, saving, opening, closing, or
-reverting an imported file invalidates and reanalyzes every transitive open
-importer, so diagnostics, navigation, completion, and evaluated inlay hints stay
-project-coherent without touching the importer. A new edit cancels superseded
+exact editor and filesystem inputs it consumed. For clients that support dynamic
+registration, the server watches Graphcal source files, `graphcal.toml`,
+`graphcal.lock`, and local Wasm plugin artifacts. Creating, changing, deleting,
+or moving one of those inputs invalidates and reanalyzes every transitive open
+importer, including importers waiting for a previously missing file. Diagnostics,
+hover, navigation, completion, and evaluated inlay hints therefore recover
+without touching the importer. An open editor buffer remains authoritative over
+disk, and a watcher event duplicated by save does not schedule a second analysis.
+A new edit cancels superseded
 loading, compilation, and evaluation work; only a result whose full dependency
 snapshot is still current can publish. During a temporarily unparsable edit,
 features that return source coordinates (hover, navigation, references, document

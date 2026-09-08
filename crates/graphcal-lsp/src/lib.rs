@@ -13,6 +13,7 @@ mod cursor_context;
 mod diagnostics;
 mod document_links;
 mod document_symbols;
+mod filesystem_events;
 mod formatting;
 mod formatting_scheduler;
 mod goto_definition;

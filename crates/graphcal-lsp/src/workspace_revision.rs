@@ -27,6 +27,14 @@ impl DocumentIdentity {
     pub const fn virtual_uri(uri: Url) -> Self {
         Self::Virtual(uri)
     }
+
+    #[must_use]
+    pub fn file_path(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Virtual(_) => None,
+        }
+    }
 }
 
 /// Globally monotonic identity for one observed open-document text snapshot.
@@ -77,10 +85,14 @@ impl AnalysisInputSnapshot {
         self.finish(dependencies, DependencyCoverage::Complete)
     }
 
-    /// Finish a fallback that could not discover a complete dependency set.
+    /// Finish a fallback that observed some filesystem inputs but could not
+    /// prove the dependency set complete.
     #[must_use]
-    pub fn finish_incomplete(&self) -> AnalysisInputs {
-        self.finish(HashSet::new(), DependencyCoverage::Incomplete)
+    pub fn finish_partially_loaded_project(
+        &self,
+        observed_dependencies: HashSet<DocumentIdentity>,
+    ) -> AnalysisInputs {
+        self.finish(observed_dependencies, DependencyCoverage::Incomplete)
     }
 
     fn finish(
@@ -126,6 +138,21 @@ pub struct AnalysisInputs {
     dependencies: HashSet<DocumentIdentity>,
     dependency_coverage: DependencyCoverage,
     expected_revisions: HashMap<DocumentIdentity, Option<DocumentRevision>>,
+}
+
+/// Combine observed disk revisions with authoritative open-buffer revisions.
+///
+/// An open editor snapshot always replaces the disk revision for the same
+/// identity, preserving dirty-buffer authority when a client reports duplicate
+/// save/watcher events.
+#[must_use]
+pub fn current_revisions(
+    disk: &HashMap<DocumentIdentity, DocumentRevision>,
+    open: impl IntoIterator<Item = (DocumentIdentity, DocumentRevision)>,
+) -> HashMap<DocumentIdentity, DocumentRevision> {
+    let mut current = disk.clone();
+    current.extend(open);
+    current
 }
 
 impl AnalysisInputs {
@@ -279,6 +306,42 @@ mod tests {
             (root, root_revision),
             (dependency, clock.next().unwrap()),
         ])));
+    }
+
+    #[test]
+    fn open_revisions_override_disk_revisions() {
+        let clock = RevisionClock::default();
+        let file = file("dep.gcl");
+        let disk_revision = clock.next().unwrap();
+        let open_revision = clock.next().unwrap();
+
+        assert_eq!(
+            current_revisions(
+                &HashMap::from([(file.clone(), disk_revision)]),
+                [(file.clone(), open_revision)]
+            ),
+            HashMap::from([(file, open_revision)])
+        );
+    }
+
+    #[test]
+    fn partial_inputs_track_observed_missing_paths() {
+        let clock = RevisionClock::default();
+        let root = file("root.gcl");
+        let missing = file("missing.gcl");
+        let root_revision = clock.next().unwrap();
+        let created_revision = clock.next().unwrap();
+        let snapshot = AnalysisInputSnapshot::new(root.clone(), root_revision, HashMap::new());
+        let inputs = snapshot.finish_partially_loaded_project(HashSet::from([missing.clone()]));
+
+        assert_eq!(
+            inputs.freshness(&HashMap::from([
+                (root, root_revision),
+                (missing, created_revision)
+            ])),
+            AnalysisFreshness::DependencyChanged
+        );
+        assert!(!inputs.has_complete_dependencies());
     }
 
     #[test]
