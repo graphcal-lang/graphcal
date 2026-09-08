@@ -32,13 +32,7 @@ node mass_ratio: Dimensionless = @total_mass / @dry_mass;
 
 ## Try It in Your Browser
 
-Edit the complete example below. Results update automatically after each change, or press **Run**.
-
-<div class="gc-playground-host">
-  <graphcal-playground example="step-1">
-    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above or <a href="../assets/playground/examples/step-1/main.gcl">open the static example source</a>.</p>
-  </graphcal-playground>
-</div>
+[Open this example in the playground](https://graphcal.org/playground/?example=hello), or [read the source](../assets/playground/examples/step-1/main.gcl). Edit the code in the full-size editor; results update with Auto-run enabled, or press **Run**.
 
 ## Run It Locally
 

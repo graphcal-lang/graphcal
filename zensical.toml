@@ -8,10 +8,9 @@ site_url = "https://graphcal.org/docs/"
 site_dir = "site/docs"
 repo_name = "graphcal-lang/graphcal"
 repo_url = "https://github.com/graphcal-lang/graphcal"
-extra_css = ["stylesheets/playground.css"]
 nav = [
   { "Home" = "index.md" },
-  { "Playground" = "playground.md" },
+  { "Playground" = "https://graphcal.org/playground/" },
   { "Installation" = "installation.md" },
   { "Tutorial" = [
     { "Overview" = "tutorial/index.md" },
@@ -41,10 +40,6 @@ nav = [
   { "Plugin Authoring" = "authoring-plugins.md" },
   { "Editor Setup" = "editor-setup.md" },
 ]
-
-[[project.extra_javascript]]
-path = "javascripts/playground.mjs"
-type = "module"
 
 [project.theme]
 language = "en"

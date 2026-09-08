@@ -66,13 +66,13 @@ delta_v    = 3778.221 m/s
 
     Try alpha-stage Graphcal immediately—no installation required.
 
-    [:octicons-arrow-right-24: Open the playground](playground.md)
+    [:octicons-arrow-right-24: Open the playground](https://graphcal.org/playground/)
 
 - :material-school:{ .lg .middle } **Interactive Tutorial**
 
     ---
 
-    Learn Graphcal step by step with editable browser examples.
+    Learn Graphcal step by step, with single-file examples you can open in the playground.
 
     [:octicons-arrow-right-24: Start the tutorial](tutorial/index.md)
 

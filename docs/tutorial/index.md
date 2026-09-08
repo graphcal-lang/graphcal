@@ -30,7 +30,7 @@ By the end of this tutorial, you'll have built engineering calculations that:
 
 ## Running the Examples
 
-Each step includes an editable browser playground, so you can start without installing anything. The compiler and evaluator run locally in WebAssembly and do not upload your source.
+Single-file steps link to the [standalone playground](https://graphcal.org/playground/), so you can start without installing anything. Its full-size editor supports examples and shareable source URLs. The compiler and evaluator run locally in WebAssembly and do not upload your source. Step 5 teaches multi-file projects and requires the CLI.
 
 To save projects locally or use the complete CLI and editor tooling, [install Graphcal](../installation.md) and run examples as `.gcl` files:
 
@@ -42,4 +42,4 @@ graphcal eval my_file.gcl
 
 The browser path has no prerequisites beyond a modern browser with JavaScript and WebAssembly enabled. For local development, use a text editor with [Graphcal editor support](../editor-setup.md) for diagnostics and inlay hints.
 
-Ready? Start with [Step 1: Hello, Graphcal](step1-hello-graphcal.md), or open the [standalone playground](../playground.md).
+Ready? Start with [Step 1: Hello, Graphcal](step1-hello-graphcal.md), or open the [standalone playground](https://graphcal.org/playground/).

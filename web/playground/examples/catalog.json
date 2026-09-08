@@ -1,0 +1,74 @@
+[
+  {
+    "id": "rocket",
+    "title": "Rocket equation",
+    "description": "Change fuel_mass or isp to explore unit-aware delta-v.",
+    "filename": "rocket.gcl",
+    "source_path": "tests/fixtures/valid/rocket.gcl",
+    "expected_values": ["delta_v", "mass_ratio"],
+    "expected_figures": 0
+  },
+  {
+    "id": "hello",
+    "title": "Hello, Graphcal",
+    "description": "Change the masses and see reactive dependencies update.",
+    "filename": "hello.gcl",
+    "source_path": "docs/assets/playground/examples/step-1/main.gcl",
+    "expected_values": ["mass_with_margin", "mass_ratio"],
+    "expected_figures": 0
+  },
+  {
+    "id": "units",
+    "title": "Dimensions and units",
+    "description": "Try a different mass unit; incompatible dimensions produce diagnostics.",
+    "filename": "units.gcl",
+    "source_path": "docs/assets/playground/examples/step-2/main.gcl",
+    "expected_values": ["delta_v"],
+    "expected_figures": 0
+  },
+  {
+    "id": "structs",
+    "title": "Structured orbital transfer",
+    "description": "Change target_alt; expand the transfer result and compare travel time.",
+    "filename": "structs.gcl",
+    "source_path": "docs/assets/playground/examples/step-3/main.gcl",
+    "expected_values": ["transfer", "total_dv", "tof_hours"],
+    "expected_figures": 0
+  },
+  {
+    "id": "functions",
+    "title": "Reusable functions",
+    "description": "Explore typed functions and DAG instances for orbital calculations.",
+    "filename": "main.gcl",
+    "source_path": "docs/assets/playground/examples/step-4/main.gcl",
+    "expected_values": ["v_parking", "transfer_dv", "total"],
+    "expected_figures": 0
+  },
+  {
+    "id": "indexed",
+    "title": "Indexed maneuvers",
+    "description": "Change a maneuver; compare sums, maximums, and cumulative delta-v.",
+    "filename": "indexed.gcl",
+    "source_path": "docs/assets/playground/examples/step-6/main.gcl",
+    "expected_values": ["total_dv", "cumulative_dv"],
+    "expected_figures": 0
+  },
+  {
+    "id": "assertions",
+    "title": "Engineering assertions",
+    "description": "Raise payload above capacity to see a failing engineering constraint.",
+    "filename": "assertions.gcl",
+    "source_path": "web/playground/examples/assertions.gcl",
+    "expected_values": ["remaining_capacity"],
+    "expected_figures": 0
+  },
+  {
+    "id": "plots",
+    "title": "Exponential decay plot",
+    "description": "Change decay_rate or initial_value to reshape the chart.",
+    "filename": "plots.gcl",
+    "source_path": "tests/fixtures/valid/plot_line.gcl",
+    "expected_values": ["y"],
+    "expected_figures": 1
+  }
+]
