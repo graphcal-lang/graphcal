@@ -763,6 +763,12 @@ Key files:
 - `display.rs` renders normal eval text output.
 - `dump.rs` selects one pipeline boundary and pretty-prints its unstable Rust
   `Debug` representation.
+- `build_support/bundle.rs` defines pure engine identity/integrity checks;
+  `build_support/engine.rs` discovers source inputs and orchestrates cached Wasm
+  generation for `build.rs`. `examples/export_report_engine.rs` exports that exact
+  embedded bundle for Node tests and release packaging. Generated files live in
+  `OUT_DIR`, not Git; this build-time dependency does not create a Rust dependency
+  from the Wasm engine back to the CLI.
 - `report.rs` is the imperative shell for `graphcal report build`: project
   loading, override binding, source digests, and artifact writes around the
   pure document assembly in `graphcal-report`.
@@ -1730,7 +1736,11 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 306. `crates/graphcal-cli/src/model.rs`
 307. `crates/graphcal-cli/src/dump.rs`
 308. `crates/graphcal-cli/src/deps.rs`
-309. `crates/graphcal-cli/build.rs`
+309. Build-time shell (explicit path modules, curated beyond the heuristic):
+     `crates/graphcal-cli/build_support/bundle.rs` →
+     `crates/graphcal-cli/build_support/engine.rs` →
+     `crates/graphcal-cli/build.rs` →
+     `crates/graphcal-cli/examples/export_report_engine.rs`
 310. `crates/graphcal-cli/src/plugin.rs`
 311. `crates/graphcal-plugin/tests/expansion.rs`
 312. `crates/graphcal-plugin/tests/prelude_drift.rs`
@@ -1756,3 +1766,4 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 332. `crates/graphcal-cli/tests/plugin_e2e.rs`
 333. `crates/graphcal-cli/tests/dump.rs`
 334. `crates/graphcal-cli/tests/presentation.rs`
+335. `crates/graphcal-cli/tests/report_engine.rs`

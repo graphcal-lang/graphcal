@@ -50,6 +50,7 @@ lint: formal pipeline-layers-lint playground-check
 
 test: formal-conformance pipeline-layers playground-test
     cargo test --workspace
+    just wasm-report
     node internals/report-runtime-tests.mjs
 
 # Audit the closed-world CLI surface while preserving documented external crate
@@ -71,19 +72,15 @@ hawk:
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
 
-# Build the no-modules engine bundle embedded in hydrated reports.
+# Export the automatically built, embedded engine for browser/Node tests.
 wasm-report:
-    rm -rf target/wasm-report/pkg
-    wasm-pack build crates/graphcal-wasm --target no-modules --out-dir ../../target/wasm-report/pkg --profile wasm-release --no-typescript --no-pack
-    rm -f target/wasm-report/pkg/.gitignore
+    cargo run --locked -p graphcal --example export_report_engine -- target/wasm-report/pkg
 
-# Regenerate the release-matched browser engine embedded in the CLI.
-wasm-report-update: wasm-report
-    mkdir -p crates/graphcal-cli/assets/report-engine
-    cp target/wasm-report/pkg/graphcal_wasm.js target/wasm-report/pkg/graphcal_wasm_bg.wasm crates/graphcal-cli/assets/report-engine/
-    GRAPHCAL_UPDATE_REPORT_ENGINE=1 cargo check -p graphcal
+# Stage verified assets for a .crate archive, not for Git (release CI only).
+wasm-report-package:
+    cargo run --locked -p graphcal --example export_report_engine -- crates/graphcal-cli/assets/report-engine
 
-# Explicitly verify the check that every source-checkout CLI build performs.
+# Every source-checkout CLI build automatically generates/verifies its engine.
 wasm-report-check:
     cargo check -p graphcal
 
@@ -95,7 +92,7 @@ report-browser-test:
 
 # Build a hydrated demo report with the embedded engine and drive its payload
 # through the prepared-project API under Node.
-report-smoke: wasm-report wasm-report-check
+report-smoke: wasm-report
     cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl --output target/wasm-report/rocket.report.html
     node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
 

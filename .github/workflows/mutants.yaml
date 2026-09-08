@@ -130,6 +130,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: git diff "$BASE_SHA"...HEAD -- '*.rs' > changed.diff
 
+      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+
       - name: Test mutants in changed Rust regions
         run: >-
           cargo mutants --in-place --no-shuffle -vV

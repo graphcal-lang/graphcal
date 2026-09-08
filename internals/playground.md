@@ -73,8 +73,8 @@ transport variants. The real-Wasm suite compares the engine's reported compiler
 version with Cargo metadata to catch a stale local build artifact. If that check
 fails despite a successful build, clean the `graphcal-wasm` package for the
 `wasm32-unknown-unknown` target and `wasm-release` profile, then rebuild. This is
-separate from the embedded report-engine freshness check; if that build check
-fails, use `just wasm-report-update` as usual.
+separate from the embedded report engine, which CLI builds automatically generate
+and verify in Cargo's `OUT_DIR`; there are no engine files or digests to commit.
 
 Browser tests cover the full catalog/plots, source-only network behavior,
 shared-link restoration in a fresh context without auto-execution, clipboard

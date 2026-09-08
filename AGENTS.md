@@ -24,7 +24,7 @@
 
 ## Testing
 
-- If a build reports that the embedded browser engine is stale for the current Graphcal sources, run `just wasm-report-update` before rerunning lint or tests. Do not bypass the freshness check.
+- CLI builds automatically generate and verify the embedded browser engine under Cargo's `OUT_DIR`. Install the source-build prerequisites in `docs/installation.md` when tools are missing; never bypass freshness or integrity checks. Generated engine files must not be committed. `just wasm-report` exports the current bundle for Node tests; `just wasm-report-package` stages it only for release packaging.
 
 ## Implementation Guidelines
 
