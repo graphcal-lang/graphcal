@@ -171,10 +171,10 @@ function = "attach_indexed"
 genre = "MatchArm"
 replacement = ""
 span = { start = { line = 79, column = 9 }, end = { line = 85, column = 12 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -182,10 +182,10 @@ function = "attach_indexed"
 genre = "MatchArmGuard"
 replacement = "true"
 span = { start = { line = 25, column = 14 }, end = { line = 25, column = 43 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -193,10 +193,10 @@ function = "attach_leaf"
 genre = "MatchArmGuard"
 replacement = "true"
 span = { start = { line = 19, column = 14 }, end = { line = 19, column = 43 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -204,10 +204,10 @@ function = "attach_struct"
 genre = "MatchArm"
 replacement = ""
 span = { start = { line = 48, column = 9 }, end = { line = 54, column = 12 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -215,10 +215,10 @@ function = "attach_struct"
 genre = "MatchArmGuard"
 replacement = "true"
 span = { start = { line = 22, column = 16 }, end = { line = 22, column = 62 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -226,10 +226,10 @@ function = "format_coordinate"
 genre = "FnValue"
 replacement = "\"xyzzy\".into()"
 span = { start = { line = 5, column = 5 }, end = { line = 5, column = 53 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -237,10 +237,10 @@ function = "format_coordinate"
 genre = "FnValue"
 replacement = "String::new()"
 span = { start = { line = 5, column = 5 }, end = { line = 5, column = 53 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -248,10 +248,10 @@ function = "format_coordinate_exact"
 genre = "FnValue"
 replacement = "\"xyzzy\".into()"
 span = { start = { line = 5, column = 5 }, end = { line = 5, column = 52 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -259,10 +259,10 @@ function = "format_coordinate_exact"
 genre = "FnValue"
 replacement = "String::new()"
 span = { start = { line = 5, column = 5 }, end = { line = 5, column = 52 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/eval/display.rs"
@@ -270,10 +270,10 @@ function = "presentation_pattern_matches"
 genre = "BinaryOperator"
 replacement = "||"
 span = { start = { line = 20, column = 17 }, end = { line = 20, column = 19 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/runtime_presentation.rs"
@@ -281,10 +281,10 @@ function = "PresentationInstance::is_none"
 genre = "FnValue"
 replacement = "false"
 span = { start = { line = 2, column = 9 }, end = { line = 2, column = 35 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-eval/src/runtime_presentation.rs"
@@ -292,10 +292,10 @@ function = "PresentationInstance::project_field"
 genre = "FnValue"
 replacement = "Ok(Default::default())"
 span = { start = { line = 5, column = 9 }, end = { line = 12, column = 10 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-package/src/lib.rs"
