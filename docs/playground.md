@@ -31,8 +31,6 @@ Multi-file projects, package dependencies, external plugins, remote data, CLI in
 
 **Reset** restores the last loaded example or shared snippet, asking before discarding edits. Loading another example also asks before replacing modified work. There is no automatic local draft storage: share or copy your changes before closing the page.
 
-!!! warning "Experimental"
-
-    Graphcal and the playground are alpha software. Use a current Chrome, Firefox, or Safari with JavaScript, WebAssembly, module workers, and gzip Compression Streams. Browser execution is resource-limited and does not replace independently reviewing engineering calculations.
+> **Experimental:** Graphcal and the playground are alpha software. Use a current Chrome, Firefox, or Safari with JavaScript, WebAssembly, module workers, and gzip Compression Streams. Browser execution is resource-limited and does not replace independently reviewing engineering calculations.
 
 Continue with the [tutorial](tutorial/index.md) for guided examples.
