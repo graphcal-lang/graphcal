@@ -15,6 +15,15 @@
       ],
       datasourceTemplate: "crate",
     },
+    {
+      customType: "regex",
+      description: "Update Zensical used to build the documentation",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/docs\\.yaml$/"],
+      matchStrings: [
+        "pip install (?<depName>zensical)==(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+      ],
+      datasourceTemplate: "pypi",
+    },
   ],
   packageRules: [
     {
