@@ -150,7 +150,7 @@ importers:
         specifier: 26.4.1
         version: 26.4.1
       typescript:
-        specifier: ~7.0.0
+        specifier: 7.0.2
         version: 7.0.2
       vite:
         specifier: 'catalog:'
