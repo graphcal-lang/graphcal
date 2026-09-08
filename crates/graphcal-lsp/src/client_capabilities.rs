@@ -155,8 +155,8 @@ impl ClientFeatureSupport {
 mod tests {
     use tower_lsp::lsp_types::{
         CodeActionClientCapabilities, CodeActionKindLiteralSupport, CodeActionLiteralSupport,
-        DocumentSymbolClientCapabilities, HoverClientCapabilities,
-        DidChangeWatchedFilesClientCapabilities, InlayHintWorkspaceClientCapabilities,
+        DidChangeWatchedFilesClientCapabilities, DocumentSymbolClientCapabilities,
+        HoverClientCapabilities, InlayHintWorkspaceClientCapabilities,
         PublishDiagnosticsClientCapabilities, TextDocumentClientCapabilities,
         WorkspaceClientCapabilities, WorkspaceEditClientCapabilities,
     };

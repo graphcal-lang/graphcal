@@ -11,11 +11,10 @@ use tower_lsp::lsp_types::{
     CodeActionProviderCapability, CodeActionResponse, CompletionOptions, CompletionParams,
     CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentChanges,
-    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    DocumentChanges, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
     OptionalVersionedTextDocumentIdentifier, PositionEncodingKind, PrepareRenameResponse,
     ReferenceParams, RenameOptions, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
     SignatureHelpOptions, SignatureHelpParams, TextDocumentEdit, TextDocumentPositionParams,
@@ -1032,12 +1031,13 @@ async fn analyze_store_publish_once(
         drop(latest_guard);
         return retry.map_or(AnalysisCompletion::Done, AnalysisCompletion::Retry);
     }
-    let graph_update = (analysis.inputs.has_complete_dependencies() || analysis.buffer_parsed).then(|| {
-        (
-            analysis.inputs.root().clone(),
-            analysis.inputs.dependencies().cloned().collect(),
-        )
-    });
+    let graph_update = (analysis.inputs.has_complete_dependencies() || analysis.buffer_parsed)
+        .then(|| {
+            (
+                analysis.inputs.root().clone(),
+                analysis.inputs.dependencies().cloned().collect(),
+            )
+        });
 
     // Hold the documents write lock across the generation re-check and
     // the insert: a newer-generation analysis completing between a
@@ -1332,12 +1332,10 @@ fn build_project(
     let fs = match graphcal_io::OverlayFileSystem::with_overlays(base, overlays) {
         Ok(fs) => fs,
         Err(error) => {
-            return ProjectBuild::failed(CompileError::Eval(
-                GraphcalError::InvalidSourcePath {
-                    path: error.path().display().to_string(),
-                    reason: error.to_string(),
-                },
-            ));
+            return ProjectBuild::failed(CompileError::Eval(GraphcalError::InvalidSourcePath {
+                path: error.path().display().to_string(),
+                reason: error.to_string(),
+            }));
         }
     };
     let tracking_fs = TrackingFileSystem::new(fs);
@@ -1474,8 +1472,7 @@ fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             return Ok(AnalysisRun {
                 analysis: AnalysisResult {
-                    inputs: input_snapshot
-                        .finish_partially_loaded_project(filesystem_inputs),
+                    inputs: input_snapshot.finish_partially_loaded_project(filesystem_inputs),
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     project_symbols: ProjectSymbols::Incomplete,
@@ -2740,7 +2737,9 @@ impl LanguageServer for Backend {
                         client
                             .log_message(
                                 MessageType::ERROR,
-                                format!("could not serialize filesystem watcher registration: {error}"),
+                                format!(
+                                    "could not serialize filesystem watcher registration: {error}"
+                                ),
                             )
                             .await;
                         return;
@@ -4782,6 +4781,51 @@ node momentum: Force * Time = @mass * @velocity;
             "an unrelated open buffer must not widen or invalidate the active project: {:?}",
             analysis.diagnostics
         );
+    }
+
+    #[test]
+    fn failed_load_tracks_missing_import_and_manifest_inputs() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"missingdep\"\n"),
+            (
+                "src/missingdep/main.gcl",
+                "import missingdep.lib::{value};\nnode result: Dimensionless = @value;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/missingdep/main.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &source, &[], test_plugin_host());
+        let dependencies: HashSet<_> = analysis.inputs.dependencies().cloned().collect();
+
+        assert!(!analysis.has_no_diagnostics());
+        assert!(!analysis.inputs.has_complete_dependencies());
+        assert!(dependencies.contains(&file_identity(&dir.path().join("src/missingdep/lib.gcl"))));
+        assert!(dependencies.contains(&file_identity(&dir.path().join("graphcal.toml"))));
+    }
+
+    #[test]
+    fn analysis_tracks_manifest_lockfile_and_plugin_artifacts() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"plugininputs\"\n"),
+            (
+                "src/plugininputs/main.gcl",
+                "import plugin \"plugin.wasm\" as plugin {\nfn value() -> Dimensionless;\n}\n",
+            ),
+            ("plugin.wasm", "not a wasm module"),
+        ]);
+        let main_path = dir.path().join("src/plugininputs/main.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let source = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &source, &[], test_plugin_host());
+        let dependencies: HashSet<_> = analysis.inputs.dependencies().cloned().collect();
+
+        for input in ["graphcal.toml", "graphcal.lock", "plugin.wasm"] {
+            assert!(
+                dependencies.contains(&file_identity(&dir.path().join(input))),
+                "missing tracked filesystem input {input}: {dependencies:?}"
+            );
+        }
     }
 
     #[test]

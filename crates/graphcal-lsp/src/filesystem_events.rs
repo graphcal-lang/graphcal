@@ -146,8 +146,7 @@ impl<F: FileSystemReader> FileSystemReader for TrackingFileSystem<F> {
         limit: EntryLimit,
         cancellation: &dyn CancellationSignal,
     ) -> Result<Vec<OsString>, FileSystemReadError> {
-        self.inner
-            .read_directory_bounded(path, limit, cancellation)
+        self.inner.read_directory_bounded(path, limit, cancellation)
     }
 
     fn is_file(&self, path: &Path) -> bool {
