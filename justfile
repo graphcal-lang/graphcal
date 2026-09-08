@@ -20,7 +20,13 @@ pipeline-layers-lint: pipeline-layers
     cargo clippy --locked --manifest-path internals/pipeline-layers/Cargo.toml --all-targets -- -D warnings
     cargo fmt --manifest-path internals/pipeline-layers/Cargo.toml --check
 
-lint: formal pipeline-layers-lint
+playground-check:
+    cd web/playground && vp check
+
+playground-test:
+    cd web/playground && vp test
+
+lint: formal pipeline-layers-lint playground-check
     cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
@@ -29,7 +35,7 @@ lint: formal pipeline-layers-lint
     CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
     CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
-test: formal-conformance pipeline-layers
+test: formal-conformance pipeline-layers playground-test
     cargo test --workspace
     node internals/report-runtime-tests.mjs
 
