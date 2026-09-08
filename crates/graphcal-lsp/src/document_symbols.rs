@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tower_lsp::lsp_types::{DocumentSymbol, SymbolKind};
+use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, SymbolKind, Url};
 
 use crate::convert::LineIndex;
 use crate::server::AnalysisResult;
@@ -76,6 +76,46 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     // Sort by range start for consistent ordering.
     symbols.sort_by_key(|s| (s.range.start.line, s.range.start.character));
     symbols
+}
+
+/// Flatten hierarchical symbols for clients that do not support `DocumentSymbol`.
+#[expect(
+    deprecated,
+    reason = "SymbolInformation::deprecated is required by the compatibility response"
+)]
+pub(crate) fn flatten_document_symbols(
+    uri: &Url,
+    symbols: Vec<DocumentSymbol>,
+) -> Vec<SymbolInformation> {
+    fn append(
+        output: &mut Vec<SymbolInformation>,
+        uri: &Url,
+        symbol: DocumentSymbol,
+        container_name: Option<String>,
+    ) {
+        let children = symbol.children.unwrap_or_default();
+        let name = symbol.name;
+        output.push(SymbolInformation {
+            name: name.clone(),
+            kind: symbol.kind,
+            tags: symbol.tags,
+            deprecated: symbol.deprecated,
+            location: Location {
+                uri: uri.clone(),
+                range: symbol.selection_range,
+            },
+            container_name,
+        });
+        children
+            .into_iter()
+            .for_each(|child| append(output, uri, child, Some(name.clone())));
+    }
+
+    let mut output = Vec::new();
+    symbols
+        .into_iter()
+        .for_each(|symbol| append(&mut output, uri, symbol, None));
+    output
 }
 
 /// Build an index from `parent name` to its `IndexVariant` definitions.
@@ -194,5 +234,25 @@ node total: Dimensionless = sum(@values);
                 .iter()
                 .all(|symbol| symbol.kind == SymbolKind::VARIABLE && symbol.children.is_none())
         );
+    }
+
+    #[test]
+    fn flat_symbols_preserve_children_with_container_names() {
+        let source = "index Mode = { Cruise, Landing };\n";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:flat-symbols.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        let flat = flatten_document_symbols(&uri, build_document_symbols(&analysis));
+        assert_eq!(
+            flat.iter()
+                .map(|symbol| (symbol.name.as_str(), symbol.container_name.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("Mode", None),
+                ("Cruise", Some("Mode")),
+                ("Landing", Some("Mode")),
+            ]
+        );
+        assert!(flat.iter().all(|symbol| symbol.location.uri == uri));
     }
 }

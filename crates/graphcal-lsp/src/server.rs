@@ -1,28 +1,33 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::{RwLock, Semaphore};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionOptions,
-    CompletionParams, CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
+    CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
     DocumentChanges, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
     DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
     GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
     InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
     OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse, ReferenceParams, RenameOptions,
-    RenameParams, SaveOptions, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
-    SignatureHelpParams, TextDocumentEdit, TextDocumentPositionParams, TextDocumentSyncCapability,
+    PositionEncodingKind, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
+    SignatureHelpOptions, SignatureHelpParams, TextDocumentEdit, TextDocumentPositionParams,
+    TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
     WorkDoneProgressOptions, WorkspaceEdit,
 };
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 
 use crate::analysis_schedule_state::AnalysisScheduleState;
+use crate::client_capabilities::{
+    ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape,
+};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
@@ -339,6 +344,9 @@ struct RecordedDocument {
 #[cfg_attr(test, derive(Debug))]
 pub struct Backend {
     client: Client,
+    /// Immutable interpretation of the initialize request's optional client
+    /// capabilities. `OnceLock` mirrors the protocol's initialize-once rule.
+    client_features: Arc<OnceLock<ClientFeatureSupport>>,
     /// Per-document analysis results, keyed by URI.
     documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     /// Generation counter per URI, used for debouncing `did_change`.
@@ -485,6 +493,20 @@ fn document_identity(uri: &Url) -> DocumentIdentity {
 }
 
 impl Backend {
+    fn client_features(&self) -> ClientFeatureSupport {
+        self.client_features.get().copied().unwrap_or_default()
+    }
+
+    fn request_inlay_hint_refresh(&self) {
+        if !self.client_features().inlay_hint_refresh {
+            return;
+        }
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = client.inlay_hint_refresh().await;
+        });
+    }
+
     fn is_graphcal_file(uri: &Url) -> bool {
         std::path::Path::new(uri.path())
             .extension()
@@ -588,10 +610,7 @@ impl Backend {
             .map(|(uri, snapshot)| (uri.clone(), Arc::clone(&snapshot.text), snapshot.revision))
             .collect();
         if !pending.is_empty() {
-            let refresh_client = self.client.clone();
-            tokio::spawn(async move {
-                let _ = refresh_client.inlay_hint_refresh().await;
-            });
+            self.request_inlay_hint_refresh();
         }
         for (uri, text, revision) in pending {
             self.analysis_scheduler.cancel_document(&uri);
@@ -640,6 +659,7 @@ impl Backend {
             &self.change_generations,
             &self.latest_text,
             &self.dependency_graph,
+            self.client_features(),
             Arc::clone(&self.plugin_host),
             Arc::clone(&self.analysis_scheduler),
             uri,
@@ -669,6 +689,7 @@ impl Backend {
         let dependency_graph = Arc::clone(&self.dependency_graph);
         let plugin_host = Arc::clone(&self.plugin_host);
         let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
+        let client_features = self.client_features();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
@@ -684,6 +705,7 @@ impl Backend {
                 &generations,
                 &latest_text,
                 &dependency_graph,
+                client_features,
                 plugin_host,
                 analysis_scheduler,
                 uri,
@@ -722,6 +744,7 @@ async fn analyze_store_publish(
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
     dependency_graph: &Arc<RwLock<DependencyGraph>>,
+    client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
     uri: Url,
@@ -736,6 +759,7 @@ async fn analyze_store_publish(
             generations,
             latest_text,
             dependency_graph,
+            client_features,
             Arc::clone(&plugin_host),
             Arc::clone(&scheduler),
             uri.clone(),
@@ -769,6 +793,7 @@ async fn analyze_store_publish_once(
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
     dependency_graph: &Arc<RwLock<DependencyGraph>>,
+    client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
     uri: Url,
@@ -967,10 +992,17 @@ async fn analyze_store_publish_once(
             .await;
     }
     for (target_uri, diags) in publish {
-        client.publish_diagnostics(target_uri, diags, None).await;
+        client
+            .publish_diagnostics(
+                target_uri,
+                diagnostics_for_client(diags, client_features),
+                None,
+            )
+            .await;
     }
-    // Best-effort: the client may not support inlay-hint refresh.
-    let _ = client.inlay_hint_refresh().await;
+    if client_features.inlay_hint_refresh {
+        let _ = client.inlay_hint_refresh().await;
+    }
     AnalysisCompletion::Done
 }
 
@@ -1042,10 +1074,14 @@ fn workspace_edit_matches_open_snapshots(
     })
 }
 
-fn version_workspace_edit(
+fn workspace_edit_for_client(
     mut edit: WorkspaceEdit,
     snapshots: &HashMap<Url, OpenDocumentSnapshot>,
+    shape: WorkspaceEditShape,
 ) -> WorkspaceEdit {
+    if shape == WorkspaceEditShape::Changes {
+        return edit;
+    }
     let Some(changes) = edit.changes.take() else {
         return edit;
     };
@@ -1064,6 +1100,46 @@ fn version_workspace_edit(
             .collect(),
     ));
     edit
+}
+
+fn code_actions_for_client(
+    actions: CodeActionResponse,
+    snapshots: &HashMap<Url, OpenDocumentSnapshot>,
+    features: ClientFeatureSupport,
+) -> CodeActionResponse {
+    actions
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::Command(command) => Some(CodeActionOrCommand::Command(command)),
+            CodeActionOrCommand::CodeAction(mut action) => {
+                if !features.code_action_literals {
+                    return None;
+                }
+                if !features.code_action_is_preferred {
+                    action.is_preferred = None;
+                }
+                action.edit = action.edit.map(|edit| {
+                    workspace_edit_for_client(edit, snapshots, features.workspace_edit_shape)
+                });
+                Some(CodeActionOrCommand::CodeAction(action))
+            }
+        })
+        .collect()
+}
+
+fn diagnostics_for_client(
+    mut diagnostics: Vec<Diagnostic>,
+    features: ClientFeatureSupport,
+) -> Vec<Diagnostic> {
+    diagnostics.iter_mut().for_each(|diagnostic| {
+        if !features.diagnostic_related_information {
+            diagnostic.related_information = None;
+        }
+        if !features.diagnostic_data {
+            diagnostic.data = None;
+        }
+    });
+    diagnostics
 }
 
 /// Log a current-revision analysis timeout without replacing source
@@ -2467,7 +2543,9 @@ fn insert_imported_def(
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let client_features = ClientFeatureSupport::from_client(&params.capabilities);
+        let _ = self.client_features.set(client_features);
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -2505,8 +2583,15 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_action_provider: client_features.code_action_literals.then(|| {
+                    CodeActionProviderCapability::Options(CodeActionOptions {
+                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        resolve_provider: Some(false),
+                    })
+                }),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                position_encoding: Some(PositionEncodingKind::UTF16),
                 ..Default::default()
             },
             ..Default::default()
@@ -2559,11 +2644,8 @@ impl LanguageServer for Backend {
             }
         };
         // Cached hint coordinates became stale as soon as the root revision
-        // changed; ask the client to clear/re-request them before debounce.
-        let refresh_client = self.client.clone();
-        tokio::spawn(async move {
-            let _ = refresh_client.inlay_hint_refresh().await;
-        });
+        // changed; ask capable clients to clear/re-request them before debounce.
+        self.request_inlay_hint_refresh();
         self.schedule_transitive_importers(&uri, &recorded.identity)
             .await;
         let generation = self.bump_generation(&uri).await;
@@ -2611,9 +2693,10 @@ impl LanguageServer for Backend {
         self.latest_text.write().await.remove(&uri);
         self.dependency_graph.write().await.remove(&identity);
         self.schedule_transitive_importers(&uri, &identity).await;
+        let features = self.client_features();
         for (target_uri, diags) in publish {
             self.client
-                .publish_diagnostics(target_uri, diags, None)
+                .publish_diagnostics(target_uri, diagnostics_for_client(diags, features), None)
                 .await;
         }
         // The closed document needs no hint refresh. If it had open
@@ -2625,10 +2708,16 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        self.with_current_analysis(&params.text_document.uri, |current| {
-            Some(DocumentSymbolResponse::Nested(
-                crate::document_symbols::build_document_symbols(current.get()),
-            ))
+        let uri = params.text_document.uri;
+        let shape = self.client_features().document_symbol_shape;
+        self.with_current_analysis(&uri, |current| {
+            let symbols = crate::document_symbols::build_document_symbols(current.get());
+            Some(match shape {
+                DocumentSymbolShape::Flat => DocumentSymbolResponse::Flat(
+                    crate::document_symbols::flatten_document_symbols(&uri, symbols),
+                ),
+                DocumentSymbolShape::Hierarchical => DocumentSymbolResponse::Nested(symbols),
+            })
         })
         .await
     }
@@ -2650,10 +2739,11 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
+        let format = self.client_features().hover_format;
         self.with_current_analysis(&uri, |current| {
             let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
-            crate::hover::hover(analysis, offset)
+            crate::hover::hover_with_format(analysis, offset, format)
         })
         .await
     }
@@ -2707,8 +2797,13 @@ impl LanguageServer for Backend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let features = self.client_features();
+        if !features.code_action_literals {
+            return Ok(None);
+        }
         let uri = params.text_document.uri.clone();
         let current_text = self.current_text(&uri).await;
+        let snapshots = self.latest_text.read().await.clone();
         self.with_current_analysis(&uri, move |current| {
             let analysis = current.get();
             let current_text = current_text.as_ref()?;
@@ -2716,6 +2811,8 @@ impl LanguageServer for Backend {
                 return None;
             }
             crate::code_actions::code_actions(&params, analysis, current_text)
+                .map(|actions| code_actions_for_client(actions, &snapshots, features))
+                .filter(|actions| !actions.is_empty())
         })
         .await
     }
@@ -2726,6 +2823,7 @@ impl LanguageServer for Backend {
         let new_name = params.new_name;
         let current_text = self.current_text(&uri).await;
         let snapshots = self.latest_text.read().await.clone();
+        let workspace_edit_shape = self.client_features().workspace_edit_shape;
         let outcome = self
             .with_current_analysis(&uri, |current| {
                 let analysis = current.get();
@@ -2742,7 +2840,11 @@ impl LanguageServer for Backend {
                         {
                             Err(crate::rename::RenameRefusal::StaleProjectSnapshot)
                         } else {
-                            Ok(Some(version_workspace_edit(edit, &snapshots)))
+                            Ok(Some(workspace_edit_for_client(
+                                edit,
+                                &snapshots,
+                                workspace_edit_shape,
+                            )))
                         }
                     }
                     other => other,
@@ -2831,13 +2933,10 @@ impl LanguageServer for Backend {
     }
 }
 
-/// Start the LSP server, reading from stdin and writing to stdout.
-pub(crate) async fn run() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-
-    let (service, socket) = LspService::new(|client| Backend {
+pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
+    LspService::new(|client| Backend {
         client,
+        client_features: Arc::new(OnceLock::new()),
         documents: Arc::new(RwLock::new(HashMap::new())),
         change_generations: Arc::new(RwLock::new(HashMap::new())),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
@@ -2846,7 +2945,14 @@ pub(crate) async fn run() {
         dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),
-    });
+    })
+}
+
+/// Start the LSP server, reading from stdin and writing to stdout.
+pub(crate) async fn run() {
+    let stdin = tokio::io::stdin();
+    let stdout = tokio::io::stdout();
+    let (service, socket) = service();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
@@ -4249,7 +4355,11 @@ node bad: Mass = mass + length;
             },
         )]);
 
-        let versioned = version_workspace_edit(edit, &snapshots);
+        let versioned = workspace_edit_for_client(
+            edit,
+            &snapshots,
+            WorkspaceEditShape::DocumentChanges,
+        );
         assert!(versioned.changes.is_none());
         let Some(DocumentChanges::Edits(documents)) = versioned.document_changes else {
             panic!("expected versioned document edits");
@@ -4261,6 +4371,23 @@ node bad: Mass = mass + length;
             .collect();
         assert_eq!(versions[&open_uri], Some(7));
         assert_eq!(versions[&closed_uri], None);
+    }
+
+    #[test]
+    fn legacy_workspace_edits_keep_changes_map() {
+        let uri = Url::parse("file:///open.gcl").unwrap();
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([(uri, Vec::new())])),
+            ..Default::default()
+        };
+
+        let shaped = workspace_edit_for_client(
+            edit,
+            &HashMap::new(),
+            WorkspaceEditShape::Changes,
+        );
+        assert!(shaped.changes.is_some());
+        assert!(shaped.document_changes.is_none());
     }
 
     /// Build a bare `AnalysisResult` carrying only a diagnostics map, for
