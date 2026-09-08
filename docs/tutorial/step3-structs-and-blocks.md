@@ -105,11 +105,7 @@ node tof_hours: Time = @transfer.tof -> h;
 
 The structured `transfer` value is expandable in the output pane, while `total_dv` and `tof_hours` show its projected fields.
 
-<div class="gc-playground-host">
-  <graphcal-playground example="step-3">
-    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above or <a href="../assets/playground/examples/step-3/main.gcl">open the static example source</a>.</p>
-  </graphcal-playground>
-</div>
+[Open this example in the playground](https://graphcal.org/playground/?example=structs), or [read the source](../assets/playground/examples/step-3/main.gcl).
 
 Expected initial output includes the expandable `transfer` value, `total_dv`, and `tof_hours`.
 

@@ -20,7 +20,7 @@ pipeline-layers-lint: pipeline-layers
     cargo clippy --locked --manifest-path internals/pipeline-layers/Cargo.toml --all-targets -- -D warnings
     cargo fmt --manifest-path internals/pipeline-layers/Cargo.toml --check
 
-# Independent browser app assets (legacy docs embed is removed in migration).
+# Stage the single-source example catalog, Wasm engine, and vendored plot runtime.
 playground-assets:
     vp -C web/playground exec node stage-examples.mjs
     wasm-pack build crates/graphcal-wasm --target web --out-dir ../../web/playground/public/pkg --profile wasm-release --no-typescript --no-pack
@@ -99,38 +99,22 @@ report-smoke: wasm-report wasm-report-check
     cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl --output target/wasm-report/rocket.report.html
     node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
 
-# Build the browser adapter and wasm-bindgen glue consumed by Zensical, and
-# stage the vendored Vega bundles the playground loads for plot rendering.
-wasm-playground:
-    rm -rf docs/assets/playground/pkg
-    wasm-pack build crates/graphcal-wasm --target web --out-dir ../../docs/assets/playground/pkg --profile wasm-release --no-typescript --no-pack
-    rm -f docs/assets/playground/pkg/.gitignore
-    rm -rf docs/assets/playground/vega
-    mkdir -p docs/assets/playground/vega
-    cp crates/graphcal-report/assets/vega.min.js crates/graphcal-report/assets/vega-lite.min.js crates/graphcal-report/assets/vega-embed.min.js docs/assets/playground/vega/
-
-# Populate the published site root: redirect stub, CNAME, robots.txt, and a
-# copy of the themed 404 page that GitHub Pages serves for unmatched paths.
+# Assemble only after Zensical's clean build, preserving both sibling apps.
 docs-assemble:
-    cp -R site-root/. site/
-    cp site/docs/404.html site/404.html
+    vp -C web/playground exec node ../../internals/site-assemble.mjs
+    vp -C web/playground exec node ../../internals/site-verify.mjs
 
-# Build docs, smoke-test the worker bridge, and enforce a 5 MiB raw Wasm budget.
-docs-build: wasm-playground
+# Build and verify the entire GitHub Pages artifact with the same steps as CI.
+docs-build: playground-build
     zensical build --clean
     just docs-assemble
-    test -s site/docs/assets/playground/pkg/graphcal_wasm.js
-    test -s site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm
-    test -s site/docs/assets/playground/vega/vega.min.js
-    test -s site/docs/assets/playground/vega/vega-lite.min.js
-    test -s site/docs/assets/playground/vega/vega-embed.min.js
-    test "$(wc -c < site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm)" -le 5242880
-    node --check docs/javascripts/playground.mjs
-    node --check docs/javascripts/playground-worker.mjs
-    node internals/playground-worker-smoke.mjs
 
-docs-serve: wasm-playground
+# Documentation-only development; use site-serve to preview /playground/ too.
+docs-serve:
     zensical serve
+
+site-serve: docs-build
+    vp -C web/playground exec node ../../internals/site-serve.mjs
 
 coverage:
     cargo llvm-cov --workspace --html

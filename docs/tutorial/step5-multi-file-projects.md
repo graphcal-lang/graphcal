@@ -78,17 +78,13 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-## Try the Multi-File Project in Your Browser
+## Try the Multi-File Project Locally
 
-Use the file tabs to edit `graphcal.toml`, both library modules, and the entry file. Imports are resolved entirely inside the browser's in-memory filesystem.
+The [standalone playground](https://graphcal.org/playground/) supports only one `.gcl` file. Use the CLI for this multi-file lesson; it is not flattened into a different browser example.
 
-<div class="gc-playground-host">
-  <graphcal-playground example="step-5">
-    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above, <a href="../assets/playground/examples/step-5/src/rocket_project/main.gcl">open the static entry source</a>, or inspect its <a href="../assets/playground/examples/step-5/project.json">project manifest</a>.</p>
-  </graphcal-playground>
-</div>
+Read the [entry source](../assets/playground/examples/step-5/src/rocket_project/main.gcl), [constants](../assets/playground/examples/step-5/src/rocket_project/constants.gcl), [parameters](../assets/playground/examples/step-5/src/rocket_project/params.gcl), and [package manifest](../assets/playground/examples/step-5/graphcal.toml). Arrange them as shown above and run the command below.
 
-Expected initial output includes all seven projected values from `g0` through `delta_v`.
+Expected output includes all seven projected values from `g0` through `delta_v`.
 
 The path before `::{...}` is absolute from the package root. The
 first segment is the package name (from `graphcal.toml`); subsequent

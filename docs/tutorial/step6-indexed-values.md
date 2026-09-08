@@ -116,11 +116,7 @@ node departure_dv: Velocity = @delta_v[Maneuver#Departure];
 
 Indexed values render as expandable tables. Change one maneuver value and watch the aggregate and cumulative outputs update.
 
-<div class="gc-playground-host">
-  <graphcal-playground example="step-6">
-    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above or <a href="../assets/playground/examples/step-6/main.gcl">open the static example source</a>.</p>
-  </graphcal-playground>
-</div>
+[Open this example in the playground](https://graphcal.org/playground/?example=indexed), or [read the source](../assets/playground/examples/step-6/main.gcl).
 
 Expected initial output includes `total_dv = 4.41 km/s` and three cumulative entries.
 
