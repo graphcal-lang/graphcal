@@ -30,3 +30,26 @@ The standalone app replaces embedded documentation playgrounds. Multi-file
 lessons remain static/CLI-based; their backend regression tests remain. Download
 is optional and is not required for release. Oversized source remains available
 for manual copying. Syntax highlighting and full LSP integration are deferred.
+
+## Development and publishing
+
+- `just playground-serve`: build Wasm/stage assets, then serve the frontend with vp.
+- `just playground-build`: frontend lint/types, pure and real-Wasm tests, production build.
+- `just docs-build`: build the frontend, build Zensical, then assemble and verify
+  the combined `site/` artifact. GitHub Pages CI uses this exact recipe.
+- `just site-serve`: build and preview the whole site at localhost:4173.
+- `just docs-serve`: documentation only; it no longer builds or embeds Wasm.
+
+`examples/catalog.json` names canonical repository sources and expected outputs.
+`stage-examples.mjs` copies them into ignored public assets. The native catalog
+integration test and TypeScript real-Wasm tests evaluate every entry. The functions
+example deliberately keeps `main.gcl` because its self-imports refer to `main`.
+Existing tutorial assets remain static downloads and multi-file regression inputs.
+
+`internals/site-assemble.mjs` assembles the standalone app after Zensical's clean
+build. `site-verify.mjs` checks the CNAME, root redirect, both apps, source asset
+identity, a 5 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
+Vega bundles are vendored from `graphcal-report` and loaded only for figures.
+`protocol.ts` validates the rendered Rust output fields; real-Wasm tests cover its
+value, assertion, diagnostic, and error variants. Plot loaders deny external
+resources and embed metadata cannot override this policy.

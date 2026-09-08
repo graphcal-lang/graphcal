@@ -1410,6 +1410,16 @@ Presentation data now precedes its producers and consumers: selected evidence
 is a contract, resolution is interpreter work, and public display attachment is
 a pure output adapter. Immutable constant selections are not invocation state.
 
+### Standalone browser shell
+
+The frontend is a consumer of `graphcal-wasm`, not an upstream compiler layer.
+Read `web/playground/src/` in this dependency order: `document.ts`,
+`example-catalog.ts`, `location.ts`, `protocol.ts`, `dom.ts`, `figures.ts`,
+`share-codec.ts`, `examples.ts`, `editor.ts`, `output.ts`, `layout.ts`,
+`evaluation-worker.ts`, `worker-client.ts`, then `app.ts`. The worker client loads
+its worker at the I/O boundary. See [playground architecture](playground.md) for
+build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
+
 ### Library-consumer sequence
 
 1. `crates/graphcal-compiler/src/syntax/attribute.rs`
