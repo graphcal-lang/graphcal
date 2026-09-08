@@ -114,7 +114,7 @@ node departure_dv: Velocity = @delta_v[Maneuver#Departure];
 
 ## Try It in Your Browser
 
-Indexed values render as expandable tables. Change one maneuver value and watch the aggregate and cumulative outputs update.
+Indexed values are expandable in the playground. One-dimensional values use a key/value list, two-dimensional values use a table, and values with three or more axes use an ordered list of tables selected by their leading axes. Change one maneuver value and watch the aggregate and cumulative outputs update.
 
 [Open this example in the playground](https://graphcal.org/playground/?example=indexed), or [read the source](../assets/playground/examples/step-6/main.gcl).
 

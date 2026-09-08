@@ -14,11 +14,19 @@ export const diagnosticSchema = z.object({
   labels: z.array(z.object({ message: z.string().nullish(), range: rangeSchema })),
 });
 export type Diagnostic = z.infer<typeof diagnosticSchema>;
-type Value =
+export type Value =
   | { kind: "quantity" | "complex" | "bool" | "int" | "label" | "datetime"; display: string }
   | { kind: "struct"; display: string; fields: { name: string; value: Value }[] }
   | { kind: "indexed"; display: string; entries: { display_key: string; value: Value }[] };
-export type { Value };
+export interface GridTable {
+  columns: string[];
+  rows: [string, string[]][];
+}
+export type ValueBody =
+  | { kind: "scalar"; body: string }
+  | { kind: "entries"; body: [string, string][] }
+  | { kind: "grid"; body: GridTable }
+  | { kind: "slices"; body: [string, GridTable][] };
 const valueSchema: z.ZodType<Value> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -37,6 +45,16 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
     }),
   ]),
 );
+const gridTableSchema = z.object({
+  columns: z.array(z.string()),
+  rows: z.array(z.tuple([z.string(), z.array(z.string())])),
+});
+const valueBodySchema: z.ZodType<ValueBody> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("scalar"), body: z.string() }),
+  z.object({ kind: z.literal("entries"), body: z.array(z.tuple([z.string(), z.string()])) }),
+  z.object({ kind: z.literal("grid"), body: gridTableSchema }),
+  z.object({ kind: z.literal("slices"), body: z.array(z.tuple([z.string(), gridTableSchema])) }),
+]);
 const nodeError = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("evaluation_failed"), message: z.string() }),
   z.object({ kind: z.literal("dependency_failed"), failed_dependencies: z.array(z.string()) }),
@@ -54,7 +72,7 @@ export const outcomeSchema = z.discriminatedUnion("status", [
           name: z.string(),
           declaration_kind: z.enum(["const", "param", "node"]),
           outcome: z.discriminatedUnion("status", [
-            z.object({ status: z.literal("value"), value: valueSchema }),
+            z.object({ status: z.literal("value"), value: valueSchema, body: valueBodySchema }),
             z.object({ status: z.literal("error"), error: nodeError }),
           ]),
         }),
