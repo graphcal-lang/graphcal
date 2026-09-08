@@ -28,9 +28,9 @@ tower-lsp = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-futures-util = { version = "0.3", features = ["sink"] }
+futures-util = { version = "=0.3.34", features = ["sink"] }
 tempfile.workspace = true
-tower = { version = "0.4.13", features = ["util"] }
+tower = { version = "=0.4.13", features = ["util"] }
 
 [target."cfg(loom)".dependencies]
 loom = "0.7"
