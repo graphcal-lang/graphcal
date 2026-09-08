@@ -83,19 +83,15 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     deprecated,
     reason = "SymbolInformation::deprecated is required by the compatibility response"
 )]
-pub(crate) fn flatten_document_symbols(
-    uri: &Url,
-    symbols: Vec<DocumentSymbol>,
-) -> Vec<SymbolInformation> {
-    fn append(
-        output: &mut Vec<SymbolInformation>,
+pub fn flatten_document_symbols(uri: &Url, symbols: Vec<DocumentSymbol>) -> Vec<SymbolInformation> {
+    fn flatten(
         uri: &Url,
         symbol: DocumentSymbol,
         container_name: Option<String>,
-    ) {
+    ) -> Vec<SymbolInformation> {
         let children = symbol.children.unwrap_or_default();
         let name = symbol.name;
-        output.push(SymbolInformation {
+        let parent = SymbolInformation {
             name: name.clone(),
             kind: symbol.kind,
             tags: symbol.tags,
@@ -105,17 +101,20 @@ pub(crate) fn flatten_document_symbols(
                 range: symbol.selection_range,
             },
             container_name,
-        });
-        children
-            .into_iter()
-            .for_each(|child| append(output, uri, child, Some(name.clone())));
+        };
+        std::iter::once(parent)
+            .chain(
+                children
+                    .into_iter()
+                    .flat_map(|child| flatten(uri, child, Some(name.clone()))),
+            )
+            .collect()
     }
 
-    let mut output = Vec::new();
     symbols
         .into_iter()
-        .for_each(|symbol| append(&mut output, uri, symbol, None));
-    output
+        .flat_map(|symbol| flatten(uri, symbol, None))
+        .collect()
 }
 
 /// Build an index from `parent name` to its `IndexVariant` definitions.

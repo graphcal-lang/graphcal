@@ -25,6 +25,15 @@ The Graphcal LSP server (`graphcal lsp`) provides:
 | **Document links**   | Clickable links for loader-resolved `import` and `include` paths                                                   |
 | **Formatting**       | Format the current document (same as `graphcal format`)                                                           |
 
+The server negotiates optional response forms from the client's initialization
+capabilities. It returns flat symbols and plaintext hover content to minimal
+clients, and uses hierarchical symbols, Markdown hover, and versioned
+`documentChanges` only when supported. Code actions are advertised only to
+clients that support code-action literals, because Graphcal quick fixes are
+returned as checked edits rather than executable commands. Global inlay-hint
+refresh requests are sent only when the client declares refresh support.
+Graphcal uses UTF-16 positions, the LSP compatibility baseline.
+
 Diagnostics distinguish precise source ranges, whole-file failures, and
 source-less built-in/internal failures. A source-less failure is never rendered
 as a misleading caret at the first byte of the file.

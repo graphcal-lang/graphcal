@@ -13,12 +13,13 @@ use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 ///
 /// Functional tests use the server's richest representation. Protocol callers
 /// should use [`hover_with_format`] with the client's negotiated format.
+#[cfg(test)]
 pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
     hover_with_format(analysis, offset, HoverFormat::Markdown)
 }
 
 /// Resolve hover information in a client-supported markup format.
-pub(crate) fn hover_with_format(
+pub fn hover_with_format(
     analysis: &AnalysisResult,
     offset: usize,
     format: HoverFormat,
@@ -48,7 +49,7 @@ struct HoverDescription {
 }
 
 impl HoverDescription {
-    fn block(synopsis: String) -> Self {
+    const fn block(synopsis: String) -> Self {
         Self {
             synopsis,
             detail: None,
@@ -56,7 +57,7 @@ impl HoverDescription {
         }
     }
 
-    fn inline(synopsis: String) -> Self {
+    const fn inline(synopsis: String) -> Self {
         Self {
             synopsis,
             detail: None,
@@ -149,16 +150,16 @@ fn describe_hover(def: &DefinitionInfo) -> HoverDescription {
             let detail = def.type_description.as_deref().unwrap_or("constructor");
             HoverDescription::block(format!("{vis}{}(...)", def.name)).with_detail(detail)
         }
-        SymbolCategory::IndexVariant => HoverDescription::inline(def.name.clone())
-            .with_detail(def.detail.as_deref().unwrap_or("")),
+        SymbolCategory::IndexVariant | SymbolCategory::LocalVar => {
+            HoverDescription::inline(def.name.clone())
+                .with_detail(def.detail.as_deref().unwrap_or(""))
+        }
         SymbolCategory::Field => HoverDescription::inline(def.name.clone()),
         SymbolCategory::GenericParam => {
             let sort = def.type_description.as_deref().unwrap_or("generic");
             let detail = def.detail.as_deref().unwrap_or("generic parameter");
             HoverDescription::block(format!("{}: {sort}", def.name)).with_detail(detail)
         }
-        SymbolCategory::LocalVar => HoverDescription::inline(def.name.clone())
-            .with_detail(def.detail.as_deref().unwrap_or("")),
         SymbolCategory::BuiltinFn | SymbolCategory::ExternFn => {
             let fallback = format!("fn {}", def.name);
             let sig = def.type_description.as_deref().unwrap_or(&fallback);
@@ -177,13 +178,9 @@ fn describe_hover(def: &DefinitionInfo) -> HoverDescription {
             let type_str = def.type_description.as_deref().unwrap_or("plot");
             HoverDescription::block(format!("{vis}plot {}", def.name)).with_detail(type_str)
         }
-        SymbolCategory::Figure => {
-            HoverDescription::block(format!("{vis}figure {}", def.name))
-        }
+        SymbolCategory::Figure => HoverDescription::block(format!("{vis}figure {}", def.name)),
         SymbolCategory::Layer => HoverDescription::block(format!("{vis}layer {}", def.name)),
-        SymbolCategory::Dag => {
-            HoverDescription::block(format!("{vis}dag {} {{ ... }}", def.name))
-        }
+        SymbolCategory::Dag => HoverDescription::block(format!("{vis}dag {} {{ ... }}", def.name)),
     }
 }
 

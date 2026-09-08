@@ -7,38 +7,61 @@ use tower_lsp::lsp_types::{ClientCapabilities, MarkupKind};
 
 /// Shape used for `textDocument/documentSymbol` responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DocumentSymbolShape {
+pub enum DocumentSymbolShape {
     Flat,
     Hierarchical,
 }
 
 /// Markup format used for hover responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HoverFormat {
+pub enum HoverFormat {
     PlainText,
     Markdown,
 }
 
 /// Workspace edit representation supported by the client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorkspaceEditShape {
+pub enum WorkspaceEditShape {
     /// The legacy `changes` map. It cannot carry document versions.
     Changes,
     /// Versioned `documentChanges` entries.
     DocumentChanges,
 }
 
+/// Support state for an optional protocol feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptionalFeatureSupport {
+    Unsupported,
+    Supported,
+}
+
+impl OptionalFeatureSupport {
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::Supported)
+    }
+}
+
+impl From<bool> for OptionalFeatureSupport {
+    fn from(supported: bool) -> Self {
+        if supported {
+            Self::Supported
+        } else {
+            Self::Unsupported
+        }
+    }
+}
+
 /// Optional client features that affect Graphcal response shapes or callbacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ClientFeatureSupport {
-    pub(crate) document_symbol_shape: DocumentSymbolShape,
-    pub(crate) hover_format: HoverFormat,
-    pub(crate) workspace_edit_shape: WorkspaceEditShape,
-    pub(crate) code_action_literals: bool,
-    pub(crate) code_action_is_preferred: bool,
-    pub(crate) diagnostic_related_information: bool,
-    pub(crate) diagnostic_data: bool,
-    pub(crate) inlay_hint_refresh: bool,
+pub struct ClientFeatureSupport {
+    pub document_symbol_shape: DocumentSymbolShape,
+    pub hover_format: HoverFormat,
+    pub workspace_edit_shape: WorkspaceEditShape,
+    pub code_action_literals: OptionalFeatureSupport,
+    pub code_action_is_preferred: OptionalFeatureSupport,
+    pub diagnostic_related_information: OptionalFeatureSupport,
+    pub diagnostic_data: OptionalFeatureSupport,
+    pub inlay_hint_refresh: OptionalFeatureSupport,
 }
 
 impl Default for ClientFeatureSupport {
@@ -47,18 +70,18 @@ impl Default for ClientFeatureSupport {
             document_symbol_shape: DocumentSymbolShape::Flat,
             hover_format: HoverFormat::PlainText,
             workspace_edit_shape: WorkspaceEditShape::Changes,
-            code_action_literals: false,
-            code_action_is_preferred: false,
-            diagnostic_related_information: false,
-            diagnostic_data: false,
-            inlay_hint_refresh: false,
+            code_action_literals: OptionalFeatureSupport::Unsupported,
+            code_action_is_preferred: OptionalFeatureSupport::Unsupported,
+            diagnostic_related_information: OptionalFeatureSupport::Unsupported,
+            diagnostic_data: OptionalFeatureSupport::Unsupported,
+            inlay_hint_refresh: OptionalFeatureSupport::Unsupported,
         }
     }
 }
 
 impl ClientFeatureSupport {
     /// Interpret the capabilities that affect currently implemented features.
-    pub(crate) fn from_client(capabilities: &ClientCapabilities) -> Self {
+    pub fn from_client(capabilities: &ClientCapabilities) -> Self {
         let text_document = capabilities.text_document.as_ref();
         let workspace = capabilities.workspace.as_ref();
         let document_symbol_shape = text_document
@@ -98,20 +121,25 @@ impl ClientFeatureSupport {
                 }),
             code_action_literals: code_action
                 .and_then(|caps| caps.code_action_literal_support.as_ref())
-                .is_some(),
+                .is_some()
+                .into(),
             code_action_is_preferred: code_action
                 .and_then(|caps| caps.is_preferred_support)
-                .unwrap_or(false),
+                .unwrap_or(false)
+                .into(),
             diagnostic_related_information: diagnostics
                 .and_then(|caps| caps.related_information)
-                .unwrap_or(false),
+                .unwrap_or(false)
+                .into(),
             diagnostic_data: diagnostics
                 .and_then(|caps| caps.data_support)
-                .unwrap_or(false),
+                .unwrap_or(false)
+                .into(),
             inlay_hint_refresh: workspace
                 .and_then(|caps| caps.inlay_hint.as_ref())
                 .and_then(|caps| caps.refresh_support)
-                .unwrap_or(false),
+                .unwrap_or(false)
+                .into(),
         }
     }
 }
@@ -183,11 +211,11 @@ mod tests {
                 document_symbol_shape: DocumentSymbolShape::Hierarchical,
                 hover_format: HoverFormat::Markdown,
                 workspace_edit_shape: WorkspaceEditShape::DocumentChanges,
-                code_action_literals: true,
-                code_action_is_preferred: true,
-                diagnostic_related_information: true,
-                diagnostic_data: true,
-                inlay_hint_refresh: true,
+                code_action_literals: OptionalFeatureSupport::Supported,
+                code_action_is_preferred: OptionalFeatureSupport::Supported,
+                diagnostic_related_information: OptionalFeatureSupport::Supported,
+                diagnostic_data: OptionalFeatureSupport::Supported,
+                inlay_hint_refresh: OptionalFeatureSupport::Supported,
             }
         );
     }

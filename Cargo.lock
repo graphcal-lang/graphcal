@@ -1986,6 +1986,7 @@ dependencies = [
 name = "graphcal-lsp"
 version = "0.0.1-alpha.29"
 dependencies = [
+ "futures-util",
  "graphcal-compiler",
  "graphcal-eval",
  "graphcal-fmt",

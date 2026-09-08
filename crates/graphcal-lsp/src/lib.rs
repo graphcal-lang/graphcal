@@ -20,6 +20,8 @@ mod hover;
 mod inlay_hints;
 mod nominal_type_index;
 mod project_symbols;
+#[cfg(test)]
+mod protocol_tests;
 mod references;
 mod rename;
 mod resolve;

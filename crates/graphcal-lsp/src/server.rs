@@ -9,25 +9,22 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, CompletionOptions, CompletionParams,
-    CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentChanges, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
-    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
-    OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse, ReferenceParams, RenameOptions,
-    PositionEncodingKind, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
+    CompletionResponse, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentChanges,
+    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    OptionalVersionedTextDocumentIdentifier, PositionEncodingKind, PrepareRenameResponse,
+    ReferenceParams, RenameOptions, RenameParams, SaveOptions, ServerCapabilities, SignatureHelp,
     SignatureHelpOptions, SignatureHelpParams, TextDocumentEdit, TextDocumentPositionParams,
-    TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
-    WorkDoneProgressOptions, WorkspaceEdit,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions, WorkspaceEdit,
 };
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 
 use crate::analysis_schedule_state::AnalysisScheduleState;
-use crate::client_capabilities::{
-    ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape,
-};
+use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
@@ -498,7 +495,7 @@ impl Backend {
     }
 
     fn request_inlay_hint_refresh(&self) {
-        if !self.client_features().inlay_hint_refresh {
+        if !self.client_features().inlay_hint_refresh.is_supported() {
             return;
         }
         let client = self.client.clone();
@@ -1000,7 +997,7 @@ async fn analyze_store_publish_once(
             )
             .await;
     }
-    if client_features.inlay_hint_refresh {
+    if client_features.inlay_hint_refresh.is_supported() {
         let _ = client.inlay_hint_refresh().await;
     }
     AnalysisCompletion::Done
@@ -1112,10 +1109,10 @@ fn code_actions_for_client(
         .filter_map(|action| match action {
             CodeActionOrCommand::Command(command) => Some(CodeActionOrCommand::Command(command)),
             CodeActionOrCommand::CodeAction(mut action) => {
-                if !features.code_action_literals {
+                if !features.code_action_literals.is_supported() {
                     return None;
                 }
-                if !features.code_action_is_preferred {
+                if !features.code_action_is_preferred.is_supported() {
                     action.is_preferred = None;
                 }
                 action.edit = action.edit.map(|edit| {
@@ -1128,18 +1125,21 @@ fn code_actions_for_client(
 }
 
 fn diagnostics_for_client(
-    mut diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<Diagnostic>,
     features: ClientFeatureSupport,
 ) -> Vec<Diagnostic> {
-    diagnostics.iter_mut().for_each(|diagnostic| {
-        if !features.diagnostic_related_information {
-            diagnostic.related_information = None;
-        }
-        if !features.diagnostic_data {
-            diagnostic.data = None;
-        }
-    });
     diagnostics
+        .into_iter()
+        .map(|mut diagnostic| {
+            if !features.diagnostic_related_information.is_supported() {
+                diagnostic.related_information = None;
+            }
+            if !features.diagnostic_data.is_supported() {
+                diagnostic.data = None;
+            }
+            diagnostic
+        })
+        .collect()
 }
 
 /// Log a current-revision analysis timeout without replacing source
@@ -2583,13 +2583,15 @@ impl LanguageServer for Backend {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
-                code_action_provider: client_features.code_action_literals.then(|| {
-                    CodeActionProviderCapability::Options(CodeActionOptions {
-                        code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
-                        work_done_progress_options: WorkDoneProgressOptions::default(),
-                        resolve_provider: Some(false),
-                    })
-                }),
+                code_action_provider: client_features.code_action_literals.is_supported().then(
+                    || {
+                        CodeActionProviderCapability::Options(CodeActionOptions {
+                            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                            work_done_progress_options: WorkDoneProgressOptions::default(),
+                            resolve_provider: Some(false),
+                        })
+                    },
+                ),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 position_encoding: Some(PositionEncodingKind::UTF16),
                 ..Default::default()
@@ -2798,7 +2800,7 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let features = self.client_features();
-        if !features.code_action_literals {
+        if !features.code_action_literals.is_supported() {
             return Ok(None);
         }
         let uri = params.text_document.uri.clone();
@@ -4355,11 +4357,8 @@ node bad: Mass = mass + length;
             },
         )]);
 
-        let versioned = workspace_edit_for_client(
-            edit,
-            &snapshots,
-            WorkspaceEditShape::DocumentChanges,
-        );
+        let versioned =
+            workspace_edit_for_client(edit, &snapshots, WorkspaceEditShape::DocumentChanges);
         assert!(versioned.changes.is_none());
         let Some(DocumentChanges::Edits(documents)) = versioned.document_changes else {
             panic!("expected versioned document edits");
@@ -4381,11 +4380,7 @@ node bad: Mass = mass + length;
             ..Default::default()
         };
 
-        let shaped = workspace_edit_for_client(
-            edit,
-            &HashMap::new(),
-            WorkspaceEditShape::Changes,
-        );
+        let shaped = workspace_edit_for_client(edit, &HashMap::new(), WorkspaceEditShape::Changes);
         assert!(shaped.changes.is_some());
         assert!(shaped.document_changes.is_none());
     }
