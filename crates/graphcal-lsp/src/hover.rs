@@ -3,30 +3,97 @@
 use graphcal_compiler::desugar::desugared_ast::BindableVisibility;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
+use crate::client_capabilities::HoverFormat;
 use crate::convert::LineIndex;
 use crate::resolve::{SymbolLocation, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
-/// Resolve hover information for a position in an analyzed document.
-pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
+/// Resolve Markdown hover information for a position in an analyzed document.
+///
+/// Functional tests use the server's richest representation. Protocol callers
+/// should use [`hover_with_format`] with the client's negotiated format.
+#[cfg(test)]
+fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
+    hover_with_format(analysis, offset, HoverFormat::Markdown)
+}
+
+/// Resolve hover information in a client-supported markup format.
+pub fn hover_with_format(
+    analysis: &AnalysisResult,
+    offset: usize,
+    format: HoverFormat,
+) -> Option<Hover> {
     let resolved = resolve_symbol_at(analysis, offset)?;
     let definition = match &resolved.location {
         SymbolLocation::Local(def) => *def,
         SymbolLocation::Imported(imported) => &imported.definition,
     };
-    let mut content = format_hover(definition);
-    if let Some(doc) = &definition.doc {
-        content.push_str("\n\n---\n\n");
-        content.push_str(doc);
-    }
+    let description = describe_hover(definition);
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: content,
+            kind: match format {
+                HoverFormat::PlainText => MarkupKind::PlainText,
+                HoverFormat::Markdown => MarkupKind::Markdown,
+            },
+            value: description.render(format, definition.doc.as_deref()),
         }),
         range: Some(LineIndex::new(&analysis.source).span_to_range(resolved.cursor_span)),
     })
+}
+
+struct HoverDescription {
+    synopsis: String,
+    detail: Option<String>,
+    inline: bool,
+}
+
+impl HoverDescription {
+    const fn block(synopsis: String) -> Self {
+        Self {
+            synopsis,
+            detail: None,
+            inline: false,
+        }
+    }
+
+    const fn inline(synopsis: String) -> Self {
+        Self {
+            synopsis,
+            detail: None,
+            inline: true,
+        }
+    }
+
+    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        if !detail.is_empty() {
+            self.detail = Some(detail);
+        }
+        self
+    }
+
+    fn render(&self, format: HoverFormat, documentation: Option<&str>) -> String {
+        let mut content = match (format, self.inline) {
+            (HoverFormat::Markdown, true) => format!("`{}`", self.synopsis),
+            (HoverFormat::Markdown, false) => {
+                format!("```graphcal\n{}\n```", self.synopsis)
+            }
+            (HoverFormat::PlainText, _) => self.synopsis.clone(),
+        };
+        if let Some(detail) = &self.detail {
+            content.push('\n');
+            content.push_str(detail);
+        }
+        if let Some(documentation) = documentation {
+            match format {
+                HoverFormat::Markdown => content.push_str("\n\n---\n\n"),
+                HoverFormat::PlainText => content.push_str("\n\n"),
+            }
+            content.push_str(documentation);
+        }
+        content
+    }
 }
 
 /// Prefix for the declaration keyword in a hover label, based on visibility.
@@ -42,97 +109,78 @@ const fn visibility_prefix(vis: Option<BindableVisibility>) -> &'static str {
     }
 }
 
-/// Format hover content for a definition.
-fn format_hover(def: &DefinitionInfo) -> String {
+/// Describe hover content independently of the client's presentation format.
+fn describe_hover(def: &DefinitionInfo) -> HoverDescription {
     let vis = visibility_prefix(def.visibility);
     match def.category {
         SymbolCategory::Param => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
             // `param` declares an annotation-free input port rather than an
             // ordinary export, so drop any visibility prefix.
-            format!("```graphcal\nparam {}: {type_str}\n```", def.name)
+            HoverDescription::block(format!("param {}: {type_str}", def.name))
         }
         SymbolCategory::Node => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
-            format!("```graphcal\n{vis}node {}: {type_str}\n```", def.name)
+            HoverDescription::block(format!("{vis}node {}: {type_str}", def.name))
         }
         SymbolCategory::Const => {
             let type_str = def.type_description.as_deref().unwrap_or("(unknown type)");
-            format!("```graphcal\n{vis}const {}: {type_str}\n```", def.name)
+            HoverDescription::block(format!("{vis}const {}: {type_str}", def.name))
         }
         SymbolCategory::Dimension => {
             let fallback = format!("dim {}", def.name);
             let desc = def.type_description.as_deref().unwrap_or(&fallback);
-            format!("```graphcal\n{vis}{desc}\n```")
+            HoverDescription::block(format!("{vis}{desc}"))
         }
         SymbolCategory::Unit => {
             let desc = def.type_description.as_deref().unwrap_or("");
-            format!("```graphcal\n{vis}unit {}: {desc}\n```", def.name)
+            HoverDescription::block(format!("{vis}unit {}: {desc}", def.name))
         }
         SymbolCategory::Index => {
             let desc = def.type_description.as_deref().unwrap_or("...");
-            format!(
-                "```graphcal\n{vis}index {} = {desc}\n```\n(named index labels are index positions for access, keys, and match patterns)",
-                def.name
+            HoverDescription::block(format!("{vis}index {} = {desc}", def.name)).with_detail(
+                "(named index labels are index positions for access, keys, and match patterns)",
             )
         }
         SymbolCategory::StructType => {
             let desc = def.type_description.as_deref().unwrap_or("...");
-            format!("```graphcal\n{vis}type {} = {desc}\n```", def.name)
+            HoverDescription::block(format!("{vis}type {} = {desc}", def.name))
         }
         SymbolCategory::Constructor => {
             let detail = def.type_description.as_deref().unwrap_or("constructor");
-            format!("```graphcal\n{vis}{}(...)\n```\n{detail}", def.name)
+            HoverDescription::block(format!("{vis}{}(...)", def.name)).with_detail(detail)
         }
-        SymbolCategory::IndexVariant => {
-            let detail = def.detail.as_deref().unwrap_or("");
-            format!("`{}` ({detail})", def.name)
+        SymbolCategory::IndexVariant | SymbolCategory::LocalVar => {
+            HoverDescription::inline(def.name.clone())
+                .with_detail(def.detail.as_deref().unwrap_or(""))
         }
-        SymbolCategory::Field => {
-            format!("`{}`", def.name)
-        }
+        SymbolCategory::Field => HoverDescription::inline(def.name.clone()),
         SymbolCategory::GenericParam => {
             let sort = def.type_description.as_deref().unwrap_or("generic");
             let detail = def.detail.as_deref().unwrap_or("generic parameter");
-            format!("```graphcal\n{}: {sort}\n```\n{detail}", def.name)
-        }
-        SymbolCategory::LocalVar => {
-            let detail = def.detail.as_deref().unwrap_or("");
-            if detail.is_empty() {
-                format!("`{}`", def.name)
-            } else {
-                format!("`{}` ({detail})", def.name)
-            }
+            HoverDescription::block(format!("{}: {sort}", def.name)).with_detail(detail)
         }
         SymbolCategory::BuiltinFn | SymbolCategory::ExternFn => {
             let fallback = format!("fn {}", def.name);
             let sig = def.type_description.as_deref().unwrap_or(&fallback);
-            let detail = def.detail.as_deref().unwrap_or("");
-            format!("```graphcal\n{sig}\n```\n{detail}")
+            HoverDescription::block(sig.to_string())
+                .with_detail(def.detail.as_deref().unwrap_or(""))
         }
         SymbolCategory::BuiltinConst => {
             let type_str = def.type_description.as_deref().unwrap_or("Dimensionless");
-            format!(
-                "```graphcal\nconst {}: {type_str}\n```\n(builtin)",
-                def.name
-            )
+            HoverDescription::block(format!("const {}: {type_str}", def.name))
+                .with_detail("(builtin)")
         }
         SymbolCategory::Assert => {
-            format!("```graphcal\n{vis}assert {}: Bool\n```", def.name)
+            HoverDescription::block(format!("{vis}assert {}: Bool", def.name))
         }
         SymbolCategory::Plot => {
             let type_str = def.type_description.as_deref().unwrap_or("plot");
-            format!("```graphcal\n{vis}plot {}\n```\n{}", def.name, type_str)
+            HoverDescription::block(format!("{vis}plot {}", def.name)).with_detail(type_str)
         }
-        SymbolCategory::Figure => {
-            format!("```graphcal\n{vis}figure {}\n```", def.name)
-        }
-        SymbolCategory::Layer => {
-            format!("```graphcal\n{vis}layer {}\n```", def.name)
-        }
-        SymbolCategory::Dag => {
-            format!("```graphcal\n{vis}dag {} {{ ... }}\n```", def.name)
-        }
+        SymbolCategory::Figure => HoverDescription::block(format!("{vis}figure {}", def.name)),
+        SymbolCategory::Layer => HoverDescription::block(format!("{vis}layer {}", def.name)),
+        SymbolCategory::Dag => HoverDescription::block(format!("{vis}dag {} {{ ... }}", def.name)),
     }
 }
 

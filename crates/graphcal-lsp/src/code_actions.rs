@@ -32,6 +32,10 @@ pub fn code_actions(
     analysis: &AnalysisResult,
     current_source: &str,
 ) -> Option<CodeActionResponse> {
+    if !quickfix_requested(params.context.only.as_deref()) {
+        return None;
+    }
+
     let source = current_source;
     let mut actions = Vec::new();
 
@@ -78,6 +82,24 @@ pub fn code_actions(
     } else {
         Some(actions)
     }
+}
+
+/// Whether a request's kind filter includes Graphcal's quick fixes.
+///
+/// Code action kinds are hierarchical: an empty/base request includes all
+/// descendants, while `source` does not include `quickfix`.
+fn quickfix_requested(only: Option<&[CodeActionKind]>) -> bool {
+    only.is_none_or(|kinds| {
+        kinds.iter().any(|requested| {
+            let requested = requested.as_str();
+            requested.is_empty()
+                || CodeActionKind::QUICKFIX.as_str() == requested
+                || CodeActionKind::QUICKFIX
+                    .as_str()
+                    .strip_prefix(requested)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+    })
 }
 
 /// Build category-preserving auto-import actions for an unknown name.
@@ -383,6 +405,43 @@ mod tests {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         }
+    }
+
+    #[test]
+    fn code_action_kind_filter_excludes_quick_fixes() {
+        let analysis = analysis_from_source("index Phase;");
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::V002",
+            "required index `Phase` must be declared `pub(bind)`",
+            Range::default(),
+            None,
+        );
+        let mut params = make_params(&uri, vec![diag]);
+        params.context.only = Some(vec![CodeActionKind::SOURCE]);
+
+        assert!(code_actions(&params, &analysis, &analysis.source).is_none());
+    }
+
+    #[test]
+    fn code_action_kind_filter_includes_quick_fixes() {
+        let analysis = analysis_from_source("index Phase;");
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::V002",
+            "required index `Phase` must be declared `pub(bind)`",
+            Range::default(),
+            None,
+        );
+        let mut params = make_params(&uri, vec![diag]);
+        params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
+
+        assert_eq!(
+            code_actions(&params, &analysis, &analysis.source)
+                .expect("quick fixes")
+                .len(),
+            1
+        );
     }
 
     #[test]
