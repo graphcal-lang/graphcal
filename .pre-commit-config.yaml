@@ -20,9 +20,9 @@ repos:
       - id: check-json
       - id: check-added-large-files
         args: [--enforce-all]
-        # The report engine (~4.6 MiB) and Vega bundles (~500 KiB each) are
-        # intentional pinned assets; see their asset-directory READMEs.
-        exclude: '^(crates/graphcal-cli/assets/report-engine/graphcal_wasm_bg\.wasm|crates/graphcal-report/assets/.*\.min\.js)$'
+        # Vendored Vega bundles are intentional pinned assets. The generated
+        # report engine belongs only in build outputs and release archives.
+        exclude: '^crates/graphcal-report/assets/.*\.min\.js$'
       - id: check-merge-conflict
       - id: check-symlinks
       - id: mixed-line-ending

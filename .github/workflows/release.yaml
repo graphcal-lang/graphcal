@@ -78,7 +78,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: $/.github/actions/report-engine-tools
+      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
 
       - name: Stage release-matched engine in the crate archive
         run: |

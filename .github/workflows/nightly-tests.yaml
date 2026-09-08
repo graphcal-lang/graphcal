@@ -30,7 +30,7 @@ jobs:
         with:
           key: nightly-release-profile
 
-      - uses: $/.github/actions/report-engine-tools
+      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
 
       - name: Test optimized workspace with overflow checks
         run: cargo test --workspace --release
