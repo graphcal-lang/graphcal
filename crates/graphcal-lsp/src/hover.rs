@@ -14,7 +14,7 @@ use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 /// Functional tests use the server's richest representation. Protocol callers
 /// should use [`hover_with_format`] with the client's negotiated format.
 #[cfg(test)]
-pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
+fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
     hover_with_format(analysis, offset, HoverFormat::Markdown)
 }
 
