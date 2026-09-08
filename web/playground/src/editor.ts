@@ -22,6 +22,9 @@ export class SourceEditor {
     this.change = change;
     this.run = run;
     this.view = new EditorView({ parent, state: this.state(source) });
+    // Give the independently scrolling region keyboard access (including Safari).
+    this.view.scrollDOM.tabIndex = 0;
+    this.view.scrollDOM.setAttribute("aria-label", "Source scrolling region");
   }
   private state(source: string) {
     return EditorState.create({
