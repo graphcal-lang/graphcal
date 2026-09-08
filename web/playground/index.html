@@ -11,7 +11,50 @@
     <link rel="canonical" href="https://graphcal.org/playground/" />
   </head>
   <body>
-    <h1>Graphcal Playground</h1>
-    <p>Standalone playground under construction. <a href="/docs/">Documentation</a></p>
+    <header>
+      <h1>Graphcal <span>Playground</span></h1>
+      <nav aria-label="Playground controls">
+        <button id="run" type="button" title="Ctrl/Cmd+Enter">Run</button>
+        <button id="stop" type="button" disabled>Stop</button>
+        <label><input id="auto" type="checkbox" checked /> Auto-run</label>
+        <button id="reset" type="button">Reset</button>
+        <a href="/docs/">Docs</a>
+        <button id="theme" type="button">Toggle theme</button>
+      </nav>
+    </header>
+    <div class="document-bar">
+      <label
+        >Filename <input id="filename" value="main.gcl" spellcheck="false" aria-label="Filename"
+      /></label>
+      <span id="status" role="status">Starting…</span>
+    </div>
+    <div class="mobile-tabs" aria-label="Visible pane">
+      <button id="editor-tab" type="button" aria-pressed="true">Editor</button>
+      <button id="results-tab" type="button" aria-pressed="false">Results</button>
+    </div>
+    <main id="workspace" data-pane="editor">
+      <section id="editor" aria-label="Source"></section>
+      <div
+        id="separator"
+        role="separator"
+        tabindex="0"
+        aria-label="Editor width"
+        aria-orientation="vertical"
+        aria-valuemin="25"
+        aria-valuemax="75"
+        aria-valuenow="60"
+        aria-controls="editor"
+      ></div>
+      <section id="output" aria-label="Results" tabindex="0"></section>
+    </main>
+    <footer>
+      Experimental · Single file · No plugins or external files · Runs locally in WebAssembly ·
+      Ctrl/Cmd+Enter to run
+    </footer>
+    <noscript
+      >This playground requires JavaScript and WebAssembly.
+      <a href="/docs/installation/">Use the Graphcal CLI instead.</a></noscript
+    >
+    <script type="module" src="/src/app.ts"></script>
   </body>
 </html>

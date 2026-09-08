@@ -20,6 +20,18 @@ pipeline-layers-lint: pipeline-layers
     cargo clippy --locked --manifest-path internals/pipeline-layers/Cargo.toml --all-targets -- -D warnings
     cargo fmt --manifest-path internals/pipeline-layers/Cargo.toml --check
 
+# Independent browser app assets (legacy docs embed is removed in migration).
+playground-assets:
+    wasm-pack build crates/graphcal-wasm --target web --out-dir ../../web/playground/public/pkg --profile wasm-release --no-typescript --no-pack
+    mkdir -p web/playground/public/vega
+    cp crates/graphcal-report/assets/vega.min.js crates/graphcal-report/assets/vega-lite.min.js crates/graphcal-report/assets/vega-embed.min.js web/playground/public/vega/
+
+playground-build: playground-assets playground-check playground-test
+    cd web/playground && vp build
+
+playground-serve: playground-assets
+    cd web/playground && vp dev
+
 playground-check:
     cd web/playground && vp check
 
