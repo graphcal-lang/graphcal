@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { gzipSync } from "node:zlib";
+import { readFile } from "node:fs/promises";
 import catalog from "../examples/catalog.json" with { type: "json" };
 import { decodeFragment } from "../src/share-codec";
 
@@ -69,6 +70,41 @@ test("all catalog examples evaluate in a real module worker; plots stay local", 
   }
   expect(requests.every((url) => new URL(url).origin === "http://127.0.0.1:4173")).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test("renders multidimensional indexed values as two-dimensional table slices", async ({
+  page,
+}) => {
+  await ready(page);
+  const fixture = await readFile(
+    new URL("../../../tests/fixtures/valid/table_literal.gcl", import.meta.url),
+    "utf8",
+  );
+  await source(page, fixture);
+  await page.getByRole("button", { name: "Run", exact: true }).click();
+  await expect(page.locator("#status")).toHaveText("Up to date");
+
+  const matrix = page.locator('[data-declaration-name="spacecraft_mass"]');
+  await matrix.locator("summary").click();
+  const matrixTable = matrix.locator("table.value-table");
+  await expect(matrixTable).toHaveCount(1);
+  await expect(matrixTable.locator('thead th[scope="col"]:not(:first-child)')).toContainText([
+    "Departure",
+    "Correction",
+    "Insertion",
+  ]);
+  await expect(matrixTable.locator('tbody th[scope="row"]')).toContainText([
+    "Launch",
+    "Cruise",
+    "Arrival",
+  ]);
+  await expect(matrix.locator("details details")).toHaveCount(0);
+
+  const cube = page.locator('[data-declaration-name="mass_3d"]');
+  await cube.locator("summary").click();
+  await expect(cube.locator("table.value-table")).toHaveCount(2);
+  await expect(cube.locator(".table-selector")).toContainText(["[Nominal]", "[Contingency]"]);
+  await expect(cube.locator("details details")).toHaveCount(0);
 });
 
 test("shares the edited filename/source and restores without auto-execution", async ({

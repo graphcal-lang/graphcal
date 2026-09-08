@@ -155,6 +155,49 @@ details .value-row {
 summary {
   cursor: pointer;
 }
+.indexed-tables > summary {
+  font-weight: 600;
+}
+.table-slice {
+  margin: 0.8rem 0 1.2rem;
+}
+.table-selector {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+.value-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.value-table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.value-table caption {
+  padding: 0.25rem;
+  text-align: left;
+  font-weight: 600;
+}
+.value-table th,
+.value-table td {
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.55rem;
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+}
+.value-table th {
+  background: var(--panel);
+}
+.table-controls:empty {
+  display: none;
+}
+.table-controls button {
+  margin-top: 0.4rem;
+}
 code {
   font-family: ui-monospace, monospace;
 }

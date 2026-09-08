@@ -57,8 +57,11 @@ build. `site-verify.mjs` checks the CNAME, root redirect, both apps, source asse
 identity, a 5 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
 Vega bundles are vendored from `graphcal-report` and loaded only for figures.
 `protocol.ts` validates the rendered Rust output fields; real-Wasm tests cover its
-value, assertion, diagnostic, and error variants. Plot loaders deny external
-resources and embed metadata cannot override this policy. `output-budget.ts`
+value, report-body, assertion, diagnostic, and error variants. The playground uses
+`graphcal-report`'s shared `ValueBody` projection: one indexed axis remains a
+key/value list, two axes render as a grid, and three or more axes render as ordered
+grid slices. Plot loaders deny external resources and embed metadata cannot override
+this policy. `output-budget.ts`
 rejects projected results above 8 MiB inside the worker before they reach the UI.
 
 ## Release verification

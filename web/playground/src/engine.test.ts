@@ -55,6 +55,24 @@ it.each(catalog)(
     ).toBe(true);
   },
 );
+it("retains the shared report projection for multidimensional tables", async () => {
+  const source = await readFile(
+    new URL("../../../tests/fixtures/valid/table_literal.gcl", import.meta.url),
+    "utf8",
+  );
+  const result = outcomeSchema.parse(
+    evaluate(evaluationRequest({ filename: "table_literal.gcl", source })),
+  );
+  if (result.status !== "evaluated") throw new Error(JSON.stringify(result));
+  const matrix = result.evaluation.values.find((value) => value.name === "spacecraft_mass");
+  expect(matrix?.outcome.status === "value" && matrix.outcome.body.kind).toBe("grid");
+  const cube = result.evaluation.values.find((value) => value.name === "mass_3d");
+  if (cube?.outcome.status !== "value" || cube.outcome.body.kind !== "slices") {
+    throw new Error("mass_3d had no table-slice projection");
+  }
+  expect(cube.outcome.body.body.map(([label]) => label)).toEqual(["Nominal", "Contingency"]);
+});
+
 it.each([
   ["node bad: Length = 1.0 s;", "compile_error"],
   [
