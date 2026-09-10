@@ -9,6 +9,7 @@
 //! and unit checking as the CLI, end to end.
 
 use base64::Engine as _;
+use graphcal_eval::project_bundle::ProjectBundle;
 use serde_json::json;
 
 use crate::escape::escape_json_for_script;
@@ -27,19 +28,10 @@ pub struct EngineBundle<'a> {
     pub wasm: &'a [u8],
 }
 
-/// The in-memory project shipped to the browser engine, mirroring the
-/// playground request shape (`entry` + relative-path files).
-pub struct HydrationProject {
-    pub entry: String,
-    /// `(relative path, content)` pairs, including the root manifest when
-    /// one exists.
-    pub files: Vec<(String, String)>,
-}
-
 /// Everything the hydration layer embeds into the page.
 pub struct Hydration<'a> {
     pub engine: EngineBundle<'a>,
-    pub project: HydrationProject,
+    pub project: ProjectBundle,
     /// Baseline binding expressions from build-time `--param` arguments,
     /// replayed as the initial reader-visible values.
     pub baseline_bindings: Vec<(String, String)>,
@@ -52,15 +44,7 @@ pub struct Hydration<'a> {
 /// elements; JSON payloads are escaped for script embedding.
 #[must_use]
 pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
-    let project = json!({
-        "entry": hydration.project.entry,
-        "files": hydration
-            .project
-            .files
-            .iter()
-            .map(|(path, content)| json!({ "path": path, "content": content }))
-            .collect::<Vec<_>>(),
-    });
+    let project = json!(hydration.project);
     let baseline = json!(
         hydration
             .baseline_bindings
@@ -98,13 +82,15 @@ mod tests {
                 glue_js: "var wasm_bindgen;",
                 wasm: b"\0asm",
             },
-            project: HydrationProject {
-                entry: "main.gcl".to_string(),
-                files: vec![(
-                    "main.gcl".to_string(),
-                    "// </script><script>alert(1)</script>\nparam x: Dimensionless = 1.0;"
-                        .to_string(),
-                )],
+            project: ProjectBundle {
+                entry: "main.gcl".to_string().try_into().unwrap(),
+                files: vec![graphcal_eval::project_bundle::BundleArtifact {
+                    path: "main.gcl".to_string().try_into().unwrap(),
+                    content: graphcal_eval::project_bundle::ArtifactContent::Source(
+                        "// </script><script>alert(1)</script>\nparam x: Dimensionless = 1.0;"
+                            .to_string(),
+                    ),
+                }],
             },
             baseline_bindings: vec![("x".to_string(), "2.0".to_string())],
         };

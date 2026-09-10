@@ -272,6 +272,39 @@ node ascent_share: Dimensionless = @dv_share[Leg#Ascent];
         .as_f64()
         .expect("ascent_share must evaluate");
     assert!((si - 0.75).abs() < 1e-12, "ascent_share = {si}");
+
+    // The same SDK binary must work inside the report's embedded browser engine.
+    let report = dir.path().join("plugins.report.html");
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(project.join("src/e2e/main.gcl"))
+        .arg("--output")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "baseline contains a failed node"
+    );
+    assert!(
+        report.is_file(),
+        "report not written: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // No original project files remain available to the browser engine.
+    std::fs::remove_dir_all(&project).unwrap();
+    let output = Command::new("node")
+        .arg(repo_root().join("internals/report-plugin-smoke.mjs"))
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "plugin browser replay failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

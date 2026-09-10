@@ -41,7 +41,7 @@ const engine = globalThis.wasm_bindgen;
 assert.equal(typeof engine, "function", "no-modules glue must define wasm_bindgen");
 
 await engine({ module_or_path: wasmBytes });
-const prepared = engine.prepareProject(project);
+const prepared = engine.prepareReportBundle(JSON.stringify(project));
 
 const ports = prepared.parameterPorts();
 const names = ports.map((port) => port.name);

@@ -43,7 +43,7 @@
           for (var i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
           Promise.resolve(wasm_bindgen({ module_or_path: bytes }))
             .then(function () {
-              prepared = wasm_bindgen.prepareProject(msg.project);
+              prepared = wasm_bindgen.prepareReportBundle(msg.project);
               self.postMessage({ type: "ready", ports: prepared.parameterPorts() });
             })
             .catch(function (error) {
@@ -86,7 +86,7 @@
       worker.onerror = function (event) {
         callbacks.onError(event.message || "the report engine crashed");
       };
-      worker.postMessage({ type: "init", project: project, wasm: wasmB64 });
+      worker.postMessage({ type: "init", project: projectText, wasm: wasmB64 });
       return {
         postMessage: function (message) { worker.postMessage(message); },
         terminate: function () { worker.terminate(); },

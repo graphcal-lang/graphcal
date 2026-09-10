@@ -276,6 +276,15 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
 }
 
 impl VirtualProject {
+    pub fn from_bundle(
+        bundle: &graphcal_eval::project_bundle::ProjectBundle,
+    ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
+        let filesystem = bundle.mount(Self::root_path())?;
+        let entry = ProjectFilePath::parse(bundle.entry.as_str())
+            .map_err(|_| graphcal_eval::project_bundle::BundleError::MissingEntry)?;
+        Ok(Self { entry, filesystem })
+    }
+
     pub fn entry_path(&self) -> PathBuf {
         self.entry.absolute().clone().into_path_buf()
     }
@@ -367,6 +376,8 @@ pub enum ProjectValidationError {
     PackageDependenciesUnsupported,
     #[error("WASM and host-function plugins are not supported in the browser playground")]
     PluginsUnsupported,
+    #[error("invalid report bundle: {message}")]
+    InvalidBundle { message: String },
 }
 
 /// Browser-facing rejection details for an invalid or unsupported project.
@@ -403,6 +414,7 @@ pub enum RequestErrorKind {
     ProjectTooLarge,
     PackageDependenciesUnsupported,
     PluginsUnsupported,
+    InvalidBundle,
 }
 
 impl From<&ProjectValidationError> for RequestErrorKind {
@@ -424,6 +436,7 @@ impl From<&ProjectValidationError> for RequestErrorKind {
                 Self::PackageDependenciesUnsupported
             }
             ProjectValidationError::PluginsUnsupported => Self::PluginsUnsupported,
+            ProjectValidationError::InvalidBundle { .. } => Self::InvalidBundle,
         }
     }
 }

@@ -14,9 +14,11 @@ use thiserror::Error;
 
 use graphcal_eval::eval::{CompileError, EvalResult, ProjectCompiler};
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, discover_project_root};
+use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, BundleError, ProjectBundle};
+use graphcal_io::FileSystemReader as _;
 use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
-use graphcal_report::report_hydrate::{EngineBundle, Hydration, HydrationProject};
+use graphcal_report::report_hydrate::{EngineBundle, Hydration};
 use graphcal_report::report_ir::{
     Provenance, ReportBuildError, ReportInputs, SourceDigest, build_report, collect_doc_captions,
 };
@@ -79,6 +81,8 @@ pub enum ReportError {
     #[error(transparent)]
     Compile(#[from] Box<CompileError>),
     #[error(transparent)]
+    Bundle(#[from] BundleError),
+    #[error(transparent)]
     Build(#[from] ReportBuildError),
     #[error("could not write {path}: {source}")]
     Write {
@@ -122,8 +126,22 @@ pub fn run_build(
 ) -> Result<ReportStatus, ReportError> {
     validate_hydration_parameter_source(args, overrides)?;
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
+    let metadata = if args.static_only {
+        Vec::new()
+    } else {
+        capture_metadata(args, &fs)?
+    };
+    let snapshot = graphcal_io::OverlayFileSystem::with_overlays(
+        fs.clone(),
+        metadata
+            .iter()
+            .map(|(path, content)| (path.clone(), content.clone())),
+    )
+    .map_err(|error| ReportError::HydrationUnsupported {
+        reason: error.to_string(),
+    })?;
     let (project, host_fns) =
-        crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
+        crate::load_project_with_plugins(&args.file, args.root.as_deref(), &snapshot)?;
     let prepared = ProjectCompiler::new(&project)
         .host_fns(&host_fns)
         .prepare()?;
@@ -169,7 +187,7 @@ pub fn run_build(
                 glue_js: engine.glue_js.as_ref(),
                 wasm: engine.wasm.as_ref(),
             },
-            project: hydration_project(&project, args, &fs)?,
+            project: hydration_project(&project, args, &fs, &metadata)?,
             baseline_bindings: baseline_binding_strings(overrides),
         }),
     };
@@ -331,24 +349,47 @@ fn validate_hydration_parameter_source(
     Ok(())
 }
 
+/// Freeze manifest and lockfile bytes before native loading. Plugin/source bytes
+/// are already retained by LoadedProject and never reread during embedding.
+fn capture_metadata(
+    args: &BuildArgs,
+    fs: &graphcal_io::RealFileSystem,
+) -> Result<Vec<(PathBuf, String)>, ReportError> {
+    let root =
+        project_root_dir(&args.file, args.root.as_deref(), fs).ok_or(BundleError::UnsafePath)?;
+    [
+        ("graphcal.toml", 1024 * 1024),
+        ("graphcal.lock", 4 * 1024 * 1024),
+    ]
+    .into_iter()
+    .try_fold(Vec::new(), |mut files, (name, maximum)| {
+        let path = root.join(name);
+        match fs.read_to_string_bounded(
+            &path,
+            graphcal_io::ByteLimit::new(maximum),
+            &graphcal_io::NeverCancel,
+        ) {
+            Ok(content) => files.push((path, content)),
+            Err(graphcal_io::FileSystemReadError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(ReportError::HydrationUnsupported {
+                    reason: format!("could not capture {name}: {error}"),
+                });
+            }
+        }
+        Ok(files)
+    })
+}
+
 /// Assemble the in-memory project shipped to the browser engine, rejecting
 /// everything the engine cannot run — loudly, at build time.
 fn hydration_project(
     project: &LoadedProject,
     args: &BuildArgs,
     fs: &graphcal_io::RealFileSystem,
-) -> Result<HydrationProject, ReportError> {
-    if project
-        .files()
-        .values()
-        .any(|file| file.ast().uses_plugins())
-    {
-        return Err(ReportError::HydrationUnsupported {
-            reason: "the project imports plugins, which cannot run in the browser engine"
-                .to_string(),
-        });
-    }
-
+    metadata: &[(PathBuf, String)],
+) -> Result<ProjectBundle, ReportError> {
     let root_dir = project_root_dir(&args.file, args.root.as_deref(), fs);
 
     // The manifest drives module resolution in the browser exactly as on
@@ -356,9 +397,10 @@ fn hydration_project(
     // projects are gated FIRST: locked-and-cached packages load from outside
     // the project root, and the out-of-root diagnostic below would otherwise
     // mask the actual reason hydration cannot work.
-    let manifest = root_dir
-        .as_deref()
-        .and_then(|root| std::fs::read_to_string(root.join("graphcal.toml")).ok());
+    let manifest = metadata
+        .iter()
+        .find(|(path, _)| path.file_name().is_some_and(|name| name == "graphcal.toml"))
+        .map(|(_, content)| content);
     if let Some(content) = &manifest {
         match graphcal_package::parse_manifest_str(content) {
             Ok(parsed) if !parsed.dependencies.is_empty() => {
@@ -387,19 +429,42 @@ fn hydration_project(
                 ),
             });
         };
-        files.push((name, file.source().to_string()));
+        files.push(BundleArtifact {
+            path: name.try_into()?,
+            content: ArtifactContent::Source(file.source().to_string()),
+        });
     }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    if let Some(content) = manifest {
-        files.push(("graphcal.toml".to_string(), content));
+    for (path, content) in metadata {
+        let name =
+            relative_source_name(path, root_dir.as_deref()).ok_or(BundleError::UnsafePath)?;
+        let content = match name.as_str() {
+            "graphcal.toml" => ArtifactContent::Manifest(content.clone()),
+            "graphcal.lock" => ArtifactContent::Lockfile(content.clone()),
+            _ => return Err(BundleError::ArtifactKind.into()),
+        };
+        files.push(BundleArtifact {
+            path: name.try_into()?,
+            content,
+        });
     }
+    for (path, plugin) in project.plugins() {
+        let plugin = plugin
+            .as_ref()
+            .map_err(|error| ReportError::HydrationUnsupported {
+                reason: error.to_string(),
+            })?;
+        files.push(BundleArtifact {
+            path: path.to_string().try_into()?,
+            content: ArtifactContent::Plugin(plugin.bytes().to_vec()),
+        });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
 
-    let entry = entry_name
-        .filter(|name| files.iter().any(|(candidate, _)| candidate == name))
-        .ok_or_else(|| ReportError::HydrationUnsupported {
-            reason: "could not resolve the entry file inside the project root".to_string(),
-        })?;
-    Ok(HydrationProject { entry, files })
+    let entry = entry_name.ok_or(BundleError::MissingEntry)?.try_into()?;
+    let bundle = ProjectBundle { entry, files };
+    // Apply exactly the browser's artifact policy before writing an interactive report.
+    bundle.mount(Path::new("/report"))?;
+    Ok(bundle)
 }
 
 /// Baseline `--param` bindings replayed as the hydrated report's initial

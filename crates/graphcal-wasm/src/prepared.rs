@@ -58,6 +58,28 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
         }
     };
 
+    prepare_virtual(&project, BrowserCapabilities::SourcesOnly)
+}
+
+/// Prepare an offline report snapshot, including sandboxed Wasm plugins.
+#[must_use]
+pub fn prepare_bundle(bundle: &graphcal_eval::project_bundle::ProjectBundle) -> PrepareOutcome {
+    match VirtualProject::from_bundle(bundle) {
+        Ok(project) => prepare_virtual(&project, BrowserCapabilities::BundledPlugins),
+        Err(error) => PrepareOutcome::Rejected {
+            error: RequestErrorView::from(&ProjectValidationError::InvalidBundle {
+                message: error.to_string(),
+            }),
+        },
+    }
+}
+
+enum BrowserCapabilities {
+    SourcesOnly,
+    BundledPlugins,
+}
+
+fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) -> PrepareOutcome {
     let filesystem = project.filesystem();
     let loaded = match load_project(
         &project.entry_path(),
@@ -72,10 +94,11 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
         }
     };
 
-    if loaded
-        .files()
-        .values()
-        .any(|file| file.ast().uses_plugins())
+    if matches!(capabilities, BrowserCapabilities::SourcesOnly)
+        && loaded
+            .files()
+            .values()
+            .any(|file| file.ast().uses_plugins())
     {
         let error = ProjectValidationError::PluginsUnsupported;
         return PrepareOutcome::Rejected {
@@ -85,10 +108,13 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
 
     let report =
         crate::browser_report::ReportMetadata::from_loaded(&loaded, project.entry_display());
-    match ProjectCompiler::new(&loaded)
-        .host_fns(&demo_registry())
-        .prepare()
-    {
+    let mut registry = demo_registry();
+    graphcal_plugin_host::register_project_plugins(
+        &graphcal_plugin_host::PluginHost::new(),
+        &loaded,
+        &mut registry,
+    );
+    match ProjectCompiler::new(&loaded).host_fns(&registry).prepare() {
         Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared, report })),
         Err(error) => PrepareOutcome::CompileError {
             diagnostics: vec![compile_error_view(&error, &project)],
@@ -372,6 +398,21 @@ mod js {
             }
         };
         match outcome {
+            PrepareOutcome::Prepared(inner) => Ok(PreparedProjectHandle { inner: *inner }),
+            PrepareOutcome::Rejected { error } => {
+                Err(outcome_js(&PlaygroundOutcome::Rejected { error }))
+            }
+            PrepareOutcome::CompileError { diagnostics } => {
+                Err(outcome_js(&PlaygroundOutcome::CompileError { diagnostics }))
+            }
+        }
+    }
+
+    /// Prepare a bounded serialized offline bundle, including its pinned plugins.
+    #[wasm_bindgen(js_name = prepareReportBundle)]
+    pub fn prepare_report_bundle_js(request: JsValue) -> Result<PreparedProjectHandle, JsValue> {
+        let bundle = crate::js_request::decode_report_bundle(request)?;
+        match super::prepare_bundle(&bundle) {
             PrepareOutcome::Prepared(inner) => Ok(PreparedProjectHandle { inner: *inner }),
             PrepareOutcome::Rejected { error } => {
                 Err(outcome_js(&PlaygroundOutcome::Rejected { error }))

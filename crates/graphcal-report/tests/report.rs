@@ -270,7 +270,8 @@ assert bad_is_finite = @bad < 10.0;
 
 #[test]
 fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
-    use graphcal_report::report_hydrate::{EngineBundle, Hydration, HydrationProject};
+    use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
+    use graphcal_report::report_hydrate::{EngineBundle, Hydration};
 
     let document = build_document(DELTA_V);
     let hydration = Hydration {
@@ -278,9 +279,12 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
             glue_js: "let wasm_bindgen = function () {};",
             wasm: b"\x00asm\x01\x00\x00\x00",
         },
-        project: HydrationProject {
-            entry: "deltav.gcl".to_string(),
-            files: vec![("deltav.gcl".to_string(), DELTA_V.to_string())],
+        project: ProjectBundle {
+            entry: "deltav.gcl".to_string().try_into().unwrap(),
+            files: vec![BundleArtifact {
+                path: "deltav.gcl".to_string().try_into().unwrap(),
+                content: ArtifactContent::Source(DELTA_V.to_string()),
+            }],
         },
         baseline_bindings: vec![("isp".to_string(), "450.0 s".to_string())],
     };

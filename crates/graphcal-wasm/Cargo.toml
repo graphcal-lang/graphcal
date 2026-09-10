@@ -30,6 +30,7 @@ graphcal-compiler.workspace = true
 graphcal-eval.workspace = true
 graphcal-io.workspace = true
 graphcal-package.workspace = true
+graphcal-plugin-host.workspace = true
 graphcal-report.workspace = true
 miette.workspace = true
 serde = { workspace = true, features = ["derive"] }
