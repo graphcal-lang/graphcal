@@ -32,6 +32,22 @@ By the end of this tutorial, you'll have built engineering calculations that:
 
 Single-file steps link to the [standalone playground](https://graphcal.org/playground/), so you can start without installing anything. Its full-size editor supports examples and shareable source URLs. The compiler and evaluator run locally in WebAssembly and do not upload your source. Step 5 teaches multi-file projects and requires the CLI.
 
+Select **Report** to view an interactive HTML report with parameter controls,
+values, plots, checks, and source provenance. Controls accept closed Graphcal
+values with explicit units (for example, `36.0 km/h`); changing a control does not
+edit the source. Invalid inputs show errors and leave the last successful results
+visible. **Reset parameters** restores source defaults; editing source clears all
+parameter overrides. **Stop** cancels evaluation; **Run** retries with the last
+applied parameters.
+
+**Share** captures the source, successfully applied parameter literals, and the
+selected view. A link shared from Report opens that view, but readers must press
+**Run** to generate the report. Pending, rejected, or not-yet-validated restored
+overrides are excluded from a new share link with a visible warning. Links contain
+readable source and parameter values, not encrypted data: do not share secrets.
+The 16 KiB URL limit still applies, and links use the currently deployed compiler,
+not an archived compiler or immutable report.
+
 To save projects locally or use the complete CLI and editor tooling, [install Graphcal](../installation.md) and run examples as `.gcl` files:
 
 ```bash

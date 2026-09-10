@@ -14,10 +14,20 @@ part of `just lint` and `just test`.
 - `document.ts`: validate a Unicode document and identifier-stem `.gcl` basename;
   UTF-8 source limit 256 KiB, matching the Rust browser boundary. Filename matters
   for self-imports. Validation never modifies source or silently renames files.
-- `share-codec.ts`: boundary serialization, version 1 gzip/base64url JSON in the
+- `share-codec.ts`: boundary serialization, version 2 gzip/base64url JSON in the
   fragment, a 16 KiB URL limit (warning above 8 KiB), incremental 2 MiB JSON-envelope
   decode limit, five-second stream deadline. The envelope allows JSON escaping
-  overhead; decoded source is separately validated. No evaluation data is shared.
+  overhead; decoded source is separately validated. The payload contains a source
+  document and applied `{name, expr}` bindings, never evaluated values or HTML.
+  Existing version 1 source-only links still decode. `?view=report` selects the
+  full-width report without changing document identity or reloading source.
+- `bindings.ts`: at most 256 unique binding names (1 KiB each), with closed-literal
+  expressions limited to 4 KiB UTF-8 each. Rust validates their syntax and units.
+- `report.ts` and `report-frame.js`: an opaque-origin sandboxed iframe hosts the
+  shared report controls and rendering runtime. The parent checks sending window,
+  session identity, request IDs, and binding limits. Fixed local Vega assets,
+  restrictive CSP, and rejecting plot loaders prevent source-selected resources.
+  The host worker alone prepares/evaluates the model and enforces cancellation.
 - `example-catalog.ts`: allowlisted metadata lookup, never user-selected URLs.
 - Browser effects belong in editor, worker, and app shells, not document state.
 
@@ -54,7 +64,9 @@ Existing tutorial assets remain static downloads and multi-file regression input
 
 `internals/site-assemble.mjs` assembles the standalone app after Zensical's clean
 build. `site-verify.mjs` checks the CNAME, root redirect, both apps, source asset
-identity, a 5 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
+identity, a 5.25 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
+The HTML report renderer and SHA-256 provenance add about 70 KiB to the engine;
+the host-rendering API avoids linking the standalone chart bundles into Wasm.
 Vega bundles are vendored from `graphcal-report` and loaded only for figures.
 `protocol.ts` validates the rendered Rust output fields; real-Wasm tests cover its
 value, report-body, assertion, diagnostic, and error variants. The playground uses
@@ -62,7 +74,10 @@ value, report-body, assertion, diagnostic, and error variants. The playground us
 key/value list, two axes render as a grid, and three or more axes render as ordered
 grid slices. Plot loaders deny external resources and embed metadata cannot override
 this policy. `output-budget.ts`
-rejects projected results above 8 MiB inside the worker before they reach the UI.
+rejects projected results, including HTML, above 8 MiB inside the worker before
+they reach the UI. Results and reports derive from the same evaluation. Pending
+or rejected controls leave the last successful values and shared bindings intact;
+source edits clear overrides. Shared links require Run before any evaluation.
 
 ## Release verification
 

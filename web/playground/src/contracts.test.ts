@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import { gzipSync } from "node:zlib";
 import { MAX_SOURCE_BYTES, evaluationRequest, validateDocument } from "./document";
+import { bindingsSchema } from "./bindings";
+import { viewLocation, sameLocationDocument } from "./location";
 import {
   decodeFragment,
   encodeFragment,
@@ -42,28 +44,69 @@ describe("single-file boundary", () => {
   });
 });
 
-describe("sharing contract v1", () => {
+describe("sharing source and applied parameters", () => {
   it.each([document, { filename: "empty.gcl", source: "" }])(
     "round trips without changing source",
     async (value) => {
-      expect(await decodeFragment(await encodeFragment(value))).toEqual(value);
+      expect(await decodeFragment(await encodeFragment(value))).toEqual({
+        document: value,
+        bindings: [],
+      });
     },
   );
   it("decodes a gzip fixture produced independently of the browser codec", async () => {
-    expect(await decodeFragment(payload(JSON.stringify(document)))).toEqual(document);
+    expect(await decodeFragment(payload(JSON.stringify(document)))).toEqual({
+      document,
+      bindings: [],
+    });
   });
   it("keeps the published v1 decode format stable", async () => {
     expect(
       await decodeFragment(
         "#v=1&code=H4sIAAAAAAAAE6tWSsvMSc1LzE1VslLKTczM00tPzlHSUSrOLy1KBokp1QIABYuCeyMAAAA",
       ),
-    ).toEqual({ filename: "main.gcl", source: "" });
+    ).toEqual({ document: { filename: "main.gcl", source: "" }, bindings: [] });
   });
   it("constructs a canonical source-only fragment URL", async () => {
     const url = new URL(await shareUrl(document, "https://graphcal.org/docs/?example=no"));
     expect(url.pathname).toBe("/playground/");
     expect(url.search).toBe("");
-    expect(await decodeFragment(url.hash)).toEqual(document);
+    expect(await decodeFragment(url.hash)).toEqual({ document, bindings: [] });
+  });
+  it("shares exact unit-bearing and i64 literals with the report view", async () => {
+    const bindings = [
+      { name: "speed", expr: "36.0 km/h" },
+      { name: "count", expr: "9223372036854775807" },
+    ];
+    const url = new URL(await shareUrl(document, "https://graphcal.org", bindings, "report"));
+    expect(url.search).toBe("?view=report");
+    expect(await decodeFragment(url.hash)).toEqual({ document, bindings });
+    const fixture = `#v=2&code=${gzipSync(JSON.stringify({ document, bindings })).toString("base64url")}`;
+    expect(await decodeFragment(fixture)).toEqual({ document, bindings });
+  });
+  it("bounds binding metadata and rejects duplicates before Wasm", () => {
+    expect(bindingsSchema.parse([{ name: "x", expr: "🙂".repeat(1024) }])).toHaveLength(1);
+    for (const bindings of [
+      [{ name: "x", expr: "🙂".repeat(1024) + "a" }],
+      [
+        { name: "x", expr: "1" },
+        { name: "x", expr: "2" },
+      ],
+      [{ name: "x", expr: "\ud800" }],
+      [{ name: "x", expr: "1", extra: true }],
+      Array.from({ length: 257 }, (_, i) => ({ name: `x${i}`, expr: "1" })),
+    ])
+      expect(bindingsSchema.safeParse(bindings).success).toBe(false);
+  });
+  it("validates view independently of document identity", () => {
+    const workspace = new URL("https://graphcal.org/playground/?example=rocket");
+    const report = new URL(workspace);
+    report.searchParams.set("view", "report");
+    expect(viewLocation(workspace)).toBe("workspace");
+    expect(viewLocation(report)).toBe("report");
+    expect(sameLocationDocument(workspace, report)).toBe(true);
+    for (const query of ["view=unknown", "view=report&view=report"])
+      expect(() => viewLocation(new URL(`https://graphcal.org/playground/?${query}`))).toThrow();
   });
   it.each([
     "",

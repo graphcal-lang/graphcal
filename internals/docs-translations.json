@@ -98,8 +98,8 @@
     },
     {
       "path": "tutorial/index.md",
-      "english_sha256": "c65f996fe3127fb3028c150b9ad38f87339a2a537967bf49752c42e57679f021",
-      "japanese_sha256": "d737b07b9c1d1a33fc70838033e18b4c452417484ad5dc8b676629ef73b4db6d"
+      "english_sha256": "c5dd541cb6ab35598030648129dd7a23a1e71a3641a0d49f2443c090e80fea0f",
+      "japanese_sha256": "0c2bdcaee14e10951cc9f8e16dc4d7fd8a31975c360a1db72064df02a7660cdb"
     },
     {
       "path": "tutorial/step1-hello-graphcal.md",

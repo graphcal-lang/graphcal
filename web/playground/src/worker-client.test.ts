@@ -36,7 +36,7 @@ it("waits for initialization and ignores replaced worker responses", () => {
   client.run(document);
   expect(workers[0].sent).toEqual([]);
   workers[0].reply({ kind: "ready" });
-  expect(workers[0].sent).toEqual([{ id: 1, document }]);
+  expect(workers[0].sent).toEqual([{ id: 1, document, bindings: [] }]);
   client.invalidate();
   expect(workers[0].terminated).toBe(true);
   workers[0].reply({ kind: "error", message: "stale" });

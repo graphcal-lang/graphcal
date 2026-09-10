@@ -1,5 +1,7 @@
-import { evaluationRequest, validateDocument } from "./document";
+import { evaluationRequest, validateDocument, sameDocument, type SourceDocument } from "./document";
+import { bindingsSchema, type Binding } from "./bindings";
 import type { WorkerReply } from "./protocol";
+import { portsSchema, outcomeSchema } from "./protocol";
 import { boundedOutcome } from "./output-budget";
 
 function reply(message: WorkerReply) {
@@ -15,10 +17,17 @@ function failure(error: unknown) {
 // Fixed, same-origin deployment assets; never derived from snippet contents.
 const moduleUrl = new URL(`${import.meta.env.BASE_URL}pkg/graphcal_wasm.js`, self.location.origin)
   .href;
+interface PreparedProject {
+  evaluateReport(bindings: Binding[]): unknown;
+  parameterPorts(): unknown;
+  free(): void;
+}
+let prepared: PreparedProject | undefined;
+let preparedDocument: SourceDocument | undefined;
 const ready = (async () => {
   const engine = (await import(/* @vite-ignore */ moduleUrl)) as {
     default: (options: { module_or_path: ArrayBuffer }) => Promise<unknown>;
-    evaluateProject: (request: ReturnType<typeof evaluationRequest>) => unknown;
+    prepareProject: (request: ReturnType<typeof evaluationRequest>) => PreparedProject;
   };
   const response = await fetch(
     new URL(`${import.meta.env.BASE_URL}pkg/graphcal_wasm_bg.wasm`, self.location.origin),
@@ -40,12 +49,27 @@ self.addEventListener("message", (event: MessageEvent<unknown>) => {
       !("document" in data)
     )
       throw new Error("Invalid evaluation message");
-    const request = evaluationRequest(validateDocument(data.document));
+    const document = validateDocument(data.document);
+    const bindings = bindingsSchema.parse("bindings" in data ? data.bindings : []);
     const engine = await ready;
+    if (!prepared || !preparedDocument || !sameDocument(document, preparedDocument)) {
+      prepared?.free();
+      prepared = undefined;
+      try {
+        prepared = engine.prepareProject(evaluationRequest(document));
+        preparedDocument = document;
+      } catch (error) {
+        const failure = outcomeSchema.safeParse(error);
+        if (!failure.success || failure.data.status === "evaluated") throw error;
+        reply({ kind: "result", id: data.id as number, outcome: failure.data, ports: [] });
+        return;
+      }
+    }
     reply({
       kind: "result",
       id: data.id as number,
-      outcome: boundedOutcome(engine.evaluateProject(request)),
+      outcome: boundedOutcome(prepared.evaluateReport(bindings)),
+      ports: portsSchema.parse(prepared.parameterPorts()),
     });
   })().catch(failure);
 });

@@ -3,9 +3,17 @@ import { element, required } from "./dom";
 import { SourceEditor } from "./editor";
 import { examples, loadExample } from "./examples";
 import { setupLayout } from "./layout";
-import { documentLocation, type DocumentLocation } from "./location";
+import {
+  documentLocation,
+  viewLocation,
+  sameLocationDocument,
+  type DocumentLocation,
+  type PlaygroundView,
+} from "./location";
 import { Output } from "./output";
-import { decodeFragment, shareUrl, WARN_URL_LENGTH } from "./share-codec";
+import { Report } from "./report";
+import { sameBindings, type Binding } from "./bindings";
+import { decodeFragment, shareUrl, WARN_URL_LENGTH, type SharedCalculation } from "./share-codec";
 import { WorkerClient } from "./worker-client";
 import "./styles.css";
 
@@ -18,14 +26,33 @@ const shareStatus = required("#share-status");
 const shareLink = required<HTMLInputElement>("#share-link");
 let current: SourceDocument = { filename: "main.gcl", source: "" };
 let original = current;
-let shared: SourceDocument | undefined;
+let shared: SharedCalculation | undefined;
+let bindings: Binding[] = [];
+let restoredBindings: Binding[] | undefined;
+let parametersPending = false;
+let parametersEdited = false;
+let view: PlaygroundView = "workspace";
 let revision = 0;
 let lastLocation = window.location.href;
 let observedLocation = lastLocation;
 let pendingLoad: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 const layout = setupLayout();
+const report = new Report(
+  required("#report"),
+  (nextBindings) => {
+    client.run(validateDocument(current), nextBindings);
+  },
+  () => {
+    revision++;
+    parametersPending = parametersEdited = true;
+    stop.disabled = false;
+    status.textContent = "Parameters changed — showing last successful evaluation";
+    updateShareStatus();
+  },
+);
 const output = new Output(required("#output"), (range) => {
+  selectView("workspace");
   layout.showEditor();
   editor.focus(range);
 });
@@ -41,11 +68,38 @@ const client = new WorkerClient((event) => {
     case "error":
       status.textContent = event.message;
       output.clear(event.message);
+      report.clear(event.message + " Press Run to retry with the last applied parameters.");
       break;
-    case "result":
+    case "result": {
+      const delivery = report.deliver(event.outcome);
+      if (delivery === "stale") {
+        stop.disabled = false;
+        break;
+      }
+      if (event.outcome.status === "binding_errors" || event.outcome.status === "eval_error") {
+        parametersPending = true;
+        const error =
+          event.outcome.status === "binding_errors"
+            ? event.outcome.errors.map((error) => `${error.name}: ${error.message}`).join("; ")
+            : event.outcome.message;
+        status.textContent = "Input rejected — " + error;
+        if (delivery === "initial")
+          report.clear(error + " Use Reset parameters to evaluate source defaults.");
+        updateShareStatus();
+        break;
+      }
       editor.diagnostics(event.outcome.status === "compile_error" ? event.outcome.diagnostics : []);
       status.textContent = output.render(event.outcome);
+      if (event.outcome.status === "evaluated") {
+        bindings = event.bindings;
+        restoredBindings = undefined;
+        parametersPending = false;
+        revision++;
+        if (delivery === "initial") report.render(event.outcome, event.ports, bindings);
+        updateShareStatus();
+      } else report.clear("Report unavailable. See the workspace diagnostics.");
       break;
+    }
   }
 });
 const editor = new SourceEditor(
@@ -68,9 +122,10 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected browser error";
 }
 function updateShareStatus() {
-  shareStatus.textContent =
-    shared && sameDocument(shared, current)
-      ? "URL includes the current source."
+  shareStatus.textContent = parametersPending
+    ? "Pending or rejected parameter edits are not shareable. Share uses the last successfully applied parameters."
+    : shared && sameDocument(shared.document, current) && sameBindings(shared.bindings, bindings)
+      ? "URL includes the current source and applied parameters."
       : "Edits are not saved in the URL. Use Share to create a snapshot.";
   shareLink.hidden = true;
 }
@@ -79,6 +134,10 @@ function edited() {
   pendingLoad?.abort();
   clearTimeout(timer);
   client.invalidate();
+  bindings = [];
+  restoredBindings = undefined;
+  parametersPending = parametersEdited = false;
+  report.clear("Source changed. Parameter overrides cleared. Run to generate a report.");
   stop.disabled = true;
   // Decorations cannot be dispatched from inside a CodeMirror update listener.
   queueMicrotask(() => editor.diagnostics([]));
@@ -97,17 +156,19 @@ function run() {
   cancelLoad();
   clearTimeout(timer);
   try {
-    client.run(validateDocument(current));
+    report.clear("Generating report…");
+    client.run(validateDocument(current), restoredBindings ?? bindings);
   } catch (error) {
     status.textContent = message(error);
   }
 }
 function mayReplace() {
   return (
-    sameDocument(current, original) || confirm("Discard edits and replace the current document?")
+    (sameDocument(current, original) && !parametersEdited) ||
+    confirm("Discard edits and replace the current document?")
   );
 }
-function load(document: SourceDocument) {
+function load(document: SourceDocument, overrides: Binding[] = []) {
   clearTimeout(timer);
   client.stop();
   stop.disabled = true;
@@ -116,6 +177,11 @@ function load(document: SourceDocument) {
   editor.load(current.source);
   editor.diagnostics([]);
   output.clear();
+  report.clear();
+  bindings = [];
+  restoredBindings = overrides;
+  parametersPending = overrides.length > 0;
+  parametersEdited = false;
   status.textContent = "Ready";
   updateShareStatus();
 }
@@ -126,21 +192,27 @@ async function open(location: DocumentLocation, url: string, push: boolean) {
   const token = ++revision;
   clearTimeout(timer);
   client.stop();
+  report.clear("Loading snippet…");
   stop.disabled = true;
   auto.checked = false;
   status.textContent = "Loading snippet…";
   try {
-    const document =
+    const selectedView = viewLocation(new URL(url));
+    const calculation =
       location.kind === "shared"
         ? await decodeFragment(location.fragment)
-        : await loadExample(
-            location.id,
-            AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
-          );
+        : {
+            document: await loadExample(
+              location.id,
+              AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+            ),
+            bindings: [],
+          };
     if (token !== revision || controller.signal.aborted) return;
     pendingLoad = undefined;
-    shared = location.kind === "shared" ? document : undefined;
-    load(document);
+    shared = location.kind === "shared" ? calculation : undefined;
+    load(calculation.document, calculation.bindings);
+    selectView(selectedView, false);
     if (push) history.pushState(null, "", url);
     lastLocation = observedLocation = window.location.href;
     chooser.value = location.kind === "example" ? location.id : "";
@@ -166,11 +238,43 @@ filename.addEventListener("input", () => {
   edited();
 });
 required("#run").addEventListener("click", run);
+required("#workspace-view").addEventListener("click", () => selectView("workspace"));
+required("#report-view").addEventListener("click", () => selectView("report"));
+required("#reset-parameters").addEventListener("click", () => {
+  revision++;
+  bindings = [];
+  restoredBindings = undefined;
+  parametersEdited = true;
+  parametersPending = false;
+  updateShareStatus();
+  run();
+});
+function selectView(next: PlaygroundView, push = true) {
+  if (push && pendingLoad) {
+    cancelLoad();
+    status.textContent = "Loading cancelled — view changed";
+  }
+  view = next;
+  required("#workspace").hidden = view === "report";
+  required("#report").hidden = view !== "report";
+  required("#mobile-tabs").hidden = view === "report";
+  required("#workspace-view").setAttribute("aria-pressed", String(view === "workspace"));
+  required("#report-view").setAttribute("aria-pressed", String(view === "report"));
+  if (push) {
+    const url = new URL(window.location.href);
+    if (view === "report") url.searchParams.set("view", view);
+    else url.searchParams.delete("view");
+    if (url.href !== window.location.href) history.pushState(null, "", url);
+    lastLocation = observedLocation = url.href;
+  }
+  shareLink.hidden = true;
+}
 stop.addEventListener("click", () => {
   clearTimeout(timer);
   client.stop();
   stop.disabled = true;
   auto.checked = false;
+  report.clear("Stopped. Run to regenerate with the last applied parameters.");
   status.textContent = "Stopped";
 });
 auto.addEventListener("change", () => {
@@ -188,6 +292,7 @@ required("#load-example").addEventListener("click", () => {
   if (!mayReplace()) return;
   const url = new URL("/playground/", window.location.origin);
   url.searchParams.set("example", chooser.value);
+  if (view === "report") url.searchParams.set("view", view);
   void open({ kind: "example", id: chooser.value }, url.href, true);
 });
 required("#share").addEventListener("click", () => {
@@ -195,13 +300,20 @@ required("#share").addEventListener("click", () => {
     cancelLoad();
     status.textContent = "Loading cancelled — sharing the current document";
   }
-  const snapshot = current;
+  const snapshot = { document: current, bindings };
+  const snapshotView = view;
   const token = revision;
   void (async () => {
     try {
-      const url = await shareUrl(snapshot, window.location.origin);
-      if (revision !== token) {
-        shareStatus.textContent = "Source changed while sharing. Press Share again.";
+      const url = await shareUrl(
+        snapshot.document,
+        window.location.origin,
+        snapshot.bindings,
+        snapshotView,
+      );
+      if (revision !== token || view !== snapshotView) {
+        shareStatus.textContent =
+          "Source, parameters, or view changed while sharing. Press Share again.";
         return;
       }
       history.replaceState(null, "", url);
@@ -212,7 +324,9 @@ required("#share").addEventListener("click", () => {
       shareStatus.textContent =
         url.length > WARN_URL_LENGTH
           ? "Long link: some messaging apps may truncate it. Copy the full link below."
-          : "URL includes the current source. Copy the link below.";
+          : "URL includes source, applied parameters, and selected view. Copy the link below.";
+      if (parametersPending)
+        shareStatus.textContent += " Pending or rejected parameter edits were excluded.";
       try {
         await navigator.clipboard.writeText(url);
         if (revision === token) shareStatus.textContent += " Link copied.";
@@ -230,12 +344,19 @@ required("#share").addEventListener("click", () => {
 function navigated() {
   if (window.location.href === observedLocation) return;
   observedLocation = window.location.href;
-  if (!mayReplace()) {
-    history.replaceState(null, "", lastLocation);
-    observedLocation = lastLocation;
-    return;
-  }
   try {
+    const url = new URL(window.location.href);
+    const nextView = viewLocation(url);
+    if (sameLocationDocument(url, new URL(lastLocation))) {
+      selectView(nextView, false);
+      lastLocation = observedLocation = url.href;
+      return;
+    }
+    if (!mayReplace()) {
+      history.replaceState(null, "", lastLocation);
+      observedLocation = lastLocation;
+      return;
+    }
     void open(documentLocation(new URL(window.location.href)), window.location.href, false);
   } catch (error) {
     status.textContent = message(error);
@@ -246,7 +367,15 @@ function navigated() {
 window.addEventListener("popstate", navigated);
 window.addEventListener("hashchange", navigated);
 window.addEventListener("beforeunload", (event) => {
-  if (!sameDocument(current, original) && !(shared && sameDocument(current, shared))) {
+  if (
+    (!sameDocument(current, original) || parametersEdited) &&
+    !(
+      shared &&
+      sameDocument(current, shared.document) &&
+      sameBindings(bindings, shared.bindings) &&
+      !parametersPending
+    )
+  ) {
     event.preventDefault();
     event.returnValue = "";
   }
@@ -257,6 +386,7 @@ window.addEventListener("pagehide", () => {
   clearTimeout(timer);
   client.stop();
   output.clear();
+  report.clear();
 });
 window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
@@ -274,6 +404,7 @@ if (import.meta.hot)
     client.stop();
     editor.destroy();
     output.clear();
+    report.clear();
   });
 try {
   void open(documentLocation(new URL(window.location.href)), window.location.href, false);

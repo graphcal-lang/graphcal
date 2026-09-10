@@ -1688,7 +1688,9 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 256. `crates/graphcal-wasm/src/output.rs`
 257. `crates/graphcal-wasm/src/js_request.rs`
 258. `crates/graphcal-wasm/src/diagnostics.rs`
-259. `crates/graphcal-wasm/src/prepared.rs`
+259. `crates/graphcal-wasm/src/bindings.rs` →
+     `crates/graphcal-wasm/src/browser_report.rs` →
+     `crates/graphcal-wasm/src/prepared.rs`
 260. `crates/graphcal-wasm/src/lib.rs`
 261. `crates/graphcal-plugin-host/src/cache.rs`
 262. `crates/graphcal-plugin-host/src/convert.rs`

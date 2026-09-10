@@ -21,8 +21,8 @@ for (const file of [
   assert.ok((await stat(new URL(file, site))).size > 0, file);
 }
 assert.ok(
-  (await stat(new URL("playground/pkg/graphcal_wasm_bg.wasm", site))).size <= 5 * 1024 * 1024,
-  "5 MiB Wasm budget",
+  (await stat(new URL("playground/pkg/graphcal_wasm_bg.wasm", site))).size <= 5.25 * 1024 * 1024,
+  "5.25 MiB Wasm budget (including browser report rendering)",
 );
 const assets = await readdir(new URL("playground/assets/", site));
 assert.ok(

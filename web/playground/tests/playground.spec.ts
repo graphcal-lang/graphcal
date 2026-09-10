@@ -120,8 +120,8 @@ test("shares the edited filename/source and restores without auto-execution", as
   await expect(link).toBeVisible();
   const url = await link.inputValue();
   expect(await decodeFragment(new URL(url).hash)).toEqual({
-    filename: "snippet.gcl",
-    source: text,
+    document: { filename: "snippet.gcl", source: text },
+    bindings: [],
   });
   const context = await browser.newContext();
   const fresh = await context.newPage();
@@ -199,7 +199,7 @@ test("dirty example replacement and Reset require confirmation", async ({ page }
 });
 
 test("malformed links and example loading failures do not replace work", async ({ page }) => {
-  await page.goto("/playground/?example=rocket#v=2&code=broken");
+  await page.goto("/playground/?example=rocket#v=3&code=broken");
   await expect(page.locator("#status")).toContainText("Unsupported");
   await expect(page.getByRole("textbox", { name: "Graphcal source editor" })).toHaveText("");
   await page.getByLabel("Examples", { exact: true }).selectOption("rocket");
@@ -249,7 +249,14 @@ test("mobile panes and trailing-slash redirect preserve shared source", async ({
     new RegExp(`/playground/${hash.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
   );
   await expect(page.locator("#status")).toContainText("press Run");
-  expect((await page.locator("#editor").boundingBox())!.height).toBeGreaterThan(350);
+  // View controls consume space too; the editor must fill the remaining pane,
+  // independent of browser-specific toolbar wrapping and font metrics.
+  const editorBox = (await page.locator("#editor").boundingBox())!;
+  const workspaceBox = (await page.locator("#workspace").boundingBox())!;
+  const footerBox = (await page.locator("footer").boundingBox())!;
+  expect(editorBox.height).toBeGreaterThan(0);
+  expect(editorBox.y).toBeCloseTo(workspaceBox.y, 0);
+  expect(editorBox.y + editorBox.height).toBeCloseTo(footerBox.y, 0);
   await page.getByRole("button", { name: "Run", exact: true }).click();
   await expect(page.locator("#status")).toHaveText("Up to date");
   await page.getByRole("button", { name: "Results", exact: true }).click();

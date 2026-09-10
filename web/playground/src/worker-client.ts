@@ -1,9 +1,10 @@
 import type { SourceDocument } from "./document";
-import { workerReplySchema, type Outcome } from "./protocol";
+import type { Binding } from "./bindings";
+import { workerReplySchema, type ReportOutcome, type ParameterPort } from "./protocol";
 
 export type ExecutionEvent =
   | { kind: "loading" | "running" }
-  | { kind: "result"; outcome: Outcome }
+  | { kind: "result"; outcome: ReportOutcome; ports: ParameterPort[]; bindings: Binding[] }
   | { kind: "error"; message: string };
 
 /** One active request, invalidated synchronously on edits/Stop/load. */
@@ -11,7 +12,7 @@ export class WorkerClient {
   private worker?: Worker;
   private ready = false;
   private sequence = 0;
-  private active?: { id: number; document: SourceDocument };
+  private active?: { id: number; document: SourceDocument; bindings: Binding[] };
   private timer?: ReturnType<typeof setTimeout>;
   private readonly emit: (event: ExecutionEvent) => void;
   private readonly createWorker: () => Worker;
@@ -24,9 +25,9 @@ export class WorkerClient {
     this.createWorker = createWorker;
   }
 
-  run(document: SourceDocument) {
+  run(document: SourceDocument, bindings: Binding[] = []) {
     if (this.active) this.stop();
-    this.active = { id: ++this.sequence, document };
+    this.active = { id: ++this.sequence, document, bindings };
     try {
       if (!this.worker) {
         const worker = this.createWorker();
@@ -47,8 +48,14 @@ export class WorkerClient {
             case "result":
               if (message.id !== this.active?.id) return;
               clearTimeout(this.timer);
+              const bindings = this.active.bindings;
               this.active = undefined;
-              this.emit({ kind: "result", outcome: message.outcome });
+              this.emit({
+                kind: "result",
+                outcome: message.outcome,
+                ports: message.ports,
+                bindings,
+              });
           }
         });
         worker.addEventListener("error", () => {

@@ -12,3 +12,19 @@ it("bounds rendered transport before it reaches the UI without truncating values
 it("denies plot data, image and link resource loading", async () => {
   await expect(denyPlotResource()).rejects.toThrow("External plot resources");
 });
+it("counts generated HTML toward the display budget", () => {
+  const outcome = {
+    status: "evaluated",
+    html: "report",
+    evaluation: {
+      compiler_version: "test",
+      has_errors: false,
+      values: [],
+      assertions: [],
+      notices: [],
+      figures: [],
+    },
+  };
+  expect(boundedOutcome(outcome)).toEqual(outcome);
+  expect(() => boundedOutcome({ ...outcome, html: "x".repeat(MAX_OUTPUT_BYTES) })).toThrow("8 MiB");
+});
