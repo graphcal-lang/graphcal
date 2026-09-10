@@ -68,9 +68,14 @@ impl From<&EvalResult> for EvaluationView {
         ) {
             Ok(figures) => figures
                 .into_iter()
-                .map(|figure| FigureView {
-                    name: figure.name,
-                    spec: figure.spec,
+                .map(|mut figure| {
+                    // Keep browser redraws consistent with the initial report:
+                    // hydration must not remove its scale-bound interaction.
+                    graphcal_report::vega::add_pan_zoom(&mut figure.spec);
+                    FigureView {
+                        name: figure.name,
+                        spec: figure.spec,
+                    }
                 })
                 .collect(),
             Err(error) => {

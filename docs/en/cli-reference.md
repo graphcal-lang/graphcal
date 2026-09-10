@@ -584,7 +584,7 @@ path). The page is derived from what the model already declares:
 |---|---|
 | Inputs | `param` declarations: every entry param becomes a control |
 | Values | `const`/`node` declarations in declaration order; indexed values render as grids |
-| Plots | `plot`/`figure`/`layer` declarations, rendered with inlined Vega bundles; single-view charts with a continuous axis get pan/zoom |
+| Plots | `plot`/`figure`/`layer` declarations, rendered with inlined Vega bundles; single-view charts get pan/zoom only on their continuous, unbinned positional axes (not categorical axes) |
 | Checks | `assert` results as pass/fail badges |
 | Captions | `///` doc comments attached to declarations |
 | Provenance | compiler version, SHA-256 of every source file, baseline parameter values, and a copy-pasteable reproduction command |
