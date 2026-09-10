@@ -7,5 +7,9 @@ disable = [
 ]
 exclude = [".local"]
 
+# Japanese sentence punctuation also distinguishes captions from headings.
+[MD036]
+punctuation = ".,;:!?。！？"
+
 [per-file-ignores]
 ".github/pull_request_template.md" = ["first-line-h1"]
