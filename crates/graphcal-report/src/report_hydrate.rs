@@ -3,10 +3,10 @@
 //! A hydrated report embeds the browser engine (the `graphcal-wasm` bundle
 //! built with `wasm-pack --target no-modules`), the project sources, and the
 //! baseline binding expressions into the static page. The runtime script
-//! (`report_runtime.js`) spawns a Web Worker from that payload, prepares the
-//! project once, synthesizes controls from the typed parameter ports, and
-//! re-evaluates on input — the same evaluator, results, and unit checking as
-//! the CLI, end to end.
+//! (`report_standalone.js`) adapts that engine to the transport-neutral UI
+//! runtime (`report_runtime.js`), which synthesizes controls from typed
+//! parameter ports and re-evaluates on input — the same evaluator, results,
+//! and unit checking as the CLI, end to end.
 
 use base64::Engine as _;
 use serde_json::json;
@@ -15,6 +15,8 @@ use crate::escape::escape_json_for_script;
 
 /// The report runtime script embedded into hydrated pages.
 const REPORT_RUNTIME_JS: &str = include_str!("report_runtime.js");
+/// The standalone embedded-Wasm transport bootstrap.
+const REPORT_STANDALONE_JS: &str = include_str!("report_standalone.js");
 
 /// The browser engine bundle produced by `wasm-pack --target no-modules`.
 pub struct EngineBundle<'a> {
@@ -74,12 +76,14 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
             "<script id=\"graphcal-engine-glue\" type=\"text/plain\">{glue}</script>\n",
             "<script id=\"graphcal-engine-wasm\" type=\"application/wasm;base64\">{wasm}</script>\n",
             "<script>{runtime}</script>\n",
+            "<script>{standalone}</script>\n",
         ),
         project = escape_json_for_script(&project.to_string()),
         baseline = escape_json_for_script(&baseline.to_string()),
         glue = engine.encode(hydration.engine.glue_js),
         wasm = engine.encode(hydration.engine.wasm),
         runtime = REPORT_RUNTIME_JS,
+        standalone = REPORT_STANDALONE_JS,
     )
 }
 
@@ -116,5 +120,19 @@ mod tests {
             !REPORT_RUNTIME_JS.contains("</script") && !REPORT_RUNTIME_JS.contains("<!--"),
             "the runtime script must not contain inline-script terminators"
         );
+        assert!(
+            !REPORT_STANDALONE_JS.contains("</script") && !REPORT_STANDALONE_JS.contains("<!--"),
+            "the standalone bootstrap must not contain inline-script terminators"
+        );
+    }
+
+    #[test]
+    fn runtime_and_standalone_bootstrap_have_separate_responsibilities() {
+        assert!(REPORT_RUNTIME_JS.contains("global.GraphcalReport = { mount: mount }"));
+        assert!(REPORT_RUNTIME_JS.contains("options.createTransport"));
+        assert!(!REPORT_RUNTIME_JS.contains("graphcal-engine-wasm"));
+        assert!(!REPORT_RUNTIME_JS.contains("wasm_bindgen"));
+        assert!(REPORT_STANDALONE_JS.contains("graphcal-engine-wasm"));
+        assert!(REPORT_STANDALONE_JS.contains("window.GraphcalReport.mount"));
     }
 }
