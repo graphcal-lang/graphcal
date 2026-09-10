@@ -7011,7 +7011,9 @@ fn report_build_hydrated_embeds_engine_project_and_runtime() {
     assert!(html.contains("\"expr\":\"450.0 s\""));
     assert!(html.contains("id=\"graphcal-engine-glue\""));
     assert!(html.contains("id=\"graphcal-engine-wasm\""));
-    assert!(html.contains("Graphcal report hydration runtime"));
+    // Both the shared runtime and the standalone bootstrap must be embedded.
+    assert!(html.contains("global.GraphcalReport = { mount: mount }"));
+    assert!(html.contains("window.GraphcalReport.mount({"));
     // The static baseline is intact underneath the hydration layer.
     assert!(html.contains("data-decl=\"delta_v\""));
     // Pan/zoom is bound on the continuous-axis figure.
