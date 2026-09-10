@@ -2110,6 +2110,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2",
  "thiserror",
  "wasm-bindgen",
  "wasm-bindgen-test",

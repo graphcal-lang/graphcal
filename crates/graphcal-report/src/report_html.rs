@@ -27,6 +27,23 @@ pub fn render_report_html(
     scripts: VegaScriptSource,
     hydration: Option<&Hydration<'_>>,
 ) -> String {
+    let vega_scripts = if document.figures.is_empty() && document.plot_errors.is_empty() {
+        String::new()
+    } else {
+        crate::plot_page::vega_script_tags(scripts)
+    };
+    let hydration_block = hydration.map_or_else(String::new, render_hydration_block);
+    render_page(document, &vega_scripts, &hydration_block)
+}
+
+/// Render a report whose host supplies the chart assets and interaction runtime.
+/// This path does not link the standalone JavaScript bundles into the browser engine.
+#[must_use]
+pub fn render_host_report_html(document: &ReportDocument) -> String {
+    render_page(document, "", "")
+}
+
+fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &str) -> String {
     let mut body = String::new();
     let title = html_escape(&document.title);
     let _ = writeln!(body, "<header><h1>{title}</h1></header>");
@@ -122,13 +139,6 @@ pub fn render_report_html(
     }
 
     push_provenance(&mut body, document);
-
-    let vega_scripts = if document.figures.is_empty() && document.plot_errors.is_empty() {
-        String::new()
-    } else {
-        crate::plot_page::vega_script_tags(scripts)
-    };
-    let hydration_block = hydration.map_or_else(String::new, render_hydration_block);
 
     format!(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n{vega_scripts}\n<style>{REPORT_CSS}</style>\n</head>\n<body>\n<main>\n{body}</main>\n{hydration_block}</body>\n</html>\n"

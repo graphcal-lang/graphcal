@@ -1,4 +1,11 @@
 import { validateDocument, type SourceDocument } from "./document";
+import { bindingsSchema, type Binding } from "./bindings";
+import type { PlaygroundView } from "./location";
+
+export interface SharedCalculation {
+  document: SourceDocument;
+  bindings: Binding[];
+}
 
 export const MAX_URL_LENGTH = 16 * 1024;
 export const WARN_URL_LENGTH = 8 * 1024;
@@ -43,29 +50,35 @@ async function boundedBytes(
   }
 }
 
-export async function encodeFragment(document: SourceDocument): Promise<string> {
+export async function encodeFragment(
+  document: SourceDocument,
+  bindings: Binding[] = [],
+): Promise<string> {
   if (typeof CompressionStream === "undefined")
     throw new Error("Sharing requires a browser with gzip Compression Streams support.");
-  const json = JSON.stringify(validateDocument(document));
+  const json = JSON.stringify({
+    document: validateDocument(document),
+    bindings: bindingsSchema.parse(bindings),
+  });
   const bytes = await boundedBytes(
     new Blob([json]).stream().pipeThrough(new CompressionStream("gzip")),
     MAX_URL_LENGTH,
   );
   const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
-  return `#v=1&code=${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
+  return `#v=2&code=${btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}`;
 }
 
-export async function decodeFragment(fragment: string): Promise<SourceDocument> {
+export async function decodeFragment(fragment: string): Promise<SharedCalculation> {
   if (fragment.length > MAX_URL_LENGTH) throw new Error("Shared URL exceeds the 16 KiB limit.");
   const fields = new URLSearchParams(fragment.replace(/^#/, ""));
   if (
     fields.size !== 2 ||
     fields.getAll("v").length !== 1 ||
     fields.getAll("code").length !== 1 ||
-    fields.get("v") !== "1"
+    (fields.get("v") !== "1" && fields.get("v") !== "2")
   ) {
     throw new Error(
-      "Unsupported or malformed shared URL. Expected version 1 and one code payload.",
+      "Unsupported or malformed shared URL. Expected version 1 or 2 and one code payload.",
     );
   }
   const code = fields.get("code")!;
@@ -83,7 +96,20 @@ export async function decodeFragment(fragment: string): Promise<SourceDocument> 
       new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")),
       MAX_ENVELOPE_BYTES,
     );
-    return validateDocument(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decoded)));
+    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decoded));
+    if (fields.get("v") === "1") return { document: validateDocument(value), bindings: [] };
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Object.keys(value).length !== 2 ||
+      !("document" in value) ||
+      !("bindings" in value)
+    )
+      throw new Error("Expected document and bindings.");
+    return {
+      document: validateDocument(value.document),
+      bindings: bindingsSchema.parse(value.bindings),
+    };
   } catch (error) {
     throw new Error(
       `Could not open shared snippet: ${error instanceof Error ? error.message : "invalid payload"}`,
@@ -91,9 +117,15 @@ export async function decodeFragment(fragment: string): Promise<SourceDocument> 
   }
 }
 
-export async function shareUrl(document: SourceDocument, origin: string): Promise<string> {
+export async function shareUrl(
+  document: SourceDocument,
+  origin: string,
+  bindings: Binding[] = [],
+  view: PlaygroundView = "workspace",
+): Promise<string> {
   const url = new URL("/playground/", origin);
-  url.hash = await encodeFragment(document);
+  if (view === "report") url.searchParams.set("view", view);
+  url.hash = await encodeFragment(document, bindings);
   if (url.href.length > MAX_URL_LENGTH)
     throw new Error(
       "Shared URL exceeds 16 KiB. Copy the source manually instead; it has not been truncated.",

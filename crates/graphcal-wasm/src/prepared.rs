@@ -12,26 +12,24 @@
 //! worker teardown — terminate the worker and prepare a fresh instance, the
 //! same contract the playground already uses.
 
-use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    ModelIndexKind, ModelValueSchema, ParameterDomain, ParameterPort, PreparedProject,
+    EvalResult, ModelIndexKind, ModelValueSchema, ParameterDomain, ParameterPort, PreparedProject,
     ProjectCompiler,
 };
 use graphcal_eval::host_fns::demo_registry;
 use graphcal_eval::loader::load_project;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::PlaygroundRequest;
+use crate::bindings::{BindingRequest, bind_one};
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
 use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
 
-/// Maximum UTF-8 size of one binding expression string.
-pub const MAX_BINDING_EXPR_BYTES: usize = 4096;
-
 /// A checked in-memory project ready for repeated evaluation.
 pub struct PreparedPlayground {
     prepared: PreparedProject,
+    report: crate::browser_report::ReportMetadata,
 }
 
 /// Outcome of preparing one browser project.
@@ -85,23 +83,17 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
         };
     }
 
+    let report =
+        crate::browser_report::ReportMetadata::from_loaded(&loaded, project.entry_display());
     match ProjectCompiler::new(&loaded)
         .host_fns(&demo_registry())
         .prepare()
     {
-        Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared })),
+        Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared, report })),
         Err(error) => PrepareOutcome::CompileError {
             diagnostics: vec![compile_error_view(&error, &project)],
         },
     }
-}
-
-/// One reader-supplied parameter binding: a closed Graphcal value expression
-/// in source syntax (e.g. `450.0 s`), exactly like the CLI's `--param`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct BindingRequest {
-    pub name: String,
-    pub expr: String,
 }
 
 /// One rejected binding, addressed to the control that produced it.
@@ -122,6 +114,27 @@ pub enum EvaluateOutcome {
     /// The evaluator failed as a whole (e.g. a required parameter without a
     /// default was left unbound).
     EvalError { message: String },
+}
+
+/// Outcome of evaluating and rendering a host-asset report.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum EvaluateReportOutcome {
+    Evaluated {
+        evaluation: EvaluationView,
+        html: String,
+    },
+    BindingErrors {
+        errors: Vec<BindingErrorView>,
+    },
+    EvalError {
+        message: String,
+    },
+}
+
+enum EvaluationFailure {
+    BindingErrors(Vec<BindingErrorView>),
+    EvalError(String),
 }
 
 /// Browser-facing schema of one entry parameter port.
@@ -185,6 +198,42 @@ impl PreparedPlayground {
     /// can annotate each offending input.
     #[must_use]
     pub fn evaluate(&self, bindings: &[BindingRequest]) -> EvaluateOutcome {
+        match self.evaluate_result(bindings) {
+            Ok(result) => EvaluateOutcome::Evaluated {
+                evaluation: EvaluationView::from(&result),
+            },
+            Err(EvaluationFailure::BindingErrors(errors)) => {
+                EvaluateOutcome::BindingErrors { errors }
+            }
+            Err(EvaluationFailure::EvalError(message)) => EvaluateOutcome::EvalError { message },
+        }
+    }
+
+    /// Evaluate once and derive both the complete view and static report from
+    /// that exact result.
+    #[must_use]
+    pub fn evaluate_report(&self, bindings: &[BindingRequest]) -> EvaluateReportOutcome {
+        match self.evaluate_result(bindings) {
+            Ok(result) => match self.report.render(&result, bindings) {
+                Ok(html) => EvaluateReportOutcome::Evaluated {
+                    evaluation: EvaluationView::from(&result),
+                    html,
+                },
+                Err(message) => EvaluateReportOutcome::EvalError { message },
+            },
+            Err(EvaluationFailure::BindingErrors(errors)) => {
+                EvaluateReportOutcome::BindingErrors { errors }
+            }
+            Err(EvaluationFailure::EvalError(message)) => {
+                EvaluateReportOutcome::EvalError { message }
+            }
+        }
+    }
+
+    fn evaluate_result(
+        &self,
+        bindings: &[BindingRequest],
+    ) -> Result<EvalResult, EvaluationFailure> {
         let mut builder = self.prepared.binding_builder();
         let mut errors = Vec::new();
         for binding in bindings {
@@ -196,45 +245,18 @@ impl PreparedPlayground {
             }
         }
         if !errors.is_empty() {
-            return EvaluateOutcome::BindingErrors { errors };
+            return Err(EvaluationFailure::BindingErrors(errors));
         }
         let row = match builder.finish() {
             Ok(row) => row,
             Err(error) => {
-                return EvaluateOutcome::EvalError {
-                    message: error.to_string(),
-                };
+                return Err(EvaluationFailure::EvalError(error.to_string()));
             }
         };
-        match self.prepared.evaluate(&row) {
-            Ok(result) => EvaluateOutcome::Evaluated {
-                evaluation: EvaluationView::from(&result),
-            },
-            Err(error) => EvaluateOutcome::EvalError {
-                message: error.to_string(),
-            },
-        }
+        self.prepared
+            .evaluate(&row)
+            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
     }
-}
-
-fn bind_one(
-    builder: &mut graphcal_eval::eval::ParameterBindingBuilder<'_>,
-    binding: &BindingRequest,
-) -> Result<(), String> {
-    if binding.expr.len() > MAX_BINDING_EXPR_BYTES {
-        return Err(format!(
-            "binding expression exceeds {MAX_BINDING_EXPR_BYTES} bytes"
-        ));
-    }
-    let name = DeclName::try_new(&binding.name)
-        .map_err(|error| format!("invalid parameter name: {error}"))?;
-    let raw = graphcal_compiler::syntax::parser::Parser::new(&binding.expr)
-        .parse_single_expr()
-        .map_err(|error| error.to_string())?;
-    let expr: graphcal_compiler::desugar::desugared_ast::Expr = raw.into();
-    builder
-        .bind_expression(&name, &expr)
-        .map_err(|error| error.to_string())
 }
 
 fn parameter_port_view(port: &ParameterPort, prepared: &PreparedProject) -> ParameterPortView {
@@ -446,12 +468,23 @@ mod js {
             crate::output::to_js(&self.inner.evaluate(&bindings))
                 .map_err(|error| serialization_error(&error))
         }
+
+        /// Evaluate once and return both the complete evaluation view and a
+        /// static report whose chart runtime is supplied by the host.
+        #[wasm_bindgen(js_name = evaluateReport)]
+        pub fn evaluate_report(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
+            let bindings: Vec<BindingRequest> = serde_wasm_bindgen::from_value(bindings)
+                .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
+            crate::output::to_js(&self.inner.evaluate_report(&bindings))
+                .map_err(|error| serialization_error(&error))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::{PlaygroundFile, PlaygroundRequest};
 
     fn single_file(source: &str) -> PlaygroundRequest {
@@ -532,6 +565,57 @@ assert positive = @delta_v > 0.0 m/s;
         };
         assert!(!evaluation.has_errors);
         assert_eq!(evaluation.assertions.len(), 1);
+    }
+
+    #[test]
+    fn report_escapes_captions_and_tracks_bound_baseline_without_an_engine() {
+        let source = "/// Speed <unsafe> & caption\nparam speed: Velocity = 1.0 m/s;\nnode doubled: Velocity = @speed * 2.0;";
+        let prepared = prepare_ok(source);
+        let binding = BindingRequest {
+            name: "speed".to_string(),
+            expr: "36.0 km/h".to_string(),
+        };
+        let EvaluateReportOutcome::Evaluated { evaluation, html } =
+            prepared.evaluate_report(std::slice::from_ref(&binding))
+        else {
+            panic!("expected report");
+        };
+        assert!(!evaluation.has_errors);
+        assert!(html.contains("Speed &lt;unsafe&gt; &amp; caption"));
+        assert!(html.contains("m/s"));
+        assert!(html.contains("--param"));
+        assert!(html.contains("speed=36.0 km/h"));
+        assert!(html.contains("sha256:"));
+        assert!(!html.contains("vega.min.js"));
+        assert!(!html.contains("wasm"));
+
+        let EvaluateReportOutcome::Evaluated { html, .. } = prepared.evaluate_report(&[]) else {
+            panic!("expected reset report");
+        };
+        assert!(!html.contains("speed=36.0 km/h"));
+    }
+
+    #[test]
+    fn report_binding_rejection_is_recoverable_and_reports_all_errors() {
+        let prepared = prepare_ok(DELTA_V);
+        let bad = [
+            BindingRequest {
+                name: "isp".to_string(),
+                expr: "2.0 kg".to_string(),
+            },
+            BindingRequest {
+                name: "missing".to_string(),
+                expr: "1.0".to_string(),
+            },
+        ];
+        let EvaluateReportOutcome::BindingErrors { errors } = prepared.evaluate_report(&bad) else {
+            panic!("expected binding errors");
+        };
+        assert_eq!(errors.len(), 2);
+        assert!(matches!(
+            prepared.evaluate_report(&[]),
+            EvaluateReportOutcome::Evaluated { .. }
+        ));
     }
 
     #[test]

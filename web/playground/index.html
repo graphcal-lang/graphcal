@@ -25,6 +25,7 @@
         <button id="stop" type="button" disabled>Stop</button>
         <label><input id="auto" type="checkbox" checked /> Auto-run</label>
         <button id="reset" type="button">Reset</button>
+        <button id="reset-parameters" type="button">Reset parameters</button>
         <button id="share" type="button">Share</button>
         <a href="/docs/">Docs</a>
         <button id="theme" type="button">Toggle theme</button>
@@ -42,13 +43,17 @@
       <input id="share-link" aria-label="Shareable URL" readonly hidden />
       <details>
         <summary>Sharing privacy and limits</summary>
-        Links contain readable source, not encrypted data. Anyone with the link can read it;
-        browsers and messaging apps may retain it. Do not share secrets. Source runs locally. URLs
-        are limited to 16 KiB; copy larger snippets manually. Links restore source, not a historical
-        Graphcal compiler.
+        Links contain readable source and parameter overrides, not encrypted data. Anyone with the
+        link can read them; browsers and messaging apps may retain it. Do not share secrets. Source
+        runs locally. URLs are limited to 16 KiB; copy larger snippets manually. Links restore
+        source, not a historical Graphcal compiler.
       </details>
     </div>
-    <div class="mobile-tabs" aria-label="Visible pane">
+    <div class="view-tabs" aria-label="Playground view">
+      <button id="workspace-view" type="button" aria-pressed="true">Workspace</button>
+      <button id="report-view" type="button" aria-pressed="false">Report</button>
+    </div>
+    <div id="mobile-tabs" class="mobile-tabs" aria-label="Visible pane">
       <button id="editor-tab" type="button" aria-pressed="true">Editor</button>
       <button id="results-tab" type="button" aria-pressed="false">Results</button>
     </div>
@@ -67,6 +72,7 @@
       ></div>
       <section id="output" aria-label="Results" tabindex="0"></section>
     </main>
+    <section id="report" aria-label="Report" hidden></section>
     <footer>
       Experimental · Single file · No plugins or external files · Runs locally in WebAssembly ·
       Ctrl/Cmd+Enter to run

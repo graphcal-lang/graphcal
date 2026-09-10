@@ -68,7 +68,9 @@ test("a delayed example cannot overwrite newer edits or a shared snapshot", asyn
   await expect(page.locator("#output")).toContainText("newer");
   const encoded = new URL(page.url()).hash.slice(1);
   const bytes = Buffer.from(new URLSearchParams(encoded).get("code")!, "base64url");
-  expect(JSON.parse(gunzipSync(bytes).toString("utf8")).source).toBe("node newer: Int = 9;");
+  expect(JSON.parse(gunzipSync(bytes).toString("utf8")).document.source).toBe(
+    "node newer: Int = 9;",
+  );
 });
 
 test("clipboard denial offers a selected URL and oversized sharing keeps source", async ({
@@ -88,9 +90,9 @@ test("clipboard denial offers a selected URL and oversized sharing keeps source"
     await link.evaluate((node: HTMLInputElement) => node.selectionEnd! - node.selectionStart!),
   ).toBe((await link.inputValue()).length);
   const payload = new URLSearchParams(new URL(page.url()).hash.slice(1)).get("code")!;
-  expect(JSON.parse(gunzipSync(Buffer.from(payload, "base64url")).toString("utf8")).source).toBe(
-    "// 🙂\r\nnode x: Int = 3;\n",
-  );
+  expect(
+    JSON.parse(gunzipSync(Buffer.from(payload, "base64url")).toString("utf8")).document.source,
+  ).toBe("// 🙂\r\nnode x: Int = 3;\n");
   const originalUrl = page.url();
   const large = `// ${randomBytes(25_000).toString("base64")}\nnode retained: Int = 7;`;
   await page.getByRole("textbox", { name: "Graphcal source editor" }).fill(large);

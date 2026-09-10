@@ -15,7 +15,11 @@ export const diagnosticSchema = z.object({
 });
 export type Diagnostic = z.infer<typeof diagnosticSchema>;
 export type Value =
-  | { kind: "quantity" | "complex" | "bool" | "int" | "label" | "datetime"; display: string }
+  | { kind: "quantity"; display: string; value: number; si_value: number; unit?: string | null }
+  | { kind: "bool"; display: string; value: boolean }
+  | { kind: "int"; display: string; decimal: string }
+  | { kind: "label"; display: string; variant: string }
+  | { kind: "complex" | "datetime"; display: string }
   | { kind: "struct"; display: string; fields: { name: string; value: Value }[] }
   | { kind: "indexed"; display: string; entries: { display_key: string; value: Value }[] };
 export interface GridTable {
@@ -30,9 +34,16 @@ export type ValueBody =
 const valueSchema: z.ZodType<Value> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({
-      kind: z.enum(["quantity", "complex", "bool", "int", "label", "datetime"]),
+      kind: z.literal("quantity"),
       display: z.string(),
+      value: z.number(),
+      unit: z.string().nullish(),
+      si_value: z.number(),
     }),
+    z.object({ kind: z.literal("bool"), display: z.string(), value: z.boolean() }),
+    z.object({ kind: z.literal("int"), display: z.string(), decimal: z.string() }),
+    z.object({ kind: z.literal("label"), display: z.string(), variant: z.string() }),
+    z.object({ kind: z.enum(["complex", "datetime"]), display: z.string() }),
     z.object({
       kind: z.literal("struct"),
       display: z.string(),
@@ -98,9 +109,49 @@ export const outcomeSchema = z.discriminatedUnion("status", [
   }),
 ]);
 export type Outcome = z.infer<typeof outcomeSchema>;
+export const reportOutcomeSchema = z.discriminatedUnion("status", [
+  outcomeSchema.options[0],
+  outcomeSchema.options[1],
+  outcomeSchema.options[2].extend({ html: z.string() }),
+  z.object({
+    status: z.literal("binding_errors"),
+    errors: z.array(z.object({ name: z.string(), message: z.string() })),
+  }),
+  z.object({ status: z.literal("eval_error"), message: z.string() }),
+]);
+export type ReportOutcome = z.infer<typeof reportOutcomeSchema>;
+export const portsSchema = z.array(
+  z.object({
+    name: z.string(),
+    has_default: z.boolean(),
+    control: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("quantity"),
+        unit: z.string().nullish(),
+        lower_si: z.number().nullish(),
+        upper_si: z.number().nullish(),
+      }),
+      z.object({
+        kind: z.literal("integer"),
+        lower: z.string().nullish(),
+        upper: z.string().nullish(),
+      }),
+      z.object({ kind: z.literal("boolean") }),
+      z.object({ kind: z.literal("select"), index: z.string(), variants: z.array(z.string()) }),
+      z.object({ kind: z.literal("datetime"), time_scale: z.string() }),
+      z.object({ kind: z.literal("expression") }),
+    ]),
+  }),
+);
+export type ParameterPort = z.infer<typeof portsSchema>[number];
 export const workerReplySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ready") }),
-  z.object({ kind: z.literal("result"), id: z.int(), outcome: outcomeSchema }),
+  z.object({
+    kind: z.literal("result"),
+    id: z.int(),
+    outcome: reportOutcomeSchema,
+    ports: portsSchema.default([]),
+  }),
   z.object({ kind: z.literal("error"), message: z.string() }),
 ]);
 export type WorkerReply = z.infer<typeof workerReplySchema>;

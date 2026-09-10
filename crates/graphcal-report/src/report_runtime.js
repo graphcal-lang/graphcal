@@ -133,6 +133,7 @@
     if (kind === "boolean") {
       var checkbox = element("input");
       checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", port.name);
       checkbox.checked = displayedExpr.trim() === "true";
       checkbox.addEventListener("change", function () {
         commit(checkbox.checked ? "true" : "false");
@@ -146,6 +147,7 @@
       holder.appendChild(toggleLabel);
     } else if (kind === "select") {
       var select = element("select", "control-select");
+      select.setAttribute("aria-label", port.name);
       for (var i = 0; i < port.control.variants.length; i += 1) {
         var option = element("option", "", port.control.variants[i]);
         option.value = namedKeyLiteral(port.control.index, port.control.variants[i]);
@@ -162,6 +164,7 @@
     } else {
       var field = element("input", "control-field");
       field.type = "text";
+      field.setAttribute("aria-label", port.name);
       field.value = displayedExpr;
       field.placeholder = "closed value literal";
       field.spellcheck = false;
@@ -191,6 +194,7 @@
       if (isBoundedQuantity || isBoundedInteger) {
         var slider = element("input", "control-slider");
         slider.type = "range";
+        slider.setAttribute("aria-label", port.name + " slider");
         var lower = isBoundedQuantity ? port.control.lower_si : integerLower;
         var upper = isBoundedQuantity ? port.control.upper_si : integerUpper;
         slider.min = String(lower);
@@ -491,6 +495,11 @@
       patchChecks(outcome.evaluation);
       patchFigures(outcome.evaluation);
       patchNotices(outcome.evaluation);
+      if (outcome.html) {
+        var provenance = new DOMParser().parseFromString(outcome.html, "text/html").getElementById("provenance");
+        var oldProvenance = document.getElementById("provenance");
+        if (provenance && oldProvenance) oldProvenance.replaceWith(provenance);
+      }
       setStatus(
         outcome.evaluation.has_errors ? "live · evaluation has errors" : "live",
         outcome.evaluation.has_errors ? "warn" : "ok",
@@ -502,7 +511,7 @@
         var control = controls.get(bindingError.name);
         if (control) control.setError(bindingError.message);
       }
-      setStatus("input rejected", "warn");
+      setStatus("input rejected · showing last successful evaluation", "warn");
     } else {
       setStatus("evaluation failed: " + outcome.message, "error");
     }
@@ -527,7 +536,12 @@
 
   function scheduleEvaluate() {
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(runEvaluate, DEBOUNCE_MS);
+    if (options.onPending) options.onPending();
+    setStatus("inputs changed · showing last successful evaluation", "warn");
+    debounceTimer = setTimeout(function () {
+      debounceTimer = null;
+      runEvaluate();
+    }, DEBOUNCE_MS);
   }
 
   function runEvaluate() {
@@ -539,10 +553,11 @@
       evaluateQueued = true;
       return;
     }
+    evaluateQueued = false;
     requestId += 1;
     activeRequest = requestId;
     setStatus("computing…", "busy");
-    timeoutTimer = setTimeout(function () {
+    if (!options.hostOwnsTimeout) timeoutTimer = setTimeout(function () {
       // Cancellation is worker teardown: a blocked evaluation cannot be
       // interrupted, so replace the whole engine and re-prepare.
       transport.terminate();
@@ -559,6 +574,19 @@
     if (msg.type === "ready") {
       ready = true;
       storedPorts = msg.ports;
+      if (options.initial) {
+        var initial = options.initial;
+        options.initial = null;
+        bannerText.textContent = "Parameter overrides are active. Source code is unchanged.";
+        resetButton.textContent = "Reset parameters";
+        buildControls(storedPorts, initial.evaluation);
+        initial.bindings.forEach(function (binding) {
+          var control = controls.get(binding.name);
+          if (control) { control.currentExpr = binding.expr; control.showValue(binding.expr); }
+        });
+        applyOutcome({ status: "evaluated", evaluation: initial.evaluation });
+        return;
+      }
       // The first evaluation (over the baseline bindings) both verifies the
       // static page and supplies the evaluated param values the controls
       // seed their literal expressions from.
@@ -573,8 +601,9 @@
       if (controls.size === 0 && msg.outcome.status === "evaluated") {
         buildControls(storedPorts, msg.outcome.evaluation);
       }
-      applyOutcome(msg.outcome);
-      if (evaluateQueued) {
+      // A control edit invalidates old results even before its debounce fires.
+      if (!evaluateQueued && !debounceTimer) applyOutcome(msg.outcome);
+      if (evaluateQueued && !debounceTimer) {
         evaluateQueued = false;
         runEvaluate();
       }
