@@ -17,7 +17,7 @@ use graphcal_eval::eval::{
     ProjectCompiler,
 };
 use graphcal_eval::host_fns::demo_registry;
-use graphcal_eval::loader::load_project;
+use graphcal_eval::loader::{LoaderBudget, load_project_with_dependency_sources};
 use serde::Serialize;
 
 use crate::PlaygroundRequest;
@@ -82,10 +82,13 @@ enum BrowserCapabilities {
 
 fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) -> PrepareOutcome {
     let filesystem = project.filesystem();
-    let loaded = match load_project(
+    let loaded = match load_project_with_dependency_sources(
         &project.entry_path(),
         Some(VirtualProject::root_path()),
         &filesystem,
+        project.dependency_sources(),
+        LoaderBudget::default(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     ) {
         Ok(loaded) => loaded,
         Err(error) => {

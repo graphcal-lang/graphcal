@@ -83,6 +83,7 @@ mod tests {
                 wasm: b"\0asm",
             },
             project: ProjectBundle {
+                dependencies: vec![],
                 entry: "main.gcl".to_string().try_into().unwrap(),
                 files: vec![graphcal_eval::project_bundle::BundleArtifact {
                     path: "main.gcl".to_string().try_into().unwrap(),

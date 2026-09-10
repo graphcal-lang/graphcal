@@ -280,6 +280,7 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
             wasm: b"\x00asm\x01\x00\x00\x00",
         },
         project: ProjectBundle {
+            dependencies: vec![],
             entry: "deltav.gcl".to_string().try_into().unwrap(),
             files: vec![BundleArtifact {
                 path: "deltav.gcl".to_string().try_into().unwrap(),

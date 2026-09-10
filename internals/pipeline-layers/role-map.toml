@@ -1468,6 +1468,16 @@ role = "loading"
 
 [[module]]
 package = "eval"
+path = ["project_bundle", "package_identity"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_sources"]
+role = "loading"
+
+[[module]]
+package = "eval"
 path = ["project_bundle", "binary"]
 role = "loading"
 

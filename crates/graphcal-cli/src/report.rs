@@ -274,17 +274,34 @@ fn source_digests(
     fs: &graphcal_io::RealFileSystem,
 ) -> Vec<SourceDigest> {
     let root_dir = project_root_dir(entry, root_override, fs);
+    let dependency_roots: std::collections::BTreeMap<_, _> = project
+        .package_closure()
+        .into_iter()
+        .flat_map(|closure| &closure.dependencies)
+        .map(|(id, dependency)| {
+            (
+                graphcal_compiler::dag_id::DagPackageId::new(id.as_str()),
+                dependency.root.as_path(),
+            )
+        })
+        .collect();
     let mut digests: Vec<SourceDigest> = project
         .files()
-        .values()
-        .map(|file| {
+        .iter()
+        .map(|(id, file)| {
             let path = file.path();
-            let name = relative_source_name(path, root_dir.as_deref()).unwrap_or_else(|| {
-                path.file_name().map_or_else(
-                    || path.display().to_string(),
-                    |name| name.to_string_lossy().into_owned(),
-                )
-            });
+            let scope = dependency_roots
+                .get(id.package())
+                .copied()
+                .or(root_dir.as_deref());
+            let relative =
+                relative_source_name(path, scope).unwrap_or_else(|| path.display().to_string());
+            // Rendering boundary only: identities remain typed in the bundle.
+            let name = if id.package() == project.root_id().package() {
+                relative
+            } else {
+                format!("{} / {relative}", id.package())
+            };
             let mut hasher = Sha256::new();
             hasher.update(file.source().as_bytes());
             SourceDigest {
@@ -392,27 +409,17 @@ fn hydration_project(
 ) -> Result<ProjectBundle, ReportError> {
     let root_dir = project_root_dir(&args.file, args.root.as_deref(), fs);
 
-    // The manifest drives module resolution in the browser exactly as on
-    // disk, so ship it when the project has one — but dependency-carrying
-    // projects are gated FIRST: locked-and-cached packages load from outside
-    // the project root, and the out-of-root diagnostic below would otherwise
-    // mask the actual reason hydration cannot work.
-    let manifest = metadata
-        .iter()
-        .find(|(path, _)| path.file_name().is_some_and(|name| name == "graphcal.toml"))
-        .map(|(_, content)| content);
-    if let Some(content) = &manifest {
-        match graphcal_package::parse_manifest_str(content) {
-            Ok(parsed) if !parsed.dependencies.is_empty() => {
-                return Err(ReportError::HydrationUnsupported {
-                    reason: "the project declares package dependencies, which the browser \
-                             engine cannot fetch"
-                        .to_string(),
-                });
-            }
-            Ok(_) | Err(_) => {}
-        }
-    }
+    let dependencies = project
+        .package_closure()
+        .into_iter()
+        .flat_map(|closure| &closure.dependencies)
+        .map(|(id, dependency)| {
+            graphcal_eval::project_bundle::BundlePackage::from_snapshot(
+                id.clone(),
+                &dependency.snapshot,
+            )
+        })
+        .collect::<Result<_, _>>()?;
 
     let entry_name = args
         .file
@@ -420,7 +427,11 @@ fn hydration_project(
         .ok()
         .and_then(|entry| relative_source_name(&entry, root_dir.as_deref()));
     let mut files = Vec::new();
-    for file in project.files().values() {
+    for (_, file) in project
+        .files()
+        .iter()
+        .filter(|(id, _)| id.package() == project.root_id().package())
+    {
         let Some(name) = relative_source_name(file.path(), root_dir.as_deref()) else {
             return Err(ReportError::HydrationUnsupported {
                 reason: format!(
@@ -447,7 +458,11 @@ fn hydration_project(
             content,
         });
     }
-    for (path, plugin) in project.plugins() {
+    for (path, plugin) in project
+        .plugins()
+        .iter()
+        .filter(|(identity, _)| identity.package() == Some(project.root_id().package()))
+    {
         let plugin = plugin
             .as_ref()
             .map_err(|error| ReportError::HydrationUnsupported {
@@ -461,7 +476,11 @@ fn hydration_project(
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
     let entry = entry_name.ok_or(BundleError::MissingEntry)?.try_into()?;
-    let bundle = ProjectBundle { entry, files };
+    let bundle = ProjectBundle {
+        entry,
+        files,
+        dependencies,
+    };
     // Apply exactly the browser's artifact policy before writing an interactive report.
     bundle.mount(Path::new("/report"))?;
     bundle.to_json()?;

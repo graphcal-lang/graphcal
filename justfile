@@ -94,6 +94,10 @@ report-browser-test:
 report-plugin-browser-test:
     GRAPHCAL_PLUGIN_BROWSER_TEST=1 cargo test --locked -p graphcal --test plugin_e2e scaffolded_plugin_builds_locks_and_evaluates -- --nocapture
 
+# Replay a deleted-checkout dependency report and exercise blocked-plugin recovery.
+report-package-browser-test:
+    GRAPHCAL_PACKAGE_BROWSER_TEST=1 cargo test --locked -p graphcal --test cli offline_dependency_reports -- --nocapture
+
 # Build a hydrated demo report with the embedded engine and drive its payload
 # through the prepared-project API under Node.
 report-smoke: wasm-report
