@@ -157,6 +157,74 @@ fn markdown_report_carries_values_checks_and_provenance() {
 }
 
 #[test]
+fn section_navigation_links_only_to_rendered_focusable_sections() {
+    for source in [
+        DELTA_V,
+        "node scalar: Dimensionless = 1.0;",
+        "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",
+        "param divisor: Dimensionless = 0.0; plot p = { mark: point, encode: { y: 1.0 / @divisor } };",
+    ] {
+        let html = render_report_html(&build_document(source), VegaScriptSource::Inline, None);
+        assert!(html.contains("<nav class=\"report-nav\" aria-label=\"Report sections\">"));
+        for id in [
+            "inputs",
+            "values",
+            "plots",
+            "checks",
+            "presentation",
+            "provenance",
+        ] {
+            assert_eq!(
+                html.contains(&format!("href=\"#{id}\"")),
+                html.contains(&format!("id=\"{id}\" tabindex=\"-1\"")),
+                "navigation/target mismatch for {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn structured_values_have_one_named_keyboard_scroll_region_without_losing_leaves() {
+    let document = build_document(include_str!("fixtures/report-layout.gcl"));
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    for name in [
+        "first",
+        "comparison_sample",
+        "samples",
+        "small",
+        "nested",
+        "wide",
+        "slices",
+        "heights",
+    ] {
+        let card = html
+            .split(&format!("data-decl=\"{name}\""))
+            .nth(1)
+            .unwrap()
+            .split("</article>")
+            .next()
+            .unwrap();
+        assert!(card.contains(&format!(
+            "class=\"value-scroll\" data-role=\"value\" role=\"region\" tabindex=\"0\" aria-label=\"{name} values\""
+        )));
+        assert_eq!(card.matches("data-role=\"value\"").count(), 1);
+    }
+    let samples = html
+        .split("data-decl=\"samples\"")
+        .nth(1)
+        .unwrap()
+        .split("</article>")
+        .next()
+        .unwrap();
+    assert_eq!(samples.matches("<tr>").count(), 64);
+    assert!(html.contains("deliberately_long_parent_field.deliberately_long_measurement_label"));
+    assert_eq!(
+        html,
+        render_report_html(&document, VegaScriptSource::Inline, None)
+    );
+}
+
+#[test]
 fn doc_captions_are_html_escaped() {
     let source = "\
 /// A <script>alert(1)</script> caption.

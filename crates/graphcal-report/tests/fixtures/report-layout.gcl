@@ -1,0 +1,29 @@
+// Synthetic, non-project data for static and hydrated report layout tests.
+pub type Sample {
+    Sample(deliberately_long_measurement_label: Dimensionless),
+}
+type Nested {
+    Nested(deliberately_long_parent_field: Sample),
+}
+param first: Sample = Sample(deliberately_long_measurement_label: 12.5);
+param comparison_sample: Sample = Sample(deliberately_long_measurement_label: 25.0);
+param gain: Dimensionless = 2.0;
+node total: Dimensionless = @first.deliberately_long_measurement_label * @gain;
+unit scaled_length: Length = (@gain) m;
+node displayed: Length = 6.0 m -> scaled_length;
+node samples: Dimensionless[Fin(64)] = for i: Fin(64) { @gain };
+node small: Dimensionless[Fin(3)] = for i: Fin(3) { @gain };
+node nested: Nested = Nested(deliberately_long_parent_field: @first);
+node wide: Dimensionless[Fin(2), Fin(32)] = for i: Fin(2) { for j: Fin(32) { @gain } };
+node slices: Dimensionless[Fin(2), Fin(2), Fin(32)] = for i: Fin(2) { for j: Fin(2) { for k: Fin(32) { @gain } } };
+index Category = { Alpha, Beta, Gamma };
+node heights: Dimensionless[Category] = {
+    Category#Alpha: 1.0,
+    Category#Beta: 2.0,
+    Category#Gamma: 3.0,
+};
+plot bars = {
+    mark: bar,
+    encode: { x: for c: Category { c }, y: @heights },
+};
+assert positive = @gain > 0.0;

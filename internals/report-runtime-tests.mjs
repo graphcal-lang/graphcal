@@ -118,6 +118,33 @@ for (const fixture of ["figure_basic", "layer_basic"]) {
 }
 console.log("Wasm figure transport: ordinary nested objects compile with vendored Vega-Lite");
 
+// Compile the real report projection, including scale-bound selections, against
+// the shipped renderer. Mixed categorical/continuous axes must not warn.
+for (const [x, y, encodings] of [
+  ["Category#Alpha", "2.0", ["y"]],
+  ["2.0", "Category#Alpha", ["x"]],
+  ["1.0", "2.0", ["x", "y"]],
+  ["Category#Alpha", "Category#Beta", []],
+  ['datetime("2026-01-01T00:00:00Z")', "2.0", ["x", "y"]],
+  ["Category#Alpha", 'datetime("2026-01-01T00:00:00Z")', ["y"]],
+]) {
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content:
+    `index Category = { Alpha, Beta }; plot p = { mark: point, encode: { x: ${x}, y: ${y} } };` }] };
+  const prepared = reportEngine.prepareProject(project);
+  for (const outcome of [reportEngine.evaluateProject(project), prepared.evaluateBindings([])]) {
+    assert.equal(outcome.status, "evaluated");
+    const spec = outcome.evaluation.figures[0].spec;
+    assert.deepEqual(spec.params?.[0].select.encodings ?? [], encodings);
+    const warnings = [];
+    vegaContext.console = { ...console, warn: (...args) => warnings.push(args) };
+    assert.ok(vegaContext.vegaLite.compile(spec).spec);
+    assert.deepEqual(warnings, []);
+  }
+  prepared.free();
+}
+vegaContext.console = console;
+console.log("pan/zoom: mixed, continuous, categorical and temporal projections compile without warnings");
+
 for (const [lower, upper, slider] of [
   ["0", "10", true], ["9007199254740990", "9007199254740991", true],
   ["-9007199254740991", "-9007199254740990", true],
@@ -182,7 +209,16 @@ try {
   const run = runtime(rankSource);
   function texts(element) { return [element.textContent, ...element.children.flatMap(texts)].filter(Boolean); }
   for (const declaration of run.evaluate()) {
-    const rendered = texts(run.api.renderView(declaration.outcome.body));
+    const view = run.api.renderView(declaration.outcome.body, declaration.name);
+    assert.equal(view["data-role"], "value");
+    if (declaration.outcome.body.kind !== "scalar") {
+      assert.equal(view.className, "value-scroll");
+      assert.equal(view.role, "region");
+      assert.equal(view.tabindex, "0");
+      assert.equal(view["aria-label"], declaration.name + " values");
+      assert.ok(view.children.every(child => child["data-role"] === undefined));
+    }
+    const rendered = texts(view);
     const card = html.split(`data-decl="${declaration.name}"`)[1].split("</article>")[0];
     const native = card.slice(card.indexOf("</h3>") + 5).replace(/<[^>]*>/g, "\n").split("\n").map(text => text.trim()).filter(Boolean);
     assert.deepEqual(rendered, native, `static/hydrated labels and leaves: ${declaration.name}`);

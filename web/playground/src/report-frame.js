@@ -16,6 +16,17 @@
 
 // The sandbox has an opaque origin. Only the configured parent can initialize it.
 window.addEventListener("DOMContentLoaded", () => {
+  // Fragment-only links in srcdoc otherwise resolve against the parent's URL,
+  // navigating away from this opaque report frame rather than within it.
+  document.querySelector(".report-nav")?.addEventListener("click", (event) => {
+    const link = event.target.closest("a");
+    if (!link) return;
+    const target = document.getElementById(link.getAttribute("href").slice(1));
+    if (!target) return;
+    event.preventDefault();
+    target.scrollIntoView();
+    target.focus({ preventScroll: true });
+  });
   const config = JSON.parse(document.getElementById("report-connection").textContent);
   const send = (message) =>
     parent.postMessage({ ...message, session: config.session }, config.origin);

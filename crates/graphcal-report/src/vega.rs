@@ -104,23 +104,32 @@ pub fn build_figures(
 /// (quantitative/temporal) — Vega-Lite requires selection params on child
 /// views for composed specs, and scale-bound intervals need a continuous
 /// scale to act on.
-pub(crate) fn add_pan_zoom(spec: &mut JsonValue) {
+pub fn add_pan_zoom(spec: &mut JsonValue) {
     if spec.get("mark").is_none() || spec.get("params").is_some() {
         return;
     }
-    let continuous = ["x", "y"].iter().any(|channel| {
-        spec.get("encoding")
-            .and_then(|encoding| encoding.get(channel))
-            .and_then(|channel_spec| channel_spec.get("type"))
-            .and_then(JsonValue::as_str)
-            .is_some_and(|kind| matches!(kind, "quantitative" | "temporal"))
-    });
-    if !continuous {
+    // This is the Vega-Lite JSON boundary, not Graphcal identifier dispatch.
+    // Project explicitly: an unrestricted interval also binds categorical axes.
+    let encodings: Vec<_> = ["x", "y"]
+        .into_iter()
+        .filter(|channel| {
+            spec.get("encoding")
+                .and_then(|encoding| encoding.get(channel))
+                .is_some_and(|encoding| {
+                    encoding
+                        .get("type")
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|kind| matches!(kind, "quantitative" | "temporal"))
+                        && matches!(encoding.get("bin"), None | Some(JsonValue::Bool(false)))
+                })
+        })
+        .collect();
+    if encodings.is_empty() {
         return;
     }
     spec["params"] = json!([{
         "name": "graphcal_pan_zoom",
-        "select": "interval",
+        "select": { "type": "interval", "encodings": encodings },
         "bind": "scales",
     }]);
 }
@@ -439,6 +448,56 @@ fn get_number_property<P: PartialEq>(properties: &[(P, PlotFieldValue)], prop: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pan_zoom_projects_only_unbinned_continuous_axes() {
+        for (x, y, expected) in [
+            ("nominal", "quantitative", json!(["y"])),
+            ("quantitative", "nominal", json!(["x"])),
+            ("quantitative", "quantitative", json!(["x", "y"])),
+            ("nominal", "ordinal", json!([])),
+            ("temporal", "quantitative", json!(["x", "y"])),
+            ("nominal", "temporal", json!(["y"])),
+        ] {
+            let mut spec = json!({"mark": "point", "encoding": {
+                "x": {"field": "x", "type": x}, "y": {"field": "y", "type": y}
+            }});
+            add_pan_zoom(&mut spec);
+            if expected == json!([]) {
+                assert!(spec.get("params").is_none());
+            } else {
+                assert_eq!(
+                    spec["params"][0],
+                    json!({
+                        "name": "graphcal_pan_zoom",
+                        "select": {"type": "interval", "encodings": expected},
+                        "bind": "scales"
+                    })
+                );
+            }
+        }
+        for bin in [json!(true), json!({"maxbins": 10}), json!("binned")] {
+            let mut spec = json!({"mark": "bar", "encoding": {
+                "x": {"field": "x", "type": "quantitative", "bin": bin},
+                "y": {"field": "y", "type": "quantitative", "bin": false}
+            }});
+            add_pan_zoom(&mut spec);
+            assert_eq!(spec["params"][0]["select"]["encodings"], json!(["y"]));
+        }
+    }
+
+    #[test]
+    fn pan_zoom_preserves_existing_params_and_skips_compositions_and_missing_axes() {
+        for mut spec in [
+            json!({"mark": "point"}),
+            json!({"layer": [], "encoding": {"x": {"type": "quantitative"}}}),
+            json!({"mark": "point", "params": [], "encoding": {"x": {"type": "quantitative"}}}),
+        ] {
+            let original = spec.clone();
+            add_pan_zoom(&mut spec);
+            assert_eq!(spec, original);
+        }
+    }
 
     #[test]
     fn vega_data_preserves_exact_int_boundary_and_datetime_nanoseconds() {

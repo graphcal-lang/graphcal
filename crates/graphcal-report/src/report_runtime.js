@@ -275,7 +275,6 @@
   // --- Result rendering ----------------------------------------------------
   function buildEntriesTable(entries) {
     var table = element("table", "entries");
-    table.setAttribute("data-role", "value");
     var body = document.createElement("tbody");
     for (var i = 0; i < entries.length; i += 1) {
       var row = document.createElement("tr");
@@ -327,7 +326,7 @@
 
   // Shape and leaf formatting come from the exact native report projection.
   // JavaScript is only the DOM shell for the shared ValueBody contract.
-  function renderView(view) {
+  function renderView(view, name) {
     var result;
     switch (view.kind) {
       case "scalar": result = element("p", "card-value", view.body); break;
@@ -342,6 +341,14 @@
         break;
       default: throw new Error("unknown report value body: " + view.kind);
     }
+    if (view.kind !== "scalar") {
+      var wrapper = element("div", "value-scroll");
+      wrapper.setAttribute("role", "region");
+      wrapper.setAttribute("tabindex", "0");
+      wrapper.setAttribute("aria-label", name + " values");
+      wrapper.appendChild(result);
+      result = wrapper;
+    }
     result.setAttribute("data-role", "value");
     return result;
   }
@@ -355,7 +362,7 @@
       if (!slot) continue;
       var replacement;
       if (declaration.outcome.status === "value") {
-        replacement = renderView(declaration.outcome.body);
+        replacement = renderView(declaration.outcome.body, declaration.name);
       } else {
         var error = declaration.outcome.error;
         var message =
@@ -365,7 +372,16 @@
         replacement = element("p", "error-chip", "ERROR: " + message);
         replacement.setAttribute("data-role", "value");
       }
-      slot.replaceWith(replacement);
+      if (slot.classList.contains("value-scroll") && replacement.classList.contains("value-scroll")) {
+        // Retain keyboard focus and the reader's position across recalculation.
+        var left = slot.scrollLeft;
+        var top = slot.scrollTop;
+        slot.replaceChildren(...replacement.childNodes);
+        slot.scrollLeft = left;
+        slot.scrollTop = top;
+      } else {
+        slot.replaceWith(replacement);
+      }
     }
   }
 
@@ -425,6 +441,7 @@
     if (!section) {
       section = element("section");
       section.id = "plots";
+      section.tabIndex = -1;
       section.appendChild(element("h2", "", "Plots"));
       document.querySelector("main").appendChild(section);
     }
@@ -473,11 +490,29 @@
     if (!section) {
       section = element("section");
       section.id = "presentation";
+      section.tabIndex = -1;
       document.querySelector("main").appendChild(section);
     }
+    section.hidden = evaluation.notices.length === 0;
     section.replaceChildren();
+    if (!section.hidden) section.appendChild(element("h2", "", "Presentation diagnostics"));
     for (var notice of evaluation.notices) {
       section.appendChild(element("p", "notice", notice.message));
+    }
+  }
+
+  function patchSectionNavigation() {
+    var list = document.querySelector('.report-nav ul');
+    if (!list) return;
+    list.replaceChildren();
+    for (var section of document.querySelectorAll('main > section[id], main > footer[id]')) {
+      var heading = section.querySelector('h2');
+      if (section.hidden || !heading) continue;
+      var item = element('li');
+      var link = element('a', '', heading.textContent);
+      link.setAttribute('href', '#' + section.id);
+      item.appendChild(link);
+      list.appendChild(item);
     }
   }
 
@@ -500,6 +535,7 @@
         var oldProvenance = document.getElementById("provenance");
         if (provenance && oldProvenance) oldProvenance.replaceWith(provenance);
       }
+      patchSectionNavigation();
       setStatus(
         outcome.evaluation.has_errors ? "live · evaluation has errors" : "live",
         outcome.evaluation.has_errors ? "warn" : "ok",

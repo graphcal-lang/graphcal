@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { once } from "node:events";
+import { testReportLayout } from "./report-layout-browser-tests.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 
 const temporary = mkdtempSync(join(tmpdir(), "graphcal-browser-"));
@@ -15,7 +16,7 @@ const chrome = process.env.GRAPHCAL_CHROME || "/Applications/Google Chrome.app/C
 const child = spawn(chrome, ["--headless", "--remote-debugging-port=0", `--user-data-dir=${join(temporary, "profile")}`, "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
 let socket;
 const exit = once(child, "exit");
-const watchdog = setTimeout(() => child.kill("SIGKILL"), 90000);
+const watchdog = setTimeout(() => child.kill("SIGKILL"), 180000);
 try {
   const endpoint = await new Promise((resolve, reject) => {
     child.once("error", reject);
@@ -27,33 +28,31 @@ try {
     });
     child.once("exit", code => reject(new Error(`Chrome exited: ${code}\n${log}`)));
   });
-  for (const initial of [0, 1]) {
-    const model = `param divisor: Dimensionless = ${initial}.0;
-plot curve = { mark: line, encode: { x: for i: Fin(2) { 1.0 }, y: for i: Fin(2) { 1.0 / @divisor } } };
-${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`;
-    const source = join(temporary, "main.gcl");
-    const output = join(temporary, `report-${initial}.html`);
-    writeFileSync(source, model);
-    const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
-    assert.equal(built.status, initial ? 0 : 1, built.stderr);
-    const target = await (await fetch(`http://${endpoint.host}/json/new?${encodeURIComponent(pathToFileURL(output).href)}`, { method: "PUT" })).json();
+  async function openReport(output, initScript = "") {
+    const target = await (await fetch(`http://${endpoint.host}/json/new?about:blank`, { method: "PUT" })).json();
     socket = new WebSocket(target.webSocketDebuggerUrl);
     await once(socket, "open");
+    const connection = socket;
+    const warnings = [];
+    const exceptions = [];
     let id = 0;
     const pending = new Map();
     socket.addEventListener("message", event => {
       const message = JSON.parse(event.data);
+      if (message.method === "Runtime.consoleAPICalled" && message.params.type === "warning") warnings.push(message.params.args);
+      if (message.method === "Runtime.exceptionThrown") exceptions.push(message.params.exceptionDetails);
       if (pending.has(message.id)) {
         const { resolve, reject } = pending.get(message.id);
         pending.delete(message.id);
         if (message.error) reject(new Error(JSON.stringify(message.error))); else resolve(message.result);
       }
     });
+    const command = (method, params = {}) => new Promise((resolve, reject) => {
+      pending.set(++id, { resolve, reject });
+      connection.send(JSON.stringify({ id, method, params }));
+    });
     const evaluate = async expression => {
-      const result = await new Promise((resolve, reject) => {
-        pending.set(++id, { resolve, reject });
-        socket.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true, timeout: 25000 } }));
-      });
+      const result = await command("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true, timeout: 25000 });
       assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
       return result.result.value;
     };
@@ -64,6 +63,28 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
       }
       throw new Error(`Timed out: ${expression}\n${await evaluate("document.body.innerText")}`);
     };
+    await command("Runtime.enable");
+    await command("Page.enable");
+    await command("Network.enable");
+    await command("Network.setBlockedURLs", { urls: ["http://*", "https://*"] });
+    if (initScript) await command("Page.addScriptToEvaluateOnNewDocument", { source: initScript });
+    await command("Page.navigate", { url: pathToFileURL(output).href });
+    return { command, evaluate, wait, warnings, exceptions, close: async () => {
+      connection.close();
+      socket = null;
+      await fetch(`http://${endpoint.host}/json/close/${target.id}`);
+    } };
+  }
+  for (const initial of [0, 1]) {
+    const model = `param divisor: Dimensionless = ${initial}.0;
+plot curve = { mark: line, encode: { x: for i: Fin(2) { 1.0 }, y: for i: Fin(2) { 1.0 / @divisor } } };
+${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`;
+    const source = join(temporary, "main.gcl");
+    const output = join(temporary, `report-${initial}.html`);
+    writeFileSync(source, model);
+    const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
+    assert.equal(built.status, initial ? 0 : 1, built.stderr);
+    const { evaluate, wait, close } = await openReport(output);
     const edit = async value => evaluate(`(() => { const field = document.querySelector('[data-decl="divisor"] .control-field'); field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', { bubbles: true })); })()`);
     const chart = `document.querySelector('figure[data-figure="curve"] canvas')`;
     const failure = `document.querySelector('figure[data-figure="curve"] .error-chip')`;
@@ -107,10 +128,9 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
     assert.equal(await evaluate(`Boolean(${chart})`), false);
     await evaluate("window.vegaEmbed = window.savedEmbed; document.querySelector('.modified-banner__reset').click()");
     await wait(initial ? chart : `${failure}?.textContent.includes('division by zero')`);
-    socket.close();
-    socket = null;
-    await fetch(`http://${endpoint.host}/json/close/${target.id}`);
+    await close();
   }
+  await testReportLayout({ temporary, openReport });
   console.log("Chrome: initial failure, success/failure/recovery, mixed plots, missing targets/assets, renderer rejection, late completion and reset passed");
 } finally {
   if (socket) socket.close();
