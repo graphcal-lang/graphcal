@@ -137,6 +137,20 @@ impl BoundedJsRequest {
     }
 }
 
+/// Validate the report's serialized envelope before copying it into linear memory.
+pub fn decode_report_bundle(
+    value: JsValue,
+) -> Result<graphcal_eval::project_bundle::ProjectBundle, JsValue> {
+    use graphcal_eval::project_bundle::{MAX_BUNDLE_JSON_BYTES, ProjectBundle};
+    let text = value
+        .dyn_into::<JsString>()
+        .map_err(|_| JsValue::from_str("expected report bundle JSON string"))?;
+    let text = BoundedJsString::<MAX_BUNDLE_JSON_BYTES>::new(text)
+        .map_err(|_| JsValue::from_str("report bundle exceeds JSON size limit"))?;
+    ProjectBundle::from_json(&text.into_string())
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct StringLimitExceeded;
 

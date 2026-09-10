@@ -1937,6 +1937,7 @@ dependencies = [
 name = "graphcal-eval"
 version = "0.0.1-alpha.30"
 dependencies = [
+ "base64 0.23.1",
  "graphcal-compiler",
  "graphcal-io",
  "graphcal-package",
@@ -2104,6 +2105,7 @@ dependencies = [
  "graphcal-eval",
  "graphcal-io",
  "graphcal-package",
+ "graphcal-plugin-host",
  "graphcal-report",
  "js-sys",
  "miette",
@@ -4590,7 +4592,6 @@ dependencies = [
  "wasmi_core",
  "wasmi_ir",
  "wasmparser 0.228.0",
- "wat",
 ]
 
 [[package]]

@@ -1604,7 +1604,8 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 172. `crates/graphcal-eval/src/domain_constraint.rs`
 173. `crates/graphcal-eval/src/domain_check.rs`
 174. `crates/graphcal-eval/src/import_surface.rs`
-175. `crates/graphcal-eval/src/package_cache.rs`
+175. `crates/graphcal-eval/src/package_cache.rs` and
+     `crates/graphcal-eval/src/project_bundle.rs` (bounded portable artifacts and virtual mounting; consumed by report assembly and browser preparation)
 176. `crates/graphcal-eval/src/project_compiler/template.rs`
 177. `crates/graphcal-eval/src/pipeline_metrics.rs`
 178. `crates/graphcal-eval/src/declaration_locations.rs`

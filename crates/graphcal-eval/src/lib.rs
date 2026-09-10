@@ -28,5 +28,6 @@ pub mod loader;
 pub mod package_cache;
 mod pipeline_metrics;
 pub mod presentation_evidence;
+pub mod project_bundle;
 pub mod project_compiler;
 pub(crate) mod runtime_presentation;

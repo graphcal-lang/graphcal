@@ -129,6 +129,22 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
     );
     localize_scaffold(&scaffold);
 
+    // Add a record result to exercise the same ABI through native and browser hosts.
+    let source_path = scaffold.join("src/lib.rs");
+    let source = std::fs::read_to_string(&source_path).unwrap();
+    std::fs::write(
+        &source_path,
+        source.replace(
+            "graphcal_plugin::plugin! {",
+            r"graphcal_plugin::plugin! {
+    fn bounds(x: Length) -> { lo: Length, hi: Length } {
+        BoundsOutput { lo: x, hi: x + 1.0 }
+    }
+",
+        ),
+    )
+    .unwrap();
+
     // --- cargo build --target wasm32-unknown-unknown
     let artifact = build_wasm(&scaffold, "e2e_kernels.wasm");
 
@@ -182,11 +198,15 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn checked_sqrt(x: Dimensionless) -> Dimensionless;
     fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+    fn bounds(x: Length) -> Bounds;
 }
 
+pub type Bounds { Bounds(lo: Length, hi: Length), }
 index Leg = { Ascent, Coast, Descent };
 
 param a: Length = 1.0 m;
+node bounds: Bounds = kernels::bounds(@a);
+node upper: Length = @bounds.hi;
 node mid: Length = kernels::lerp(@a, 3.0 m, 0.5);
 node bad: Dimensionless = kernels::checked_sqrt(-1.0);
 node fine: Dimensionless = kernels::checked_sqrt(9.0);
@@ -272,6 +292,40 @@ node ascent_share: Dimensionless = @dv_share[Leg#Ascent];
         .as_f64()
         .expect("ascent_share must evaluate");
     assert!((si - 0.75).abs() < 1e-12, "ascent_share = {si}");
+
+    // The same SDK binary must work inside the report's embedded browser engine.
+    let report = dir.path().join("plugins.report.html");
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(project.join("src/e2e/main.gcl"))
+        .arg("--output")
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "baseline contains a failed node"
+    );
+    assert!(
+        report.is_file(),
+        "report not written: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // No original project files remain available to the browser engine.
+    std::fs::remove_dir_all(&project).unwrap();
+    let output = Command::new("node")
+        .arg(repo_root().join("internals/report-plugin-smoke.mjs"))
+        .arg(&report)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "plugin browser replay failed: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
 #[test]

@@ -7167,6 +7167,68 @@ fn report_build_hydrated_rejects_package_dependencies() {
 }
 
 #[test]
+fn report_metadata_limits_preserve_large_valid_inputs_and_reject_io_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("project");
+    let main = write_package_project(&project, "", "node x: Dimensionless = 1.0;\n");
+    let manifest_path = project.join("graphcal.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        &manifest_path,
+        format!("{manifest}\n#{}\n", "x".repeat(4096)),
+    )
+    .unwrap();
+    let locked = graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(&project)
+        .env("GRAPHCAL_CACHE_DIR", directory.path().join("cache"))
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    let lock_path = project.join("graphcal.lock");
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    std::fs::write(
+        &lock_path,
+        format!("{lock}\n#{}\n", "x".repeat(2 * 1024 * 1024)),
+    )
+    .unwrap();
+    let engine = write_fake_engine(directory.path());
+    let build = || {
+        graphcal_bin()
+            .args(["report", "build"])
+            .arg(&main)
+            .arg("--engine-dir")
+            .arg(&engine)
+            .output()
+            .unwrap()
+    };
+    let output = build();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_file(&lock_path).unwrap();
+    std::fs::create_dir(&lock_path).unwrap();
+    let output = build();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not capture graphcal.lock"));
+    std::fs::remove_dir(&lock_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        format!("{manifest}\n#{}\n", "x".repeat(2 * 1024 * 1024)),
+    )
+    .unwrap();
+    let output = build();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not capture graphcal.toml"));
+}
+
+#[test]
 fn report_build_with_missing_engine_override_fails_with_recovery_path() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);

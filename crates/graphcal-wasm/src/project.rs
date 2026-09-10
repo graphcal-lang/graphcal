@@ -276,6 +276,30 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
 }
 
 impl VirtualProject {
+    pub fn from_bundle(
+        bundle: &graphcal_eval::project_bundle::ProjectBundle,
+    ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
+        // Until package-scoped bundle readers exist, never let a bundle select
+        // the native cache-backed loader (this API is also callable natively).
+        for artifact in &bundle.files {
+            match &artifact.content {
+                graphcal_eval::project_bundle::ArtifactContent::Manifest(text)
+                    if graphcal_package::parse_manifest_str(text)
+                        .is_ok_and(|manifest| !manifest.dependencies.is_empty()) =>
+                {
+                    return Err(
+                        graphcal_eval::project_bundle::BundleError::PackageDependenciesUnsupported,
+                    );
+                }
+                _ => {}
+            }
+        }
+        let filesystem = bundle.mount(Self::root_path())?;
+        let entry = ProjectFilePath::parse(bundle.entry.as_str())
+            .map_err(|_| graphcal_eval::project_bundle::BundleError::MissingEntry)?;
+        Ok(Self { entry, filesystem })
+    }
+
     pub fn entry_path(&self) -> PathBuf {
         self.entry.absolute().clone().into_path_buf()
     }
@@ -367,6 +391,8 @@ pub enum ProjectValidationError {
     PackageDependenciesUnsupported,
     #[error("WASM and host-function plugins are not supported in the browser playground")]
     PluginsUnsupported,
+    #[error("invalid report bundle: {message}")]
+    InvalidBundle { message: String },
 }
 
 /// Browser-facing rejection details for an invalid or unsupported project.
@@ -403,6 +429,7 @@ pub enum RequestErrorKind {
     ProjectTooLarge,
     PackageDependenciesUnsupported,
     PluginsUnsupported,
+    InvalidBundle,
 }
 
 impl From<&ProjectValidationError> for RequestErrorKind {
@@ -424,6 +451,7 @@ impl From<&ProjectValidationError> for RequestErrorKind {
                 Self::PackageDependenciesUnsupported
             }
             ProjectValidationError::PluginsUnsupported => Self::PluginsUnsupported,
+            ProjectValidationError::InvalidBundle { .. } => Self::InvalidBundle,
         }
     }
 }
@@ -664,6 +692,24 @@ mod tests {
                 path: "module.gcl/child.gcl".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn report_bundle_cannot_select_the_native_package_cache() {
+        use graphcal_eval::project_bundle::{
+            ArtifactContent, BundleArtifact, BundleError, ProjectBundle,
+        };
+        let bundle = ProjectBundle {
+            entry: "main.gcl".to_string().try_into().unwrap(),
+            files: vec![
+                BundleArtifact { path: "main.gcl".to_string().try_into().unwrap(), content: ArtifactContent::Source(String::new()) },
+                BundleArtifact { path: "graphcal.toml".to_string().try_into().unwrap(), content: ArtifactContent::Manifest("[package]\nname = 'demo'\n[dependencies]\nunits = { git = 'https://example.com/units', rev = '1111111111111111111111111111111111111111' }\n".to_string()) },
+            ],
+        };
+        assert!(matches!(
+            VirtualProject::from_bundle(&bundle),
+            Err(BundleError::PackageDependenciesUnsupported)
+        ));
     }
 
     #[test]

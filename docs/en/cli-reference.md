@@ -641,10 +641,21 @@ installation step. Graphcal developers can override it with `--engine-dir` or
 explicit override fails rather than silently using a different engine;
 `--static` builds a non-interactive report without embedding the engine.
 
-Models the browser engine cannot run — plugin imports, package
-dependencies — fail loudly at build time with the reason; build them with
-`--static` instead (the baseline is still computed natively, plugins
-included).
+**Plugin imports.** Interactive reports embed root-project Wasm plugins together
+with their manifest and lockfile. They run offline using the same metered
+interpreter as native evaluation: signature checks, lockfile pins, fuel limits,
+and isolated calls remain enforced. No plugin can access the filesystem or
+network. Sharing the HTML discloses the embedded model sources and plugin binaries.
+The text-only playground editor does not accept these binary bundles.
+
+Report bundles allow at most 4096 artifacts, 16 MiB per artifact, and 64 MiB of
+decoded content (96 MiB for the JSON envelope). Existing loader and plugin limits
+also apply. Invalid or oversized bundles fail explicitly instead of silently
+becoming static reports.
+
+Package dependencies are not yet supported in interactive reports and fail
+explicitly at build time. Use `--static` for those models; their baseline is
+still computed natively, including plugins.
 
 Options:
 

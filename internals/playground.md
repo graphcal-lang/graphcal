@@ -64,7 +64,7 @@ Existing tutorial assets remain static downloads and multi-file regression input
 
 `internals/site-assemble.mjs` assembles the standalone app after Zensical's clean
 build. `site-verify.mjs` checks the CNAME, root redirect, both apps, source asset
-identity, a 5.25 MiB raw Wasm budget, and a 600 KiB raw entry-JavaScript budget.
+identity, a 6.5 MiB raw Wasm budget (including the shared metered plugin interpreter), and a 600 KiB raw entry-JavaScript budget.
 The HTML report renderer and SHA-256 provenance add about 70 KiB to the engine;
 the host-rendering API avoids linking the standalone chart bundles into Wasm.
 Vega bundles are vendored from `graphcal-report` and loaded only for figures.

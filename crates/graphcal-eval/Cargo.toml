@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+base64.workspace = true
 graphcal-compiler = { workspace = true }
 graphcal-io = { workspace = true }
 graphcal-package = { workspace = true }
@@ -21,6 +22,8 @@ miette.workspace = true
 num-rational = "0.4.2"
 num-traits = "0.2.19"
 petgraph = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
