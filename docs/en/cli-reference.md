@@ -641,21 +641,41 @@ installation step. Graphcal developers can override it with `--engine-dir` or
 explicit override fails rather than silently using a different engine;
 `--static` builds a non-interactive report without embedding the engine.
 
-**Plugin imports.** Interactive reports embed root-project Wasm plugins together
-with their manifest and lockfile. They run offline using the same metered
+**Plugins and dependencies.** Interactive reports embed root-project and
+dependency-owned Wasm plugins, manifests, and the validated lockfile. They run
+offline using the same metered
 interpreter as native evaluation: signature checks, lockfile pins, fuel limits,
 and isolated calls remain enforced. No plugin can access the filesystem or
-network. Sharing the HTML discloses the embedded model sources and plugin binaries.
-The text-only playground editor does not accept these binary bundles.
+network. The text-only playground editor does not accept these binary bundles.
 
-Report bundles allow at most 4096 artifacts, 16 MiB per artifact, and 64 MiB of
+The complete locked dependency closure is embedded as isolated package snapshots,
+including transitive dependencies and multiple versions. Aliases, versions, and
+edges are preserved without rewriting imports. Each package retains its own
+plugin policy. Opening the report never fetches packages or reads a native cache;
+it works after the original checkout and cache have been deleted. Build the lock
+with `graphcal deps lock` before creating a report.
+
+Dependency snapshots preserve every hashed byte: manifest, source directory
+(including auxiliary data), and imported Wasm files outside that directory.
+The browser revalidates the graph, hashes, artifact paths, and resource budgets
+before registering plugins. Missing, extra, or changed dependency artifacts fail
+closed. These consistency checks are not a publisher signature: someone who
+can replace the HTML can also replace its embedded lockfile.
+
+Sharing the HTML discloses root sources, complete dependency snapshots, plugin
+binaries, package metadata, and baseline parameter values. Review the artifact
+before distributing it; use synthetic fixtures for diagnostics and issue reports.
+
+Report bundles allow at most 1024 dependency packages and 4096 artifacts across
+all packages, 16 MiB per artifact, and 64 MiB of
 decoded content (96 MiB for the JSON envelope). Existing loader and plugin limits
 also apply. Invalid or oversized bundles fail explicitly instead of silently
 becoming static reports.
 
-Package dependencies are not yet supported in interactive reports and fail
-explicitly at build time. Use `--static` for those models; their baseline is
-still computed natively, including plugins.
+A worker deadline cancels blocked evaluation by replacing the entire worker;
+subsequent valid edits can restart evaluation. No resource policy is silently
+clamped and no unsupported model silently becomes static. Use `--static` only
+when you intentionally want a non-interactive baseline.
 
 Options:
 

@@ -1762,11 +1762,36 @@ pub fn load_project_with_budget_and_cancellation<F: FileSystemReader>(
     budget: LoaderBudget,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
+    load_project_with_dependency_sources(
+        root_path,
+        project_root_override,
+        fs,
+        crate::package_sources::DependencySources::NativeCache,
+        budget,
+        cancellation,
+    )
+}
+
+/// Load with explicit dependency authority. Embedded authority cannot access the
+/// native package cache and must supply exactly the validated locked closure.
+///
+/// # Errors
+/// Reports missing, extra, or unauthenticated packages, malformed sources,
+/// budget exhaustion, and cancellation through the normal compiler diagnostics.
+pub fn load_project_with_dependency_sources<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+    sources: crate::package_sources::DependencySources<'_>,
+    budget: LoaderBudget,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<LoadedProject, CompileError> {
     let mut budget = LoaderBudgetState::new(budget);
     load_project_with_budget_state(
         root_path,
         project_root_override,
         fs,
+        sources,
         &mut budget,
         cancellation,
     )
@@ -1776,6 +1801,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     root_path: &Path,
     project_root_override: Option<&Path>,
     fs: &F,
+    sources: crate::package_sources::DependencySources<'_>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
@@ -1810,9 +1836,16 @@ fn load_project_with_budget_state<F: FileSystemReader>(
             &project_root,
             package_manifest.clone(),
             fs,
+            sources,
             budget,
             cancellation,
         );
+    }
+    if matches!(sources, crate::package_sources::DependencySources::Embedded(packages) if !packages.is_empty())
+    {
+        return Err(loader_manifest_error(
+            "embedded packages were supplied but the root has no dependencies",
+        ));
     }
     let package_id = match manifest.as_ref() {
         Some(package_manifest) => DagPackageId::new(package_manifest.name.as_str()),
@@ -1927,13 +1960,20 @@ fn load_locked_package_project<F: FileSystemReader>(
     project_root: &Path,
     root_manifest: PackageManifest,
     fs: &F,
+    sources: crate::package_sources::DependencySources<'_>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
     cancellation.checkpoint()?;
     let root_policy = root_manifest.plugin_execution_policy.clone();
-    let context =
-        PackageLoadContext::from_lockfile(project_root, root_manifest, fs, budget, cancellation)?;
+    let context = PackageLoadContext::from_lockfile(
+        project_root,
+        root_manifest,
+        fs,
+        sources,
+        budget,
+        cancellation,
+    )?;
     let root_package = context.graph.root().clone();
     let mut plugin_call_policy =
         PluginCallPolicy::from_manifest(&root_policy, &DagPackageId::new(root_package.as_str()));
@@ -2018,6 +2058,7 @@ impl<'a> PackageLoadContext<'a> {
         project_root: &Path,
         root_manifest: PackageManifest,
         fs: &'a dyn FileSystemReader,
+        sources: crate::package_sources::DependencySources<'_>,
         budget: &mut LoaderBudgetState,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
@@ -2036,39 +2077,20 @@ impl<'a> PackageLoadContext<'a> {
         let validated = lockfile
             .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
-        let cache_root = package_cache_root().map_err(loader_manifest_error)?;
-        let canonical_project_root = fs.canonicalize(project_root).map_err(|error| {
-            loader_manifest_error(format!(
-                "could not canonicalize root package `{}`: {error}",
-                project_root.display()
-            ))
-        })?;
-        let mut roots = BTreeMap::new();
-        let mut native_readers = BTreeMap::new();
-
-        for package in validated.packages() {
-            cancellation.checkpoint()?;
-            let candidate = source_root_candidate(project_root, &cache_root, package);
-            if &package.id == validated.root() {
-                let canonical = fs
-                    .canonicalize(&candidate)
-                    .map_err(|error| source_root_error(package, &candidate, &error))?;
-                if !canonical.starts_with(&canonical_project_root) {
-                    return Err(loader_manifest_error(format!(
-                        "locked root package `{}` resolves outside project root `{}`",
-                        canonical.display(),
-                        canonical_project_root.display()
-                    )));
-                }
-                roots.insert(package.id.clone(), canonical);
-            } else {
-                let reader = RealFileSystem::rooted(&candidate)
-                    .map_err(|error| source_root_error(package, &candidate, &error))?;
-                let canonical = reader
-                    .canonicalize(&candidate)
-                    .map_err(|error| source_root_error(package, &candidate, &error))?;
-                roots.insert(package.id.clone(), canonical);
-                native_readers.insert(package.id.clone(), reader);
+        let canonical_project_root = fs
+            .canonicalize(project_root)
+            .map_err(loader_manifest_error)?;
+        let mut roots = BTreeMap::from([(validated.root().clone(), canonical_project_root)]);
+        if let crate::package_sources::DependencySources::Embedded(packages) = sources {
+            let expected: std::collections::BTreeSet<_> = validated
+                .packages()
+                .filter(|package| &package.id != validated.root())
+                .map(|package| &package.id)
+                .collect();
+            if expected != packages.keys().collect() {
+                return Err(loader_manifest_error(
+                    "embedded package identities must exactly match the locked dependency closure",
+                ));
             }
         }
 
@@ -2080,19 +2102,14 @@ impl<'a> PackageLoadContext<'a> {
             if &package.id == validated.root() {
                 continue;
             }
-            let root = roots.get(&package.id).ok_or_else(|| {
-                loader_manifest_error(format!(
-                    "lockfile package `{}` has no approved source root",
-                    package.id
-                ))
-            })?;
-            let reader = native_readers.get(&package.id).ok_or_else(|| {
-                loader_manifest_error(format!(
-                    "lockfile package `{}` has no filesystem capability",
-                    package.id
-                ))
-            })?;
-            let verified = load_verified_dependency(root, package, reader, budget, cancellation)?;
+            let verified = capture_dependency_from_authority(
+                project_root,
+                package,
+                sources,
+                budget,
+                cancellation,
+            )?;
+            roots.insert(package.id.clone(), verified.dependency.root.clone());
             dependencies.insert(package.id.clone(), verified.dependency);
             dependency_readers.insert(package.id.clone(), verified.filesystem);
             manifests.insert(package.id.clone(), verified.manifest);
@@ -2567,6 +2584,57 @@ fn source_root_error(
             package.id,
             candidate.display()
         )),
+    }
+}
+
+fn capture_dependency_from_authority(
+    project_root: &Path,
+    package: &LockedPackage,
+    sources: crate::package_sources::DependencySources<'_>,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<VerifiedDependency, CompileError> {
+    match sources {
+        crate::package_sources::DependencySources::NativeCache => {
+            let cache = package_cache_root().map_err(loader_manifest_error)?;
+            let candidate = source_root_candidate(project_root, &cache, package);
+            let reader = RealFileSystem::rooted(&candidate)
+                .map_err(|error| source_root_error(package, &candidate, &error))?;
+            let root = reader
+                .canonicalize(&candidate)
+                .map_err(|error| source_root_error(package, &candidate, &error))?;
+            load_verified_dependency(&root, package, &reader, budget, cancellation)
+        }
+        crate::package_sources::DependencySources::Embedded(packages) => {
+            let embedded = packages.get(&package.id).ok_or_else(|| {
+                loader_manifest_error(format!("missing embedded package `{}`", package.id))
+            })?;
+            let verified = load_verified_dependency(
+                &embedded.root,
+                package,
+                &embedded.filesystem,
+                budget,
+                cancellation,
+            )?;
+            let expected: std::collections::BTreeSet<_> = verified
+                .dependency
+                .snapshot
+                .files()
+                .map(|(path, _)| embedded.root.join(path))
+                .collect();
+            let supplied: std::collections::BTreeSet<_> = embedded
+                .filesystem
+                .file_paths()
+                .map(|path| path.as_path().to_path_buf())
+                .collect();
+            if expected != supplied {
+                return Err(loader_manifest_error(format!(
+                    "embedded package `{}` contains files outside its authenticated closure",
+                    package.id
+                )));
+            }
+            Ok(verified)
+        }
     }
 }
 
@@ -3545,6 +3613,7 @@ path = "{escaped_outside}"
             project.path(),
             root_manifest,
             &file_system,
+            crate::package_sources::DependencySources::NativeCache,
             &mut budget,
             &cancellation,
         );

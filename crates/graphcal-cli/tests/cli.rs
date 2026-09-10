@@ -6445,7 +6445,127 @@ fn scale_plugin_wasm(factor: u32) -> Vec<u8> {
             result: scalar.into(),
         }],
     };
-    manifest.embed_into(&wat::parse_str(format!(r#"(module (func (export "scale") (param f64) (result f64) local.get 0 f64.const {factor} f64.mul))"#)).unwrap()).unwrap()
+    manifest.embed_into(&wat::parse_str(format!(r#"(module (func (export "scale") (param f64) (result f64) local.get 0 f64.const 0 f64.lt if loop $blocked br $blocked end end local.get 0 f64.const {factor} f64.mul))"#)).unwrap()).unwrap()
+}
+
+#[cfg(unix)]
+fn dependency_report_fixture(
+    directory: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let kernels = directory.join("kernels");
+    create_git_package(
+        &kernels,
+        "kernels",
+        "import plugin \"plugins/kernel.wasm\" as k { fn scale(x: Dimensionless) -> Dimensionless; }\nparam x: Dimensionless = 1.0; pub node result: Dimensionless = k::scale(@x);\n",
+    );
+    let manifest_path = kernels.join("graphcal.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        format!("{manifest}\n[plugins]\nfuel_per_call = 2000000000\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(kernels.join("plugins")).unwrap();
+    std::fs::write(kernels.join("src/checksum.dat"), [0, 255, 17, 33]).unwrap();
+    std::fs::write(kernels.join("plugins/kernel.wasm"), scale_plugin_wasm(2)).unwrap();
+    let first = commit_git_repo(&kernels, "first plugin");
+    std::fs::write(kernels.join("plugins/kernel.wasm"), scale_plugin_wasm(3)).unwrap();
+    let second = commit_git_repo(&kernels, "second plugin");
+    let remote = test_remote_git_url(&kernels);
+    let bridge = directory.join("bridge");
+    create_git_package(
+        &bridge,
+        "bridge",
+        "param x: Dimensionless = 1.0;\ninclude kernels.lib(x: @x)::{ result as scaled };\npub node result: Dimensionless = @scaled;\n",
+    );
+    let manifest = bridge.join("graphcal.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        manifest,
+        format!("{text}\n[dependencies]\nkernels = {{ git = '{remote}', rev = '{first}' }}\n"),
+    )
+    .unwrap();
+    let revision = commit_git_repo(&bridge, "bridge to first plugin");
+    let bridge_remote = test_remote_git_url(&bridge);
+    let project = directory.join("app");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "[dependencies]\nfirst = {{ package = 'bridge', git = '{bridge_remote}', rev = '{revision}' }}\nsecond = {{ package = 'kernels', git = '{remote}', rev = '{second}' }}\n"
+        ),
+        "param input: Dimensionless = 4.0;\ninclude first.lib(x: @input)::{ result as first };\ninclude second.lib(x: @input)::{ result as later_result };\n",
+    );
+    let cache = directory.join("cache");
+    let locked = graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(&project)
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    (main, cache)
+}
+
+#[cfg(unix)]
+#[test]
+fn offline_dependency_reports_preserve_transitive_plugins_and_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let checkout = directory.path().join("checkout");
+    std::fs::create_dir(&checkout).unwrap();
+    let (main, cache) = dependency_report_fixture(&checkout);
+    let report = directory.path().join("offline.html");
+    let native = graphcal_bin()
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .arg("eval")
+        .arg(&main)
+        .args(["--format", "json"])
+        .output()
+        .unwrap();
+    assert!(
+        native.status.success(),
+        "{}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let values: serde_json::Value = serde_json::from_slice(&native.stdout).unwrap();
+    assert_eq!(values["node"]["first"]["si_value"], 8.0);
+    assert_eq!(values["node"]["later_result"]["si_value"], 12.0);
+    let build = || {
+        let output = graphcal_bin()
+            .env("GRAPHCAL_CACHE_DIR", &cache)
+            .args(["report", "build"])
+            .arg(&main)
+            .arg("--output")
+            .arg(&report)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    build();
+    let first = std::fs::read(&report).unwrap();
+    build();
+    assert!(
+        first == std::fs::read(&report).unwrap(),
+        "bundle construction must be deterministic"
+    );
+    std::fs::remove_dir_all(checkout).unwrap();
+    let output = std::process::Command::new("node")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../internals/report-package-smoke.mjs"))
+        .arg(&report)
+        .output()
+        .expect("Node is required for report engine tests");
+    assert!(
+        output.status.success(),
+        "offline package report failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -6899,6 +7019,9 @@ fn report_build_provenance_pins_source_digest_and_parameter_baseline() {
     );
     let html = std::fs::read_to_string(&html_path).unwrap();
 
+    // Root sources keep project-relative names, without a package prefix.
+    assert!(html.contains("<li><code>deltav.gcl</code> <span class=\"sha\">"));
+
     // The digest is the real SHA-256 of the source, rendered as lowercase hex.
     let mut hasher = Sha256::new();
     hasher.update(REPORT_MODEL.as_bytes());
@@ -7214,9 +7337,8 @@ fn report_build_hydrated_ships_dependency_free_manifest() {
 
 #[cfg(unix)]
 #[test]
-fn report_build_hydrated_rejects_package_dependencies() {
-    // Locked-and-cached git dependencies evaluate natively, but the browser
-    // engine cannot fetch them: the hydrated build must refuse loudly.
+fn report_build_hydrated_embeds_package_dependencies() {
+    // Dependency sources ship inside isolated package snapshots, not fetched.
     let dir = tempfile::tempdir().unwrap();
     let dep_repo = dir.path().join("units-repo");
     let dep_rev = create_git_package(
@@ -7254,10 +7376,21 @@ fn report_build_hydrated_rejects_package_dependencies() {
         .env("GRAPHCAL_CACHE_DIR", &cache)
         .output()
         .expect("failed to run graphcal");
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("package dependencies"), "stderr: {stderr}");
-    assert!(stderr.contains("--static"), "stderr: {stderr}");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(main.with_extension("report.html")).unwrap();
+    let payload = html
+        .split_once("<script id=\"graphcal-project\" type=\"application/json\">")
+        .unwrap()
+        .1
+        .split_once("</script>")
+        .unwrap()
+        .0;
+    let bundle = graphcal_eval::project_bundle::ProjectBundle::from_json(payload).unwrap();
+    assert_eq!(bundle.dependencies.len(), 1);
 
     // The same project builds statically: the baseline is computed natively.
     let html_path = dir.path().join("out.html");

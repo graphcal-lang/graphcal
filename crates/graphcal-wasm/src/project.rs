@@ -219,6 +219,10 @@ struct VirtualFile {
 pub struct VirtualProject {
     entry: ProjectFilePath,
     filesystem: InMemoryFileSystem,
+    dependencies: std::collections::BTreeMap<
+        graphcal_package::PackageInstanceId,
+        graphcal_eval::package_sources::EmbeddedPackage,
+    >,
 }
 
 impl TryFrom<PlaygroundRequest> for VirtualProject {
@@ -271,7 +275,11 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
                 })?;
         }
 
-        Ok(Self { entry, filesystem })
+        Ok(Self {
+            entry,
+            filesystem,
+            dependencies: std::collections::BTreeMap::new(),
+        })
     }
 }
 
@@ -279,25 +287,20 @@ impl VirtualProject {
     pub fn from_bundle(
         bundle: &graphcal_eval::project_bundle::ProjectBundle,
     ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
-        // Until package-scoped bundle readers exist, never let a bundle select
-        // the native cache-backed loader (this API is also callable natively).
-        for artifact in &bundle.files {
-            match &artifact.content {
-                graphcal_eval::project_bundle::ArtifactContent::Manifest(text)
-                    if graphcal_package::parse_manifest_str(text)
-                        .is_ok_and(|manifest| !manifest.dependencies.is_empty()) =>
-                {
-                    return Err(
-                        graphcal_eval::project_bundle::BundleError::PackageDependenciesUnsupported,
-                    );
-                }
-                _ => {}
-            }
-        }
-        let filesystem = bundle.mount(Self::root_path())?;
+        let mounted = bundle.mount(Self::root_path())?;
         let entry = ProjectFilePath::parse(bundle.entry.as_str())
             .map_err(|_| graphcal_eval::project_bundle::BundleError::MissingEntry)?;
-        Ok(Self { entry, filesystem })
+        Ok(Self {
+            entry,
+            filesystem: mounted.filesystem,
+            dependencies: mounted.dependencies,
+        })
+    }
+
+    pub const fn dependency_sources(
+        &self,
+    ) -> graphcal_eval::package_sources::DependencySources<'_> {
+        graphcal_eval::package_sources::DependencySources::Embedded(&self.dependencies)
     }
 
     pub fn entry_path(&self) -> PathBuf {
@@ -696,19 +699,18 @@ mod tests {
 
     #[test]
     fn report_bundle_cannot_select_the_native_package_cache() {
-        use graphcal_eval::project_bundle::{
-            ArtifactContent, BundleArtifact, BundleError, ProjectBundle,
-        };
+        use graphcal_eval::project_bundle::{ArtifactContent, BundleArtifact, ProjectBundle};
         let bundle = ProjectBundle {
-            entry: "main.gcl".to_string().try_into().unwrap(),
+            dependencies: vec![],
+            entry: "src/demo.gcl".to_string().try_into().unwrap(),
             files: vec![
-                BundleArtifact { path: "main.gcl".to_string().try_into().unwrap(), content: ArtifactContent::Source(String::new()) },
+                BundleArtifact { path: "src/demo.gcl".to_string().try_into().unwrap(), content: ArtifactContent::Source(String::new()) },
                 BundleArtifact { path: "graphcal.toml".to_string().try_into().unwrap(), content: ArtifactContent::Manifest("[package]\nname = 'demo'\n[dependencies]\nunits = { git = 'https://example.com/units', rev = '1111111111111111111111111111111111111111' }\n".to_string()) },
             ],
         };
         assert!(matches!(
-            VirtualProject::from_bundle(&bundle),
-            Err(BundleError::PackageDependenciesUnsupported)
+            crate::prepared::prepare_bundle(&bundle),
+            crate::prepared::PrepareOutcome::CompileError { diagnostics } if diagnostics.iter().any(|diagnostic| diagnostic.message.contains("graphcal.lock"))
         ));
     }
 

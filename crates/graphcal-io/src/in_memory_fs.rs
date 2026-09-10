@@ -197,6 +197,12 @@ impl InMemoryFileSystem {
         Ok(())
     }
 
+    /// Enumerate the exact file identities supplied by this capability, without
+    /// cloning or exposing their contents. Directory entries are implicit.
+    pub fn file_paths(&self) -> impl Iterator<Item = &VirtualAbsolutePath> {
+        self.files.keys()
+    }
+
     fn contains(&self, path: &VirtualAbsolutePath) -> bool {
         self.files.contains_key(path)
     }

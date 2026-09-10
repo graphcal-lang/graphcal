@@ -49,6 +49,8 @@ jobs:
       - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
       - name: Verify offline SDK plugin reports in all browser engines
         run: just report-plugin-browser-test
+      - name: Verify offline dependency reports and worker cancellation
+        run: just report-package-browser-test
       - name: Upload browser failure traces
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

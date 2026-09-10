@@ -30,11 +30,32 @@ pub struct EngineBundle<'a> {
 
 /// Everything the hydration layer embeds into the page.
 pub struct Hydration<'a> {
-    pub engine: EngineBundle<'a>,
-    pub project: ProjectBundle,
+    engine: EngineBundle<'a>,
+    project_json: String,
     /// Baseline binding expressions from build-time `--param` arguments,
     /// replayed as the initial reader-visible values.
-    pub baseline_bindings: Vec<(String, String)>,
+    baseline_bindings: Vec<(String, String)>,
+}
+
+impl<'a> Hydration<'a> {
+    /// Freeze the final HTML-escaped wire payload. Escaping can expand source
+    /// bytes, so the browser's envelope limit must be checked after this step.
+    ///
+    /// # Errors
+    /// Returns a bundle error when serialization or the encoded size limit fails.
+    pub fn new(
+        engine: EngineBundle<'a>,
+        project: &ProjectBundle,
+        baseline_bindings: Vec<(String, String)>,
+    ) -> Result<Self, graphcal_eval::project_bundle::BundleError> {
+        let project_json = escape_json_for_script(&project.to_json()?);
+        ProjectBundle::check_json_size(project_json.len())?;
+        Ok(Self {
+            engine,
+            project_json,
+            baseline_bindings,
+        })
+    }
 }
 
 /// Render the payload block appended to the page body: project request,
@@ -44,7 +65,6 @@ pub struct Hydration<'a> {
 /// elements; JSON payloads are escaped for script embedding.
 #[must_use]
 pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
-    let project = json!(hydration.project);
     let baseline = json!(
         hydration
             .baseline_bindings
@@ -62,7 +82,7 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
             "<script>{runtime}</script>\n",
             "<script>{standalone}</script>\n",
         ),
-        project = escape_json_for_script(&project.to_string()),
+        project = hydration.project_json,
         baseline = escape_json_for_script(&baseline.to_string()),
         glue = engine.encode(hydration.engine.glue_js),
         wasm = engine.encode(hydration.engine.wasm),
@@ -77,12 +97,13 @@ mod tests {
 
     #[test]
     fn payload_escapes_script_closing_sequences_in_sources() {
-        let hydration = Hydration {
-            engine: EngineBundle {
+        let hydration = Hydration::new(
+            EngineBundle {
                 glue_js: "var wasm_bindgen;",
                 wasm: b"\0asm",
             },
-            project: ProjectBundle {
+            &ProjectBundle {
+                dependencies: vec![],
                 entry: "main.gcl".to_string().try_into().unwrap(),
                 files: vec![graphcal_eval::project_bundle::BundleArtifact {
                     path: "main.gcl".to_string().try_into().unwrap(),
@@ -92,12 +113,39 @@ mod tests {
                     ),
                 }],
             },
-            baseline_bindings: vec![("x".to_string(), "2.0".to_string())],
-        };
+            vec![("x".to_string(), "2.0".to_string())],
+        )
+        .unwrap();
         let block = render_hydration_block(&hydration);
         assert!(!block.contains("</script><script>alert(1)"));
         assert!(block.contains("graphcal-project"));
         assert!(block.contains("graphcal-engine-wasm"));
+    }
+
+    #[test]
+    fn html_escaping_cannot_exceed_the_browser_envelope_budget() {
+        use graphcal_eval::project_bundle::{
+            ArtifactContent, BundleArtifact, BundleError, MAX_BUNDLE_JSON_BYTES,
+        };
+        let project = ProjectBundle {
+            entry: "main.gcl".to_string().try_into().unwrap(),
+            files: vec![BundleArtifact {
+                path: "main.gcl".to_string().try_into().unwrap(),
+                content: ArtifactContent::Source("<".repeat(MAX_BUNDLE_JSON_BYTES / 6)),
+            }],
+            dependencies: vec![],
+        };
+        assert!(matches!(
+            Hydration::new(
+                EngineBundle {
+                    glue_js: "",
+                    wasm: &[]
+                },
+                &project,
+                vec![]
+            ),
+            Err(BundleError::TotalSize)
+        ));
     }
 
     #[test]
