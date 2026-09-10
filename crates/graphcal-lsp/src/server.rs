@@ -1365,6 +1365,18 @@ fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIde
         .iter()
         .filter(|(file_id, _)| *file_id != project.root_id())
         .map(|(_, file)| DocumentIdentity::file(file.path().to_path_buf()))
+        .chain(
+            project
+                .package_closure()
+                .into_iter()
+                .flat_map(|closure| closure.dependencies.values())
+                .flat_map(|dependency| {
+                    dependency
+                        .snapshot
+                        .files()
+                        .map(|(relative, _)| DocumentIdentity::file(dependency.root.join(relative)))
+                }),
+        )
         .collect()
 }
 

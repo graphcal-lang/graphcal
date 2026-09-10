@@ -18,9 +18,11 @@ use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_compiler::syntax::plugin::PluginPath;
+#[cfg(test)]
+use graphcal_io::hash_source_tree;
 use graphcal_io::{
     ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy,
-    RealFileSystem, SourceTreeHashLimits, hash_source_tree,
+    RealFileSystem, SourceTreeHashLimits,
 };
 mod inline_dags;
 
@@ -798,6 +800,21 @@ pub struct LoadedProject {
     plugins: HashMap<PluginIdentity, PluginFileEntry>,
     /// Package-scoped plugin fuel settings resolved to typed function identities.
     plugin_call_policy: PluginCallPolicy,
+    package_closure: Option<LoadedPackageClosure>,
+}
+
+/// Lockfile and exact verified dependency bytes used by this loaded project.
+#[derive(Debug)]
+pub struct LoadedPackageClosure {
+    pub lockfile: String,
+    pub dependencies: BTreeMap<PackageInstanceId, LoadedDependency>,
+}
+
+/// An authenticated dependency snapshot and its filesystem provenance.
+#[derive(Debug)]
+pub struct LoadedDependency {
+    pub root: PathBuf,
+    pub snapshot: graphcal_io::SourceTreeSnapshot,
 }
 
 /// Outcome of locating and reading one wasm plugin file.
@@ -1085,7 +1102,14 @@ impl LoadedProject {
             dag_owners,
             plugins,
             plugin_call_policy,
+            package_closure: None,
         }
+    }
+
+    /// Exact verified dependency closure, when the project has dependencies.
+    #[must_use]
+    pub const fn package_closure(&self) -> Option<&LoadedPackageClosure> {
+        self.package_closure.as_ref()
     }
 
     /// All loaded files, keyed by their canonical semantic identity.
@@ -1946,17 +1970,6 @@ fn load_locked_package_project<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let root_dag_id = path_to_dag_id[&(root_package.clone(), root_canonical.to_path_buf())].clone();
     cancellation.checkpoint()?;
-    // Dependency execution stays gated while its artifact-integrity contract is
-    // being extended. The current tree hash excludes files outside source_dir;
-    // package-qualified identity alone must not authorize those binaries.
-    if files.values().any(|file| {
-        file.dag_id.package() != root_dag_id.package()
-            && wasm_plugin_paths(&file.ast).next().is_some()
-    }) {
-        return Err(loader_manifest_error(
-            "dependency-owned Wasm plugins are not yet supported: executable artifact hash coverage must be established",
-        ));
-    }
     // Each artifact resolves within its declaring package's authority. Root
     // plugins use explicit pins; dependency binaries need verified coverage.
     let mut plugins = HashMap::new();
@@ -1979,13 +1992,10 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    Ok(LoadedProject::from_parts(
-        files,
-        root_dag_id,
-        load_order,
-        plugins,
-        plugin_call_policy,
-    ))
+    let mut project =
+        LoadedProject::from_parts(files, root_dag_id, load_order, plugins, plugin_call_policy);
+    project.package_closure = Some(context.closure);
+    Ok(project)
 }
 
 /// Package-aware filesystem authority: root-package reads preserve the
@@ -1996,9 +2006,10 @@ struct PackageLoadContext<'a> {
     root_package: PackageInstanceId,
     root_reader: &'a dyn FileSystemReader,
     roots: BTreeMap<PackageInstanceId, PathBuf>,
-    dependency_readers: BTreeMap<PackageInstanceId, RealFileSystem>,
+    dependency_readers: BTreeMap<PackageInstanceId, graphcal_io::InMemoryFileSystem>,
     dependency_plugin_policies:
         BTreeMap<PackageInstanceId, graphcal_package::PluginExecutionPolicy>,
+    closure: LoadedPackageClosure,
     /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
     plugin_pins: BTreeMap<String, String>,
 }
@@ -2034,7 +2045,7 @@ impl<'a> PackageLoadContext<'a> {
             ))
         })?;
         let mut roots = BTreeMap::new();
-        let mut dependency_readers = BTreeMap::new();
+        let mut native_readers = BTreeMap::new();
 
         for package in validated.packages() {
             cancellation.checkpoint()?;
@@ -2058,11 +2069,13 @@ impl<'a> PackageLoadContext<'a> {
                     .canonicalize(&candidate)
                     .map_err(|error| source_root_error(package, &candidate, &error))?;
                 roots.insert(package.id.clone(), canonical);
-                dependency_readers.insert(package.id.clone(), reader);
+                native_readers.insert(package.id.clone(), reader);
             }
         }
 
         let mut manifests = BTreeMap::new();
+        let mut dependency_readers = BTreeMap::new();
+        let mut dependencies = BTreeMap::new();
         for package in validated.packages() {
             cancellation.checkpoint()?;
             if &package.id == validated.root() {
@@ -2074,15 +2087,32 @@ impl<'a> PackageLoadContext<'a> {
                     package.id
                 ))
             })?;
-            let reader = dependency_readers.get(&package.id).ok_or_else(|| {
+            let reader = native_readers.get(&package.id).ok_or_else(|| {
                 loader_manifest_error(format!(
                     "lockfile package `{}` has no filesystem capability",
                     package.id
                 ))
             })?;
             let manifest = read_package_manifest_from_path(root, reader, budget, cancellation)?;
-            verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
-            manifests.insert(package.id.clone(), manifest);
+            let snapshot =
+                verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
+            let captured = snapshot.mount(root).map_err(loader_manifest_error)?;
+            let captured_manifest =
+                read_package_manifest_from_path(root, &captured, budget, cancellation)?;
+            if captured_manifest != manifest {
+                return Err(loader_manifest_error(
+                    "package manifest changed while capturing its authenticated snapshot",
+                ));
+            }
+            dependencies.insert(
+                package.id.clone(),
+                LoadedDependency {
+                    root: root.clone(),
+                    snapshot,
+                },
+            );
+            dependency_readers.insert(package.id.clone(), captured);
+            manifests.insert(package.id.clone(), captured_manifest);
         }
         let dependency_plugin_policies = manifests
             .iter()
@@ -2103,6 +2133,10 @@ impl<'a> PackageLoadContext<'a> {
             roots,
             dependency_readers,
             dependency_plugin_policies,
+            closure: LoadedPackageClosure {
+                lockfile: lockfile_text,
+                dependencies,
+            },
             plugin_pins,
         })
     }
@@ -2560,13 +2594,15 @@ fn verify_locked_source(
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<graphcal_io::SourceTreeSnapshot, CompileError> {
     let PackageSource::Git { tree_hashes, .. } = &package.source else {
-        return Ok(());
+        return Err(loader_manifest_error(
+            "only Git dependencies have authenticated source snapshots",
+        ));
     };
     let cancellation_signal = || cancellation.is_cancelled();
     let source_dir = manifest.source_dir.to_path_buf();
-    let actual = hash_source_tree(
+    let snapshot = crate::package_snapshot::capture_package(
         fs,
         root,
         &source_dir,
@@ -2574,7 +2610,12 @@ fn verify_locked_source(
         &cancellation_signal,
     )
     .map_err(|error| {
-        if matches!(error, graphcal_io::SourceTreeHashError::Cancelled) {
+        if matches!(
+            error,
+            crate::package_snapshot::PackageSnapshotError::Tree(
+                graphcal_io::SourceTreeHashError::Cancelled
+            )
+        ) {
             cancellation
                 .checkpoint()
                 .map_or_else(CompileError::from, |()| loader_manifest_error(error))
@@ -2582,11 +2623,12 @@ fn verify_locked_source(
             loader_manifest_error(error)
         }
     })?;
+    let actual = snapshot.hash();
     budget
         .account_source_tree(root, actual.entries(), actual.bytes())
         .map_err(loader_manifest_error)?;
     if actual.sha256() == tree_hashes.sha256.to_string() {
-        Ok(())
+        Ok(snapshot)
     } else {
         Err(loader_manifest_error(format!(
             "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",

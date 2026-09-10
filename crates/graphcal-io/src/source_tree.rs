@@ -270,6 +270,20 @@ pub fn hash_source_tree(
     limits: SourceTreeHashLimits,
     cancellation: &dyn CancellationSignal,
 ) -> Result<SourceTreeHash, SourceTreeHashError> {
+    capture_source_tree(fs, root, source_dir, limits, cancellation).map(|snapshot| snapshot.hash())
+}
+
+/// Capture the bytes used for hashing so later loading cannot reread changed files.
+///
+/// # Errors
+/// Returns the same bounded traversal errors as [`hash_source_tree`].
+pub fn capture_source_tree(
+    fs: &dyn FileSystemReader,
+    root: &Path,
+    source_dir: &Path,
+    limits: SourceTreeHashLimits,
+    cancellation: &dyn CancellationSignal,
+) -> Result<SourceTreeSnapshot, SourceTreeHashError> {
     let canonical_root =
         fs.canonicalize(root)
             .map_err(|source| SourceTreeHashError::Canonicalize {
@@ -324,7 +338,7 @@ pub fn hash_source_tree(
         }
     }
 
-    let mut hasher = Sha256::new();
+    let mut captured = BTreeMap::new();
     let mut total_bytes = 0_u64;
     for (relative, path) in &files {
         if cancellation.is_cancelled() {
@@ -347,20 +361,157 @@ pub fn hash_source_tree(
                 limit: limits.total_bytes,
             });
         }
-        hasher.update(relative.0.as_bytes());
-        hasher.update([0]);
-        hasher.update(bytes.len().to_string().as_bytes());
-        hasher.update([0]);
-        hasher.update(bytes);
-        hasher.update([0]);
+        captured.insert(relative.clone(), bytes);
     }
 
-    Ok(SourceTreeHash {
-        sha256: hex_string(&hasher.finalize()),
-        files: files.len() as u64,
+    Ok(SourceTreeSnapshot {
+        files: captured,
         bytes: total_bytes,
         entries,
     })
+}
+
+/// Immutable captured source tree, including explicitly referenced artifacts.
+/// Debug output deliberately omits file contents.
+#[derive(Clone)]
+pub struct SourceTreeSnapshot {
+    files: BTreeMap<PortableRelativePath, Vec<u8>>,
+    bytes: u64,
+    entries: u64,
+}
+
+impl std::fmt::Debug for SourceTreeSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceTreeSnapshot")
+            .field("files", &self.files.len())
+            .field("bytes", &self.bytes)
+            .finish()
+    }
+}
+
+impl SourceTreeSnapshot {
+    /// Captured portable relative names and exact file bytes.
+    pub fn files(&self) -> impl Iterator<Item = (&Path, &[u8])> {
+        self.files
+            .iter()
+            .map(|(path, bytes)| (Path::new(&path.0), bytes.as_slice()))
+    }
+
+    /// Digest of exactly these bytes, in the original portable hash format.
+    #[must_use]
+    pub fn hash(&self) -> SourceTreeHash {
+        let mut hasher = Sha256::new();
+        for (relative, bytes) in &self.files {
+            hasher.update(relative.0.as_bytes());
+            hasher.update([0]);
+            hasher.update(bytes.len().to_string().as_bytes());
+            hasher.update([0]);
+            hasher.update(bytes);
+            hasher.update([0]);
+        }
+        SourceTreeHash {
+            sha256: hex_string(&hasher.finalize()),
+            files: self.files.len() as u64,
+            bytes: self.bytes,
+            entries: self.entries,
+        }
+    }
+
+    /// Capture an explicitly referenced file outside the source subtree. Already
+    /// captured files are not reread. Every path component must be symlink-free.
+    ///
+    /// # Errors
+    /// Rejects unsafe paths, non-files, cancellation and exhausted shared budgets.
+    pub fn capture_artifact(
+        &mut self,
+        fs: &dyn FileSystemReader,
+        root: &Path,
+        relative: &Path,
+        limits: SourceTreeHashLimits,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<(), SourceTreeHashError> {
+        let key = portable_relative_path(relative)?;
+        if contains_git_component(relative) || key.0.is_empty() {
+            return Err(SourceTreeHashError::UnsupportedEntry {
+                path: relative.to_path_buf(),
+            });
+        }
+        if self.files.contains_key(&key) {
+            return Ok(());
+        }
+        let canonical_root =
+            fs.canonicalize(root)
+                .map_err(|source| SourceTreeHashError::Canonicalize {
+                    path: root.to_path_buf(),
+                    source,
+                })?;
+        let mut path = canonical_root.clone();
+        for component in Path::new(&key.0).components() {
+            if cancellation.is_cancelled() {
+                return Err(SourceTreeHashError::Cancelled);
+            }
+            self.entries = self
+                .entries
+                .checked_add(1)
+                .filter(|count| *count <= limits.entries)
+                .ok_or(SourceTreeHashError::ResourceLimit {
+                    resource: SourceTreeResource::Entries,
+                    limit: limits.entries,
+                })?;
+            path.push(component);
+            match fs
+                .entry_kind(&path)
+                .map_err(|source| SourceTreeHashError::Inspect {
+                    path: path.clone(),
+                    source,
+                })? {
+                FileSystemEntryKind::Symlink => return Err(SourceTreeHashError::Symlink { path }),
+                FileSystemEntryKind::File | FileSystemEntryKind::Directory => {}
+                FileSystemEntryKind::Other => {
+                    return Err(SourceTreeHashError::UnsupportedEntry { path });
+                }
+            }
+        }
+        if !matches!(fs.entry_kind(&path), Ok(FileSystemEntryKind::File)) {
+            return Err(SourceTreeHashError::UnsupportedEntry { path });
+        }
+        let path = canonical_inside(fs, &path, &canonical_root)?;
+        let limit = ByteLimit::new(
+            limits
+                .file_bytes
+                .get()
+                .min(limits.total_bytes.saturating_sub(self.bytes)),
+        );
+        let bytes = fs
+            .read_bytes_bounded(&path, limit, cancellation)
+            .map_err(|error| map_file_error(&path, error))?;
+        self.bytes = self
+            .bytes
+            .checked_add(bytes.len() as u64)
+            .filter(|total| *total <= limits.total_bytes)
+            .ok_or(SourceTreeHashError::ResourceLimit {
+                resource: SourceTreeResource::Bytes,
+                limit: limits.total_bytes,
+            })?;
+        self.files.insert(key, bytes);
+        Ok(())
+    }
+
+    /// Mount only captured bytes under a caller-selected virtual root.
+    ///
+    /// # Errors
+    /// Rejects an invalid root or conflicting virtual paths.
+    pub fn mount(&self, root: &Path) -> Result<crate::InMemoryFileSystem, SourceTreeHashError> {
+        let mut fs = crate::InMemoryFileSystem::new();
+        for (relative, bytes) in self.files() {
+            let path = root.join(relative);
+            let absolute = crate::VirtualAbsolutePath::new(&path)
+                .map_err(|_| SourceTreeHashError::UnsupportedEntry { path: path.clone() })?;
+            fs.add_binary_file(absolute, bytes.to_vec())
+                .map_err(|_| SourceTreeHashError::UnsupportedEntry { path })?;
+        }
+        Ok(fs)
+    }
 }
 
 fn hex_string(bytes: &[u8]) -> String {

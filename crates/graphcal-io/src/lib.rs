@@ -28,7 +28,8 @@ pub use ingestion::ProjectIngestionPolicy;
 pub use overlay_fs::{OverlayFileSystem, OverlayFileSystemError};
 pub use real_fs::RealFileSystem;
 pub use source_tree::{
-    SourceTreeHash, SourceTreeHashError, SourceTreeHashLimits, hash_source_tree,
+    SourceTreeHash, SourceTreeHashError, SourceTreeHashLimits, SourceTreeSnapshot,
+    capture_source_tree, hash_source_tree,
 };
 
 use std::ffi::OsString;
