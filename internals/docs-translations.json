@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "path": "authoring-plugins.md",
+      "english_sha256": "11d91d7607b70cbefd5e9e3cb0b9e5553b228881960c32fafccb88a9668fc0f1",
+      "japanese_sha256": "b7a0c653f6b427276afbea62cf89ec6b5d8f47f5c60767338a983351621edc48"
+    },
+    {
+      "path": "cli-reference.md",
+      "english_sha256": "5ce91e7940f28440391bb447739fec02c61c9732f36585d16ba6cfaae06d2242",
+      "japanese_sha256": "28f96a9dd8faf6dbf50d5971b2e3411d70ce6727ac90f3273e6c0a1deaacc077"
+    },
+    {
+      "path": "editor-setup.md",
+      "english_sha256": "682c2d3a080a9d1d9c8ca7dbbb22fffa51a964c72ffcb19cddd219448c93cd0f",
+      "japanese_sha256": "5181c449830f08d958c89784aa2df7528dde0567114eee77769ae17b57236bcf"
+    },
+    {
+      "path": "index.md",
+      "english_sha256": "0de54994f51bdff1fcd827afb164c112e988b62dcc80d3b0407a7d370d00e4b7",
+      "japanese_sha256": "004f7ac354ee01fed809e9edde673d1121af509d46d9c00d5c4e1b1ac00eb8ce"
+    },
+    {
+      "path": "installation.md",
+      "english_sha256": "40b57ec0a0c972aeab7d75a864ef6c8ef9c2bd18229817979b4586aad95eda08",
+      "japanese_sha256": "159d066a0c3e26330eda7e7537c1e856b436bf707abcc5a366c6a829cc165cf8"
+    },
+    {
+      "path": "language/algebraic-data-types.md",
+      "english_sha256": "c2941aa6fbbd9f8e83a82d141fae0b1e5c2fd03788cf62e38b4bbab722a597cd",
+      "japanese_sha256": "dce1b03ecebe5b432f46ffa8f4ce3e33d63ce058e9f9ece914c83e733c8500f6"
+    },
+    {
+      "path": "language/assertions.md",
+      "english_sha256": "fcc8109d9dc097bf23337c1a27d023a25bb19ee88804e4d5448b66a520319ab9",
+      "japanese_sha256": "2c454c60d580be06ff7b0209be02fa99a356130b135f909749fba450150ba4ba"
+    },
+    {
+      "path": "language/built-ins.md",
+      "english_sha256": "563e936a88e989f02657f9dee75071d30e23741a46a6dec3f3b45d0f1f893ad8",
+      "japanese_sha256": "f558f6dce535d6d3d1c8460185ec61e39cb1747430624d0775b6d71e616e4144"
+    },
+    {
+      "path": "language/computation-model.md",
+      "english_sha256": "f73c87585e071084e45da349b83c5caeed6129ba6c3dbfebf4c7a6bae51904df",
+      "japanese_sha256": "cbb8c843f306be851df7d965a502f0f74b8fa187b1d74559b68ed5486d861769"
+    },
+    {
+      "path": "language/dimensions-and-units.md",
+      "english_sha256": "166988095423aae833686af00f651893303a31ef8c77456080310b6e1ca6d868",
+      "japanese_sha256": "7b0775696b7408f6345622a6943d7439ccd97deb41c530c2443bf70b6bb34a53"
+    },
+    {
+      "path": "language/expressions.md",
+      "english_sha256": "71fa78882033c7457989537969825b445f10d3f7273d5b348f7bae8cbfefc8f8",
+      "japanese_sha256": "8197ee5781bdb8ae081eac3daa59d8f27af4bdab67604e5549f5be2f0b7bf3da"
+    },
+    {
+      "path": "language/extern-functions.md",
+      "english_sha256": "734f54988751cd072b496af186a51b2d2396203d4b1ec9a109afe7301329b85c",
+      "japanese_sha256": "71ef437861e49a8a7b9f89165b7e0f017b4040c34355a8efb638fcc6343c5faa"
+    },
+    {
+      "path": "language/functions.md",
+      "english_sha256": "db240547c238fae04aff5dc9d684c292fbd7ad42739d46ca6a7e02520b310d98",
+      "japanese_sha256": "29ca9542805bdaadc050d034d34680d60fcea00d347c384263d752fd8bbe824f"
+    },
+    {
+      "path": "language/index.md",
+      "english_sha256": "dbcd065cb514ad5f58fc4a4027957e63a5f8ad15f45432bb131f1c1eae552970",
+      "japanese_sha256": "f5ffd321387eb966905a75b2077d2842a75e34149a6661bd468e861be43802be"
+    },
+    {
+      "path": "language/indexes.md",
+      "english_sha256": "5b464fa015c046d26b8cce16d75d2dfaf3ec3f72b534815e9a9434cf49c87e04",
+      "japanese_sha256": "fb1d145ee35cfd0b0567d8a3a8227125810f3df59c30edc86609ab09cdd5d6bc"
+    },
+    {
+      "path": "language/multi-file.md",
+      "english_sha256": "53a77b2d4e0d628d59666d49eba78094f68a5667b240b19fa1ac0d0bd7e6bc2b",
+      "japanese_sha256": "1447f814c150b955ccf2315a7ed0e60a9913414c397da82c02874370e6588075"
+    },
+    {
+      "path": "language/plots.md",
+      "english_sha256": "b7d4f54711e3e771b06dba0e4d4b64230d09b5bc396a39ff7ccd4aa2032ee7ff",
+      "japanese_sha256": "fa1d215f632aae36dfbda06cf2d32dbd36789c34bae174ba5eeb3b2b014b6ab5"
+    },
+    {
+      "path": "language/type-system.md",
+      "english_sha256": "9c1bfc84aef89f227b88a05fb0ca0289d56a1d7211b2f493e340099c55f19460",
+      "japanese_sha256": "0ba926a1d129cb2093dd4929daa64787e17b822783fd0d53a8c37626706dafb4"
+    },
+    {
+      "path": "tenax-integration.md",
+      "english_sha256": "55fd437f56194d6e250017e0de120787ce3a3fe6c42b15f5d011f4252c0ac360",
+      "japanese_sha256": "cd2814ac7e4f2a70c571f509c58d472639af120b7abd6809e213c7e7f2604224"
+    },
+    {
+      "path": "tutorial/index.md",
+      "english_sha256": "c65f996fe3127fb3028c150b9ad38f87339a2a537967bf49752c42e57679f021",
+      "japanese_sha256": "d737b07b9c1d1a33fc70838033e18b4c452417484ad5dc8b676629ef73b4db6d"
+    },
+    {
+      "path": "tutorial/step1-hello-graphcal.md",
+      "english_sha256": "16ba564a37c0e2dd7fee1793302ec5957da25867c9b5207cf321c8f0cd27e330",
+      "japanese_sha256": "0fa277b570329fdcabfaf4a262ece2f28f8fe8dc0ad77a31dde575c5251bd94f"
+    },
+    {
+      "path": "tutorial/step2-dimensions-and-units.md",
+      "english_sha256": "03ef5a5a21a0f1c4f8e1cd6baddf60bfe86b69d852eff8c5fc2f933bf99299f0",
+      "japanese_sha256": "67f6df701bea1a904d52b43eccaa62a413e93f784f8e5189a7e44934f9abcbe3"
+    },
+    {
+      "path": "tutorial/step3-structs-and-blocks.md",
+      "english_sha256": "a4f981d6a7a21ba4adfa663046fe836ef7e46f963c7e6e282a8045b3d0006953",
+      "japanese_sha256": "de28f6e163e2eec9f5d9698840d27cac3bbe29772c36b31c427a510c2219987f"
+    },
+    {
+      "path": "tutorial/step4-functions.md",
+      "english_sha256": "487a57c17049fd032fb90b54c532599e1a3274f846a7b1e9be857f3f6de192d4",
+      "japanese_sha256": "cbfd55c4115e075829e0b53bbd4717afe2596f0a45a91e6d6c0925a191646b3c"
+    },
+    {
+      "path": "tutorial/step5-multi-file-projects.md",
+      "english_sha256": "311b132ffdf11088efc8d8b92468ac2262259130fdd7efe40bd70519cf8e20f0",
+      "japanese_sha256": "2698838eb1ff3176571978a994c2a0c1c1bb0245d7a147489cb50eab5ed79b02"
+    },
+    {
+      "path": "tutorial/step6-indexed-values.md",
+      "english_sha256": "d2a2448e9ba346f3794efec282a0aa984bd1cd4a9aebfca459d551e5e0f52acb",
+      "japanese_sha256": "448b4a8b87128f14eb94e61639b10e541e19823fd8729c301faa5eefca10eb18"
+    }
+  ]
+}

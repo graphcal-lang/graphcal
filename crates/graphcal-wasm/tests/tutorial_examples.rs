@@ -16,7 +16,7 @@ struct ExampleDescriptor {
 }
 
 fn examples_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/assets/playground/examples")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/en/assets/playground/examples")
 }
 
 fn load_example(name: &str) -> Result<PlaygroundRequest, Box<dyn Error>> {

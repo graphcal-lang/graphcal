@@ -7,7 +7,7 @@
 
 Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc scripts provide. Write plain-text calculation graphs, let the compiler check types and physical dimensions, and see dependent values update when inputs change.
 
-![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/assets/rocket-screenshot.png)
+![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/en/assets/rocket-screenshot.png)
 
 *The language server shows computed values inline, turning a text file into a live engineering worksheet.*
 

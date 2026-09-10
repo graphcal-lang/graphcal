@@ -25,8 +25,9 @@ target
 # cargo-hawk also exercises the binary against fixture models)
 *.report.html
 
-# Zensical documentation build output
+# Zensical documentation build output and validation bytecode
 site/
+/internals/__pycache__/
 
 # Amp orb portal metadata
 .amp/portals/*

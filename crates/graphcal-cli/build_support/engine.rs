@@ -25,7 +25,7 @@ pub enum Error {
     #[error("{0}")]
     Invalid(String),
     #[error(
-        "could not run {command}: {source}\nSee docs/installation.md for source-build prerequisites"
+        "could not run {command}: {source}\nSee docs/en/installation.md for source-build prerequisites"
     )]
     Spawn {
         command: String,
@@ -96,7 +96,7 @@ fn watch_tool(name: &str) -> Result<(), Error> {
         })
         .ok_or_else(|| {
             Error::Invalid(format!(
-                "missing `{name}` on PATH; see docs/installation.md for source-build prerequisites"
+                "missing `{name}` on PATH; see docs/en/installation.md for source-build prerequisites"
             ))
         })?;
     watch(&executable);

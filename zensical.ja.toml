@@ -1,0 +1,80 @@
+[project]
+site_name = "Graphcal ドキュメント"
+site_description = "工学計算のための、型安全で単位を扱え、Git と相性のよいリアクティブプログラミング言語 Graphcal のドキュメント。"
+site_author = "Shunichiro Nomura"
+site_url = "https://graphcal.org/docs/ja/"
+docs_dir = "docs/ja"
+site_dir = "target/docs-site/ja"
+repo_name = "graphcal-lang/graphcal"
+repo_url = "https://github.com/graphcal-lang/graphcal"
+nav = [
+  { "ホーム" = "index.md" },
+  { "プレイグラウンド" = "https://graphcal.org/playground/" },
+  { "インストール" = "installation.md" },
+  { "チュートリアル" = [
+    { "概要" = "tutorial/index.md" },
+    { "ステップ 1: はじめての Graphcal" = "tutorial/step1-hello-graphcal.md" },
+    { "ステップ 2: 次元と単位" = "tutorial/step2-dimensions-and-units.md" },
+    { "ステップ 3: 構造体とブロック" = "tutorial/step3-structs-and-blocks.md" },
+    { "ステップ 4: 関数" = "tutorial/step4-functions.md" },
+    { "ステップ 5: 複数ファイルのプロジェクト" = "tutorial/step5-multi-file-projects.md" },
+    { "ステップ 6: インデックス付きの値" = "tutorial/step6-indexed-values.md" },
+  ] },
+  { "言語リファレンス" = [
+    { "概要" = "language/index.md" },
+    { "計算モデル" = "language/computation-model.md" },
+    { "型システム" = "language/type-system.md" },
+    { "次元と単位" = "language/dimensions-and-units.md" },
+    { "代数的データ型" = "language/algebraic-data-types.md" },
+    { "インデックス" = "language/indexes.md" },
+    { "関数" = "language/functions.md" },
+    { "extern 関数（プラグイン）" = "language/extern-functions.md" },
+    { "式" = "language/expressions.md" },
+    { "複数ファイルのプロジェクト" = "language/multi-file.md" },
+    { "アサーションと属性" = "language/assertions.md" },
+    { "組み込みリファレンス" = "language/built-ins.md" },
+    { "プロット" = "language/plots.md" },
+  ] },
+  { "CLI リファレンス" = "cli-reference.md" },
+  { "Tenax 連携" = "tenax-integration.md" },
+  { "プラグインの作成" = "authoring-plugins.md" },
+  { "エディターの設定" = "editor-setup.md" },
+]
+
+[project.extra]
+alternate = [
+  { name = "English", link = "/docs/", lang = "en" },
+  { name = "日本語", link = "/docs/ja/", lang = "ja" },
+]
+
+[project.theme]
+custom_dir = "internals/docs-theme"
+language = "ja"
+features = [
+  "announce.dismiss",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "ダークモードに切り替える"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "ライトモードに切り替える"

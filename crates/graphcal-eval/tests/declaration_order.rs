@@ -11,8 +11,8 @@
 //! semantically inert, but order *within* a declaration is not. Label order
 //! inside an `index` declaration defines the axis's index order and is
 //! load-bearing for order-sensitive consumers such as `scan`
-//! (`docs/language/indexes.md`), and assertions report in declaration order
-//! (`docs/language/assertions.md`). The shuffler only permutes whole
+//! (`docs/en/language/indexes.md`), and assertions report in declaration order
+//! (`docs/en/language/assertions.md`). The shuffler only permutes whole
 //! declarations, so it never disturbs either.
 //!
 //! See: <https://github.com/graphcal-lang/graphcal/issues/247>

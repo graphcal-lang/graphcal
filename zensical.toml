@@ -3,9 +3,9 @@ site_name = "Graphcal Documentation"
 site_description = "Documentation for Graphcal, a type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations."
 site_author = "Shunichiro Nomura"
 site_url = "https://graphcal.org/docs/"
-# The published site root also carries the redirect stub and CNAME from
-# `site-root/`, so the documentation is built one level down. See `docs-assemble`.
-site_dir = "site/docs"
+# Build each locale in isolation; docs-assemble owns the final Pages artifact.
+docs_dir = "docs/en"
+site_dir = "target/docs-site/en"
 repo_name = "graphcal-lang/graphcal"
 repo_url = "https://github.com/graphcal-lang/graphcal"
 nav = [
@@ -34,6 +34,7 @@ nav = [
     { "Multi-File Projects" = "language/multi-file.md" },
     { "Assertions & Attributes" = "language/assertions.md" },
     { "Built-in Reference" = "language/built-ins.md" },
+    { "Plots" = "language/plots.md" },
   ] },
   { "CLI Reference" = "cli-reference.md" },
   { "Tenax Integration" = "tenax-integration.md" },
@@ -41,7 +42,14 @@ nav = [
   { "Editor Setup" = "editor-setup.md" },
 ]
 
+[project.extra]
+alternate = [
+  { name = "English", link = "/docs/", lang = "en" },
+  { name = "日本語", link = "/docs/ja/", lang = "ja" },
+]
+
 [project.theme]
+custom_dir = "internals/docs-theme"
 language = "en"
 features = [
   "announce.dismiss",
