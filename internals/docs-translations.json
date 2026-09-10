@@ -8,8 +8,8 @@
     },
     {
       "path": "cli-reference.md",
-      "english_sha256": "fa948bdd9ed218b618d1a5f31fd6c679bc4cbb2d3a44148a337745b6db976ac3",
-      "japanese_sha256": "07c9204b2e0f8872b13f612763a72f893a43e4cd6180e16fe92abb6b4f15a057"
+      "english_sha256": "38bce407c1e03c8d9ca447dae9fabc5e0ed802851acb89a01eb467bf33dff78c",
+      "japanese_sha256": "53d96aef4d3d3f9727226b682ea8a06992ba86aa92ce93eb5aea97884450b4a1"
     },
     {
       "path": "editor-setup.md",

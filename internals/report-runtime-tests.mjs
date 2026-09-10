@@ -209,7 +209,16 @@ try {
   const run = runtime(rankSource);
   function texts(element) { return [element.textContent, ...element.children.flatMap(texts)].filter(Boolean); }
   for (const declaration of run.evaluate()) {
-    const rendered = texts(run.api.renderView(declaration.outcome.body));
+    const view = run.api.renderView(declaration.outcome.body, declaration.name);
+    assert.equal(view["data-role"], "value");
+    if (declaration.outcome.body.kind !== "scalar") {
+      assert.equal(view.className, "value-scroll");
+      assert.equal(view.role, "region");
+      assert.equal(view.tabindex, "0");
+      assert.equal(view["aria-label"], declaration.name + " values");
+      assert.ok(view.children.every(child => child["data-role"] === undefined));
+    }
+    const rendered = texts(view);
     const card = html.split(`data-decl="${declaration.name}"`)[1].split("</article>")[0];
     const native = card.slice(card.indexOf("</h3>") + 5).replace(/<[^>]*>/g, "\n").split("\n").map(text => text.trim()).filter(Boolean);
     assert.deepEqual(rendered, native, `static/hydrated labels and leaves: ${declaration.name}`);

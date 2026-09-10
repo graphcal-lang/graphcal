@@ -603,6 +603,10 @@ evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
 patch values, grids, badges, and charts in place. Static and hydrated value
 cards use the same projection: rank-two values are grids, and higher ranks
 are labelled two-axis slices retaining every leaf and outer-axis label.
+Structured values stay inside labelled, keyboard-focusable scroll regions, so
+wide grids and long field paths cannot overlap neighboring cards. Focus a region
+and use the arrow keys to inspect overflowing columns. Recalculation retains the
+region's focus and scroll position.
 Every accepted result also reconciles all charts: failed or missing plots lose
 their previous data and show an individual error. Initially failed plots can
 recover after an input edit. Renderer failures are explicit, and a delayed
