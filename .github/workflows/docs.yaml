@@ -46,6 +46,7 @@ jobs:
         run: vp -C web/playground exec playwright install --with-deps chromium firefox webkit
       - name: Build and verify documentation and standalone playground in real browsers
         run: just playground-browser-test
+      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
       - name: Verify offline SDK plugin reports in all browser engines
         run: just report-plugin-browser-test
       - name: Upload browser failure traces
