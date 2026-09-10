@@ -47,9 +47,12 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
     let mut body = String::new();
     let title = html_escape(&document.title);
     let _ = writeln!(body, "<header><h1>{title}</h1></header>");
+    push_section_navigation(&mut body, document);
 
     if !document.params.is_empty() {
-        body.push_str("<section id=\"inputs\">\n<h2>Inputs</h2>\n<div class=\"cards\">\n");
+        body.push_str(
+            "<section id=\"inputs\" tabindex=\"-1\">\n<h2>Inputs</h2>\n<div class=\"cards\">\n",
+        );
         for card in &document.params {
             push_value_card(&mut body, card);
         }
@@ -57,7 +60,9 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
     }
 
     if !document.values.is_empty() {
-        body.push_str("<section id=\"values\">\n<h2>Values</h2>\n<div class=\"cards\">\n");
+        body.push_str(
+            "<section id=\"values\" tabindex=\"-1\">\n<h2>Values</h2>\n<div class=\"cards\">\n",
+        );
         for card in &document.values {
             push_value_card(&mut body, card);
         }
@@ -65,7 +70,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
     }
 
     if !document.figures.is_empty() || !document.plot_errors.is_empty() {
-        body.push_str("<section id=\"plots\">\n<h2>Plots</h2>\n");
+        body.push_str("<section id=\"plots\" tabindex=\"-1\">\n<h2>Plots</h2>\n");
         body.push_str(
             "<noscript><p class=\"notice\">Charts require JavaScript; values and checks above are complete without it.</p></noscript>\n",
         );
@@ -102,7 +107,9 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
     push_presentation_diagnostics(&mut body, &document.presentation_diagnostics);
 
     if !document.checks.is_empty() {
-        body.push_str("<section id=\"checks\">\n<h2>Checks</h2>\n<ul class=\"checks\">\n");
+        body.push_str(
+            "<section id=\"checks\" tabindex=\"-1\">\n<h2>Checks</h2>\n<ul class=\"checks\">\n",
+        );
         for check in &document.checks {
             let (class, label) = match check.status {
                 CheckStatus::Pass => ("pass", "PASS"),
@@ -145,9 +152,36 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
     )
 }
 
+fn push_section_navigation(out: &mut String, document: &ReportDocument) {
+    out.push_str("<nav class=\"report-nav\" aria-label=\"Report sections\"><ul>\n");
+    for (id, label, present) in [
+        ("inputs", "Inputs", !document.params.is_empty()),
+        ("values", "Values", !document.values.is_empty()),
+        (
+            "plots",
+            "Plots",
+            !document.figures.is_empty() || !document.plot_errors.is_empty(),
+        ),
+        (
+            "presentation",
+            "Presentation diagnostics",
+            !document.presentation_diagnostics.is_empty(),
+        ),
+        ("checks", "Checks", !document.checks.is_empty()),
+        ("provenance", "Provenance", true),
+    ] {
+        if present {
+            let _ = writeln!(out, "<li><a href=\"#{id}\">{label}</a></li>");
+        }
+    }
+    out.push_str("</ul></nav>\n");
+}
+
 fn push_presentation_diagnostics(out: &mut String, diagnostics: &[String]) {
     if !diagnostics.is_empty() {
-        out.push_str("<section id=\"presentation\"><h2>Presentation diagnostics</h2>\n");
+        out.push_str(
+            "<section id=\"presentation\" tabindex=\"-1\"><h2>Presentation diagnostics</h2>\n",
+        );
         for diagnostic in diagnostics {
             let _ = writeln!(out, "<p class=\"notice\">{}</p>", html_escape(diagnostic));
         }
@@ -248,7 +282,7 @@ fn push_grid(out: &mut String, grid: &GridTable) {
 
 fn push_provenance(out: &mut String, document: &ReportDocument) {
     let provenance = &document.provenance;
-    out.push_str("<footer id=\"provenance\">\n<h2>Provenance</h2>\n<dl class=\"provenance\">\n");
+    out.push_str("<footer id=\"provenance\" tabindex=\"-1\">\n<h2>Provenance</h2>\n<dl class=\"provenance\">\n");
     let _ = writeln!(
         out,
         "<dt>Compiler</dt><dd>Graphcal {}</dd>",

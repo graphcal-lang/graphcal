@@ -34,7 +34,7 @@ function horizontalGeometry() {
 
 export async function testReportLayout({ temporary, openReport }) {
   const source = join(temporary, "layout.gcl");
-  writeFileSync(source, readFileSync(new URL("./fixtures/report-layout.gcl", import.meta.url)));
+  writeFileSync(source, readFileSync(new URL("../crates/graphcal-report/tests/fixtures/report-layout.gcl", import.meta.url)));
   for (const interactive of [false, true]) {
     const output = join(temporary, `layout-${interactive}.html`);
     const markdown = join(temporary, `layout-${interactive}.md`);
@@ -64,6 +64,14 @@ export async function testReportLayout({ temporary, openReport }) {
         }
         assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true, `${width}px page must not overflow`);
         assert.equal(await evaluate(`${region("samples")}.querySelectorAll('tbody tr').length`), 64);
+        assert.equal(await evaluate(`${region("samples")}.clientHeight <= 384 && ${region("samples")}.scrollHeight > ${region("samples")}.clientHeight`), true, "tall table is height-bounded, not truncated");
+        assert.equal(await evaluate("document.querySelector('[data-decl=\"total\"]').getBoundingClientRect().height < 150"), true, "scalar card must not stretch with its neighbor");
+        if (width === 1440) assert.equal(await evaluate("document.getElementById('plots').getBoundingClientRect().top + scrollY < 1600"), true, "detail tables must not bury plots");
+        await evaluate(`${region("samples")}.focus(); ${region("samples")}.scrollTop = 0`);
+        await command("Input.dispatchKeyEvent", { type: "keyDown", key: "End", code: "End", windowsVirtualKeyCode: 35 });
+        await command("Input.dispatchKeyEvent", { type: "keyUp", key: "End", code: "End", windowsVirtualKeyCode: 35 });
+        await wait(`${region("samples")}.scrollTop + ${region("samples")}.clientHeight >= ${region("samples")}.scrollHeight - 1`);
+        assert.equal(await evaluate(`${region("samples")}.querySelector('tr:last-child').getBoundingClientRect().bottom <= ${region("samples")}.getBoundingClientRect().bottom + 1`), true, "keyboard can reveal the last row");
         assert.equal(await evaluate(`${region("slices")}.querySelectorAll('td').length`), 128);
         assert.equal(await evaluate(`${region("wide")}.scrollWidth > ${region("wide")}.clientWidth`), true);
         // A real keyboard event can reveal the far-right columns locally.
@@ -74,6 +82,24 @@ export async function testReportLayout({ temporary, openReport }) {
         // Let the browser's keyboard-scroll animation finish before resizing.
         await evaluate("new Promise(resolve => setTimeout(resolve, 250))");
       }
+    }
+    async function checkNavigation() {
+      const links = await evaluate("Array.from(document.querySelectorAll('.report-nav a'), link => link.getAttribute('href'))");
+      assert.deepEqual(links, ["#inputs", "#values", "#plots", "#checks", "#provenance"]);
+      await evaluate("document.querySelector('.report-nav a[href=\"#plots\"]').focus()");
+      await command("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await wait("document.activeElement === document.getElementById('plots')");
+      assert.equal(await evaluate("document.getElementById('plots').getBoundingClientRect().top >= 0 && document.getElementById('plots').getBoundingClientRect().top < innerHeight"), true);
+    }
+    async function checkPrint() {
+      await command("Emulation.setDeviceMetricsOverride", { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await command("Emulation.setEmulatedMedia", { media: "print" });
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.report-nav')).display"), "none");
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.card')).breakInside"), "auto", "long cards can span printed pages");
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll('.value-scroll')).every(region => region.clientHeight >= region.scrollHeight - 1 && region.clientWidth >= region.scrollWidth - 1)`), true, "printing exposes all rows and wraps columns without clipping");
+      assert.equal(await evaluate(`${region("samples")}.querySelectorAll('tbody tr').length`), 64);
+      await command("Emulation.setEmulatedMedia", { media: "" });
     }
     async function checkZoom() {
       await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
@@ -95,6 +121,8 @@ export async function testReportLayout({ temporary, openReport }) {
       assert.deepEqual(await evaluate("window.zoomView.scale('x').domain()"), before.x, "categorical domain must not zoom");
     }
     await checkLayout();
+    await checkNavigation();
+    await checkPrint();
     await checkZoom();
     if (interactive) {
       await evaluate(`(() => {
@@ -106,14 +134,24 @@ export async function testReportLayout({ temporary, openReport }) {
       await wait("document.querySelector('[data-decl=\"total\"] [data-role=\"value\"]').textContent === '37.5'");
       assert.deepEqual(await evaluate(`({ focused: document.activeElement === window.savedRegion, same: window.savedRegion === ${region("wide")}, left: window.savedRegion.scrollLeft })`), { focused: true, same: true, left: 100 }, "recalculation preserves focus and scroll position");
       await checkLayout();
+      await checkNavigation();
+      await checkPrint();
       await checkZoom();
+      await evaluate(`(() => {
+        const field = document.querySelector('[data-decl="gain"] .control-field');
+        field.value = '0.0'; field.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+      await wait("document.querySelector('.report-nav a[href=\"#presentation\"]')");
+      assert.equal(await evaluate("document.getElementById('presentation').querySelector('h2').textContent"), "Presentation diagnostics");
       await evaluate("document.querySelector('.modified-banner__reset').click()");
       await wait("document.querySelector('[data-decl=\"total\"] [data-role=\"value\"]').textContent === '25'");
+      await wait("!document.querySelector('.report-nav a[href=\"#presentation\"]')");
       await checkLayout();
+      await checkNavigation();
     }
     assert.deepEqual(warnings, [], "valid charts should not emit renderer warnings");
     assert.deepEqual(exceptions, [], "no uncaught browser exceptions");
     await close();
   }
-  console.log("Chrome: static/hydrated table containment, keyboard scrolling, redraw focus, determinism and categorical/continuous zoom passed");
+  console.log("Chrome: static/hydrated table containment, keyboard scrolling, bounded heights, section navigation, print, redraw focus, determinism and categorical/continuous zoom passed");
 }

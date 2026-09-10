@@ -20,16 +20,19 @@ body {
 }
 main { max-width: 72rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 header h1 { font-size: 1.6rem; margin: 0 0 1rem; border-bottom: 2px solid var(--line); padding-bottom: 0.5rem; }
+.report-nav ul { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; list-style: none; padding: 0; }
+.report-nav a { color: var(--accent); }
+section[id], footer[id] { scroll-margin-top: 3rem; }
 h2 { font-size: 1.15rem; margin: 2rem 0 0.75rem; color: var(--ink); }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); gap: 0.75rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr)); align-items: start; gap: 0.75rem; }
 .card { min-width: 0; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem 0.9rem; background: var(--paper); }
 .card--param { background: var(--panel); }
 .card-name { margin: 0; font-size: 0.95rem; font-weight: 600; }
 .card-kind { font-size: 0.72rem; font-weight: 400; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .card-doc { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--muted); }
 .card-value { margin: 0.45rem 0 0; font-size: 1.15rem; font-variant-numeric: tabular-nums; }
-.value-scroll { max-width: 100%; overflow: auto; }
+.value-scroll { max-width: 100%; max-height: min(24rem, 60vh); overflow: auto; }
 .value-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .value-scroll table { overflow-wrap: normal; }
 .entries code { overflow-wrap: anywhere; }
@@ -60,8 +63,13 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
 .repro { display: inline-block; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.5rem; word-break: break-all; }
 @media print {
   main { max-width: none; padding: 0; }
-  .cards { grid-template-columns: repeat(3, 1fr); }
-  figure.plot, .card { break-inside: avoid; }
+  .report-nav { display: none; }
+  .cards { display: block; }
+  .card { margin-bottom: 0.75rem; break-inside: auto; }
+  .value-scroll { max-height: none; overflow: visible; }
+  .value-scroll table { width: 100%; table-layout: fixed; overflow-wrap: anywhere; }
+  .entries th, .entries td, .grid th, .grid td { padding: 0.2rem 0; }
+  figure.plot { break-inside: avoid; }
   footer#provenance { break-before: page; }
 }
 .control { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }

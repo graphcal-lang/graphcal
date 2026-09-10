@@ -606,7 +606,13 @@ are labelled two-axis slices retaining every leaf and outer-axis label.
 Structured values stay inside labelled, keyboard-focusable scroll regions, so
 wide grids and long field paths cannot overlap neighboring cards. Focus a region
 and use the arrow keys to inspect overflowing columns. Recalculation retains the
-region's focus and scroll position.
+region's focus and scroll position. On screen, these regions are at most 24 rem
+(or 60% of the viewport height), and short cards do not stretch to match taller
+neighbors. All rows remain available by scrolling; no values are truncated.
+The **Report sections** navigation jumps directly to inputs, values, plots,
+checks, diagnostics when present, and provenance. Printing removes the height
+limit, wraps table cells, and lays out cards in a single column so long tables
+can span pages. Markdown output continues to include every value.
 Every accepted result also reconciles all charts: failed or missing plots lose
 their previous data and show an individual error. Initially failed plots can
 recover after an input edit. Renderer failures are explicit, and a delayed

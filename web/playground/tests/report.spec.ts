@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { gzipSync, gunzipSync } from "node:zlib";
+import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 
 const source = `/// Speed <script> is plain text.
@@ -70,6 +71,21 @@ test("report controls update results and share exact applied bindings and focuse
   await expect(result(fresh)).toHaveText("4 m/s");
   await expect(result(fresh, "enabled")).toHaveText("true");
   await fresh.close();
+});
+
+test("report section links stay inside the sandbox and survive recalculation", async ({ page }) => {
+  await open(page);
+  for (const speed of ["3.0 m/s", "4.0 m/s"]) {
+    await report(page).getByRole("textbox", { name: "speed", exact: true }).fill(speed);
+    await expect(result(page)).toHaveText(speed === "3.0 m/s" ? "6 m/s" : "8 m/s");
+    const link = report(page).getByRole("link", { name: "Plots", exact: true });
+    await link.focus();
+    await page.keyboard.press("Enter");
+    await expect(report(page).locator("#plots")).toBeFocused();
+    await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
+    await expect(page.locator("#report iframe")).toHaveCount(1);
+    expect(page.frames().some((frame) => frame.url() === "about:srcdoc")).toBe(true);
+  }
 });
 
 test("rejected and pending edits do not replace or share successful values", async ({ page }) => {
@@ -238,6 +254,45 @@ test("opaque iframe denies parent access, forged messages and external plot reso
   await report(page).getByRole("textbox", { name: "speed", exact: true }).fill("5.0 m/s");
   await expect(result(page)).toHaveText("10 m/s");
   expect((await share(page)).state.bindings).toEqual([{ name: "speed", expr: "5.0 m/s" }]);
+});
+
+test("structured report tables are contained, bounded and accessible", async ({ page }) => {
+  const layoutSource = readFileSync(
+    new URL("../../../crates/graphcal-report/tests/fixtures/report-layout.gcl", import.meta.url),
+    "utf8",
+  );
+  await page.goto(`/playground/?view=report${fragment([], layoutSource)}`);
+  await page.locator("#run").click();
+  await expect(report(page).locator(".hydration-status")).toHaveText("live");
+  expect(
+    (await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze())
+      .violations,
+  ).toEqual([]);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const samples = report(page).getByRole("region", { name: "samples values", exact: true });
+    await expect(samples.locator("tbody tr")).toHaveCount(64);
+    expect(
+      await samples.evaluate(
+        (region) => region.clientHeight <= 384 && region.scrollHeight > region.clientHeight,
+      ),
+    ).toBe(true);
+    expect(
+      await report(page)
+        .locator(".value-scroll")
+        .evaluateAll((regions) =>
+          regions.every((region) => {
+            const card = region.closest(".card")!.getBoundingClientRect();
+            const box = region.getBoundingClientRect();
+            return (
+              box.left >= card.left &&
+              box.right <= card.right &&
+              region.getAttribute("tabindex") === "0"
+            );
+          }),
+        ),
+    ).toBe(true);
+  }
 });
 
 test("report layout and controls remain accessible at desktop and narrow widths", async ({

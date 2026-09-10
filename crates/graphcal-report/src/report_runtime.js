@@ -441,6 +441,7 @@
     if (!section) {
       section = element("section");
       section.id = "plots";
+      section.tabIndex = -1;
       section.appendChild(element("h2", "", "Plots"));
       document.querySelector("main").appendChild(section);
     }
@@ -489,11 +490,29 @@
     if (!section) {
       section = element("section");
       section.id = "presentation";
+      section.tabIndex = -1;
       document.querySelector("main").appendChild(section);
     }
+    section.hidden = evaluation.notices.length === 0;
     section.replaceChildren();
+    if (!section.hidden) section.appendChild(element("h2", "", "Presentation diagnostics"));
     for (var notice of evaluation.notices) {
       section.appendChild(element("p", "notice", notice.message));
+    }
+  }
+
+  function patchSectionNavigation() {
+    var list = document.querySelector('.report-nav ul');
+    if (!list) return;
+    list.replaceChildren();
+    for (var section of document.querySelectorAll('main > section[id], main > footer[id]')) {
+      var heading = section.querySelector('h2');
+      if (section.hidden || !heading) continue;
+      var item = element('li');
+      var link = element('a', '', heading.textContent);
+      link.setAttribute('href', '#' + section.id);
+      item.appendChild(link);
+      list.appendChild(item);
     }
   }
 
@@ -516,6 +535,7 @@
         var oldProvenance = document.getElementById("provenance");
         if (provenance && oldProvenance) oldProvenance.replaceWith(provenance);
       }
+      patchSectionNavigation();
       setStatus(
         outcome.evaluation.has_errors ? "live · evaluation has errors" : "live",
         outcome.evaluation.has_errors ? "warn" : "ok",
