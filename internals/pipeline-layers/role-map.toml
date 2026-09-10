@@ -1443,6 +1443,21 @@ role = "loading"
 
 [[module]]
 package = "eval"
+path = ["project_bundle"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["project_bundle", "binary"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["project_bundle", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
 path = ["package_cache", "tests"]
 role = "loading"
 

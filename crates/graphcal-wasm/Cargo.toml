@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 
 # Optimize the shipped wasm for size instead of wasm-pack's default speed
 # pass: the playground and hydrated reports carry this binary inline, and the
-# CI budget caps the raw download, including HTML report rendering, at 5.25 MiB.
+# CI budget caps the raw download, including reports and metered plugins, at 6.5 MiB.
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz"]
 

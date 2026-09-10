@@ -350,7 +350,7 @@ fn validate_hydration_parameter_source(
 }
 
 /// Freeze manifest and lockfile bytes before native loading. Plugin/source bytes
-/// are already retained by LoadedProject and never reread during embedding.
+/// are already retained by `LoadedProject` and never reread during embedding.
 fn capture_metadata(
     args: &BuildArgs,
     fs: &graphcal_io::RealFileSystem,
@@ -464,6 +464,10 @@ fn hydration_project(
     let bundle = ProjectBundle { entry, files };
     // Apply exactly the browser's artifact policy before writing an interactive report.
     bundle.mount(Path::new("/report"))?;
+    let encoded = serde_json::to_string(&bundle).map_err(BundleError::Json)?;
+    if encoded.len() > graphcal_eval::project_bundle::MAX_BUNDLE_JSON_BYTES {
+        return Err(BundleError::TotalSize.into());
+    }
     Ok(bundle)
 }
 

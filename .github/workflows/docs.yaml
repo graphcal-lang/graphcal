@@ -46,6 +46,8 @@ jobs:
         run: vp -C web/playground exec playwright install --with-deps chromium firefox webkit
       - name: Build and verify documentation and standalone playground in real browsers
         run: just playground-browser-test
+      - name: Verify offline SDK plugin reports in all browser engines
+        run: just report-plugin-browser-test
       - name: Upload browser failure traces
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

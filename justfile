@@ -90,6 +90,10 @@ report-browser-test:
     cargo build -p graphcal
     node internals/report-browser-tests.mjs
 
+# Build a real SDK plugin and replay its offline report in all three browser engines.
+report-plugin-browser-test:
+    GRAPHCAL_PLUGIN_BROWSER_TEST=1 cargo test --locked -p graphcal --test plugin_e2e scaffolded_plugin_builds_locks_and_evaluates -- --nocapture
+
 # Build a hydrated demo report with the embedded engine and drive its payload
 # through the prepared-project API under Node.
 report-smoke: wasm-report

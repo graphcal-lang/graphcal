@@ -44,9 +44,9 @@ pub enum PrepareOutcome {
 
 /// Validate and compile an in-memory browser project for repeated evaluation.
 ///
-/// Projects that use plugins are rejected here with the same loud
-/// `plugins_unsupported` error as the one-shot path: the wasmi plugin host is
-/// not part of the browser build.
+/// Text-only playground requests still reject plugins: they cannot supply
+/// executable artifacts. Offline reports use [`prepare_bundle`] to provide
+/// the complete validated snapshot, including pinned plugin binaries.
 #[must_use]
 pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
     let project = match VirtualProject::try_from(request) {
@@ -74,6 +74,7 @@ pub fn prepare_bundle(bundle: &graphcal_eval::project_bundle::ProjectBundle) -> 
     }
 }
 
+#[derive(Clone, Copy)]
 enum BrowserCapabilities {
     SourcesOnly,
     BundledPlugins,
@@ -89,7 +90,7 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
         Ok(loaded) => loaded,
         Err(error) => {
             return PrepareOutcome::CompileError {
-                diagnostics: vec![compile_error_view(&error, &project)],
+                diagnostics: vec![compile_error_view(&error, project)],
             };
         }
     };
@@ -117,7 +118,7 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
     match ProjectCompiler::new(&loaded).host_fns(&registry).prepare() {
         Ok(prepared) => PrepareOutcome::Prepared(Box::new(PreparedPlayground { prepared, report })),
         Err(error) => PrepareOutcome::CompileError {
-            diagnostics: vec![compile_error_view(&error, &project)],
+            diagnostics: vec![compile_error_view(&error, project)],
         },
     }
 }

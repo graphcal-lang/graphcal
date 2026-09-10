@@ -14,6 +14,7 @@ use thiserror::Error;
 /// Upper bound on a serialized report project, checked before JS strings enter Wasm.
 pub const MAX_BUNDLE_JSON_BYTES: usize = 96 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ENCODED_ARTIFACT_BYTES: usize = MAX_ARTIFACT_BYTES.div_ceil(3) * 4;
 const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 4096;
 const MAX_PATH_BYTES: usize = 1024;
@@ -177,6 +178,8 @@ impl ProjectBundle {
 /// Invalid portable-project input. Messages never dump source or binary payloads.
 #[derive(Debug, Error)]
 pub enum BundleError {
+    #[error("package dependencies require package-scoped bundle readers and are not yet supported")]
+    PackageDependenciesUnsupported,
     #[error("bundle paths must be bounded, portable relative paths without traversal")]
     UnsafePath,
     #[error("bundle must contain between 1 and 4096 artifacts")]
@@ -206,7 +209,7 @@ mod binary {
         deserializer: D,
     ) -> Result<Vec<u8>, D::Error> {
         let encoded = String::deserialize(deserializer)?;
-        if encoded.len() > MAX_ARTIFACT_BYTES.div_ceil(3) * 4 {
+        if encoded.len() > MAX_ENCODED_ARTIFACT_BYTES {
             return Err(serde::de::Error::custom(
                 "plugin exceeds encoded artifact limit",
             ));
@@ -235,6 +238,48 @@ mod tests {
         ] {
             assert!(ArtifactPath::try_from(path.to_string()).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn malformed_categories_entries_and_resource_limits_fail_closed() {
+        let source = || BundleArtifact {
+            path: "main.gcl".to_string().try_into().unwrap(),
+            content: ArtifactContent::Source(String::new()),
+        };
+        let mut bundle = ProjectBundle {
+            entry: "main.gcl".to_string().try_into().unwrap(),
+            files: vec![],
+        };
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::FileCount)
+        ));
+        bundle.files = vec![source(); MAX_FILES + 1];
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::FileCount)
+        ));
+        bundle.files = vec![source()];
+        bundle.files[0].content = ArtifactContent::Plugin(vec![]);
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::ArtifactKind)
+        ));
+        bundle.files[0] = source();
+        bundle.entry = "missing.gcl".to_string().try_into().unwrap();
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::MissingEntry)
+        ));
+        bundle.files[0].content = ArtifactContent::Source("x".repeat(MAX_ARTIFACT_BYTES + 1));
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::ArtifactSize)
+        ));
+        assert!(
+            ProjectBundle::from_json(r#"{"entry":"main.gcl","files":[],"unexpected":true}"#)
+                .is_err()
+        );
     }
 
     #[test]

@@ -13,10 +13,8 @@
   var wasmB64 = payloadText("graphcal-engine-wasm");
   if (!projectText || !glueB64 || !wasmB64 || !window.GraphcalReport) return;
 
-  var project;
   var baselineBindings;
   try {
-    project = JSON.parse(projectText);
     baselineBindings = JSON.parse(payloadText("graphcal-baseline") || "[]");
   } catch (error) {
     return;
