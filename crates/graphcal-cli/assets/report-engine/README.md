@@ -3,7 +3,7 @@
 Source-checkout CLI builds automatically compile `graphcal-wasm` with the pinned
 repository Rust toolchain, generate no-modules JavaScript with the locked
 `wasm-bindgen` CLI, and optimize the Wasm with Binaryen's `wasm-opt -Oz`.
-See `docs/installation.md` for prerequisites. Build scripts never install tools.
+See `docs/en/installation.md` for prerequisites. Build scripts never install tools.
 
 The bundle and its integrity manifest live under Cargo's `OUT_DIR/report-engine`.
 A private nested Cargo target directory preserves compilation artifacts across

@@ -11,7 +11,7 @@
 
 ## Documentation
 
-- The user-facing documentation is in the `docs/` directory. The `docs/index.md` is the main entry point for users.
+- The user-facing documentation is in `docs/en/` (English) and `docs/ja/` (Japanese). The entry points are `docs/en/index.md` and `docs/ja/index.md`. Update both languages together; see `internals/docs-localization.md` for the translation and validation workflow.
   - It is a Zensical site, so you can run it locally with `zensical serve` in the project root and open `http://localhost:8000` in the browser.
 - The formal grammar is in `grammar.ebnf` at the repository root. It serves as the source of truth referenced by tree-sitter and TextMate grammars.
 - Design ideas and feature proposals are tracked as GitHub issues.
@@ -24,7 +24,7 @@
 
 ## Testing
 
-- CLI builds automatically generate and verify the embedded browser engine under Cargo's `OUT_DIR`. Install the source-build prerequisites in `docs/installation.md` when tools are missing; never bypass freshness or integrity checks. Generated engine files must not be committed. `just wasm-report` exports the current bundle for Node tests; `just wasm-report-package` stages it only for release packaging.
+- CLI builds automatically generate and verify the embedded browser engine under Cargo's `OUT_DIR`. Install the source-build prerequisites in `docs/en/installation.md` when tools are missing; never bypass freshness or integrity checks. Generated engine files must not be committed. `just wasm-report` exports the current bundle for Node tests; `just wasm-report-package` stages it only for release packaging.
 
 ## Implementation Guidelines
 

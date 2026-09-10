@@ -1,0 +1,5 @@
+{% extends "main.html" %}
+{% block content %}
+  {# Zensical's skip link targets __skip when there is no page TOC. #}
+  <h1 id="__skip">{% if config.theme.language == "ja" %}404 - ページが見つかりません{% else %}404 - Not found{% endif %}</h1>
+{% endblock %}
