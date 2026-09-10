@@ -6426,6 +6426,117 @@ import plugin "plugins/demo.wasm" as demo {
 node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
 "#;
 
+#[cfg(unix)]
+fn scale_plugin_wasm(factor: u32) -> Vec<u8> {
+    use graphcal_plugin_abi::{
+        ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, PluginManifest,
+    };
+    let scalar = ManifestParamKind::Quantity(ManifestMonomial::default());
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![ManifestFunction {
+            name: "scale".to_string(),
+            dim_vars: vec![],
+            index_vars: vec![],
+            params: vec![ManifestParam {
+                name: "x".to_string(),
+                kind: scalar.clone(),
+            }],
+            result: scalar.into(),
+        }],
+    };
+    manifest.embed_into(&wat::parse_str(format!(r#"(module (func (export "scale") (param f64) (result f64) local.get 0 f64.const {factor} f64.mul))"#)).unwrap()).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
+    use graphcal_package::{GitSourceId, PackageSource};
+    let binary = scale_plugin_wasm;
+    let dir = tempfile::tempdir().unwrap();
+    let repository = dir.path().join("kernels");
+    create_git_package(
+        &repository,
+        "kernels",
+        "import plugin \"plugins/kernel.wasm\" as k { fn scale(x: Dimensionless) -> Dimensionless; }\nparam x: Dimensionless = 1.0; pub node result: Dimensionless = k::scale(@x);\n",
+    );
+    std::fs::create_dir_all(repository.join("plugins")).unwrap();
+    std::fs::write(repository.join("plugins/kernel.wasm"), binary(2)).unwrap();
+    let first = commit_git_repo(&repository, "first binary");
+    std::fs::write(repository.join("plugins/kernel.wasm"), binary(3)).unwrap();
+    let second = commit_git_repo(&repository, "second binary");
+    let remote = test_remote_git_url(&repository);
+    let project = dir.path().join("app");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "[dependencies]\nfirst = {{ package = 'kernels', git = '{remote}', rev = '{first}' }}\nsecond = {{ package = 'kernels', git = '{remote}', rev = '{second}' }}\n"
+        ),
+        "param input: Dimensionless = 4.0;\ninclude first.lib(x: @input)::{ result as first };\ninclude second.lib(x: @input)::{ result as later_result };\n",
+    );
+    let cache = dir.path().join("cache");
+    let locked = graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(&project)
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    let lock = graphcal_package::parse_lockfile_str(
+        &std::fs::read_to_string(project.join("graphcal.lock")).unwrap(),
+    )
+    .unwrap();
+    let sources: Vec<_> = lock
+        .packages
+        .iter()
+        .filter_map(|package| match &package.source {
+            PackageSource::Git {
+                url,
+                commit,
+                tree_hashes,
+                ..
+            } => Some((
+                GitSourceId::new(url.clone(), commit.clone()),
+                tree_hashes.sha256,
+            )),
+            PackageSource::Root => None,
+        })
+        .collect();
+    assert_eq!(sources.len(), 2);
+    assert_ne!(
+        sources[0].1, sources[1].1,
+        "only the out-of-source binary changed"
+    );
+    let evaluate = || {
+        graphcal_bin()
+            .arg("eval")
+            .arg(&main)
+            .args(["--format", "json"])
+            .env("GRAPHCAL_CACHE_DIR", &cache)
+            .output()
+            .unwrap()
+    };
+    let output = evaluate();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let values: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(values["node"]["first"]["si_value"], 8.0);
+    assert_eq!(values["node"]["later_result"]["si_value"], 12.0);
+    let cache_root = graphcal_eval::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
+    let checkout = cache_root.git_checkout(&sources[0].0, &sources[0].1);
+    std::fs::write(checkout.join("plugins/kernel.wasm"), binary(9)).unwrap();
+    let output = evaluate();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("hash mismatch"));
+}
+
 #[test]
 fn eval_runs_a_vendored_wasm_plugin() {
     let dir = tempfile::tempdir().unwrap();

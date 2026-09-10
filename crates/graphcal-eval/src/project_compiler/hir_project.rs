@@ -21,7 +21,7 @@ pub struct HirProject<'project> {
     /// Loader-owned plugin verification inputs are borrowed narrowly; source
     /// ASTs and the rest of `LoadedProject` do not cross the HIR boundary.
     pub(super) plugins: &'project HashMap<
-        graphcal_compiler::syntax::plugin::PluginPath,
+        graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::PluginFileEntry,
     >,
     /// Minimal semantic fact needed to reject runtime units at a pure import

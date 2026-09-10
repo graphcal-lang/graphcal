@@ -26,6 +26,7 @@ pub(crate) mod import_surface;
 pub(crate) mod inline_dag;
 pub mod loader;
 pub mod package_cache;
+pub mod package_snapshot;
 mod pipeline_metrics;
 pub mod presentation_evidence;
 pub mod project_bundle;

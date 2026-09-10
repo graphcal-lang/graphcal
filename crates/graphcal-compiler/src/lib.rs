@@ -25,6 +25,7 @@ pub mod ir;
 pub mod nat;
 pub mod plot_props;
 pub mod plot_shape;
+pub mod plugin_identity;
 pub mod registry;
 pub(crate) mod source_line;
 pub mod stack;

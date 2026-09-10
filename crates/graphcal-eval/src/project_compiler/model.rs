@@ -107,7 +107,7 @@ pub(super) struct ModuleArtifact {
     /// The module's own bodies, frozen once and shared by every importer.
     pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
     pub(super) extern_functions: HashMap<
-        graphcal_compiler::syntax::plugin::ExternFnKey,
+        graphcal_compiler::plugin_identity::ExternFnKey,
         graphcal_compiler::ir::lower::ExternFunctionEntry,
     >,
 }

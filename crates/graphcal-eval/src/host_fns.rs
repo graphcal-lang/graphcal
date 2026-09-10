@@ -17,8 +17,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::function_signature::FunctionSignature;
+use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
+use graphcal_compiler::syntax::plugin::PluginPath;
 
 /// Error returned by a host function closure.
 ///
@@ -212,7 +213,7 @@ pub enum PluginRegistrationError {
 #[derive(Debug, Clone, Default)]
 pub struct HostFunctionMetadata {
     signatures: HashMap<ExternFnKey, Option<FunctionSignature>>,
-    failed_plugins: HashMap<PluginPath, PluginRegistrationError>,
+    failed_plugins: HashMap<PluginIdentity, PluginRegistrationError>,
 }
 
 impl HostFunctionMetadata {
@@ -230,7 +231,10 @@ impl HostFunctionMetadata {
 
     /// Plugin registration failure captured by the embedding shell.
     #[must_use]
-    pub(crate) fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
+    pub(crate) fn plugin_failure(
+        &self,
+        plugin: &PluginIdentity,
+    ) -> Option<&PluginRegistrationError> {
         self.failed_plugins.get(plugin)
     }
 }
@@ -275,7 +279,10 @@ impl HostFunctionRegistry {
         name: FnName,
         function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
-        let key = ExternFnKey { plugin, name };
+        let key = ExternFnKey {
+            plugin: PluginIdentity::Host(plugin),
+            name,
+        };
         self.metadata.signatures.insert(key.clone(), None);
         self.fns.insert(
             key,
@@ -289,7 +296,7 @@ impl HostFunctionRegistry {
     /// manifest declares; the pipeline verifies declarations against it.
     pub fn register_with_signature(
         &mut self,
-        plugin: PluginPath,
+        plugin: PluginIdentity,
         name: FnName,
         signature: FunctionSignature,
         function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
@@ -311,7 +318,11 @@ impl HostFunctionRegistry {
     /// The pipeline reports this (with the import site's span) before any
     /// per-function "missing host function" diagnostic, so users see the
     /// root cause.
-    pub fn record_plugin_failure(&mut self, plugin: PluginPath, error: PluginRegistrationError) {
+    pub fn record_plugin_failure(
+        &mut self,
+        plugin: PluginIdentity,
+        error: PluginRegistrationError,
+    ) {
         self.metadata.failed_plugins.insert(plugin, error);
     }
 
@@ -476,7 +487,7 @@ mod tests {
 
     fn key(name: &str) -> ExternFnKey {
         ExternFnKey {
-            plugin: PluginPath::new(DEMO_PLUGIN_PATH),
+            plugin: PluginIdentity::Host(PluginPath::new(DEMO_PLUGIN_PATH)),
             name: FnName::expect_valid(name),
         }
     }

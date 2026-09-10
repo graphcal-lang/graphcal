@@ -11,8 +11,7 @@ use graphcal_eval::package_cache::{PackageCacheRoot, PackageCacheRootError};
 use graphcal_io::{
     ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, NeverCancel,
     ProjectIngestionPolicy, RealFileSystem, SourceTreeHash, SourceTreeHashLimits,
-    create_file_atomically, hash_source_tree as hash_package_source_tree,
-    replace_file_atomically_if_unchanged,
+    create_file_atomically, replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl, LOCK_VERSION,
@@ -1098,13 +1097,20 @@ fn hash_source_tree(
         path: root.to_path_buf(),
         source,
     })?;
-    let hash = hash_package_source_tree(
+    let hash = graphcal_eval::package_snapshot::capture_package(
         &fs,
         root,
         &source_dir.to_path_buf(),
         budget.source_tree_limits(),
         &NeverCancel,
-    )?;
+    )
+    .map_err(|error| match error {
+        graphcal_eval::package_snapshot::PackageSnapshotError::Tree(error) => {
+            DepsError::SourceTreeHash(error)
+        }
+        other => DepsError::PackageSnapshot(other),
+    })?
+    .hash();
     budget.account_source_tree(root, &hash)?;
     Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
 }
@@ -1120,6 +1126,8 @@ fn hex_string(bytes: &[u8]) -> String {
 /// `graphcal deps` command failure.
 #[derive(Debug, Error)]
 pub enum DepsError {
+    #[error(transparent)]
+    PackageSnapshot(graphcal_eval::package_snapshot::PackageSnapshotError),
     /// Could not read the current directory.
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),

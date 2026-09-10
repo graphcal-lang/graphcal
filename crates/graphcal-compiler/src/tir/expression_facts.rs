@@ -121,7 +121,7 @@ pub enum ExpressionOperation {
     Unary(crate::syntax::ast::UnaryOp),
     BuiltinCall(crate::builtin::BuiltinFnName),
     EpochCall(crate::registry::time_scale::TimeScale),
-    HostCall(crate::syntax::plugin::ExternFnKey),
+    HostCall(crate::plugin_identity::ExternFnKey),
     Conditional,
     Conversion,
     DisplayTimezone,

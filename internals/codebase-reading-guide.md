@@ -1456,7 +1456,8 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 24. `crates/graphcal-compiler/src/syntax/comments.rs`
 25. `crates/graphcal-compiler/src/syntax/lexer.rs`
 26. `crates/graphcal-compiler/src/syntax/function_name.rs`
-27. `crates/graphcal-compiler/src/syntax/plugin.rs`
+27. `crates/graphcal-compiler/src/syntax/plugin.rs` →
+    `crates/graphcal-compiler/src/plugin_identity.rs` (resolved package-owned artifacts versus global host identities)
 28. `crates/graphcal-compiler/src/syntax/index_name.rs`
 29. `crates/graphcal-compiler/src/syntax/local_name.rs`
 30. `crates/graphcal-compiler/src/syntax/module_name.rs`
@@ -1604,7 +1605,8 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 172. `crates/graphcal-eval/src/domain_constraint.rs`
 173. `crates/graphcal-eval/src/domain_check.rs`
 174. `crates/graphcal-eval/src/import_surface.rs`
-175. `crates/graphcal-eval/src/package_cache.rs` and
+175. `crates/graphcal-eval/src/package_cache.rs`,
+     `crates/graphcal-eval/src/package_snapshot.rs` (capture and authenticate sources plus declared Wasm artifacts), and
      `crates/graphcal-eval/src/project_bundle.rs` (bounded portable artifacts and virtual mounting; consumed by report assembly and browser preparation)
 176. `crates/graphcal-eval/src/project_compiler/template.rs`
 177. `crates/graphcal-eval/src/pipeline_metrics.rs`

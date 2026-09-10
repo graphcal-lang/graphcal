@@ -47,6 +47,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["plugin_identity"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["plugin_identity", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["declaration_category"]
 role = "contracts"
 
@@ -1439,6 +1449,16 @@ role = "loading"
 [[module]]
 package = "eval"
 path = ["package_cache"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_snapshot"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_snapshot", "tests"]
 role = "loading"
 
 [[module]]

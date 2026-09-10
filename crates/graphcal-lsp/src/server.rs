@@ -1365,7 +1365,24 @@ fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIde
         .iter()
         .filter(|(file_id, _)| *file_id != project.root_id())
         .map(|(_, file)| DocumentIdentity::file(file.path().to_path_buf()))
+        .chain(
+            project
+                .package_closure()
+                .into_iter()
+                .flat_map(dependency_artifact_identities),
+        )
         .collect()
+}
+
+fn dependency_artifact_identities(
+    closure: &graphcal_eval::loader::LoadedPackageClosure,
+) -> impl Iterator<Item = DocumentIdentity> + '_ {
+    closure.dependencies.values().flat_map(|dependency| {
+        dependency
+            .snapshot
+            .files()
+            .map(|(relative, _)| DocumentIdentity::file(dependency.root.join(relative)))
+    })
 }
 
 /// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
@@ -4802,6 +4819,57 @@ node momentum: Force * Time = @mass * @velocity;
         assert!(!analysis.inputs.has_complete_dependencies());
         assert!(dependencies.contains(&file_identity(&dir.path().join("src/missingdep/lib.gcl"))));
         assert!(dependencies.contains(&file_identity(&dir.path().join("graphcal.toml"))));
+    }
+
+    #[test]
+    fn dependency_watch_inputs_include_authenticated_out_of_source_plugins() {
+        use graphcal_io::{
+            InMemoryFileSystem, NeverCancel, SourceTreeHashLimits, VirtualAbsolutePath,
+        };
+        let root = std::path::Path::new("/dependency");
+        let mut fs = InMemoryFileSystem::new();
+        for (path, text) in [
+            ("graphcal.toml", "manifest"),
+            ("src/library.gcl", "source"),
+            ("plugins/kernel.wasm", "binary"),
+        ] {
+            fs.add_file(
+                VirtualAbsolutePath::new(root.join(path)).unwrap(),
+                text.to_string(),
+            )
+            .unwrap();
+        }
+        let mut snapshot = graphcal_io::capture_source_tree(
+            &fs,
+            root,
+            std::path::Path::new("src"),
+            SourceTreeHashLimits::unbounded(),
+            &NeverCancel,
+        )
+        .unwrap();
+        snapshot
+            .capture_artifact(
+                &fs,
+                root,
+                std::path::Path::new("plugins/kernel.wasm"),
+                SourceTreeHashLimits::unbounded(),
+                &NeverCancel,
+            )
+            .unwrap();
+        let closure = graphcal_eval::loader::LoadedPackageClosure {
+            lockfile: String::new(),
+            dependencies: std::collections::BTreeMap::from([(
+                graphcal_package::PackageInstanceId::new("dependency").unwrap(),
+                graphcal_eval::loader::LoadedDependency {
+                    root: root.to_path_buf(),
+                    snapshot,
+                },
+            )]),
+        };
+        let inputs: HashSet<_> = dependency_artifact_identities(&closure).collect();
+        for path in ["graphcal.toml", "src/library.gcl", "plugins/kernel.wasm"] {
+            assert!(inputs.contains(&DocumentIdentity::file(root.join(path))));
+        }
     }
 
     #[test]

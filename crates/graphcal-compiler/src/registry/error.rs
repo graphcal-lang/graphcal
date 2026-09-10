@@ -490,7 +490,7 @@ pub enum GraphcalError {
         )
     )]
     MissingHostFunction {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         name: crate::syntax::function_name::FnName,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -524,7 +524,7 @@ pub enum GraphcalError {
         )
     )]
     ExternSignatureMismatch {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         name: crate::syntax::function_name::FnName,
         declared: String,
         provided: String,
@@ -538,11 +538,11 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::P006),
         help(
-            "plugin paths ending in `.wasm` resolve relative to the project root and must name a vendored WebAssembly module with an embedded graphcal manifest"
+            "plugin paths ending in `.wasm` resolve relative to the declaring package root and must name a vendored WebAssembly module with an embedded graphcal manifest"
         )
     )]
     PluginLoadFailed {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         reason: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -558,27 +558,12 @@ pub enum GraphcalError {
         )
     )]
     PluginForbiddenImport {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         import_module: String,
         import_name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("plugin declares a forbidden import")]
-        span: SourceSpan,
-    },
-
-    #[error("plugin \"{plugin}\" is imported by a dependency package")]
-    #[diagnostic(
-        code(graphcal::P008),
-        help(
-            "WebAssembly plugin files can currently be imported only by the root package; dependency packages may still use embedder-provided (host registry) plugins"
-        )
-    )]
-    PluginInDependencyPackage {
-        plugin: crate::syntax::plugin::PluginPath,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("wasm plugin import in a dependency package")]
         span: SourceSpan,
     },
 
@@ -590,7 +575,7 @@ pub enum GraphcalError {
         )
     )]
     PluginNotPinned {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("plugin has no graphcal.lock pin")]
@@ -607,7 +592,7 @@ pub enum GraphcalError {
         )
     )]
     PluginHashMismatch {
-        plugin: crate::syntax::plugin::PluginPath,
+        plugin: crate::plugin_identity::PluginIdentity,
         expected: String,
         actual: String,
         #[source_code]
@@ -2430,7 +2415,6 @@ impl GraphcalError {
             | Self::ExternSignatureMismatch { src, .. }
             | Self::PluginLoadFailed { src, .. }
             | Self::PluginForbiddenImport { src, .. }
-            | Self::PluginInDependencyPackage { src, .. }
             | Self::PluginNotPinned { src, .. }
             | Self::PluginHashMismatch { src, .. }
             | Self::InvalidExternSignature { src, .. }

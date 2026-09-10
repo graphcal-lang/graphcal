@@ -1993,6 +1993,7 @@ dependencies = [
  "graphcal-eval",
  "graphcal-fmt",
  "graphcal-io",
+ "graphcal-package",
  "graphcal-plugin-host",
  "indexmap",
  "loom",

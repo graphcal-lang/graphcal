@@ -29,6 +29,7 @@ workspace = true
 
 [dev-dependencies]
 futures-util = { version = "=0.3.34", features = ["sink"] }
+graphcal-package.workspace = true
 tempfile.workspace = true
 tower = { version = "=0.5.3", features = ["util"] }
 
