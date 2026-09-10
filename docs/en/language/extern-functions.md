@@ -325,6 +325,11 @@ neither exists, the embedder's default applies. Each configured value must be
 between 1 and 2,000,000,000 inclusive. This hard maximum preserves a finite
 availability bound when a project is opened by the language server.
 
+Each package's manifest controls only its own plugin defaults and function
+limits. The application package does not silently override a dependency's
+budgets, and dependencies cannot change the interpreter's hard limits. Two
+versions of a package have separate plugin identities and policies.
+
 Selectors are structured as separate plugin path and function fields rather
 than a combined string. The plugin path must be a portable root-relative
 `.wasm` path. Whenever that plugin is loaded by an entry point, the selector
@@ -413,11 +418,18 @@ Two boundary cases:
 - **Ad-hoc files** (no `graphcal.toml` anywhere above) load plugins
   unpinned — there is no lock regime to audit against, and the sandbox
   plus resource bounds still apply.
-- **Dependency packages** need no `[[plugin]]` entries: a `.wasm` vendored
-  inside a Git dependency is already covered by that package's pinned
-  source tree hash. (In this phase, `import plugin "….wasm"` is itself
-  restricted to the root package; dependency packages may still use
-  embedder-provided plugins.)
+- **Dependency packages** may declare Wasm plugins and need no separate
+  `[[plugin]]` entries. Their locked tree hash includes the manifest, source
+  directory, and every Wasm artifact imported by those sources, including
+  imports inside nested DAGs and binaries outside the source directory.
+  Paths resolve within the declaring package root; traversal and symbolic
+  links are rejected. Native evaluation and LSP analysis execute only the
+  verified captured bytes. Changing a binary requires a new reviewed dependency
+  lock. Regenerate older locks for packages with out-of-source plugins using
+  `graphcal deps lock`.
+- **Package instances** scope Wasm identity: two versions can both import
+  `plugins/solver.wasm` without collisions. Embedder-provided host functions
+  remain global identities.
 
 ## Failure Semantics
 

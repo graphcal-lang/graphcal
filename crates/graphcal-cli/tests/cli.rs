@@ -6427,29 +6427,32 @@ node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
 "#;
 
 #[cfg(unix)]
-#[test]
-fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
-    use graphcal_package::{GitSourceId, PackageSource};
+fn scale_plugin_wasm(factor: u32) -> Vec<u8> {
     use graphcal_plugin_abi::{
         ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, PluginManifest,
     };
-    let binary = |factor: u32| {
-        let scalar = ManifestParamKind::Quantity(ManifestMonomial::default());
-        let manifest = PluginManifest {
-            abi_version: graphcal_plugin_abi::ABI_VERSION,
-            functions: vec![ManifestFunction {
-                name: "scale".to_string(),
-                dim_vars: vec![],
-                index_vars: vec![],
-                params: vec![ManifestParam {
-                    name: "x".to_string(),
-                    kind: scalar.clone(),
-                }],
-                result: scalar.into(),
+    let scalar = ManifestParamKind::Quantity(ManifestMonomial::default());
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![ManifestFunction {
+            name: "scale".to_string(),
+            dim_vars: vec![],
+            index_vars: vec![],
+            params: vec![ManifestParam {
+                name: "x".to_string(),
+                kind: scalar.clone(),
             }],
-        };
-        manifest.embed_into(&wat::parse_str(format!(r#"(module (func (export "scale") (param f64) (result f64) local.get 0 f64.const {factor} f64.mul))"#)).unwrap()).unwrap()
+            result: scalar.into(),
+        }],
     };
+    manifest.embed_into(&wat::parse_str(format!(r#"(module (func (export "scale") (param f64) (result f64) local.get 0 f64.const {factor} f64.mul))"#)).unwrap()).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
+    use graphcal_package::{GitSourceId, PackageSource};
+    let binary = scale_plugin_wasm;
     let dir = tempfile::tempdir().unwrap();
     let repository = dir.path().join("kernels");
     create_git_package(
@@ -6498,7 +6501,7 @@ fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() 
                 ..
             } => Some((
                 GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256.clone(),
+                tree_hashes.sha256,
             )),
             PackageSource::Root => None,
         })

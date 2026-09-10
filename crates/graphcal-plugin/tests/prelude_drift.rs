@@ -85,7 +85,9 @@ fn registry_from_embedded_manifest() -> HostFunctionRegistry {
     let manifest = PluginManifest::from_json(&GRAPHCAL_PLUGIN_MANIFEST).expect("manifest decodes");
     let functions =
         graphcal_plugin_host::convert_manifest(&manifest).expect("manifest converts to typed IR");
-    let plugin = PluginPath::new("graphcal:sdk-drift");
+    let plugin = graphcal_compiler::plugin_identity::PluginIdentity::Host(PluginPath::new(
+        "graphcal:sdk-drift",
+    ));
     let mut registry = HostFunctionRegistry::new();
     for (name, signature) in functions {
         registry

@@ -1453,6 +1453,16 @@ role = "loading"
 
 [[module]]
 package = "eval"
+path = ["package_snapshot"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["package_snapshot", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
 path = ["project_bundle"]
 role = "loading"
 

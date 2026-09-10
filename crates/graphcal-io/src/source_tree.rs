@@ -385,6 +385,7 @@ impl std::fmt::Debug for SourceTreeSnapshot {
         f.debug_struct("SourceTreeSnapshot")
             .field("files", &self.files.len())
             .field("bytes", &self.bytes)
+            .field("entries", &self.entries)
             .finish()
     }
 }
@@ -554,6 +555,47 @@ mod tests {
         .unwrap();
         assert_eq!(first, second);
         assert_eq!(first.files(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn referenced_artifacts_reject_symlinked_parents_even_within_the_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("graphcal.toml"), "manifest").unwrap();
+        std::fs::write(root.join("src/kernel.wasm"), b"binary").unwrap();
+        std::os::unix::fs::symlink(root.join("src"), root.join("plugins")).unwrap();
+        let fs = RealFileSystem::rooted(root).unwrap();
+        let mut snapshot = capture_source_tree(
+            &fs,
+            root,
+            Path::new("src"),
+            SourceTreeHashLimits::unbounded(),
+            &NeverCancel,
+        )
+        .unwrap();
+        assert!(matches!(
+            snapshot.capture_artifact(
+                &fs,
+                root,
+                Path::new("plugins/kernel.wasm"),
+                SourceTreeHashLimits::unbounded(),
+                &NeverCancel
+            ),
+            Err(SourceTreeHashError::Symlink { .. })
+        ));
+        assert!(
+            snapshot
+                .capture_artifact(
+                    &fs,
+                    root,
+                    Path::new("../kernel.wasm"),
+                    SourceTreeHashLimits::unbounded(),
+                    &NeverCancel
+                )
+                .is_err()
+        );
     }
 
     #[cfg(unix)]

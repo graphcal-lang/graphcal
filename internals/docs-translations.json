@@ -58,8 +58,8 @@
     },
     {
       "path": "language/extern-functions.md",
-      "english_sha256": "734f54988751cd072b496af186a51b2d2396203d4b1ec9a109afe7301329b85c",
-      "japanese_sha256": "71ef437861e49a8a7b9f89165b7e0f017b4040c34355a8efb638fcc6343c5faa"
+      "english_sha256": "a39a6b60e5d854e0495a479fc0aa9043a18ed1727dad3fb1b700a9f636b3fc3e",
+      "japanese_sha256": "8ef3b11749828ef93d94b1ee352d627492f89c3ece8c3c9b057b728505737db6"
     },
     {
       "path": "language/functions.md",
@@ -78,8 +78,8 @@
     },
     {
       "path": "language/multi-file.md",
-      "english_sha256": "53a77b2d4e0d628d59666d49eba78094f68a5667b240b19fa1ac0d0bd7e6bc2b",
-      "japanese_sha256": "1447f814c150b955ccf2315a7ed0e60a9913414c397da82c02874370e6588075"
+      "english_sha256": "4b5b4624b2ba63ebc9965f5dfba199ba9efde0686a0893d8160d1c0d780f2618",
+      "japanese_sha256": "05b73c2ae341b8738793ac7ee88a6a097052e24e8ed69909691d99e2bf87f76d"
     },
     {
       "path": "language/plots.md",

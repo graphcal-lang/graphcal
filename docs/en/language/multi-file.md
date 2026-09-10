@@ -860,6 +860,10 @@ or control-character components must move the artifact to a portable relative
 path and regenerate the lock.
 
 Lock creation and loading use the same deterministic source-tree algorithm.
+It includes `graphcal.toml`, the declared source directory, and all Wasm plugin
+artifacts imported by those sources, even outside that directory. Source and
+plugin bytes are captured once; verification and evaluation use that immutable
+snapshot. Unrelated files outside this closure are neither hashed nor executed.
 Package trees may contain only ordinary directories and regular files: symbolic
 links and special files are rejected rather than followed, every canonical path
 must remain under its locked package root, and relative path names must be UTF-8.

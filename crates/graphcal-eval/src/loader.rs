@@ -719,7 +719,7 @@ impl LoadedFile {
     }
 }
 
-/// Fuel policy resolved from the root package manifest into compiler-owned
+/// Fuel policies resolved from each owning package manifest into compiler-owned
 /// plugin and function identities.
 #[derive(Debug, Clone, Default)]
 pub struct PluginCallPolicy {
@@ -788,15 +788,11 @@ pub struct LoadedProject {
     /// Canonical owner source file for every file-root and inline DAG identity.
     dag_owners: HashMap<DagId, DagId>,
     /// WASM plugin files referenced by `import plugin "….wasm"` declarations
-    /// in root-package files, keyed by the verbatim plugin path.
+    /// keyed by the declaring package instance and artifact path.
     ///
-    /// Paths resolve relative to the root package's source root and are
-    /// sandboxed inside it. A failed read is recorded (not fatal here) so
-    /// compile-only consumers keep working; the evaluation pipeline surfaces
-    /// the stored error with the declaring import's span. Host-registry
-    /// plugin identities (e.g. `graphcal:demo`) never appear in this map,
-    /// and neither do wasm imports declared by dependency packages (those
-    /// are rejected at verification time).
+    /// Paths resolve within the owning package root. Dependency bytes come
+    /// exclusively from the authenticated snapshot. Read failures are reported
+    /// at import spans; global host-registry identities never appear here.
     plugins: HashMap<PluginIdentity, PluginFileEntry>,
     /// Package-scoped plugin fuel settings resolved to typed function identities.
     plugin_call_policy: PluginCallPolicy,
@@ -898,10 +894,13 @@ fn read_wasm_plugins<'a>(
         for path in wasm_plugin_paths(ast) {
             cancellation.checkpoint()?;
             let identity = PluginIdentity::resolve(path, package);
-            if !plugins.contains_key(&identity) {
-                let entry = read_plugin_file(package_root, path, fs, budget, cancellation);
-                cancellation.checkpoint()?;
-                plugins.insert(identity, entry);
+            match plugins.entry(identity) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    let entry = read_plugin_file(package_root, path, fs, budget, cancellation);
+                    cancellation.checkpoint()?;
+                    slot.insert(entry);
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
             }
         }
     }
@@ -1975,7 +1974,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     let mut plugins = HashMap::new();
     for package in context.roots.keys() {
         let owner = DagPackageId::new(package.as_str());
-        let mut owned = read_wasm_plugins(
+        let mut package_plugins = read_wasm_plugins(
             files
                 .values()
                 .filter(|file| file.dag_id.package() == &owner)
@@ -1986,9 +1985,9 @@ fn load_locked_package_project<F: FileSystemReader>(
             cancellation,
         )?;
         if package == &root_package {
-            apply_plugin_pins(&mut owned, &context.plugin_pins);
+            apply_plugin_pins(&mut package_plugins, &context.plugin_pins);
         }
-        plugins.extend(owned);
+        plugins.extend(package_plugins);
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
@@ -2093,26 +2092,10 @@ impl<'a> PackageLoadContext<'a> {
                     package.id
                 ))
             })?;
-            let manifest = read_package_manifest_from_path(root, reader, budget, cancellation)?;
-            let snapshot =
-                verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
-            let captured = snapshot.mount(root).map_err(loader_manifest_error)?;
-            let captured_manifest =
-                read_package_manifest_from_path(root, &captured, budget, cancellation)?;
-            if captured_manifest != manifest {
-                return Err(loader_manifest_error(
-                    "package manifest changed while capturing its authenticated snapshot",
-                ));
-            }
-            dependencies.insert(
-                package.id.clone(),
-                LoadedDependency {
-                    root: root.clone(),
-                    snapshot,
-                },
-            );
-            dependency_readers.insert(package.id.clone(), captured);
-            manifests.insert(package.id.clone(), captured_manifest);
+            let verified = load_verified_dependency(root, package, reader, budget, cancellation)?;
+            dependencies.insert(package.id.clone(), verified.dependency);
+            dependency_readers.insert(package.id.clone(), verified.filesystem);
+            manifests.insert(package.id.clone(), verified.manifest);
         }
         let dependency_plugin_policies = manifests
             .iter()
@@ -2585,6 +2568,39 @@ fn source_root_error(
             candidate.display()
         )),
     }
+}
+
+struct VerifiedDependency {
+    manifest: PackageManifest,
+    filesystem: graphcal_io::InMemoryFileSystem,
+    dependency: LoadedDependency,
+}
+
+fn load_verified_dependency(
+    root: &Path,
+    package: &LockedPackage,
+    reader: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<VerifiedDependency, CompileError> {
+    let manifest = read_package_manifest_from_path(root, reader, budget, cancellation)?;
+    let snapshot = verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
+    let filesystem = snapshot.mount(root).map_err(loader_manifest_error)?;
+    let captured_manifest =
+        read_package_manifest_from_path(root, &filesystem, budget, cancellation)?;
+    if captured_manifest != manifest {
+        return Err(loader_manifest_error(
+            "package manifest changed while capturing its authenticated snapshot",
+        ));
+    }
+    Ok(VerifiedDependency {
+        manifest,
+        filesystem,
+        dependency: LoadedDependency {
+            root: root.to_path_buf(),
+            snapshot,
+        },
+    })
 }
 
 fn verify_locked_source(
