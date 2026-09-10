@@ -38,12 +38,14 @@ function runtime(source, baseline = [], files = []) {
     },
     window: {}, setTimeout() {}, clearTimeout() {},
   };
-  // Expose the production closure in this test only, replacing worker startup.
+  // Expose the production mount's functional UI core in this test only,
+  // replacing transport startup.
   const code = readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8");
-  const startup = "  try {\n    var glueSource";
+  const startup = "  startTransport();\n  }";
   assert.equal(code.split(startup).length, 2);
-  runInNewContext(code.slice(0, code.indexOf(startup)) +
-    "globalThis.api = { buildControls, currentBindings, patchParamControls, controls, resetButton, renderView };})();", context);
+  runInNewContext(code.replace(startup,
+    "  globalThis.api = { buildControls, currentBindings, patchParamControls, controls, resetButton, renderView };\n  }"), context);
+  context.window.GraphcalReport.mount({ baselineBindings: baseline, createTransport() {} });
   const { api } = context;
   api.buildControls(prepared.parameterPorts(), prepared.evaluateBindings(baseline).evaluation);
   const bindings = () => JSON.parse(JSON.stringify(api.currentBindings()));
@@ -191,3 +193,43 @@ try {
   run.prepared.free();
 } finally { rmSync(temporary, { recursive: true, force: true }); }
 console.log("value body: static and hydrated ranks 0–5 and nested structures have identical labels/leaves");
+
+// Exercise the public mount contract, not a source-rewritten UI helper.
+{
+  const timers = new Map();
+  const transports = [];
+  const body = new Element();
+  const context = {
+    window: {},
+    document: { body, createElement: tag => new Element(tag), querySelector: () => body },
+    setTimeout(fn, milliseconds) { const id = {}; timers.set(id, { fn, milliseconds }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  runInNewContext(readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8"), context);
+  context.window.GraphcalReport.mount({
+    baselineBindings: [{ name: "mass", expr: "12.0 kg" }],
+    createTransport(callbacks) {
+      const transport = { callbacks, messages: [], terminated: false,
+        postMessage(message) { this.messages.push(message); },
+        terminate() { this.terminated = true; },
+      };
+      transports.push(transport);
+      return transport;
+    },
+  });
+  const first = transports[0];
+  first.callbacks.onMessage({ type: "ready", ports: [] });
+  assert.deepEqual(JSON.parse(JSON.stringify(first.messages)), [
+    { type: "evaluate", id: 1, bindings: [{ name: "mass", expr: "12.0 kg" }] },
+  ]);
+  first.callbacks.onMessage({ type: "result", id: 999, outcome: { status: "eval_error", message: "stale" } });
+  assert.equal(body.children[0].textContent, "computing…");
+  [...timers.values()].find(timer => timer.milliseconds === 10000).fn();
+  assert.equal(first.terminated, true);
+  assert.equal(transports.length, 2);
+  transports[1].callbacks.onMessage({ type: "ready", ports: [] });
+  assert.equal(transports[1].messages[0].id, 2);
+  transports[1].callbacks.onMessage({ type: "result", id: 2, outcome: { status: "eval_error", message: "missing input" } });
+  assert.equal(body.children[0].textContent, "evaluation failed: missing input");
+}
+console.log("report transport: baseline replay, stale response rejection and timeout replacement passed");

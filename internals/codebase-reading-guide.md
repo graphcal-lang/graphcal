@@ -692,9 +692,11 @@ too: `value_display.rs` projects runtime values into scalar/entry/grid bodies,
 `report_ir.rs` derives the typed `ReportDocument` (cards, figures, checks,
 provenance, `///` captions), and `report_html.rs` / `report_markdown.rs` render
 it deterministically. `report_hydrate.rs` packages the interactive layer —
-the no-modules wasm engine, project sources, and baseline bindings — behind
-`report_runtime.js`, which synthesizes controls from typed parameter ports and
-re-evaluates in a Web Worker. Wasm declaration outcomes serialize the same
+the no-modules wasm engine, project sources, and baseline bindings.
+`report_standalone.js` adapts that embedded engine to the transport-neutral
+`window.GraphcalReport.mount` API in `report_runtime.js`, which owns controls,
+rendering, debounce, and timeout restart lifecycle. Wasm declaration outcomes
+serialize the same
 `value_display::ValueBody` projection consumed by native HTML; JavaScript only
 creates DOM elements and does not reinterpret tensor rank or leaf formatting.
 Consumed by the CLI (`--plot`, `report build`)

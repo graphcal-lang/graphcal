@@ -224,7 +224,8 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
         "id=\"graphcal-baseline\"",
         "id=\"graphcal-engine-glue\"",
         "id=\"graphcal-engine-wasm\"",
-        "Graphcal report hydration runtime",
+        "Graphcal report UI runtime",
+        "Standalone Graphcal report bootstrap",
     ] {
         assert_eq!(
             html.matches(marker).count(),
