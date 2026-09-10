@@ -123,6 +123,25 @@ pub struct ProjectBundle {
 }
 
 impl ProjectBundle {
+    /// Encode the wire boundary with the same envelope limit used by decoding.
+    /// Artifact validation remains the responsibility of `mount`.
+    ///
+    /// # Errors
+    /// Rejects serialization failures or an oversized JSON envelope.
+    pub fn to_json(&self) -> Result<String, BundleError> {
+        let json = serde_json::to_string(self).map_err(BundleError::Json)?;
+        Self::check_json_size(json.len())?;
+        Ok(json)
+    }
+
+    const fn check_json_size(bytes: usize) -> Result<(), BundleError> {
+        if bytes > MAX_BUNDLE_JSON_BYTES {
+            Err(BundleError::TotalSize)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Validate and mount this snapshot without granting any host filesystem access.
     ///
     /// # Errors
@@ -168,9 +187,7 @@ impl ProjectBundle {
     /// # Errors
     /// Returns a structured size or malformed-payload error.
     pub fn from_json(json: &str) -> Result<Self, BundleError> {
-        if json.len() > MAX_BUNDLE_JSON_BYTES {
-            return Err(BundleError::TotalSize);
-        }
+        Self::check_json_size(json.len())?;
         serde_json::from_str(json).map_err(BundleError::Json)
     }
 }
@@ -223,6 +240,20 @@ mod binary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_size_boundaries_are_shared_by_producers_and_consumers() {
+        assert!(ProjectBundle::check_json_size(MAX_BUNDLE_JSON_BYTES - 1).is_ok());
+        assert!(ProjectBundle::check_json_size(MAX_BUNDLE_JSON_BYTES).is_ok());
+        assert!(matches!(
+            ProjectBundle::check_json_size(MAX_BUNDLE_JSON_BYTES + 1),
+            Err(BundleError::TotalSize)
+        ));
+        assert!(matches!(
+            ProjectBundle::check_json_size(usize::MAX),
+            Err(BundleError::TotalSize)
+        ));
+    }
 
     #[test]
     fn paths_are_portable_and_do_not_escape() {
