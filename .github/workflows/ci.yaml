@@ -286,8 +286,8 @@ jobs:
       - name: Smoke-test the automatically embedded report engine
         run: |
           cargo run --locked -p graphcal --example export_report_engine -- target/wasm-report/pkg
-          # 5.25 MiB includes browser HTML rendering and report provenance.
-          test "$(wc -c < target/wasm-report/pkg/graphcal_wasm_bg.wasm)" -le 5505024
+          # 6.5 MiB includes reports and the shared metered plugin interpreter.
+          test "$(wc -c < target/wasm-report/pkg/graphcal_wasm_bg.wasm)" -le 6815744
           cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl \
             --output target/wasm-report/rocket.report.html
           node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
