@@ -454,7 +454,7 @@ fn unpinned_plugins_are_rejected_in_package_projects() {
         matches!(
             err,
             CompileError::Eval(GraphcalError::PluginNotPinned { ref plugin, .. })
-                if plugin.as_str() == "plugins/demo.wasm"
+                if plugin.path().as_str() == "plugins/demo.wasm"
         ),
         "expected PluginNotPinned, got {err:?}"
     );
@@ -583,7 +583,7 @@ fuel_per_call = 200000000
         matches!(
             err,
             CompileError::Eval(GraphcalError::ManifestError { ref message })
-                if message.contains("plugins/demo.wasm.missing")
+                if message.contains("plugins/demo.wasm (package proj).missing")
         ),
         "unexpected error: {err:?}"
     );

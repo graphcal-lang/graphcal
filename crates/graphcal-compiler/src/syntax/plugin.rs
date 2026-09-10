@@ -10,7 +10,8 @@ use std::sync::Arc;
 /// embedder-provided host registry entry — and everything downstream
 /// pattern-matches the typed kind. Keeping the identity a dedicated type
 /// (rather than a bare `String`) fences that meaning behind one identity
-/// used consistently by the AST, TIR, loader, and evaluator.
+/// used by source syntax. Resolution adds package ownership through
+/// [`crate::plugin_identity::PluginIdentity`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PluginPath(Arc<str>);
 
@@ -59,15 +60,4 @@ impl std::fmt::Display for PluginPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
-}
-
-/// Canonical identity of one extern function: the plugin it belongs to plus
-/// its leaf name. Host function registries and resolved signature tables key
-/// on this.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ExternFnKey {
-    /// The owning plugin.
-    pub plugin: PluginPath,
-    /// The function leaf name.
-    pub name: crate::syntax::function_name::FnName,
 }

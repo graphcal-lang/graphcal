@@ -1193,7 +1193,7 @@ impl std::fmt::Display for FunctionRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternFnRef {
     /// Canonical plugin identity (the `import plugin "…"` path string).
-    pub plugin: crate::syntax::plugin::PluginPath,
+    pub plugin: crate::plugin_identity::PluginIdentity,
     /// The module alias the call site was qualified with.
     pub alias: ModuleAliasName,
     /// The function leaf name.
@@ -1203,8 +1203,8 @@ pub struct ExternFnRef {
 impl ExternFnRef {
     /// The canonical `(plugin, function)` lookup key.
     #[must_use]
-    pub fn key(&self) -> crate::syntax::plugin::ExternFnKey {
-        crate::syntax::plugin::ExternFnKey {
+    pub fn key(&self) -> crate::plugin_identity::ExternFnKey {
+        crate::plugin_identity::ExternFnKey {
             plugin: self.plugin.clone(),
             name: self.name.clone(),
         }

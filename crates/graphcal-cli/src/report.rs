@@ -454,7 +454,7 @@ fn hydration_project(
                 reason: error.to_string(),
             })?;
         files.push(BundleArtifact {
-            path: path.to_string().try_into()?,
+            path: path.path().to_string().try_into()?,
             content: ArtifactContent::Plugin(plugin.bytes().to_vec()),
         });
     }

@@ -469,7 +469,7 @@ pub struct HirDag {
     pub(crate) imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
-    pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
+    pub(crate) extern_functions: HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,

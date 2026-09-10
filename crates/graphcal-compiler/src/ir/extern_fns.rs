@@ -23,7 +23,7 @@ use crate::syntax::span::Span;
 #[derive(Debug, Clone)]
 pub struct ExternFunctionEntry {
     /// Canonical plugin identity (the `import plugin "…"` path string).
-    pub plugin: crate::syntax::plugin::PluginPath,
+    pub plugin: crate::plugin_identity::PluginIdentity,
     /// The alias the declaring file bound the plugin to (diagnostics only).
     pub alias: crate::syntax::module_name::ModuleAliasName,
     /// The function leaf name.
@@ -80,7 +80,7 @@ pub(super) fn resolve_plugin_imports(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
+) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
     use std::collections::hash_map::Entry;
 
     let mut map = HashMap::new();
@@ -189,7 +189,7 @@ fn resolve_extern_function(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<(crate::syntax::plugin::ExternFnKey, ExternFunctionEntry), GraphcalError> {
+) -> Result<(crate::plugin_identity::ExternFnKey, ExternFunctionEntry), GraphcalError> {
     // Binder idents share one lexical namespace regardless of
     // constraint: `<D: Dim, D: Index>` is a duplicate declaration.
     let mut seen_binders: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -266,12 +266,13 @@ fn resolve_extern_function(
                     span: function.span.into(),
                 }
             })?;
-    let key = crate::syntax::plugin::ExternFnKey {
-        plugin: decl.path.value.clone(),
+    let plugin = crate::plugin_identity::PluginIdentity::resolve(&decl.path.value, owner.package());
+    let key = crate::plugin_identity::ExternFnKey {
+        plugin: plugin.clone(),
         name: function.name.value.clone(),
     };
     let entry = ExternFunctionEntry {
-        plugin: decl.path.value.clone(),
+        plugin,
         alias: decl.alias.value.clone(),
         name: function.name.value.clone(),
         signature,

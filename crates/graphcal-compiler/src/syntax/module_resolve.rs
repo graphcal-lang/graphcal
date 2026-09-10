@@ -1009,7 +1009,7 @@ impl ModuleAliasTarget {
 /// `import plugin "path" as alias { ... }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginAliasTarget {
-    path: crate::syntax::plugin::PluginPath,
+    path: crate::plugin_identity::PluginIdentity,
     span: Span,
     functions: HashMap<crate::syntax::function_name::FnName, Span>,
 }
@@ -1017,7 +1017,7 @@ pub struct PluginAliasTarget {
 impl PluginAliasTarget {
     /// The plugin identity the alias refers to.
     #[must_use]
-    pub(crate) const fn path(&self) -> &crate::syntax::plugin::PluginPath {
+    pub(crate) const fn path(&self) -> &crate::plugin_identity::PluginIdentity {
         &self.path
     }
 
@@ -3541,7 +3541,10 @@ fn register_plugin_imports(
         scope.plugin_aliases.insert(
             plugin.alias.value.clone(),
             PluginAliasTarget {
-                path: plugin.path.value.clone(),
+                path: crate::plugin_identity::PluginIdentity::resolve(
+                    &plugin.path.value,
+                    owner.package(),
+                ),
                 span: plugin.alias.span,
                 functions,
             },

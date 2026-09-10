@@ -64,7 +64,7 @@ pub fn register_project_plugins(
 
 /// Register every manifest function of one loaded module.
 fn register_module_functions(
-    plugin_path: &graphcal_compiler::syntax::plugin::PluginPath,
+    plugin_path: &graphcal_compiler::plugin_identity::PluginIdentity,
     module: &Arc<PluginModule>,
     policy: &PluginCallPolicy,
     host_default_fuel_per_call: u64,

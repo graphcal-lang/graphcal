@@ -1456,7 +1456,8 @@ build, sharing, and safety contracts. No compiler/LSP dependency edges changed.
 24. `crates/graphcal-compiler/src/syntax/comments.rs`
 25. `crates/graphcal-compiler/src/syntax/lexer.rs`
 26. `crates/graphcal-compiler/src/syntax/function_name.rs`
-27. `crates/graphcal-compiler/src/syntax/plugin.rs`
+27. `crates/graphcal-compiler/src/syntax/plugin.rs` →
+    `crates/graphcal-compiler/src/plugin_identity.rs` (resolved package-owned artifacts versus global host identities)
 28. `crates/graphcal-compiler/src/syntax/index_name.rs`
 29. `crates/graphcal-compiler/src/syntax/local_name.rs`
 30. `crates/graphcal-compiler/src/syntax/module_name.rs`

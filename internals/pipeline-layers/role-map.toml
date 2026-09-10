@@ -47,6 +47,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["plugin_identity"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["plugin_identity", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["declaration_category"]
 role = "contracts"
 

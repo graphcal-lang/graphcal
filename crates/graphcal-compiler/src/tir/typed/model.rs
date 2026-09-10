@@ -1416,7 +1416,7 @@ pub struct ResolvedConstructorTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("TIR already contains a different definition for plugin `{plugin}` function `{name}`")]
 pub struct CompetingExternFunctionDefinition {
-    pub plugin: crate::syntax::plugin::PluginPath,
+    pub plugin: crate::plugin_identity::PluginIdentity,
     pub name: crate::syntax::function_name::FnName,
 }
 
@@ -1434,7 +1434,7 @@ pub struct TirBuilder {
     runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     extern_functions:
-        HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
+        HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
 
 impl TirBuilder {
@@ -1443,7 +1443,7 @@ impl TirBuilder {
         project_types: Arc<ProjectTypeStore>,
         root: DagTIR,
         extern_functions: HashMap<
-            crate::syntax::plugin::ExternFnKey,
+            crate::plugin_identity::ExternFnKey,
             crate::ir::lower::ExternFunctionEntry,
         >,
     ) -> Self {
@@ -1533,7 +1533,7 @@ impl TirBuilder {
     /// function identity already has a different callable signature.
     pub fn insert_extern_function(
         &mut self,
-        key: crate::syntax::plugin::ExternFnKey,
+        key: crate::plugin_identity::ExternFnKey,
         function: crate::ir::lower::ExternFunctionEntry,
     ) -> Result<(), CompetingExternFunctionDefinition> {
         match self.extern_functions.get(&key) {
@@ -1579,7 +1579,7 @@ pub struct TIR {
     pub(crate) runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     pub(crate) extern_functions:
-        HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
+        HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
 
 impl TIR {
@@ -1714,7 +1714,7 @@ impl TIR {
     #[must_use]
     pub const fn extern_functions(
         &self,
-    ) -> &HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
+    ) -> &HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
         &self.extern_functions
     }
 

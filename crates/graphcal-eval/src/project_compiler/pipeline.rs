@@ -342,9 +342,7 @@ pub(in crate::project_compiler) fn check_hir_project(
             &cancellation,
         )?;
         verify_host_functions(
-            root.package(),
             plugins,
-            file_dag_id,
             &compiled.tir,
             &file_src,
             host_metadata,
@@ -390,34 +388,26 @@ pub(in crate::project_compiler) fn check_hir_project(
 ///    this is the "declaration verified against the embedded manifest"
 ///    guarantee of the plugin design (#25).
 fn verify_host_functions(
-    root_package: &graphcal_compiler::dag_id::DagPackageId,
     plugins: &HashMap<
-        graphcal_compiler::syntax::plugin::PluginPath,
+        graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::PluginFileEntry,
     >,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    use graphcal_compiler::syntax::plugin::PluginSourceKind;
-
     // Deterministic reporting order: earliest declaration first.
     let mut declared: Vec<_> = tir.extern_functions().iter().collect();
     declared.sort_by_key(|(_, function)| function.name_span.offset());
 
     for (key, function) in declared {
         cancellation.checkpoint()?;
-        if key.plugin.source_kind() == PluginSourceKind::WasmModule {
-            verify_wasm_plugin(
-                root_package,
-                plugins,
-                file_dag_id,
-                function,
-                src,
-                host_metadata,
-            )?;
+        if matches!(
+            key.plugin,
+            graphcal_compiler::plugin_identity::PluginIdentity::Wasm { .. }
+        ) {
+            verify_wasm_plugin(plugins, function, src, host_metadata)?;
         }
         if !host_metadata.contains(key) {
             return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
@@ -450,26 +440,14 @@ fn verify_host_functions(
 /// failures recorded by the loader and module-level failures recorded by
 /// the embedder's plugin host, reported at the import path's span.
 fn verify_wasm_plugin(
-    root_package: &graphcal_compiler::dag_id::DagPackageId,
     plugins: &HashMap<
-        graphcal_compiler::syntax::plugin::PluginPath,
+        graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::PluginFileEntry,
     >,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
     function: &graphcal_compiler::ir::lower::ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
 ) -> Result<(), CompileError> {
-    if file_dag_id.package() != root_package {
-        return Err(CompileError::Eval(
-            GraphcalError::PluginInDependencyPackage {
-                plugin: function.plugin.clone(),
-                src: src.clone(),
-                span: function.path_span.into(),
-            },
-        ));
-    }
-
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::PluginFileError::NotPinned)) => {
             return Err(CompileError::Eval(GraphcalError::PluginNotPinned {

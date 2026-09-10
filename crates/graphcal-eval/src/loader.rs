@@ -10,13 +10,14 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
-use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
+use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_io::{
     ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy,
     RealFileSystem, SourceTreeHashLimits, hash_source_tree,
@@ -720,18 +721,24 @@ impl LoadedFile {
 /// plugin and function identities.
 #[derive(Debug, Clone, Default)]
 pub struct PluginCallPolicy {
-    default_fuel_per_call: Option<u64>,
+    default_fuel_per_call: HashMap<DagPackageId, u64>,
     function_fuel_per_call: HashMap<ExternFnKey, u64>,
 }
 
 impl PluginCallPolicy {
-    fn from_manifest(policy: &graphcal_package::PluginExecutionPolicy) -> Self {
+    fn from_manifest(
+        policy: &graphcal_package::PluginExecutionPolicy,
+        package: &DagPackageId,
+    ) -> Self {
         let function_fuel_per_call = policy
             .function_limits()
             .map(|(selector, budget)| {
                 (
                     ExternFnKey {
-                        plugin: PluginPath::new(selector.plugin().to_string()),
+                        plugin: PluginIdentity::resolve(
+                            &PluginPath::new(selector.plugin().to_string()),
+                            package,
+                        ),
                         name: FnName::expect_valid(selector.function().as_str()),
                     },
                     budget.get(),
@@ -741,7 +748,9 @@ impl PluginCallPolicy {
         Self {
             default_fuel_per_call: policy
                 .default_fuel_per_call()
-                .map(graphcal_package::PluginFuelBudget::get),
+                .map(|fuel| (package.clone(), fuel.get()))
+                .into_iter()
+                .collect(),
             function_fuel_per_call,
         }
     }
@@ -749,14 +758,18 @@ impl PluginCallPolicy {
     /// Resolve one function's configured budget, with a function override
     /// taking precedence over the project-wide default.
     #[must_use]
-    pub fn fuel_per_call(&self, plugin: &PluginPath, function: &FnName) -> Option<u64> {
+    pub fn fuel_per_call(&self, plugin: &PluginIdentity, function: &FnName) -> Option<u64> {
         self.function_fuel_per_call
             .get(&ExternFnKey {
                 plugin: plugin.clone(),
                 name: function.clone(),
             })
             .copied()
-            .or(self.default_fuel_per_call)
+            .or_else(|| {
+                plugin
+                    .package()
+                    .and_then(|package| self.default_fuel_per_call.get(package).copied())
+            })
     }
 }
 
@@ -782,8 +795,8 @@ pub struct LoadedProject {
     /// plugin identities (e.g. `graphcal:demo`) never appear in this map,
     /// and neither do wasm imports declared by dependency packages (those
     /// are rejected at verification time).
-    plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
-    /// Root-package plugin fuel settings resolved to typed function identities.
+    plugins: HashMap<PluginIdentity, PluginFileEntry>,
+    /// Package-scoped plugin fuel settings resolved to typed function identities.
     plugin_call_policy: PluginCallPolicy,
 }
 
@@ -812,16 +825,20 @@ fn validate_plugin_call_policy(
 ) -> Result<(), CompileError> {
     let declared_functions = files
         .values()
-        .flat_map(|file| file.ast.declarations.iter())
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::PluginImport(plugin) => Some(plugin),
-            _ => None,
-        })
-        .flat_map(|plugin| {
-            plugin.functions.iter().map(|function| ExternFnKey {
-                plugin: plugin.path.value.clone(),
-                name: function.name.value.clone(),
-            })
+        .flat_map(|file| {
+            file.ast
+                .declarations
+                .iter()
+                .filter_map(|declaration| match &declaration.kind {
+                    DeclKind::PluginImport(plugin) => Some(plugin),
+                    _ => None,
+                })
+                .flat_map(move |plugin| {
+                    plugin.functions.iter().map(move |function| ExternFnKey {
+                        plugin: PluginIdentity::resolve(&plugin.path.value, file.dag_id.package()),
+                        name: function.name.value.clone(),
+                    })
+                })
         })
         .collect::<HashSet<_>>();
 
@@ -848,20 +865,26 @@ fn validate_plugin_call_policy(
 /// compile-only consumers (hover, symbols) keep working; evaluation surfaces
 /// the stored error at the declaring import.
 fn read_wasm_plugins<'a>(
-    file_asts: impl Iterator<Item = &'a graphcal_compiler::desugar::desugared_ast::File>,
+    file_asts: impl Iterator<
+        Item = (
+            &'a DagPackageId,
+            &'a graphcal_compiler::desugar::desugared_ast::File,
+        ),
+    >,
     package_root: &Path,
     fs: &dyn FileSystemReader,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>, CompileError> {
+) -> Result<HashMap<PluginIdentity, PluginFileEntry>, CompileError> {
     let mut plugins = HashMap::new();
-    for ast in file_asts {
+    for (package, ast) in file_asts {
         for path in wasm_plugin_paths(ast) {
             cancellation.checkpoint()?;
-            if !plugins.contains_key(path) {
+            let identity = PluginIdentity::resolve(path, package);
+            if !plugins.contains_key(&identity) {
                 let entry = read_plugin_file(package_root, path, fs, budget, cancellation);
                 cancellation.checkpoint()?;
-                plugins.insert(path.clone(), entry);
+                plugins.insert(identity, entry);
             }
         }
     }
@@ -1017,14 +1040,14 @@ pub enum PluginFileError {
 /// to the pinned digest. Missing or mismatched pins replace the loaded
 /// entry with a hard error surfaced at the declaring import.
 fn apply_plugin_pins(
-    plugins: &mut HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+    plugins: &mut HashMap<PluginIdentity, PluginFileEntry>,
     pins: &BTreeMap<String, String>,
 ) {
     for (path, entry) in plugins.iter_mut() {
         let Ok(loaded) = entry.as_ref() else {
             continue;
         };
-        match pins.get(path.as_str()) {
+        match pins.get(path.path().as_str()) {
             None => *entry = Err(PluginFileError::NotPinned),
             Some(expected) if *expected != loaded.sha256_hex => {
                 *entry = Err(PluginFileError::HashMismatch {
@@ -1042,7 +1065,7 @@ impl LoadedProject {
         files: HashMap<DagId, LoadedFile>,
         root: DagId,
         load_order: Vec<DagId>,
-        plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+        plugins: HashMap<PluginIdentity, PluginFileEntry>,
         plugin_call_policy: PluginCallPolicy,
     ) -> Self {
         let dag_owners = files
@@ -1112,9 +1135,7 @@ impl LoadedProject {
 
     /// Validated plugin artifacts and deferred plugin-loading errors.
     #[must_use]
-    pub const fn plugins(
-        &self,
-    ) -> &HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
+    pub const fn plugins(&self) -> &HashMap<PluginIdentity, PluginFileEntry> {
         &self.plugins
     }
 
@@ -1201,7 +1222,12 @@ impl LoadedProject {
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
         let plugins = wasm_plugin_paths(&ast)
-            .map(|plugin| (plugin.clone(), Err(PluginFileError::NoProjectFilesystem)))
+            .map(|plugin| {
+                (
+                    PluginIdentity::resolve(plugin, dag_id.package()),
+                    Err(PluginFileError::NoProjectFilesystem),
+                )
+            })
             .collect();
         cancellation.checkpoint()?;
         let loaded_file = LoadedFile {
@@ -1791,7 +1817,9 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(
-        files.values().map(|file| &file.ast),
+        files
+            .values()
+            .map(|file| (file.dag_id.package(), &file.ast)),
         &project_root,
         fs,
         budget,
@@ -1808,7 +1836,7 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     let plugin_call_policy = manifest
         .as_ref()
         .map_or_else(PluginCallPolicy::default, |manifest| {
-            PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy)
+            PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy, &package_id)
         });
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
@@ -1880,11 +1908,21 @@ fn load_locked_package_project<F: FileSystemReader>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
     cancellation.checkpoint()?;
-    let plugin_call_policy =
-        PluginCallPolicy::from_manifest(&root_manifest.plugin_execution_policy);
+    let root_policy = root_manifest.plugin_execution_policy.clone();
     let context =
         PackageLoadContext::from_lockfile(project_root, root_manifest, fs, budget, cancellation)?;
     let root_package = context.graph.root().clone();
+    let mut plugin_call_policy =
+        PluginCallPolicy::from_manifest(&root_policy, &DagPackageId::new(root_package.as_str()));
+    for (package, policy) in &context.dependency_plugin_policies {
+        let policy = PluginCallPolicy::from_manifest(policy, &DagPackageId::new(package.as_str()));
+        plugin_call_policy
+            .default_fuel_per_call
+            .extend(policy.default_fuel_per_call);
+        plugin_call_policy
+            .function_fuel_per_call
+            .extend(policy.function_fuel_per_call);
+    }
 
     let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
     let mut path_to_dag_id: HashMap<(PackageInstanceId, PathBuf), DagId> = HashMap::new();
@@ -1908,23 +1946,37 @@ fn load_locked_package_project<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let root_dag_id = path_to_dag_id[&(root_package.clone(), root_canonical.to_path_buf())].clone();
     cancellation.checkpoint()?;
-    // Wasm plugin files may only be declared by the root package (dependency
-    // packages' declarations are rejected at verification); resolve and read
-    // them against the root package's source root.
-    let root_package_root = context.root_for(&root_package)?.to_path_buf();
-    let root_dag_package = root_dag_id.package().clone();
-    let root_reader = context.reader_for(&root_package)?;
-    let mut plugins = read_wasm_plugins(
-        files
-            .values()
-            .filter(|file| *file.dag_id.package() == root_dag_package)
-            .map(|file| &file.ast),
-        &root_package_root,
-        root_reader,
-        budget,
-        cancellation,
-    )?;
-    apply_plugin_pins(&mut plugins, &context.plugin_pins);
+    // Dependency execution stays gated while its artifact-integrity contract is
+    // being extended. The current tree hash excludes files outside source_dir;
+    // package-qualified identity alone must not authorize those binaries.
+    if files.values().any(|file| {
+        file.dag_id.package() != root_dag_id.package()
+            && wasm_plugin_paths(&file.ast).next().is_some()
+    }) {
+        return Err(loader_manifest_error(
+            "dependency-owned Wasm plugins are not yet supported: executable artifact hash coverage must be established",
+        ));
+    }
+    // Each artifact resolves within its declaring package's authority. Root
+    // plugins use explicit pins; dependency binaries need verified coverage.
+    let mut plugins = HashMap::new();
+    for package in context.roots.keys() {
+        let owner = DagPackageId::new(package.as_str());
+        let mut owned = read_wasm_plugins(
+            files
+                .values()
+                .filter(|file| file.dag_id.package() == &owner)
+                .map(|file| (file.dag_id.package(), &file.ast)),
+            context.root_for(package)?,
+            context.reader_for(package)?,
+            budget,
+            cancellation,
+        )?;
+        if package == &root_package {
+            apply_plugin_pins(&mut owned, &context.plugin_pins);
+        }
+        plugins.extend(owned);
+    }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
@@ -1945,6 +1997,8 @@ struct PackageLoadContext<'a> {
     root_reader: &'a dyn FileSystemReader,
     roots: BTreeMap<PackageInstanceId, PathBuf>,
     dependency_readers: BTreeMap<PackageInstanceId, RealFileSystem>,
+    dependency_plugin_policies:
+        BTreeMap<PackageInstanceId, graphcal_package::PluginExecutionPolicy>,
     /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
     plugin_pins: BTreeMap<String, String>,
 }
@@ -2030,6 +2084,10 @@ impl<'a> PackageLoadContext<'a> {
             verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
             manifests.insert(package.id.clone(), manifest);
         }
+        let dependency_plugin_policies = manifests
+            .iter()
+            .map(|(id, manifest)| (id.clone(), manifest.plugin_execution_policy.clone()))
+            .collect();
         manifests.insert(validated.root().clone(), root_manifest);
         let graph = validated
             .bind_manifests(&manifests)
@@ -2044,6 +2102,7 @@ impl<'a> PackageLoadContext<'a> {
             root_reader: fs,
             roots,
             dependency_readers,
+            dependency_plugin_policies,
             plugin_pins,
         })
     }
@@ -3216,8 +3275,9 @@ fuel_per_call = 900000000
 "#,
         )
         .unwrap();
-        let policy = PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy);
-        let plugin = PluginPath::new("plugins/solver.wasm");
+        let owner = DagPackageId::new("test");
+        let policy = PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy, &owner);
+        let plugin = PluginIdentity::resolve(&PluginPath::new("plugins/solver.wasm"), &owner);
 
         assert_eq!(
             policy.fuel_per_call(&plugin, &FnName::expect_valid("heavy")),
