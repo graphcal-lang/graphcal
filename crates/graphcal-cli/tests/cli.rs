@@ -7379,7 +7379,15 @@ fn report_build_hydrated_embeds_package_dependencies() {
         String::from_utf8_lossy(&output.stderr)
     );
     let html = std::fs::read_to_string(main.with_extension("report.html")).unwrap();
-    assert!(html.contains("\"dependencies\":[{\"id\":"));
+    let payload = html
+        .split_once("<script id=\"graphcal-project\" type=\"application/json\">")
+        .unwrap()
+        .1
+        .split_once("</script>")
+        .unwrap()
+        .0;
+    let bundle = graphcal_eval::project_bundle::ProjectBundle::from_json(payload).unwrap();
+    assert_eq!(bundle.dependencies.len(), 1);
 
     // The same project builds statically: the baseline is computed natively.
     let html_path = dir.path().join("out.html");

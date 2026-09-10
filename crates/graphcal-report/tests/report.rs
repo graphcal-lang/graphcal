@@ -274,12 +274,12 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
     use graphcal_report::report_hydrate::{EngineBundle, Hydration};
 
     let document = build_document(DELTA_V);
-    let hydration = Hydration {
-        engine: EngineBundle {
+    let hydration = Hydration::new(
+        EngineBundle {
             glue_js: "let wasm_bindgen = function () {};",
             wasm: b"\x00asm\x01\x00\x00\x00",
         },
-        project: ProjectBundle {
+        &ProjectBundle {
             dependencies: vec![],
             entry: "deltav.gcl".to_string().try_into().unwrap(),
             files: vec![BundleArtifact {
@@ -287,8 +287,9 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
                 content: ArtifactContent::Source(DELTA_V.to_string()),
             }],
         },
-        baseline_bindings: vec![("isp".to_string(), "450.0 s".to_string())],
-    };
+        vec![("isp".to_string(), "450.0 s".to_string())],
+    )
+    .unwrap();
     let html = render_report_html(&document, VegaScriptSource::Inline, Some(&hydration));
 
     // Payload blocks and the runtime are embedded once each.

@@ -182,14 +182,14 @@ pub fn run_build(
     };
     let hydration = match &engine {
         None => None,
-        Some(engine) => Some(Hydration {
-            engine: EngineBundle {
+        Some(engine) => Some(Hydration::new(
+            EngineBundle {
                 glue_js: engine.glue_js.as_ref(),
                 wasm: engine.wasm.as_ref(),
             },
-            project: hydration_project(&project, args, &fs, &metadata)?,
-            baseline_bindings: baseline_binding_strings(overrides),
-        }),
+            &hydration_project(&project, args, &fs, &metadata)?,
+            baseline_binding_strings(overrides),
+        )?),
     };
 
     let html = render_report_html(&document, VegaScriptSource::Inline, hydration.as_ref());
@@ -483,7 +483,6 @@ fn hydration_project(
     };
     // Apply exactly the browser's artifact policy before writing an interactive report.
     bundle.mount(Path::new("/report"))?;
-    bundle.to_json()?;
     Ok(bundle)
 }
 

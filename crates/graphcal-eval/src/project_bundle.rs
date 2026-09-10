@@ -161,7 +161,11 @@ impl ProjectBundle {
         Ok(json)
     }
 
-    const fn check_json_size(bytes: usize) -> Result<(), BundleError> {
+    /// Check a serialized envelope, including any transport-specific escaping.
+    ///
+    /// # Errors
+    /// Rejects byte counts above the shared encoded-payload limit.
+    pub const fn check_json_size(bytes: usize) -> Result<(), BundleError> {
         if bytes > MAX_BUNDLE_JSON_BYTES {
             Err(BundleError::TotalSize)
         } else {
@@ -356,18 +360,80 @@ mod binary {
         let encoded = String::deserialize(deserializer)?;
         if encoded.len() > MAX_ENCODED_ARTIFACT_BYTES {
             return Err(serde::de::Error::custom(
-                "plugin exceeds encoded artifact limit",
+                "binary artifact exceeds encoded limit",
             ));
         }
         base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|_| serde::de::Error::custom("invalid plugin base64"))
+            .map_err(|_| serde::de::Error::custom("invalid binary artifact base64"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_file_counts_share_one_budget() {
+        let bundle = ProjectBundle {
+            entry: "s0.gcl".to_string().try_into().unwrap(),
+            files: (0..MAX_FILES)
+                .map(|index| BundleArtifact {
+                    path: format!("s{index}.gcl").try_into().unwrap(),
+                    content: ArtifactContent::Source(String::new()),
+                })
+                .collect(),
+            dependencies: vec![BundlePackage {
+                id: PackageInstanceId::new("dep").unwrap(),
+                files: vec![BundleArtifact {
+                    path: "graphcal.toml".to_string().try_into().unwrap(),
+                    content: ArtifactContent::Manifest(String::new()),
+                }],
+            }],
+        };
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::FileCount)
+        ));
+    }
+
+    #[test]
+    fn equal_relative_paths_remain_in_distinct_package_authorities() {
+        use graphcal_io::FileSystemReader as _;
+        let artifact = BundleArtifact {
+            path: "main.gcl".to_string().try_into().unwrap(),
+            content: ArtifactContent::Source(String::new()),
+        };
+        let mut bundle = ProjectBundle {
+            entry: artifact.path.clone(),
+            files: vec![artifact.clone()],
+            dependencies: ["first", "second"]
+                .into_iter()
+                .map(|id| BundlePackage {
+                    id: PackageInstanceId::new(id).unwrap(),
+                    files: vec![artifact.clone()],
+                })
+                .collect(),
+        };
+        let mounted = bundle.mount(Path::new("/report")).unwrap();
+        let first = &mounted.dependencies[&bundle.dependencies[0].id];
+        let second = &mounted.dependencies[&bundle.dependencies[1].id];
+        let read = |fs: &InMemoryFileSystem, root: &Path| {
+            fs.read_to_string_bounded(
+                &root.join("main.gcl"),
+                graphcal_io::ByteLimit::new(1),
+                &graphcal_io::NeverCancel,
+            )
+        };
+        assert!(read(&first.filesystem, &first.root).is_ok());
+        assert!(read(&first.filesystem, &second.root).is_err());
+        assert!(read(&mounted.filesystem, &first.root).is_err());
+        bundle.dependencies[1].id = bundle.dependencies[0].id.clone();
+        assert!(matches!(
+            bundle.mount(Path::new("/report")),
+            Err(BundleError::PackageIdentity)
+        ));
+    }
 
     #[test]
     fn encoded_size_boundaries_are_shared_by_producers_and_consumers() {

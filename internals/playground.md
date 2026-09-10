@@ -79,6 +79,27 @@ they reach the UI. Results and reports derive from the same evaluation. Pending
 or rejected controls leave the last successful values and shared bindings intact;
 source edits clear overrides. Shared links require Run before any evaluation.
 
+## Offline report bundles
+
+Reports use `prepareReportBundle` separately from text-only `prepareProject`.
+The CLI embeds verified dependency snapshots, root metadata, and plugin bytes;
+`project_bundle.rs` validates the bounded wire format and mounts each package in
+its own filesystem. `DependencySources::Embedded` cannot fall back to native
+cache reads. The ordinary loader revalidates the complete lock graph and exact
+artifact closure, then the ordinary metered plugin host registers the binaries.
+Opaque package identities remain typed map keys; numeric mount directories are
+only virtual filesystem locations, never encoded identities.
+
+`just report-plugin-browser-test` covers a real SDK plugin's scalar/array/record
+calls. `just report-package-browser-test` covers deleted-checkout and cache replay,
+direct/transitive dependencies, two versions of the same plugin path, byte-identical
+report generation, malformed closure rejection, and Chromium/Firefox/WebKit
+controls/reset. Its blocked-plugin recovery test shortens only the browser shell's
+deadline to avoid depending on how fast each engine spends a fuel budget; actual
+worker teardown/repreparation and metered plugin execution remain unchanged.
+No grammar or editor protocol changes are needed; native LSP invalidation follows
+captured dependency manifests, sources, and binaries.
+
 ## Release verification
 
 Frontend checks include Unicode/CRLF and empty-source sharing, malformed and
