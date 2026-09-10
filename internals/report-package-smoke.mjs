@@ -14,6 +14,14 @@ function payload(id) {
 }
 const bundle = JSON.parse(payload("graphcal-project"));
 assert.equal(bundle.dependencies.length, 3);
+const provenance = html.match(/<ul class="sources">([\s\S]*?)<\/ul>/)?.[1];
+assert.ok(provenance);
+assert.ok(provenance.includes(`<code>${bundle.entry}</code>`));
+for (const package_ of bundle.dependencies) {
+  for (const file of package_.files.filter(file => file.kind === "source")) {
+    assert.ok(provenance.includes(`<code>${package_.id} / ${file.path}</code>`), "dependency provenance must retain package identity and relative path");
+  }
+}
 const plugins = bundle.dependencies.filter(package_ => package_.files.some(file => file.kind === "plugin"));
 assert.equal(plugins.length, 2);
 assert.notEqual(plugins[0].id, plugins[1].id);

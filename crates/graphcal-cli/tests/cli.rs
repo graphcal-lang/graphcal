@@ -7019,6 +7019,9 @@ fn report_build_provenance_pins_source_digest_and_parameter_baseline() {
     );
     let html = std::fs::read_to_string(&html_path).unwrap();
 
+    // Root sources keep project-relative names, without a package prefix.
+    assert!(html.contains("<li><code>deltav.gcl</code> <span class=\"sha\">"));
+
     // The digest is the real SHA-256 of the source, rendered as lowercase hex.
     let mut hasher = Sha256::new();
     hasher.update(REPORT_MODEL.as_bytes());
