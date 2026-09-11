@@ -146,13 +146,13 @@ Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so
 binding `usd_per_eur` at evaluation time (e.g., via
 `--param 'usd_per_eur=1.20'`) changes all EUR-denominated values accordingly.
 
-Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must lower successfully and have the concrete scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
+Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must have the scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
 
 Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
 A plain `unit` belongs to the concrete runtime DAG instance whose params and nodes determine its scale. This capability follows the source marker, not constant folding: every plain `unit` is non-importable (`M025`), even when its right-hand side contains no `@` reference. Use `const unit` when a blueprint-stable unit must cross an `import` boundary.
 
-Concrete `include` and direct-call instances may use plain units. Each repeated or nested instance receives its own `(unit declaration, instance)` identity, so different bindings can produce different scales without collision. A scale used by a quantity literal participates in that instance's computational dependency ordering and cycle checks. A conversion-only display scale is computed after the owning invocation's SI values exist; it is not a computational prerequisite. Outputs keep the corresponding instance-specific unit presentation. An include does not turn the unit into an importable global name: a module include exposes it through that concrete instance namespace (`fx::EUR`), while a selective include can project an instance-specific alias (`unit EUR as euros`). Any blueprint-stable dimension or base unit used in the surrounding annotation remains an explicit `import`.
+Each `include` or direct call uses its own bindings to determine dynamic unit scales, and its outputs retain those display units. A module include exposes a unit through its instance namespace (`fx::EUR`); a selective include can give it an alias (`unit EUR as euros`). Dimensions and base units used in the caller's annotations still require explicit `import` declarations.
 
 ### Using Units
 
@@ -199,26 +199,13 @@ The source and target must share the same dimension. Attempting to convert betwe
 
 Compound targets support the `1/unit` reciprocal shorthand, matching how unit labels are displayed: `@f -> 1/min` is equivalent to `@f -> min^-1`. Only a literal `1` is allowed as the numerator.
 
-The conversion sets the value's *display* unit; values are always stored in SI internally. Display metadata follows value reads: a value converted at its construction site renders the same way when read back through `@x`, an algebraic payload field, an index entry, a dag output projection, a `const`, or the branch of an `if`/`match` selected at runtime. Evaluation carries selected presentation evidence with each concrete value, including locals and each execution of a comprehension or call site. Branches and index projections are not re-executed during rendering. Evidence is structured by index entry and field; multi-axis values and read chains have no fixed presentation-depth limit. A dag output keeps the selected unit label and scale of its defining invocation rather than being reinterpreted in the caller. The same applies to timezone displays on `Datetime` values.
+The conversion changes only the *display* unit, not the SI value used in calculations. References, field access, index access, and DAG outputs preserve the selected display unit. The same applies to timezone displays on `Datetime` values.
 
-If a display-only scale fails, canonical unit-label formatting exceeds its representation, or the requested display conversion overflows or underflows, the valid SI value remains available. Label-formatting failures also preserve quantity literals and compile-time constants: they do not reject an otherwise valid constant program. A separate **presentation diagnostic** identifies the affected declaration and nested field/index path. Computational, domain, and assertion failures remain failures, not presentation notices; compiler invariants and cancellation still abort evaluation. Repeated rendering performs no additional host calls.
-
-Display-only self and forward references use the completed owning frame's SI values. An unselected branch's display target is never evaluated. For example, a failed node used only by a unit target cannot erase either of these SI results:
-
-```gcl
-node broken: Dimensionless = 1.0 / 0.0;
-unit bad: Length = (@broken) m;
-node chosen: Length = 1.0 m -> bad;
-node unchosen: Length = if true { 1.0 m -> m } else { 1.0 m -> bad };
-```
-
-Here `broken` is a computation failure, `chosen` retains 1 m with a presentation diagnostic, and `unchosen` retains 1 m without one. In contrast, `1.0 bad` needs the scale to compute SI and therefore fails. An inline DAG still fails when any of its genuinely computational declarations fails, even if its selected output could otherwise be computed.
+If a display conversion cannot be performed, Graphcal reports a **presentation diagnostic** and retains the valid SI value. This does not suppress computational, domain, or assertion failures. In particular, a quantity literal needs a valid unit scale to compute its SI value; an invalid scale makes that computation fail.
 
 `->` is non-chaining: an expression carries at most one conversion target. Both the bare chain `@alt -> km -> m` (a parse error) and the parenthesized form `(@alt -> km) -> m` (a `D012` dimension-check error) are rejected — only the outermost target could ever take effect, so an inner conversion is either a typo or dead code.
 
 A conversion is only allowed where its display effect can land — the top level of a declaration body, an `if`/`match` branch, a constructor field initializer, a map-literal entry, a for-comprehension body, or a `scan`/`unfold` init or body (and a `scan` source). Each recurrence step preserves its selected presentation; an unannotated computed step retains the initial display preference. Anywhere else (arithmetic operands, function arguments, comparisons, conditions, assert bodies) the conversion would be silently inert, so it is rejected (`D013`).
-
-A conversion must also be *resolvable* for display: if the target's scale cannot be computed (for example, a [dynamic unit](#dynamic-units) whose scale expression evaluates to zero or a negative value), its SI fallback has a visible presentation diagnostic. This is distinct from a failed computational quantity-literal scale.
 
 ## Result Dimension Computation
 

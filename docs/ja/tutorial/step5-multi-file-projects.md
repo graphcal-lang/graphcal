@@ -34,10 +34,6 @@ rocket_project/
       main.gcl
 ```
 
-### 任意のプラグイン実行ポリシー { #optional-plugin-execution-policy }
-
-レビュー済みの WebAssembly カーネルを呼び出すプロジェクトは、マニフェストに上限付きの fuel 予算を設定することもできます。プロジェクト全体の `[plugins].fuel_per_call` の値は、ベンダリングされたすべてのプラグイン関数に適用されます。`[[plugins.function_limits]]` エントリーは、個別に識別された 1 つのプラグインパスと関数に対して上書きできます。優先順位、検証、および上限値については[プロジェクトの fuel ポリシー](../language/extern-functions.md#project-fuel-policies)を参照してください。
-
 ### `constants.gcl` { #constantsgcl }
 
 ```graphcal

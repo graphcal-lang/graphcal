@@ -315,11 +315,7 @@ positional keys always include the `#` prefix.
 
 ### `#[lazy]`
 
-Reserved syntax, but lazy evaluation is not implemented. Semantic checking
-rejects `#[lazy]` on every declaration and selective include item (A023), with
-or without arguments. The parser and formatter continue to recognize it so a
-future implementation can define an exact target and argument shape before
-carrying typed lazy metadata into the execution plan.
+`#[lazy]` is reserved but not supported. Using it is a compile error (A023).
 
 ## Assertions in Multi-File Projects
 

@@ -43,9 +43,7 @@ determines rendering order and the element order of
 !!! note "No empty indexes"
     Every index has at least one element. A named index must declare a label,
     `Fin(0)` is invalid, and coordinate constructors must produce at least one
-    coordinate. Completed indexed values are therefore always nonempty. If an
-    empty value reaches an aggregation internally, Graphcal reports `X001` as a
-    compiler invariant violation; empty aggregation has no user-facing semantics.
+    coordinate. Completed indexed values are therefore always nonempty.
 
 !!! note "Contextual syntax names"
     `scan` and `unfold` select recurrence syntax only as bare call heads followed
@@ -680,7 +678,7 @@ param      power_mode_active:  Bool[Component, OperationMode]
   };
 ```
 
-Currently, at most one slot may carry an extra axis; multiple adjacent extra-axis slots are planned for a later extension.
+At most one slot may carry an extra axis.
 
 ### N-D with slice sections
 
@@ -707,10 +705,6 @@ param      power_mode_active: Bool[Phase, Component, OperationMode]
 ```
 
 Slice labels must qualify each shared axis in the declared order (`Phase#Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
-
-### Editor integration
-
-Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Axis, contextual header-label, and qualified slice references participate in navigation and rename as well. The formatter preserves the multi-decl surface form while canonicalizing alignment and retaining every required axis qualifier. Cell-level inlay hints (projecting slot names into the header row of the source) remain future work.
 
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) are not allowed on a multi-declaration. Visibility is

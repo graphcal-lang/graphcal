@@ -25,72 +25,12 @@ The Graphcal LSP server (`graphcal lsp`) provides:
 | **Document links**   | Clickable links for loader-resolved `import` and `include` paths                                                   |
 | **Formatting**       | Format the current document (same as `graphcal format`)                                                           |
 
-The server negotiates optional response forms from the client's initialization
-capabilities. It returns flat symbols and plaintext hover content to minimal
-clients, and uses hierarchical symbols, Markdown hover, and versioned
-`documentChanges` only when supported. Code actions are advertised only to
-clients that support code-action literals, because Graphcal quick fixes are
-returned as checked edits rather than executable commands. Global inlay-hint
-refresh requests are sent only when the client declares refresh support.
-Graphcal uses UTF-16 positions, the LSP compatibility baseline.
-
-Diagnostics distinguish precise source ranges, whole-file failures, and
-source-less built-in/internal failures. A source-less failure is never rendered
-as a misleading caret at the first byte of the file.
-
 !!! tip "Inlay hints: live calculation view"
 The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As you edit your `.gcl` file, the LSP evaluates the computation graph and shows the resulting values next to eligible `param`, `node`, and `const` declarations, with a type fallback when no value is available. Change an input and watch all dependent values update.
 
-For multi-file projects, editor navigation follows module-qualified identity for
-same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
-`Pick`, go-to-definition on `a::Phase`, `a::Phase#Burn`, `a::Item`, or `a::Pick(...)`
-jumps to `a.gcl`, not whichever same-leaf symbol was seen first. Navigation and
-rename also preserve Graphcal namespaces: a term and a unit may share a spelling
-without being merged. Selective imports retain every authored alias while all
-aliases still navigate to the one canonical declaration. References and rename
-use one canonical index across every source in the active loaded project,
-including re-exports and includes. A canonical API rename changes unaliased
-imports and uses while preserving authored aliases. The server refuses rename
-when an occurrence is ambiguous, an affected open snapshot is stale, or an
-exported definition may have reverse importers outside the loaded project.
-This safety check applies to the canonical definition regardless of whether
-rename starts at its declaration, an import selector, or a reference in an
-importer. A dependency closure does not prove that closed sibling importers
-are covered; exported API renames are refused until reverse coverage is proven.
-Local renames check overlapping comprehension, recurrence-lambda, and match
-payload scopes, rejecting duplicate bindings and capture rather than returning
-an unsafe edit. Independent scopes may still reuse the same spelling.
-
-Analysis is dependency- and revision-aware and bounded. Each result records the
-exact editor and filesystem inputs it consumed. For clients that support dynamic
-registration, the server watches Graphcal source files, `graphcal.toml`,
-`graphcal.lock`, and local Wasm plugin artifacts. Creating, changing, deleting,
-or moving one of those inputs invalidates and reanalyzes every transitive open
-importer, including importers waiting for a previously missing file. Diagnostics,
-hover, navigation, completion, and evaluated inlay hints therefore recover
-without touching the importer. An open editor buffer remains authoritative over
-disk, and a watcher event duplicated by save does not schedule a second analysis.
-A new edit cancels superseded
-loading, compilation, and evaluation work; only a result whose full dependency
-snapshot is still current can publish. During a temporarily unparsable edit,
-features that return source coordinates (hover, navigation, references, document
-symbols, and inlay hints) return no stale result rather than interpreting the
-new cursor against old spans. Inlay hints are refreshed immediately. Completion
-and signature help can still reuse coordinate-free semantic candidates: their
-context and nested-DAG scope are tokenized from the current buffer. If an
-analysis exceeds the server deadline, the LSP keeps the last completed result
-available rather than replacing source diagnostics with a server-timeout error.
-If analysis must fall back to an empty
-symbol table or module resolver, the server emits a warning through the LSP
-client log (`window/logMessage`) so unavailable navigation or completion can be
-diagnosed instead of appearing indistinguishable from an empty result. Formatting
-an incomplete buffer quietly produces no edit, while an internal formatter
-reparse, AST-equivalence, rendering, or UTF-8 failure is returned as a
-JSON-RPC internal error and written to the client log. Editor formatting rejects
-buffers above the loader's 16 MiB per-source limit before parsing. Accepted
-requests run one at a time on a blocking worker with a 10-second deadline;
-timed-out work keeps its sole permit until the synchronous worker exits, and
-cooperative phase boundaries observe cancellation.
+Rename is limited to symbols whose affected uses are all known within the
+loaded project. It may be unavailable for exported symbols used by unopened
+files, or when a new name would create ambiguous references.
 
 ## VS Code
 

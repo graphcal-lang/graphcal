@@ -8,13 +8,13 @@
     },
     {
       "path": "cli-reference.md",
-      "english_sha256": "a289697e48a209497923bfe88a152fd6d786caba23777fd0ffd9337e418ed038",
-      "japanese_sha256": "d810b991f24509817ce66b257eb9f2bdbe50eb4ec27ce838443874f6e0d11f04"
+      "english_sha256": "8093a9f27dc1693cf57abc78cd5fff882826d40772faf0e7c83d27387d9c93b4",
+      "japanese_sha256": "00ef5b54d0305667a6df650621bf06ac315b1740272c536c5686808a835b29d9"
     },
     {
       "path": "editor-setup.md",
-      "english_sha256": "682c2d3a080a9d1d9c8ca7dbbb22fffa51a964c72ffcb19cddd219448c93cd0f",
-      "japanese_sha256": "5181c449830f08d958c89784aa2df7528dde0567114eee77769ae17b57236bcf"
+      "english_sha256": "89226602a3230fce7d1d46ea698426f615b829309563cc383f38549ccd8ca1c3",
+      "japanese_sha256": "fa6469fc00e5810927b9c942d675d9eb011a961f24b73d8b72e434e9904494e3"
     },
     {
       "path": "index.md",
@@ -23,33 +23,33 @@
     },
     {
       "path": "installation.md",
-      "english_sha256": "40b57ec0a0c972aeab7d75a864ef6c8ef9c2bd18229817979b4586aad95eda08",
-      "japanese_sha256": "159d066a0c3e26330eda7e7537c1e856b436bf707abcc5a366c6a829cc165cf8"
+      "english_sha256": "76ec2891a6c1dd0b2ebcd874de5cbc86eeba204a8f2d7c7a53ec9b59ea07a506",
+      "japanese_sha256": "83efa321d31472cd8dafd8ec1dec940b82fffd3d24023716fd1fd9456eca7d74"
     },
     {
       "path": "language/algebraic-data-types.md",
-      "english_sha256": "c2941aa6fbbd9f8e83a82d141fae0b1e5c2fd03788cf62e38b4bbab722a597cd",
-      "japanese_sha256": "dce1b03ecebe5b432f46ffa8f4ce3e33d63ce058e9f9ece914c83e733c8500f6"
+      "english_sha256": "fc5b87dc7776089cc4178c829942bcf7621a26c8d88ecda530c50565c81692e8",
+      "japanese_sha256": "25a3eae3d658384e9171d3fdc670eac6ad13931fc82c3427a744ac793580550d"
     },
     {
       "path": "language/assertions.md",
-      "english_sha256": "fcc8109d9dc097bf23337c1a27d023a25bb19ee88804e4d5448b66a520319ab9",
-      "japanese_sha256": "2c454c60d580be06ff7b0209be02fa99a356130b135f909749fba450150ba4ba"
+      "english_sha256": "9cc6cf8ca99cc30fb4588a4cd61f2b41cc611b0e427abdcb21c13cd00a49fa8d",
+      "japanese_sha256": "cebd073c91576ddca69b7eafff3a2d67f76c17cdf5d4761f57a1a5f868927c0c"
     },
     {
       "path": "language/built-ins.md",
-      "english_sha256": "563e936a88e989f02657f9dee75071d30e23741a46a6dec3f3b45d0f1f893ad8",
-      "japanese_sha256": "f558f6dce535d6d3d1c8460185ec61e39cb1747430624d0775b6d71e616e4144"
+      "english_sha256": "f3ed0313edf0aaa42f25acbb2ebdc22f420a84adfc8880f83f04b7c708785b5b",
+      "japanese_sha256": "4c6c51d5c2d6beb9b746b54361dc7c723fb3f957b63d59b2e1d6e4202e9d9e28"
     },
     {
       "path": "language/computation-model.md",
-      "english_sha256": "f73c87585e071084e45da349b83c5caeed6129ba6c3dbfebf4c7a6bae51904df",
-      "japanese_sha256": "cbb8c843f306be851df7d965a502f0f74b8fa187b1d74559b68ed5486d861769"
+      "english_sha256": "64f4ab97a588659370965bf2b811e92facdc27eb68d4128fcf9626bccaa58e53",
+      "japanese_sha256": "f10fb2103811e7526f0b71f37bd00cf292a9247abfe710881424b0ca51539147"
     },
     {
       "path": "language/dimensions-and-units.md",
-      "english_sha256": "166988095423aae833686af00f651893303a31ef8c77456080310b6e1ca6d868",
-      "japanese_sha256": "7b0775696b7408f6345622a6943d7439ccd97deb41c530c2443bf70b6bb34a53"
+      "english_sha256": "7b50110c8fc7a3d91734d784aa6b1ffe57ffae8fb50ebe67789761a40026b902",
+      "japanese_sha256": "e45e2d3835242627e9c474c8cda7b988f46c59ceb71e5faa7d51b6a5a945c200"
     },
     {
       "path": "language/expressions.md",
@@ -58,8 +58,8 @@
     },
     {
       "path": "language/extern-functions.md",
-      "english_sha256": "a39a6b60e5d854e0495a479fc0aa9043a18ed1727dad3fb1b700a9f636b3fc3e",
-      "japanese_sha256": "8ef3b11749828ef93d94b1ee352d627492f89c3ece8c3c9b057b728505737db6"
+      "english_sha256": "b525bb2dba4321dc77c485770ecf131ba4dcb763f7120494614081de9c797adf",
+      "japanese_sha256": "443c0301002d8ee1d6a3ecfc100b55b90010f1dd630ed048882568cdc9128f44"
     },
     {
       "path": "language/functions.md",
@@ -73,18 +73,18 @@
     },
     {
       "path": "language/indexes.md",
-      "english_sha256": "5b464fa015c046d26b8cce16d75d2dfaf3ec3f72b534815e9a9434cf49c87e04",
-      "japanese_sha256": "fb1d145ee35cfd0b0567d8a3a8227125810f3df59c30edc86609ab09cdd5d6bc"
+      "english_sha256": "8ade0c6b89a08953bce8821f211b2a6f014a5e98e23e7f9d28806be779b18f25",
+      "japanese_sha256": "8fe4530185b24ad1e2bafd249aee61b9a097a969fef46a4e1032b47d474d6d9f"
     },
     {
       "path": "language/multi-file.md",
-      "english_sha256": "4b5b4624b2ba63ebc9965f5dfba199ba9efde0686a0893d8160d1c0d780f2618",
-      "japanese_sha256": "05b73c2ae341b8738793ac7ee88a6a097052e24e8ed69909691d99e2bf87f76d"
+      "english_sha256": "dc4452bf47a3f575da80258d90c3907b40c97f2efee6af1e5ebd0f6b5f366e38",
+      "japanese_sha256": "45e76d5af183d2776a6e8e0d20666ee7615f9fd325840fd11969301ffc29c364"
     },
     {
       "path": "language/plots.md",
-      "english_sha256": "b7d4f54711e3e771b06dba0e4d4b64230d09b5bc396a39ff7ccd4aa2032ee7ff",
-      "japanese_sha256": "fa1d215f632aae36dfbda06cf2d32dbd36789c34bae174ba5eeb3b2b014b6ab5"
+      "english_sha256": "796567b625109e4cefdf1bfc8087ff2ac8b3a9a29db5c6e33f5149ec825175bd",
+      "japanese_sha256": "62909863c3d7f2a0f990515d1ea90802614c13c294aa95375f3b80b15ff01935"
     },
     {
       "path": "language/type-system.md",
@@ -123,8 +123,8 @@
     },
     {
       "path": "tutorial/step5-multi-file-projects.md",
-      "english_sha256": "311b132ffdf11088efc8d8b92468ac2262259130fdd7efe40bd70519cf8e20f0",
-      "japanese_sha256": "2698838eb1ff3176571978a994c2a0c1c1bb0245d7a147489cb50eab5ed79b02"
+      "english_sha256": "7c93f89e403e574f3c07415f36336f2f08249071f0d4943263aa1b83658bb8cd",
+      "japanese_sha256": "126880676d65df2a6df62c35716540233158e52a0efa38bb8ec7a4120f9342f5"
     },
     {
       "path": "tutorial/step6-indexed-values.md",

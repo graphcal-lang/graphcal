@@ -208,8 +208,6 @@ runtime failures. Local civil times are also resolved against Graphcal's
 bundled tzdb during checking: nonexistent times in DST gaps and repeated times
 in DST folds are rejected rather than shifted or selected silently. To choose a
 specific instant, use one-argument `datetime` with an explicit numeric offset.
-The obsolete positional form `epoch("...", TT)` is rejected; write
-`epoch<TT>("...")`.
 
 #### Time Scale Conversions
 
@@ -276,17 +274,9 @@ The `->` operator can display a datetime in a specific timezone without changing
 node meeting_ny: Datetime = @meeting -> "America/New_York";
 ```
 
-Quoted timezone spellings are contextual `TimezoneLiteral`s, not first-class
-`String` values. They are validated and canonicalized while the program is
-checked, then carried through compilation and evaluation as opaque IANA
-identifiers.
-
-Timezone construction, validation, and display all use the same IANA timezone
-database bundled with the Graphcal toolchain. Graphcal never consults the
-host's zoneinfo installation, so a given Graphcal release resolves timezone
-rules identically across supported platforms. Invalid-timezone diagnostics
-report the bundled IANA tzdb release; updating those rules is an explicit
-Graphcal dependency update.
+Timezone names must be quoted literals, not computed strings. Graphcal uses a
+bundled IANA timezone database, so the same release applies the same timezone
+rules across supported platforms.
 
 ### Aggregation Functions (Indexed Values)
 
@@ -446,8 +436,7 @@ reports an evaluation error; representable subnormal determinants are retained.
 Dense kernels share a checked budget of 10,000,000 estimated arithmetic
 operations per declaration evaluation. Work such as an oversized matrix
 multiplication or cubic factorization fails explicitly before the expensive
-kernel runs. Long kernels also observe cooperative cancellation at bounded
-intervals, which keeps LSP and browser evaluation responsive.
+kernel runs.
 
 ## Prelude Base Dimensions
 

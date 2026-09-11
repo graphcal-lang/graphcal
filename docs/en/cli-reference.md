@@ -35,16 +35,8 @@ graphcal [OPTIONS] <COMMAND>
 
 Commands that load Graphcal source sandbox filesystem access to the explicit
 `--root`, the nearest discovered `graphcal.toml` directory, or (for a loose
-file) the file's enclosing directory. An explicit root that does not exist or
-cannot be canonicalized is a hard error; Graphcal never drops to unrestricted
-filesystem access when sandbox setup fails. A rooted reader holds an open root
-directory capability and performs opens, metadata queries, canonicalization,
-and directory listing relative to that handle. Concurrent file or parent
-symlink swaps therefore cannot redirect a checked operation outside the root.
-Source and manifest reads accept only regular files. Unix opens are nonblocking
-and revalidate the opened handle, so a FIFO (including one substituted after
-the initial check) cannot indefinitely block ingestion. Byte limits and
-cancellation continue to apply to regular-file reads.
+file) the file's enclosing directory. The root must exist and be accessible;
+source and manifest paths must refer to regular files.
 
 ---
 
@@ -63,23 +55,10 @@ graphcal deps lock [OPTIONS]
 |--------|-------------|
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
-`graphcal deps lock` is the only public package-management command in the MVP.
-It reads `[dependencies]` from `graphcal.toml`, accepts only supported remote
-HTTPS or SSH Git URLs with a full commit-hash `rev`, fetches any missing
-sources, records a graph-shaped package-instance lockfile, and writes nothing
-when the deterministic lockfile contents are already up to date. A checkout
-whose source-tree digest still matches the prior validated lock is reused
-without network access. Manifest,
-source, source-tree, plugin, and existing-lock reads use the same per-artifact
-and aggregate limits as ordinary project loading; lock generation therefore
-cannot produce a lock that the default loader rejects only for artifact size.
-Local paths,
-`file://`, plain HTTP, unsupported schemes, embedded credentials, and malformed
-or option-shaped remote components fail validation before any fetch starts.
-In the generated lock graph, the unique root uses the fixed path source `.`,
-every dependency is Git-backed, and every package entry is reachable from that
-root. Loading rejects arbitrary path sources and orphan entries before deriving
-source-root filesystem capabilities.
+The command reads `[dependencies]` from `graphcal.toml` and fetches missing
+sources. Dependencies must use HTTPS or SSH Git URLs with a full commit-hash
+`rev`; local paths and plain HTTP are not supported. Verified cached checkouts
+are reused without network access, and an up-to-date lockfile is left unchanged.
 
 The command also scans the package's `.gcl` sources for
 [WASM plugin imports](language/extern-functions.md#trust-lockfile-pins) and
@@ -92,28 +71,14 @@ read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
-ask you to run `graphcal deps lock`. Cache entries are content-addressed by a
-typed canonical-URL/commit identity and the verified tree digest. Writers use a
-per-source advisory lock, fetch into a same-cache staging directory, and publish
-an immutable generation by rename; another process evaluating an older valid
-generation continues to use it. Lock creation and verification share one
-iterative hashing implementation; it rejects symlinks, special files,
-non-UTF-8 relative names, and canonical paths outside the package root instead
-of traversing them.
+ask you to run `graphcal deps lock`.
 
 Private Git repositories are supported only when the underlying Git fetch can
 obtain credentials from the current environment. This is intentionally not a
 portable guarantee: SSH may work with a configured key/agent, while HTTPS may
 fail unless a compatible credential helper or non-interactive credential
 provider is available. Do not place credentials directly in `git` URLs in
-`graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root; a relative
-value is resolved to an absolute path once before producers and consumers
-derive checkout paths.
-
-!!! note "Cache layout migration"
-    The content-addressed checkout layout replaces the earlier single-directory
-    Git cache layout. Existing `graphcal.lock` files remain valid, but run
-    `graphcal deps lock` once with network access to populate the new layout.
+`graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root.
 
 **Examples:**
 
@@ -831,27 +796,12 @@ Format `.gcl` files. When given a directory, recursively formats regular
 `.gcl` files within. Symlinked entries found during directory traversal are
 skipped, and explicitly named symlinked paths are rejected rather than followed.
 
-Formatting only ever changes layout, never meaning. After producing the
-formatted text, the formatter re-parses it and verifies the result is the same
-syntax tree as the input (ignoring source positions). If they ever diverge —
-which would be a bug in the formatter, not in your code — formatting fails with
-an error instead of writing a file whose meaning might differ from the source.
-Changed files are written completely to same-directory temporary files,
-synchronized, and atomically renamed into place. Existing permissions are
-preserved, but ownership, ACLs, extended attributes, and hard-link identity are
-not; an atomic replacement creates a new file identity. If a source changes
-after it was read, replacement fails instead of overwriting the newer bytes.
-One replacement failure does not prevent later batch targets from being
-formatted.
+Formatting changes layout, not program meaning, and targets 100 display columns.
+A trailing comma requests multiline layout for a list.
 
-Parentheses are removed only when an exhaustive precedence and associativity
-check proves that reparsing preserves the same expression tree, including
-prefix, infix, postfix, conversion, call, and delimited contexts. Breakable
-layouts target 100 display columns. Long `&&` and `||` chains break
-before their operators, with all continuation operators aligned; short chains
-remain inline. Long attribute argument lists are expanded to one argument per
-line with a trailing comma. Adding a trailing comma to a short source list
-requests the same multiline layout; short lists without one remain inline.
+Files are replaced in place. Permissions are preserved, but ownership, ACLs,
+extended attributes, and hard-link identity are not. Use `--check` to inspect
+formatting without changing files.
 
 ```bash
 graphcal format [OPTIONS] [PATHS]...
@@ -881,10 +831,6 @@ graphcal format rocket.gcl hohmann.gcl
 # Check formatting in CI (non-destructive)
 graphcal format --check
 ```
-
-Directory traversal errors are hard failures: visible files are still processed
-for a complete diagnostic batch, but a partial tree never produces a successful
-certification result.
 
 **Exit codes:**
 
