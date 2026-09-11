@@ -71,6 +71,23 @@
     inputsSection.insertBefore(inputToolbar, inputCards);
   }
 
+  // Keep the static document intact until the engine has verified the baseline.
+  var workspace = null;
+  var parameterDescriptions = new Map();
+
+  function registerField(port, widget, kind, labels, path, identity, constructorControl) {
+    if (workspace) workspace.field({
+      parameter: port.name,
+      widget: widget,
+      kind: kind,
+      labels: labels,
+      path: path,
+      identity: identity,
+      constructorControl: Boolean(constructorControl),
+      description: parameterDescriptions.get(port.name) || "",
+    });
+  }
+
   function fatal(message) {
     setStatus("interactive mode unavailable", "error");
     var main = document.querySelector("main");
@@ -124,13 +141,15 @@
     return null;
   }
 
-  function appendLeafEditor(holder, port, schema, draft, commit, label, root) {
+  function appendLeafEditor(holder, port, schema, draft, commit, label, root, labels, path, identity) {
     if (schema.kind === "boolean") {
       var checkbox = element("input");
       checkbox.type = "checkbox";
       checkbox.setAttribute("aria-label", label);
       checkbox.checked = draft.expr.trim() === "true";
+      checkbox.indeterminate = !draft.expr.trim();
       checkbox.addEventListener("change", function () {
+        checkbox.indeterminate = false;
         draft.expr = checkbox.checked ? "true" : "false";
         commit();
       });
@@ -138,6 +157,7 @@
       toggleLabel.appendChild(checkbox);
       toggleLabel.appendChild(document.createTextNode(" enabled"));
       holder.appendChild(toggleLabel);
+      registerField(port, checkbox, "boolean", labels, path, identity);
       return;
     }
     if (schema.kind === "key" && schema.axis.kind === "named") {
@@ -151,6 +171,7 @@
       select.value = draft.expr.trim();
       select.addEventListener("change", function () { draft.expr = select.value; commit(); });
       holder.appendChild(select);
+      registerField(port, select, "select", labels, path, identity);
       return;
     }
     var field = element("input", "control-field");
@@ -161,6 +182,7 @@
     field.spellcheck = false;
     field.addEventListener("input", function () { draft.expr = field.value; commit(); });
     holder.appendChild(field);
+    registerField(port, field, "literal", labels, path, identity);
 
     var control = root ? port.control : null;
     var integerLower = control && typeof control.lower === "string" ? Number(control.lower) : NaN;
@@ -191,7 +213,9 @@
     }
   }
 
-  function appendStructuredEditor(holder, port, schema, draft, commit, label, root, path) {
+  function appendStructuredEditor(holder, port, schema, draft, commit, label, root, path, labels, identity) {
+    labels = labels || [port.name];
+    identity = identity || [];
     if (schema.kind === "algebraic") {
       var definition = definitionFor(port, schema.definition);
       if (!definition) throw new Error("missing algebraic editor definition");
@@ -221,16 +245,19 @@
           fieldset.setAttribute("data-binding-path", JSON.stringify(fieldPath));
           appendStructuredEditor(
             fieldset, port, fieldSchema.schema, draft.fields[index], commit,
-            label + " " + fieldSchema.name, false, fieldPath
+            label + " " + fieldSchema.name, false, fieldPath,
+            labels.concat([fieldSchema.name]),
+            identity.concat([{ kind: "constructor", definition: schema.definition, index: constructor.id }, { kind: "field", index: index }])
           );
           fieldsHolder.appendChild(fieldset);
         });
       }
-      if (definition.constructors.length > 1) {
+      if (definition.constructors.length > 1 || definition.constructors[0].fields.length === 0) {
         var select = element("select", "control-select control-constructor");
         select.setAttribute("aria-label", label + " constructor");
         var placeholder = element("option", "", "Select constructor…");
         placeholder.value = "";
+        placeholder.disabled = true;
         select.appendChild(placeholder);
         definition.constructors.forEach(function (constructor) {
           var option = element("option", "", constructor.name);
@@ -256,41 +283,48 @@
           commit();
         });
         holder.appendChild(select);
+        registerField(port, select, "select", labels.concat(["constructor"]), path,
+          identity.concat([{ kind: "selector" }]), true);
       }
       holder.appendChild(fieldsHolder);
       renderFields();
       return;
     }
     if (schema.kind === "indexed") {
-      var labels = axisLabels(schema.axis);
+      var entryLabels = axisLabels(schema.axis);
       var tabs = element("div", "control-indexed");
       var rendered = 0;
       function renderPage() {
-        var end = Math.min(labels.length, rendered + 32);
+        var end = Math.min(entryLabels.length, rendered + 32);
         for (var index = rendered; index < end; index += 1) {
-          var entryLabel = labels[index];
+          var entryLabel = entryLabels[index];
           var fieldset = element("fieldset", "control-fieldset control-index-entry");
           fieldset.appendChild(element("legend", "control-legend", entryLabel));
           var entryPath = path.concat([{ kind: "entry", index: index }]);
           fieldset.setAttribute("data-binding-path", JSON.stringify(entryPath));
           appendStructuredEditor(
             fieldset, port, schema.element, draft.entries[index], commit,
-            label + " " + entryLabel, false, entryPath
+            label + " " + entryLabel, false, entryPath,
+            labels.concat([entryLabel]), identity.concat([{ kind: "entry", index: index }])
           );
           tabs.appendChild(fieldset);
         }
         rendered = end;
-        if (more) more.hidden = rendered >= labels.length;
+        if (more) more.hidden = rendered >= entryLabels.length;
       }
       var more = element("button", "control-more", "Show more entries");
       more.type = "button";
-      more.addEventListener("click", renderPage);
+      more.addEventListener("click", function () {
+        renderPage();
+        if (workspace) workspace.refresh();
+      });
       renderPage();
       tabs.appendChild(more);
       holder.appendChild(tabs);
+      if (workspace) workspace.loader(more);
       return;
     }
-    appendLeafEditor(holder, port, schema, draft, commit, label, root);
+    appendLeafEditor(holder, port, schema, draft, commit, label, root, labels, path, identity);
   }
 
   var errorId = 0;
@@ -299,6 +333,8 @@
     var card = cardFor(port.name);
     if (!card) return null;
     card.className += " card--interactive";
+    var description = card.querySelector ? card.querySelector(".card-doc") : null;
+    parameterDescriptions.set(port.name, description ? description.textContent : "");
     var holder = element("div", "control");
     var editorHolder = element("div", "control-editor");
     var errorLine = element("p", "control-error");
@@ -309,6 +345,7 @@
     var initialDraft = draftFromView(port, port.schema, paramView) || emptyDraft(port, port.schema);
     var draft = cloneStructured(initialDraft);
     var startingDraft = cloneStructured(initialDraft);
+    var latestDefaultDraft = cloneStructured(initialDraft);
     var rawDraft = initialBinding && typeof initialBinding.expr === "string" ? initialBinding.expr : "";
     var startingRawDraft = rawDraft;
     var mode = "form";
@@ -338,6 +375,7 @@
       setError: function (message, path) {
         errorLine.textContent = message;
         errorLine.hidden = !message;
+        if (workspace) workspace.error(port.name, message, path);
         if (!holder.querySelectorAll) return;
         holder.querySelectorAll(".control-error--nested").forEach(function (node) { node.remove(); });
         if (!message || !path || !path.length) return;
@@ -359,6 +397,7 @@
       showView: function (view) {
         var next = draftFromView(port, port.schema, view);
         if (!next) return;
+        if (control.currentBinding === null) latestDefaultDraft = cloneStructured(next);
         if (dirty) {
           if (control.currentBinding === null) sourceChanged = true;
           updateDraftStatus();
@@ -412,6 +451,7 @@
       restore: function () {
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
+        if (sourceChanged && control.currentBinding === null) startingDraft = cloneStructured(latestDefaultDraft);
         draft = cloneStructured(startingDraft);
         rawDraft = startingRawDraft;
         dirty = false;
@@ -423,6 +463,7 @@
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
         if (enabled && dirty) queueAutoRun();
+        updateDraftStatus();
       },
     };
 
@@ -437,6 +478,7 @@
               : "Unapplied edits. The last accepted results remain visible."
             : "";
       draftStatus.hidden = !draftStatus.textContent;
+      if (workspace) workspace.status(port.name, draftStatus.textContent);
     }
     function queueAutoRun() {
       if (autoRunTimer) clearTimeout(autoRunTimer);
@@ -451,6 +493,7 @@
       sourceChanged = false;
       control.setError("");
       updateDraftStatus();
+      if (workspace) workspace.refresh();
       if (autoRun) {
         queueAutoRun();
         setStatus("auto run waiting for input · showing last successful evaluation", "warn");
@@ -465,6 +508,7 @@
       editorHolder.hidden = mode !== "form";
       rawHolder.hidden = mode !== "raw";
       updateDraftStatus();
+      if (workspace && holder.isConnected) workspace.refresh();
     }
 
     var isStructured = port.schema.kind === "algebraic" || port.schema.kind === "indexed";
@@ -564,10 +608,21 @@
     holder.appendChild(draftStatus);
     holder.appendChild(errorLine);
     card.appendChild(holder);
+    if (workspace) {
+      var parameterActions = [
+        { label: "Apply", run: function () { submitDraft(true); } },
+        { label: "Discard edits", run: control.restore },
+      ];
+      if (clear) parameterActions.push({ label: "Use default", run: function () { clear.click(); } });
+      workspace.parameter(port.name, parameterActions, function () {
+        if (mode === "raw") formMode.click();
+      });
+    }
     return control;
   }
 
   function buildControls(ports, evaluation) {
+    if (!workspace && global.GraphcalReportWorkspace) workspace = global.GraphcalReportWorkspace.mount();
     var paramViews = {};
     for (var v = 0; v < evaluation.values.length; v += 1) {
       var declaration = evaluation.values[v];
@@ -579,6 +634,7 @@
       var control = makeControl(ports[i], paramViews[ports[i].name]);
       if (control) controls.set(control.name, control);
     }
+    if (workspace) workspace.refresh(true);
     resetButton.addEventListener("click", function () {
       controls.forEach(function (control) {
         control.setError("");
@@ -838,7 +894,8 @@
     var list = document.querySelector('.report-nav ul');
     if (!list) return;
     list.replaceChildren();
-    for (var section of document.querySelectorAll('main > section[id], main > footer[id]')) {
+    if (workspace) workspace.reconcileResults();
+    for (var section of document.querySelectorAll('main section[id], main footer[id]')) {
       var heading = section.querySelector('h2');
       if (section.hidden || !heading) continue;
       var item = element('li');

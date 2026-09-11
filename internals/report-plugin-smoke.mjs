@@ -65,9 +65,11 @@ if (process.env.GRAPHCAL_PLUGIN_BROWSER_TEST === "1") {
       await expect(page.locator(".hydration-status")).toHaveText("live · evaluation has errors");
       const mid = page.locator('[data-decl="mid"] [data-role="value"]');
       await expect(mid).toHaveText("2 m");
-      const field = page.locator('[data-decl="a"] .control-field');
+      const field = page.getByRole('textbox', { name: 'a', exact: true });
       await field.fill("5.0 m");
-      await page.locator('[data-decl="a"] .control-apply').click();
+      const actions = page.locator('.outline-row[data-parameter="a"] .outline-row-actions');
+      await actions.locator('summary').click();
+      await actions.getByRole('button', { name: 'Apply', exact: true }).click();
       await expect(mid).toHaveText("4 m");
       await page.locator(".modified-banner__reset").click();
       await expect(mid).toHaveText("2 m");
