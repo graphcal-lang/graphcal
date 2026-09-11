@@ -67,6 +67,7 @@ if (process.env.GRAPHCAL_PLUGIN_BROWSER_TEST === "1") {
       await expect(mid).toHaveText("2 m");
       const field = page.locator('[data-decl="a"] .control-field');
       await field.fill("5.0 m");
+      await page.locator('[data-decl="a"] .control-apply').click();
       await expect(mid).toHaveText("4 m");
       await page.locator(".modified-banner__reset").click();
       await expect(mid).toHaveText("2 m");

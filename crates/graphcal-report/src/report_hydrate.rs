@@ -5,8 +5,8 @@
 //! baseline binding expressions into the static page. The runtime script
 //! (`report_standalone.js`) adapts that engine to the transport-neutral UI
 //! runtime (`report_runtime.js`), which synthesizes controls from typed
-//! parameter ports and re-evaluates on input — the same evaluator, results,
-//! and unit checking as the CLI, end to end.
+//! parameter ports and atomically applies complete drafts — the same evaluator,
+//! results, and unit checking as the CLI, end to end.
 
 use base64::Engine as _;
 use graphcal_eval::project_bundle::ProjectBundle;
@@ -14,6 +14,8 @@ use serde_json::json;
 
 use crate::escape::escape_json_for_script;
 
+/// Pure recursive form-state transitions embedded into hydrated pages.
+const REPORT_FORM_STATE_JS: &str = include_str!("report_form_state.js");
 /// The report runtime script embedded into hydrated pages.
 const REPORT_RUNTIME_JS: &str = include_str!("report_runtime.js");
 /// The standalone embedded-Wasm transport bootstrap.
@@ -79,6 +81,7 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
             "<script id=\"graphcal-baseline\" type=\"application/json\">{baseline}</script>\n",
             "<script id=\"graphcal-engine-glue\" type=\"text/plain\">{glue}</script>\n",
             "<script id=\"graphcal-engine-wasm\" type=\"application/wasm;base64\">{wasm}</script>\n",
+            "<script>{form_state}</script>\n",
             "<script>{runtime}</script>\n",
             "<script>{standalone}</script>\n",
         ),
@@ -86,6 +89,7 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
         baseline = escape_json_for_script(&baseline.to_string()),
         glue = engine.encode(hydration.engine.glue_js),
         wasm = engine.encode(hydration.engine.wasm),
+        form_state = REPORT_FORM_STATE_JS,
         runtime = REPORT_RUNTIME_JS,
         standalone = REPORT_STANDALONE_JS,
     )
@@ -151,8 +155,11 @@ mod tests {
     #[test]
     fn runtime_script_is_safe_to_inline() {
         assert!(
-            !REPORT_RUNTIME_JS.contains("</script") && !REPORT_RUNTIME_JS.contains("<!--"),
-            "the runtime script must not contain inline-script terminators"
+            !REPORT_FORM_STATE_JS.contains("</script")
+                && !REPORT_FORM_STATE_JS.contains("<!--")
+                && !REPORT_RUNTIME_JS.contains("</script")
+                && !REPORT_RUNTIME_JS.contains("<!--"),
+            "the form state and runtime scripts must not contain inline-script terminators"
         );
         assert!(
             !REPORT_STANDALONE_JS.contains("</script") && !REPORT_STANDALONE_JS.contains("<!--"),
@@ -162,6 +169,7 @@ mod tests {
 
     #[test]
     fn runtime_and_standalone_bootstrap_have_separate_responsibilities() {
+        assert!(REPORT_FORM_STATE_JS.contains("global.GraphcalReportFormState"));
         assert!(REPORT_RUNTIME_JS.contains("global.GraphcalReport = { mount: mount }"));
         assert!(REPORT_RUNTIME_JS.contains("options.createTransport"));
         assert!(!REPORT_RUNTIME_JS.contains("graphcal-engine-wasm"));

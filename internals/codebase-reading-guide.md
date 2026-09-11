@@ -694,11 +694,15 @@ provenance, `///` captions), and `report_html.rs` / `report_markdown.rs` render
 it deterministically. `report_hydrate.rs` packages the interactive layer —
 the no-modules wasm engine, project sources, and baseline bindings.
 `report_standalone.js` adapts that embedded engine to the transport-neutral
-`window.GraphcalReport.mount` API in `report_runtime.js`, which owns controls,
-rendering, debounce, and timeout restart lifecycle. Wasm declaration outcomes
-serialize the same
-`value_display::ValueBody` projection consumed by native HTML; JavaScript only
-creates DOM elements and does not reinterpret tensor rank or leaf formatting.
+`window.GraphcalReport.mount` API. `report_form_state.js` owns pure recursive
+schema/value-to-draft projection and completeness checks; `report_runtime.js`
+owns explicit whole-parameter Apply/Discard transitions, DOM rendering, debounce,
+and timeout restart lifecycle. Algebraic and indexed form submissions
+remain tagged data until the evaluator constructs and validates their AST;
+JavaScript never assembles container syntax. Wasm declaration outcomes serialize
+the same `value_display::ValueBody` projection consumed by native HTML plus a
+lossless typed editable-value projection; JavaScript creates DOM elements and
+does not reinterpret tensor rank or leaf formatting.
 Consumed by the CLI (`--plot`, `report build`)
 and the browser WASM adapter (playground figures). No file, process, or
 network I/O.

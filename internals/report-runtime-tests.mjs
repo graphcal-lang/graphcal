@@ -40,6 +40,7 @@ function runtime(source, baseline = [], files = []) {
   };
   // Expose the production mount's functional UI core in this test only,
   // replacing transport startup.
+  runInNewContext(readFileSync("crates/graphcal-report/src/report_form_state.js", "utf8"), context);
   const code = readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8");
   const startup = "  startTransport();\n  }";
   assert.equal(code.split(startup).length, 2);
@@ -55,9 +56,11 @@ function runtime(source, baseline = [], files = []) {
     api.patchParamControls(outcome.evaluation);
     return outcome.evaluation.values;
   };
-  const field = name => cards.get(name).children[0].children.find(child => child.className === "control-field");
+  const descendants = element => [element, ...element.children.flatMap(child => child instanceof Element ? descendants(child) : [])];
+  const field = name => descendants(cards.get(name)).find(child => child.className === "control-field");
   const edit = (name, value) => { const input = field(name); input.value = value; input.events.input(); };
-  return { api, cards, field, edit, bindings, evaluate, prepared };
+  const apply = name => descendants(cards.get(name)).find(child => child.className === "control-apply").events.click();
+  return { api, cards, descendants, field, edit, apply, bindings, evaluate, prepared };
 }
 const model = `
 param input: Dimensionless = 2.0;
@@ -72,25 +75,131 @@ for (const baseline of [[], [{ name: "doubled", expr: "8.0" }]]) {
   assert.deepEqual(run.bindings(), baseline);
   assert.equal(run.field("input").value, "2.0");
   run.edit("input", "3.0");
+  assert.deepEqual(run.bindings(), baseline, "keystrokes remain unapplied");
+  run.descendants(run.cards.get("input")).find(child => child.className === "control-discard").events.click();
+  assert.equal(run.field("input").value, "2.0", "discard restores the accepted snapshot");
+  run.edit("input", "3.0");
+  run.apply("input");
   assert.equal(value(run.evaluate(), "result").value, baseline.length ? 8 : 6);
   assert.equal(run.field("doubled").value, baseline.length ? "8.0" : "6.0");
   run.edit("input", "5.0");
+  run.apply("input");
   assert.equal(value(run.evaluate(), "result").value, baseline.length ? 8 : 10);
   run.edit("doubled", "12.0");
+  run.apply("doubled");
   assert.equal(value(run.evaluate(), "result").value, 12);
-  run.edit("doubled", "");
+  run.descendants(run.cards.get("doubled")).find(child => child.className === "control-clear").events.click();
   assert.equal(value(run.evaluate(), "result").value, 10);
   assert.deepEqual(run.bindings(), [{ name: "input", expr: "5.0" }]);
-  run.cards.get("input").children[0].children.find(child => child.className === "control-clear").events.click();
+  run.descendants(run.cards.get("input")).find(child => child.className === "control-clear").events.click();
   assert.equal(value(run.evaluate(), "result").value, 4);
   assert.deepEqual(run.bindings(), []);
   run.api.resetButton.events.click();
   assert.deepEqual(run.bindings(), baseline);
   assert.equal(value(run.evaluate(), "result").value, baseline.length ? 8 : 4);
-  assert.equal(run.field("samples").value, "");
+  assert.deepEqual(
+    run.descendants(run.cards.get("samples")).filter(child => child.className === "control-field").map(child => child.value),
+    ["1", "2"],
+  );
   run.prepared.free();
 }
 console.log("report runtime: reactive defaults, explicit bindings, clear and reset passed");
+
+{
+  const run = runtime(`
+    pub type Choice { Amount(value: Dimensionless), Switch(enabled: Bool), }
+    param choice: Choice = Amount(value: 2.0);
+    param samples: Int[Fin(2)] = table[Fin(2)] { 1; 2; };
+  `);
+  const constructor = run.descendants(run.cards.get("choice")).find(
+    child => typeof child.className === "string" && child.className.includes("control-constructor"),
+  );
+  constructor.value = "1";
+  constructor.events.change();
+  run.apply("choice");
+  assert.deepEqual(run.bindings(), [], "missing constructor fields are not fabricated or applied");
+  const checkbox = run.descendants(run.cards.get("choice")).find(child => child.type === "checkbox");
+  checkbox.checked = true;
+  checkbox.events.change();
+  constructor.value = "0";
+  constructor.events.change();
+  const amount = run.descendants(run.cards.get("choice")).find(child => child.className === "control-field");
+  amount.value = "7.0";
+  amount.events.input();
+  constructor.value = "1";
+  constructor.events.change();
+  assert.equal(
+    run.descendants(run.cards.get("choice")).find(child => child.type === "checkbox").checked,
+    true,
+    "constructor toggles retain prior drafts",
+  );
+  run.apply("choice");
+  let evaluated = run.evaluate();
+  assert.equal(value(evaluated, "choice").type_name, "Switch");
+  assert.equal(value(evaluated, "choice").fields[0].value.value, true);
+  const entries = run.descendants(run.cards.get("samples")).filter(child => child.className === "control-field");
+  entries[1].value = "9";
+  entries[1].events.input();
+  run.apply("samples");
+  evaluated = run.evaluate();
+  assert.equal(value(evaluated, "samples").entries[1].value.decimal, "9");
+  assert.deepEqual(run.bindings(), [
+    {
+      name: "choice",
+      value: {
+        kind: "algebraic",
+        definition: 0,
+        constructor: 1,
+        fields: [{ kind: "literal", expr: "true" }],
+      },
+    },
+    {
+      name: "samples",
+      value: {
+        kind: "indexed",
+        entries: [
+          { kind: "literal", expr: "1" },
+          { kind: "literal", expr: "9" },
+        ],
+      },
+    },
+  ]);
+  run.prepared.free();
+}
+console.log("structured controls: constructor drafts, nested fields and fixed-axis edits passed");
+
+{
+  const run = runtime(`
+    pub type Chain { Link(value: Int, next: Chain), End(value: Int), }
+    param chain: Chain = Link(value: 1, next: End(value: 2));
+  `);
+  const port = run.prepared.parameterPorts()[0];
+  assert.equal(port.definitions.length, 1, "recursive schemas use finite arena references");
+  const fields = run.descendants(run.cards.get("chain")).filter(child => child.className === "control-field");
+  assert.deepEqual(fields.map(field => field.value), ["1", "2"]);
+  fields[1].value = "9";
+  fields[1].events.input();
+  run.apply("chain");
+  const chain = value(run.evaluate(), "chain");
+  assert.equal(chain.fields[1].value.type_name, "End");
+  assert.equal(chain.fields[1].value.fields[0].value.decimal, "9");
+  run.prepared.free();
+}
+console.log("recursive controls: finite schema graph and deep edits passed");
+
+{
+  const run = runtime(`pub type Choice { Amount(value: Dimensionless), Off, }
+    param choice: Choice = Off;`);
+  run.descendants(run.cards.get("choice")).find(child => child.textContent === "Raw literal").events.click();
+  const raw = run.descendants(run.cards.get("choice")).find(child => child.className === "control-raw-field");
+  raw.value = "Amount(value: 6.0)";
+  raw.events.input();
+  assert.deepEqual(run.bindings(), [], "raw edits remain unapplied");
+  run.apply("choice");
+  assert.equal(value(run.evaluate(), "choice").type_name, "Amount");
+  run.prepared.free();
+}
+console.log("structured controls: raw mode preserves explicit apply semantics");
 
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
@@ -160,9 +269,10 @@ for (const [lower, upper, slider] of [
   assert.equal(ports.length, 2, "large bounds must not disable other controls");
   assert.equal(ports[0].control.lower ?? null, lower);
   assert.equal(ports[0].control.upper ?? null, upper);
-  assert.equal(run.cards.get("iterations").children[0].children.some(child => child.className === "control-slider"), slider);
+  assert.equal(run.descendants(run.cards.get("iterations")).some(child => child.className === "control-slider"), slider);
   for (const endpoint of [lower, upper].filter(Boolean)) {
     run.edit("iterations", endpoint);
+    run.apply("iterations");
     assert.equal(value(run.evaluate(), "iterations").decimal, endpoint);
   }
   run.prepared.free();
@@ -175,18 +285,21 @@ for (const [prefix, index, files] of [
   ["import demo.modes::{ index Mode as Setting };", "Setting", [{ path: "graphcal.toml", content: '[package]\nname = "demo"' }, { path: "src/demo/modes.gcl", content: "pub index Mode = { Nominal, Safe };" }]],
 ]) {
   const run = runtime(`${prefix} param mode: Key<${index}> = ${index}#Nominal; param enabled: Bool = true;`, [], files);
-  const select = run.cards.get("mode").children[0].children.find(child => child.tag === "select");
+  const select = run.descendants(run.cards.get("mode")).find(child => child.tag === "select");
   assert.equal(select.value, `${index}#Nominal`);
   assert.deepEqual(select.children.map(child => child.value), [`${index}#Nominal`, `${index}#Safe`]);
-  const checkbox = run.cards.get("enabled").children[0].children[0].children[0];
+  const checkbox = run.descendants(run.cards.get("enabled")).find(child => child.tag === "input" && child.type === "checkbox");
   checkbox.checked = false;
   checkbox.events.change();
+  run.apply("enabled");
   assert.equal(value(run.evaluate(), "mode").variant, "Nominal");
   assert.deepEqual(run.bindings(), [{ name: "enabled", expr: "false" }]);
-  for (const option of select.children) {
-    select.value = option.value;
-    select.events.change();
-    assert.equal(value(run.evaluate(), "mode").variant, option.textContent);
+  for (const expected of ["Nominal", "Safe"]) {
+    const liveSelect = run.descendants(run.cards.get("mode")).find(child => child.tag === "select");
+    liveSelect.value = `${index}#${expected}`;
+    liveSelect.events.change();
+    run.apply("mode");
+    assert.equal(value(run.evaluate(), "mode").variant, expected);
   }
   run.prepared.free();
 }
@@ -241,6 +354,7 @@ console.log("value body: static and hydrated ranks 0–5 and nested structures h
     setTimeout(fn, milliseconds) { const id = {}; timers.set(id, { fn, milliseconds }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
+  runInNewContext(readFileSync("crates/graphcal-report/src/report_form_state.js", "utf8"), context);
   runInNewContext(readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8"), context);
   context.window.GraphcalReport.mount({
     baselineBindings: [{ name: "mass", expr: "12.0 kg" }],

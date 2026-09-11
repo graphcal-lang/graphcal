@@ -14,6 +14,13 @@
       throw new Error("GraphcalReport.mount requires a createTransport factory");
     }
     var baselineBindings = options.baselineBindings || [];
+    var formState = global.GraphcalReportFormState;
+    if (!formState) throw new Error("Graphcal report form state is unavailable");
+    var axisLabels = formState.axisLabels;
+    var emptyDraft = formState.emptyDraft;
+    var draftFromView = formState.draftFromView;
+    var cloneStructured = formState.clone;
+    var incompleteDraft = formState.incomplete;
 
   // --- UI chrome -----------------------------------------------------------
   function element(tag, className, text) {
@@ -24,6 +31,8 @@
   }
 
   var statusChip = element("div", "hydration-status", "loading engine…");
+  statusChip.setAttribute("role", "status");
+  statusChip.setAttribute("aria-live", "polite");
   document.body.appendChild(statusChip);
   function setStatus(text, state) {
     statusChip.textContent = text;
@@ -70,161 +79,429 @@
     return /^-?[0-9]+$/.test(text) ? text + ".0" : text;
   }
 
-  // Derive a valid closed-literal expression from one evaluated param view,
-  // or null when the value has no single-line literal form (structured
-  // values: the reader replaces the field wholesale).
+  // Project evaluated leaves into editable Graphcal literals. Container syntax
+  // is never assembled in JavaScript: structured values cross the boundary as
+  // tagged data and Rust constructs the checked AST.
   function namedKeyLiteral(index, variant) {
     return index + "#" + variant;
   }
 
-  function exprFromView(view, control) {
-    if (!view) return null;
-    if (view.kind === "quantity") {
-      return numberLiteral(view.value) + (view.unit ? " " + view.unit : "");
-    }
-    if (view.kind === "bool") return String(view.value);
-    if (view.kind === "int") return view.decimal;
-    if (view.kind === "label" && control && control.kind === "select") {
-      return namedKeyLiteral(control.index, view.variant);
+  function baselineBindingFor(name) {
+    for (var i = 0; i < baselineBindings.length; i += 1) {
+      if (baselineBindings[i].name === name) return baselineBindings[i];
     }
     return null;
   }
 
-  function baselineExprFor(port) {
-    for (var i = 0; i < baselineBindings.length; i += 1) {
-      if (baselineBindings[i].name === port.name) return baselineBindings[i].expr;
+  function definitionFor(port, id) {
+    for (var i = 0; i < port.definitions.length; i += 1) {
+      if (port.definitions[i].id === id) return port.definitions[i];
     }
-    // Displayed defaults are not bindings. Only explicit build-time inputs
-    // belong in the original binding set.
-    return "";
+    return null;
   }
+
+  function appendLeafEditor(holder, port, schema, draft, commit, label, root) {
+    if (schema.kind === "boolean") {
+      var checkbox = element("input");
+      checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", label);
+      checkbox.checked = draft.expr.trim() === "true";
+      checkbox.addEventListener("change", function () {
+        draft.expr = checkbox.checked ? "true" : "false";
+        commit();
+      });
+      var toggleLabel = element("label", "control-toggle");
+      toggleLabel.appendChild(checkbox);
+      toggleLabel.appendChild(document.createTextNode(" enabled"));
+      holder.appendChild(toggleLabel);
+      return;
+    }
+    if (schema.kind === "key" && schema.axis.kind === "named") {
+      var select = element("select", "control-select");
+      select.setAttribute("aria-label", label);
+      schema.axis.variants.forEach(function (variant) {
+        var option = element("option", "", variant);
+        option.value = namedKeyLiteral(schema.axis.name, variant);
+        select.appendChild(option);
+      });
+      select.value = draft.expr.trim();
+      select.addEventListener("change", function () { draft.expr = select.value; commit(); });
+      holder.appendChild(select);
+      return;
+    }
+    var field = element("input", "control-field");
+    field.type = "text";
+    field.setAttribute("aria-label", label);
+    field.value = draft.expr;
+    field.placeholder = "closed value literal";
+    field.spellcheck = false;
+    field.addEventListener("input", function () { draft.expr = field.value; commit(); });
+    holder.appendChild(field);
+
+    var control = root ? port.control : null;
+    var integerLower = control && typeof control.lower === "string" ? Number(control.lower) : NaN;
+    var integerUpper = control && typeof control.upper === "string" ? Number(control.upper) : NaN;
+    var boundedQuantity = control && control.kind === "quantity" &&
+      typeof control.lower_si === "number" && typeof control.upper_si === "number" &&
+      control.upper_si > control.lower_si;
+    var boundedInteger = control && control.kind === "integer" &&
+      Number.isSafeInteger(integerLower) && Number.isSafeInteger(integerUpper) &&
+      Number.isSafeInteger(integerUpper - integerLower) && integerUpper > integerLower;
+    if (boundedQuantity || boundedInteger) {
+      var slider = element("input", "control-slider");
+      slider.type = "range";
+      slider.setAttribute("aria-label", label + " slider");
+      slider.min = String(boundedQuantity ? control.lower_si : integerLower);
+      slider.max = String(boundedQuantity ? control.upper_si : integerUpper);
+      slider.step = boundedQuantity ? String((control.upper_si - control.lower_si) / 200) : "1";
+      var numeric = Number.parseFloat(draft.expr);
+      if (Number.isFinite(numeric)) slider.value = String(numeric);
+      slider.addEventListener("input", function () {
+        draft.expr = boundedQuantity
+          ? numberLiteral(Number(slider.value)) + (control.unit ? " " + control.unit : "")
+          : slider.value;
+        field.value = draft.expr;
+        commit();
+      });
+      holder.appendChild(slider);
+    }
+  }
+
+  function appendStructuredEditor(holder, port, schema, draft, commit, label, root, path) {
+    if (schema.kind === "algebraic") {
+      var definition = definitionFor(port, schema.definition);
+      if (!definition) throw new Error("missing algebraic editor definition");
+      var constructorDrafts = {};
+      if (draft.kind === "algebraic") constructorDrafts[draft.constructor] = draft.fields;
+      if (draft.kind === "missing" && definition.constructors.length === 1) {
+        draft.kind = "algebraic";
+        draft.definition = schema.definition;
+        draft.constructor = definition.constructors[0].id;
+        draft.fields = definition.constructors[0].fields.map(function (field) {
+          return emptyDraft(port, field.schema);
+        });
+        constructorDrafts[draft.constructor] = draft.fields;
+      }
+      var fieldsHolder = element("div", "control-structure");
+      function renderFields() {
+        fieldsHolder.replaceChildren();
+        if (draft.kind !== "algebraic") return;
+        var constructor = definition.constructors.find(function (candidate) {
+          return candidate.id === draft.constructor;
+        });
+        if (!constructor) return;
+        constructor.fields.forEach(function (fieldSchema, index) {
+          var fieldset = element("fieldset", "control-fieldset");
+          fieldset.appendChild(element("legend", "control-legend", fieldSchema.name));
+          var fieldPath = path.concat([{ kind: "field", index: index }]);
+          fieldset.setAttribute("data-binding-path", JSON.stringify(fieldPath));
+          appendStructuredEditor(
+            fieldset, port, fieldSchema.schema, draft.fields[index], commit,
+            label + " " + fieldSchema.name, false, fieldPath
+          );
+          fieldsHolder.appendChild(fieldset);
+        });
+      }
+      if (definition.constructors.length > 1) {
+        var select = element("select", "control-select control-constructor");
+        select.setAttribute("aria-label", label + " constructor");
+        var placeholder = element("option", "", "Select constructor…");
+        placeholder.value = "";
+        select.appendChild(placeholder);
+        definition.constructors.forEach(function (constructor) {
+          var option = element("option", "", constructor.name);
+          option.value = String(constructor.id);
+          select.appendChild(option);
+        });
+        select.value = draft.kind === "algebraic" ? String(draft.constructor) : "";
+        select.addEventListener("change", function () {
+          var constructor = definition.constructors.find(function (candidate) {
+            return candidate.id === Number(select.value);
+          });
+          if (!constructor) return;
+          if (draft.kind === "algebraic") constructorDrafts[draft.constructor] = draft.fields;
+          var fields = constructorDrafts[constructor.id] || constructor.fields.map(function (field) {
+            return emptyDraft(port, field.schema);
+          });
+          draft.kind = "algebraic";
+          draft.definition = schema.definition;
+          draft.constructor = constructor.id;
+          draft.fields = fields;
+          constructorDrafts[constructor.id] = fields;
+          renderFields();
+          commit();
+        });
+        holder.appendChild(select);
+      }
+      holder.appendChild(fieldsHolder);
+      renderFields();
+      return;
+    }
+    if (schema.kind === "indexed") {
+      var labels = axisLabels(schema.axis);
+      var tabs = element("div", "control-indexed");
+      var rendered = 0;
+      function renderPage() {
+        var end = Math.min(labels.length, rendered + 32);
+        for (var index = rendered; index < end; index += 1) {
+          var entryLabel = labels[index];
+          var fieldset = element("fieldset", "control-fieldset control-index-entry");
+          fieldset.appendChild(element("legend", "control-legend", entryLabel));
+          var entryPath = path.concat([{ kind: "entry", index: index }]);
+          fieldset.setAttribute("data-binding-path", JSON.stringify(entryPath));
+          appendStructuredEditor(
+            fieldset, port, schema.element, draft.entries[index], commit,
+            label + " " + entryLabel, false, entryPath
+          );
+          tabs.appendChild(fieldset);
+        }
+        rendered = end;
+        if (more) more.hidden = rendered >= labels.length;
+      }
+      var more = element("button", "control-more", "Show more entries");
+      more.type = "button";
+      more.addEventListener("click", renderPage);
+      renderPage();
+      tabs.appendChild(more);
+      holder.appendChild(tabs);
+      return;
+    }
+    appendLeafEditor(holder, port, schema, draft, commit, label, root);
+  }
+
+  var errorId = 0;
 
   function makeControl(port, paramView) {
     var card = cardFor(port.name);
     if (!card) return null;
     var holder = element("div", "control");
+    var editorHolder = element("div", "control-editor");
     var errorLine = element("p", "control-error");
     errorLine.hidden = true;
+    var draftStatus = element("p", "control-draft-status");
+    draftStatus.setAttribute("aria-live", "polite");
+    var initialBinding = baselineBindingFor(port.name);
+    var initialDraft = draftFromView(port, port.schema, paramView) || emptyDraft(port, port.schema);
+    var draft = cloneStructured(initialDraft);
+    var startingDraft = cloneStructured(initialDraft);
+    var rawDraft = initialBinding && typeof initialBinding.expr === "string" ? initialBinding.expr : "";
+    var startingRawDraft = rawDraft;
+    var mode = "form";
+    var dirty = false;
+    var sourceChanged = false;
+    var pending = false;
+    var pendingBinding = null;
+    var pendingMode = null;
+    var pendingDraft = null;
+    var revision = 0;
+    var pendingRevision = 0;
+    var submittedRequest = null;
+    var rawHolder = element("div", "control-raw");
+    var rawField = element("textarea", "control-raw-field");
+    rawField.setAttribute("aria-label", port.name + " complete closed value");
+    rawField.placeholder = "complete closed Graphcal value";
+    rawField.spellcheck = false;
+    rawHolder.appendChild(rawField);
 
-    // Empty means "leave unbound": evaluation falls back to the compiled
-    // default, so an unedited control never sends a binding.
-    var initialExpr = baselineExprFor(port);
-    var displayedExpr = initialExpr || exprFromView(paramView, port.control) || "";
     var control = {
       name: port.name,
-      schema: port.control,
-      initialExpr: initialExpr,
-      currentExpr: initialExpr,
-      setSi: function () {},
-      showValue: function () {},
-      setError: function (message) {
+      schema: port.schema,
+      initialBinding: initialBinding,
+      currentBinding: initialBinding,
+      bindingForEvaluation: function () { return pending ? pendingBinding : control.currentBinding; },
+      setError: function (message, path) {
         errorLine.textContent = message;
         errorLine.hidden = !message;
-      },
-      restore: null,
-    };
-
-    function commit(expr) {
-      control.currentExpr = expr;
-      scheduleEvaluate();
-    }
-
-    var kind = port.control.kind;
-    if (kind === "boolean") {
-      var checkbox = element("input");
-      checkbox.type = "checkbox";
-      checkbox.setAttribute("aria-label", port.name);
-      checkbox.checked = displayedExpr.trim() === "true";
-      checkbox.addEventListener("change", function () {
-        commit(checkbox.checked ? "true" : "false");
-      });
-      control.showValue = function (expr) {
-        checkbox.checked = expr.trim() === "true";
-      };
-      var toggleLabel = element("label", "control-toggle");
-      toggleLabel.appendChild(checkbox);
-      toggleLabel.appendChild(document.createTextNode(" enabled"));
-      holder.appendChild(toggleLabel);
-    } else if (kind === "select") {
-      var select = element("select", "control-select");
-      select.setAttribute("aria-label", port.name);
-      for (var i = 0; i < port.control.variants.length; i += 1) {
-        var option = element("option", "", port.control.variants[i]);
-        option.value = namedKeyLiteral(port.control.index, port.control.variants[i]);
-        select.appendChild(option);
-      }
-      select.value = displayedExpr.trim();
-      select.addEventListener("change", function () {
-        commit(select.value);
-      });
-      control.showValue = function (expr) {
-        select.value = expr.trim();
-      };
-      holder.appendChild(select);
-    } else {
-      var field = element("input", "control-field");
-      field.type = "text";
-      field.setAttribute("aria-label", port.name);
-      field.value = displayedExpr;
-      field.placeholder = "closed value literal";
-      field.spellcheck = false;
-      field.addEventListener("input", function () {
-        commit(field.value);
-      });
-      control.showValue = function (expr) {
-        field.value = expr;
-      };
-      holder.appendChild(field);
-
-      var isBoundedQuantity =
-        kind === "quantity" &&
-        typeof port.control.lower_si === "number" &&
-        typeof port.control.upper_si === "number" &&
-        port.control.upper_si > port.control.lower_si;
-      // Convert only after checking the decimal transport exists; unsafe
-      // endpoints never become a slider and remain exact text inputs.
-      var integerLower = typeof port.control.lower === "string" ? Number(port.control.lower) : NaN;
-      var integerUpper = typeof port.control.upper === "string" ? Number(port.control.upper) : NaN;
-      var isBoundedInteger =
-        kind === "integer" &&
-        Number.isSafeInteger(integerLower) &&
-        Number.isSafeInteger(integerUpper) &&
-        Number.isSafeInteger(integerUpper - integerLower) &&
-        integerUpper > integerLower;
-      if (isBoundedQuantity || isBoundedInteger) {
-        var slider = element("input", "control-slider");
-        slider.type = "range";
-        slider.setAttribute("aria-label", port.name + " slider");
-        var lower = isBoundedQuantity ? port.control.lower_si : integerLower;
-        var upper = isBoundedQuantity ? port.control.upper_si : integerUpper;
-        slider.min = String(lower);
-        slider.max = String(upper);
-        slider.step = isBoundedQuantity ? String((upper - lower) / 200) : "1";
-        var unitSuffix =
-          isBoundedQuantity && port.control.unit ? " " + port.control.unit : "";
-        slider.addEventListener("input", function () {
-          var expr = isBoundedQuantity
-            ? numberLiteral(Number(slider.value)) + unitSuffix
-            : slider.value;
-          field.value = expr;
-          commit(expr);
+        if (!holder.querySelectorAll) return;
+        holder.querySelectorAll(".control-error--nested").forEach(function (node) { node.remove(); });
+        if (!message || !path || !path.length) return;
+        var encoded = JSON.stringify(path);
+        var target = Array.from(holder.querySelectorAll("[data-binding-path]")).find(function (node) {
+          return node.getAttribute("data-binding-path") === encoded;
         });
-        control.setSi = function (si) {
-          if (Number.isFinite(si)) slider.value = String(si);
-        };
-        holder.appendChild(slider);
-      }
+        if (!target) return;
+        errorLine.hidden = true;
+        var nested = element("p", "control-error control-error--nested", message);
+        errorId += 1;
+        nested.id = "binding-error-" + errorId;
+        target.appendChild(nested);
+        if (target.querySelector) {
+          var input = target.querySelector("input, select, textarea");
+          if (input) input.setAttribute("aria-describedby", nested.id);
+        }
+      },
+      showView: function (view) {
+        var next = draftFromView(port, port.schema, view);
+        if (!next) return;
+        if (dirty) {
+          if (control.currentBinding === null) sourceChanged = true;
+          updateDraftStatus();
+          return;
+        }
+        if (control.currentBinding === null || typeof control.currentBinding.expr === "string") {
+          draft = next;
+          startingDraft = cloneStructured(next);
+          render();
+        }
+      },
+      markSubmitted: function (id) { if (pending) submittedRequest = id; },
+      acceptPending: function (id) {
+        if (!pending || submittedRequest !== id) return;
+        control.currentBinding = pendingBinding;
+        pending = false;
+        if (pendingMode === "form" && pendingDraft) startingDraft = cloneStructured(pendingDraft);
+        if (pendingMode === "raw") startingRawDraft = pendingDraft;
+        dirty = revision !== pendingRevision;
+        sourceChanged = false;
+        pendingMode = null;
+        pendingDraft = null;
+        submittedRequest = null;
+        updateDraftStatus();
+      },
+      rejectPending: function (id) {
+        if (!pending || submittedRequest !== id) return;
+        pending = false;
+        pendingMode = null;
+        pendingDraft = null;
+        submittedRequest = null;
+        updateDraftStatus();
+      },
+      stageBaseline: function () {
+        pending = true;
+        pendingBinding = initialBinding;
+        pendingMode = "baseline";
+        pendingDraft = null;
+        pendingRevision = revision;
+        submittedRequest = null;
+        draft = cloneStructured(initialDraft);
+        startingDraft = cloneStructured(initialDraft);
+        rawDraft = initialBinding && typeof initialBinding.expr === "string" ? initialBinding.expr : "";
+        startingRawDraft = rawDraft;
+        dirty = false;
+        sourceChanged = false;
+        render();
+      },
+      restore: function () {
+        draft = cloneStructured(startingDraft);
+        rawDraft = startingRawDraft;
+        dirty = false;
+        sourceChanged = false;
+        control.setError("");
+        render();
+      },
+    };
+
+    function updateDraftStatus() {
+      draftStatus.textContent = pending
+        ? "Applying complete parameter value…"
+        : sourceChanged
+          ? "Unapplied edits. The reactive default changed; discard to reload it."
+          : dirty
+            ? "Unapplied edits. The last accepted results remain visible."
+            : "";
+      draftStatus.hidden = !draftStatus.textContent;
+    }
+    function editDraft() {
+      revision += 1;
+      dirty = true;
+      sourceChanged = false;
+      control.setError("");
+      updateDraftStatus();
+      setStatus("unapplied parameter edits · showing last successful evaluation", "warn");
+    }
+    function render() {
+      editorHolder.replaceChildren();
+      appendStructuredEditor(editorHolder, port, port.schema, draft, editDraft, port.name, true, []);
+      rawField.value = rawDraft;
+      editorHolder.hidden = mode !== "form";
+      rawHolder.hidden = mode !== "raw";
+      updateDraftStatus();
     }
 
-    control.restore = function () {
-      control.showValue(displayedExpr);
-    };
-    var clear = element("button", "control-clear", "Use default");
-    clear.type = "button";
-    clear.addEventListener("click", function () {
-      commit("");
+    var isStructured = port.schema.kind === "algebraic" || port.schema.kind === "indexed";
+    if (isStructured) {
+      var modes = element("div", "control-modes");
+      var formMode = element("button", "control-mode control-mode--active", "Form");
+      var rawMode = element("button", "control-mode", "Raw literal");
+      formMode.type = "button";
+      rawMode.type = "button";
+      formMode.addEventListener("click", function () {
+        mode = "form";
+        formMode.className = "control-mode control-mode--active";
+        rawMode.className = "control-mode";
+        render();
+      });
+      rawMode.addEventListener("click", function () {
+        mode = "raw";
+        rawMode.className = "control-mode control-mode--active";
+        formMode.className = "control-mode";
+        render();
+      });
+      modes.appendChild(formMode);
+      modes.appendChild(rawMode);
+      holder.appendChild(modes);
+    }
+    rawField.addEventListener("input", function () {
+      rawDraft = rawField.value;
+      editDraft();
     });
-    holder.appendChild(clear);
+    render();
+    holder.appendChild(editorHolder);
+    holder.appendChild(rawHolder);
+    holder.appendChild(element(
+      "p",
+      "control-snapshot-note",
+      "Applying overrides the whole parameter, including unchanged fields.",
+    ));
+    var actions = element("div", "control-actions");
+    var apply = element("button", "control-apply", "Apply");
+    apply.type = "button";
+    apply.addEventListener("click", function () {
+      var incomplete = mode === "form"
+        ? incompleteDraft(draft, [])
+        : rawDraft.trim()
+          ? null
+          : { path: [], message: "Enter a complete closed value before applying." };
+      if (incomplete) {
+        control.setError(incomplete.message, incomplete.path);
+        setStatus("incomplete parameter draft · showing last successful evaluation", "warn");
+        return;
+      }
+      pending = true;
+      pendingMode = mode;
+      pendingDraft = mode === "form" ? cloneStructured(draft) : rawDraft;
+      pendingRevision = revision;
+      submittedRequest = null;
+      pendingBinding = mode === "form" && isStructured
+        ? { name: port.name, value: cloneStructured(pendingDraft) }
+        : { name: port.name, expr: mode === "form" ? pendingDraft.expr : pendingDraft };
+      updateDraftStatus();
+      scheduleEvaluate();
+    });
+    var discard = element("button", "control-discard", "Discard edits");
+    discard.type = "button";
+    discard.addEventListener("click", control.restore);
+    actions.appendChild(apply);
+    actions.appendChild(discard);
+    if (port.has_default) {
+      var clear = element("button", "control-clear", "Use default");
+      clear.type = "button";
+      clear.addEventListener("click", function () {
+        pending = true;
+        pendingBinding = null;
+        pendingMode = "default";
+        pendingDraft = null;
+        pendingRevision = revision;
+        submittedRequest = null;
+        dirty = false;
+        sourceChanged = false;
+        updateDraftStatus();
+        scheduleEvaluate();
+      });
+      actions.appendChild(clear);
+    }
+    holder.appendChild(actions);
+    holder.appendChild(draftStatus);
     holder.appendChild(errorLine);
     card.appendChild(holder);
     return control;
@@ -244,22 +521,20 @@
     }
     resetButton.addEventListener("click", function () {
       controls.forEach(function (control) {
-        control.currentExpr = control.initialExpr;
         control.setError("");
-        if (control.restore) control.restore();
+        control.stageBaseline();
       });
       scheduleEvaluate();
     });
   }
 
   function currentBindings() {
-    // Preserve explicit inputs even when their card has no editable control.
     var bindings = baselineBindings.filter(function (binding) {
       return !controls.has(binding.name);
     });
     controls.forEach(function (control) {
-      var expr = control.currentExpr.trim();
-      if (expr) bindings.push({ name: control.name, expr: expr });
+      var binding = control.bindingForEvaluation();
+      if (binding) bindings.push(binding);
     });
     return bindings;
   }
@@ -267,7 +542,7 @@
   function anyModified() {
     var modified = false;
     controls.forEach(function (control) {
-      if (control.currentExpr.trim() !== control.initialExpr.trim()) modified = true;
+      if (JSON.stringify(control.currentBinding) !== JSON.stringify(control.initialBinding)) modified = true;
     });
     return modified;
   }
@@ -391,14 +666,7 @@
       if (declaration.declaration_kind !== "param") continue;
       var control = controls.get(declaration.name);
       if (!control) continue;
-      if (declaration.outcome.status === "value") {
-        var view = declaration.outcome.value;
-        if (!control.currentExpr.trim()) control.showValue(exprFromView(view, control.schema) || "");
-        if (view.kind === "quantity") control.setSi(view.si_value);
-        if (view.kind === "int" && Number.isSafeInteger(Number(view.decimal))) {
-          control.setSi(Number(view.decimal));
-        }
-      }
+      if (declaration.outcome.status === "value") control.showView(declaration.outcome.value);
     }
   }
 
@@ -522,9 +790,10 @@
     });
   }
 
-  function applyOutcome(outcome) {
+  function applyOutcome(outcome, completedRequest) {
     if (outcome.status === "evaluated") {
       clearBindingErrors();
+      controls.forEach(function (control) { control.acceptPending(completedRequest); });
       patchValues(outcome.evaluation);
       patchParamControls(outcome.evaluation);
       patchChecks(outcome.evaluation);
@@ -541,11 +810,12 @@
         outcome.evaluation.has_errors ? "warn" : "ok",
       );
     } else if (outcome.status === "binding_errors") {
+      controls.forEach(function (control) { control.rejectPending(completedRequest); });
       clearBindingErrors();
       for (var i = 0; i < outcome.errors.length; i += 1) {
         var bindingError = outcome.errors[i];
         var control = controls.get(bindingError.name);
-        if (control) control.setError(bindingError.message);
+        if (control) control.setError(bindingError.message, bindingError.path || []);
       }
       setStatus("input rejected · showing last successful evaluation", "warn");
     } else {
@@ -597,12 +867,14 @@
       // Cancellation is worker teardown: a blocked evaluation cannot be
       // interrupted, so replace the whole engine and re-prepare.
       transport.terminate();
+      controls.forEach(function (control) { control.rejectPending(activeRequest); });
       activeRequest = null;
       ready = false;
-      evaluateQueued = true;
+      evaluateQueued = false;
       setStatus("evaluation timed out · restarting engine", "warn");
       startTransport();
     }, EVALUATION_TIMEOUT_MS);
+    controls.forEach(function (control) { control.markSubmitted(requestId); });
     transport.postMessage({ type: "evaluate", id: requestId, bindings: activeBindings() });
   }
 
@@ -618,7 +890,7 @@
         buildControls(storedPorts, initial.evaluation);
         initial.bindings.forEach(function (binding) {
           var control = controls.get(binding.name);
-          if (control) { control.currentExpr = binding.expr; control.showValue(binding.expr); }
+          if (control) control.currentBinding = binding;
         });
         applyOutcome({ status: "evaluated", evaluation: initial.evaluation });
         return;
@@ -638,7 +910,7 @@
         buildControls(storedPorts, msg.outcome.evaluation);
       }
       // A control edit invalidates old results even before its debounce fires.
-      if (!evaluateQueued && !debounceTimer) applyOutcome(msg.outcome);
+      if (!evaluateQueued && !debounceTimer) applyOutcome(msg.outcome, msg.id);
       if (evaluateQueued && !debounceTimer) {
         evaluateQueued = false;
         runEvaluate();

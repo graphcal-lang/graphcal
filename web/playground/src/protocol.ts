@@ -15,13 +15,25 @@ export const diagnosticSchema = z.object({
 });
 export type Diagnostic = z.infer<typeof diagnosticSchema>;
 export type Value =
-  | { kind: "quantity"; display: string; value: number; si_value: number; unit?: string | null }
-  | { kind: "bool"; display: string; value: boolean }
-  | { kind: "int"; display: string; decimal: string }
-  | { kind: "label"; display: string; variant: string }
-  | { kind: "complex" | "datetime"; display: string }
-  | { kind: "struct"; display: string; fields: { name: string; value: Value }[] }
-  | { kind: "indexed"; display: string; entries: { display_key: string; value: Value }[] };
+  | {
+      kind: "quantity";
+      display: string;
+      literal: string;
+      value: number;
+      si_value: number;
+      unit?: string | null;
+    }
+  | { kind: "bool"; display: string; literal: string; value: boolean }
+  | { kind: "int"; display: string; literal: string; decimal: string }
+  | { kind: "label"; display: string; literal: string; index: string; variant: string }
+  | { kind: "complex" | "datetime"; display: string; literal: string }
+  | { kind: "struct"; display: string; type_name: string; fields: { name: string; value: Value }[] }
+  | {
+      kind: "indexed";
+      display: string;
+      index: string;
+      entries: { display_key: string; value: Value }[];
+    };
 export interface GridTable {
   columns: string[];
   rows: [string, string[]][];
@@ -36,22 +48,41 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
     z.object({
       kind: z.literal("quantity"),
       display: z.string(),
+      literal: z.string(),
       value: z.number(),
       unit: z.string().nullish(),
       si_value: z.number(),
     }),
-    z.object({ kind: z.literal("bool"), display: z.string(), value: z.boolean() }),
-    z.object({ kind: z.literal("int"), display: z.string(), decimal: z.string() }),
-    z.object({ kind: z.literal("label"), display: z.string(), variant: z.string() }),
-    z.object({ kind: z.enum(["complex", "datetime"]), display: z.string() }),
+    z.object({
+      kind: z.literal("bool"),
+      display: z.string(),
+      literal: z.string(),
+      value: z.boolean(),
+    }),
+    z.object({
+      kind: z.literal("int"),
+      display: z.string(),
+      literal: z.string(),
+      decimal: z.string(),
+    }),
+    z.object({
+      kind: z.literal("label"),
+      display: z.string(),
+      literal: z.string(),
+      index: z.string(),
+      variant: z.string(),
+    }),
+    z.object({ kind: z.enum(["complex", "datetime"]), display: z.string(), literal: z.string() }),
     z.object({
       kind: z.literal("struct"),
       display: z.string(),
+      type_name: z.string(),
       fields: z.array(z.object({ name: z.string(), value: valueSchema })),
     }),
     z.object({
       kind: z.literal("indexed"),
       display: z.string(),
+      index: z.string(),
       entries: z.array(z.object({ display_key: z.string(), value: valueSchema })),
     }),
   ]),
@@ -115,11 +146,41 @@ export const reportOutcomeSchema = z.discriminatedUnion("status", [
   outcomeSchema.options[2].extend({ html: z.string() }),
   z.object({
     status: z.literal("binding_errors"),
-    errors: z.array(z.object({ name: z.string(), message: z.string() })),
+    errors: z.array(
+      z.object({
+        name: z.string(),
+        message: z.string(),
+        path: z
+          .array(
+            z.discriminatedUnion("kind", [
+              z.object({ kind: z.literal("field"), index: z.int().nonnegative() }),
+              z.object({ kind: z.literal("entry"), index: z.int().nonnegative() }),
+            ]),
+          )
+          .default([]),
+      }),
+    ),
   }),
   z.object({ status: z.literal("eval_error"), message: z.string() }),
 ]);
 export type ReportOutcome = z.infer<typeof reportOutcomeSchema>;
+const indexValueSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("named"), name: z.string(), variants: z.array(z.string()) }),
+  z.object({ kind: z.literal("coordinate"), name: z.string(), labels: z.array(z.string()) }),
+  z.object({ kind: z.literal("finite"), cardinality: z.int().nonnegative() }),
+]);
+const recursiveValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("quantity"), unit: z.string().nullish() }),
+    z.object({ kind: z.literal("complex"), unit: z.string().nullish() }),
+    z.object({ kind: z.literal("boolean") }),
+    z.object({ kind: z.literal("integer") }),
+    z.object({ kind: z.literal("datetime"), time_scale: z.string() }),
+    z.object({ kind: z.literal("key"), axis: indexValueSchema }),
+    z.object({ kind: z.literal("algebraic"), definition: z.int().nonnegative() }),
+    z.object({ kind: z.literal("indexed"), axis: indexValueSchema, element: recursiveValueSchema }),
+  ]),
+);
 export const portsSchema = z.array(
   z.object({
     name: z.string(),
@@ -141,6 +202,25 @@ export const portsSchema = z.array(
       z.object({ kind: z.literal("datetime"), time_scale: z.string() }),
       z.object({ kind: z.literal("expression") }),
     ]),
+    schema: recursiveValueSchema,
+    definitions: z.array(
+      z.object({
+        id: z.int().nonnegative(),
+        constructors: z.array(
+          z.object({
+            id: z.int().nonnegative(),
+            name: z.string(),
+            fields: z.array(
+              z.object({
+                id: z.int().nonnegative(),
+                name: z.string(),
+                schema: recursiveValueSchema,
+              }),
+            ),
+          }),
+        ),
+      }),
+    ),
   }),
 );
 export type ParameterPort = z.infer<typeof portsSchema>[number];

@@ -38,7 +38,8 @@ use crate::project_compiler::{
 };
 
 use super::model_schema::{
-    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelValueSchema, index_def_for_ref,
+    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
+    ModelValueSchema, index_def_for_ref,
 };
 use super::output::{
     apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
@@ -49,8 +50,10 @@ mod binding_compile;
 #[path = "tenax_model.rs"]
 mod tenax_model;
 
-pub use binding_compile::ParameterBindingRow;
 use binding_compile::build_parameter_ports;
+pub use binding_compile::{
+    ParameterBindingRow, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
+};
 pub use tenax_model::{
     InclusiveBounds, ModelDefinitionError, ModelExecutionError, ModelOutputPort, ModelRowFailure,
     ModelRowOutcome, ParameterDomain, ParameterPort, PreparedModel, TenaxV2Input, TenaxV2InputKind,
@@ -372,6 +375,12 @@ impl PreparedProject {
     #[must_use]
     pub fn parameter_ports(&self) -> &[ParameterPort] {
         &self.parameter_ports
+    }
+
+    /// Recursive value-schema arena shared by all model ports.
+    #[must_use]
+    pub fn model_schema_graph(&self) -> &ModelSchemaGraph {
+        &self.schema_graph
     }
 
     /// Direct root nodes in source declaration order.

@@ -22,9 +22,9 @@ pub use project::{
     ModelQuantitySchema, ModelRowFailure, ModelRowOutcome, ModelSchemaGraph, ModelTypeId,
     ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
     ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
-    PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
-    TenaxV2RowOutcome, compile_and_eval_from_project, compile_and_eval_project,
-    prepare_from_project,
+    PreparedProject, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
+    TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
+    compile_and_eval_from_project, compile_and_eval_project, prepare_from_project,
 };
 
 pub use runtime::RuntimeEvaluation;
@@ -32,7 +32,7 @@ pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayProjectionError,
     DisplayUnit, DisplayValueError, EvalOutputView, EvalResult, FigureSpec, LayerSpec,
     MarkProperty, NodeError, PlotError, PlotFieldValue, PlotProperty, PlotSpec, Value, ValueError,
-    format_epoch_with_tz, quantity_display_value,
+    datetime_literal, format_epoch_with_tz, quantity_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

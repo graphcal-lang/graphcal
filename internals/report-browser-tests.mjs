@@ -85,14 +85,19 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
     const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
     assert.equal(built.status, initial ? 0 : 1, built.stderr);
     const { evaluate, wait, close } = await openReport(output);
-    const edit = async value => evaluate(`(() => { const field = document.querySelector('[data-decl="divisor"] .control-field'); field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    const draft = async value => evaluate(`(() => { const field = document.querySelector('[data-decl="divisor"] .control-field'); field.value = ${JSON.stringify(value)}; field.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    const apply = async () => evaluate(`document.querySelector('[data-decl="divisor"] .control-apply').click()`);
+    const edit = async value => { await draft(value); await apply(); };
     const chart = `document.querySelector('figure[data-figure="curve"] canvas')`;
     const failure = `document.querySelector('figure[data-figure="curve"] .error-chip')`;
     await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
     if (!initial) {
       await wait(`${failure}?.textContent.includes('division by zero')`);
       assert.equal(await evaluate("typeof window.vegaEmbed"), "function", "failed baseline must include renderer assets");
-      await edit("1.0");
+      await draft("1.0");
+      await delay(300);
+      assert.equal(await evaluate(`Boolean(${chart})`), false, "unapplied edits must retain the failed baseline");
+      await apply();
     }
     await wait(chart);
     await edit("0.0");
@@ -128,6 +133,47 @@ ${initial ? "plot healthy = { mark: point, encode: { x: 1.0, y: 2.0 } };" : ""}`
     assert.equal(await evaluate(`Boolean(${chart})`), false);
     await evaluate("window.vegaEmbed = window.savedEmbed; document.querySelector('.modified-banner__reset').click()");
     await wait(initial ? chart : `${failure}?.textContent.includes('division by zero')`);
+    await close();
+  }
+  {
+    const source = join(temporary, "structured.gcl");
+    const output = join(temporary, "structured.html");
+    writeFileSync(source, `pub type Choice { Amount(value: Length), Off, }
+param choice: Choice = Amount(value: 2.0 m);
+param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
+    const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
+    assert.equal(built.status, 0, built.stderr);
+    const { evaluate, wait, exceptions, close } = await openReport(output);
+    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 32);
+    await evaluate(`document.querySelector('[data-decl="samples"] .control-more').click()`);
+    assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 40);
+    await evaluate(`(() => {
+      const field = document.querySelector('[data-decl="choice"] .control-field');
+      field.value = '3.0 s'; field.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-decl="choice"] .control-apply').click();
+    })()`);
+    await wait(`document.querySelector('[data-decl="choice"] .control-error--nested')`);
+    assert.equal(await evaluate(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.includes('2 m')`), true, "invalid nested input retains the accepted result");
+    await evaluate(`(() => {
+      const field = document.querySelector('[data-decl="choice"] .control-field');
+      field.value = '3.0 m'; field.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('[data-decl="choice"] .control-apply').click();
+    })()`);
+    await wait(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.includes('3 m')`);
+    const draft = await evaluate(`document.querySelector('[data-decl="choice"] .control-field').value`);
+    await evaluate(`(() => {
+      const select = document.querySelector('[data-decl="choice"] .control-constructor');
+      select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('[data-decl="choice"] .control-apply').click();
+    })()`);
+    await wait(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.trim() === 'Off'`);
+    await evaluate(`(() => {
+      const select = document.querySelector('[data-decl="choice"] .control-constructor');
+      select.value = '0'; select.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    assert.equal(await evaluate(`document.querySelector('[data-decl="choice"] .control-field').value`), draft, "constructor-specific drafts survive toggles");
+    assert.deepEqual(exceptions, [], "structured controls must not throw browser exceptions");
     await close();
   }
   await testReportLayout({ temporary, openReport });
