@@ -620,7 +620,12 @@ Structured values stay inside labelled, keyboard-focusable scroll regions, so
 wide grids and long field paths cannot overlap neighboring cards.
 
 Interactive reports use an adaptive input outline beside an independently
-scrolling results pane (stacked on narrow screens). Scalars and one-field
+scrolling results pane on desktop. On narrow screens, inputs and results use
+normal page scrolling instead of two cramped panes. The sticky **Inputs** and
+**Results** buttons jump between them without losing drafts, pins, or result-tab
+selection. Input fields fill the row, and controls have larger touch targets.
+Wide plots retain their authored dimensions and scroll within their own
+keyboard-focusable region rather than widening the page. Scalars and one-field
 records are directly editable rows; small records start expanded, and larger
 structures can be opened as needed. **Search inputs** matches names, field
 paths, and parameter descriptions, revealing matching branches. Stars pin

@@ -16,6 +16,8 @@
       return node;
     }
     var results = element("div", "workspace-results");
+    results.id = "workspace-results";
+    results.tabIndex = -1;
     container.appendChild(results);
     var heading = element("div", "workspace-result-heading");
     heading.append(element("h2", "", "Results"), element("p", "", "Pin outputs to keep them in view while editing."));

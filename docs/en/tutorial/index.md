@@ -47,9 +47,12 @@ The adaptive input outline shows scalars and one-field records as editable
 rows, with larger structures expandable on demand. Search names, paths, or
 parameter descriptions, and star frequently used inputs to pin editable rows.
 The **⋯** menu applies or discards the whole containing parameter.
-**Advanced controls** provides metadata, sliders, and raw entry. Results scroll
-independently; their tabs and output pins keep useful values in view while you
-edit. Pins are session-only and are not included in shared links.
+**Advanced controls** provides metadata, sliders, and raw entry. On desktop,
+results scroll independently; their tabs and output pins keep useful values in
+view while you edit. On mobile, the report uses normal page scrolling with
+larger input controls. Sticky **Inputs** and **Results** buttons jump between
+sections without losing edits; wide tables and plots scroll locally rather
+than widening the page. Pins are session-only and are not included in shared links.
 **Reset parameters** restores source defaults;
 editing source clears all
 parameter overrides. **Stop** cancels evaluation; **Run** retries with the last

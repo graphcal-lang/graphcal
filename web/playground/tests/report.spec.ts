@@ -394,6 +394,104 @@ test("outline search and editable pins share the native evaluator in the sandbox
   await expect(result(page)).toHaveText("12 m/s");
 });
 
+test.describe("mobile report", () => {
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } });
+
+  test("readable controls, local navigation and scrolling survive edits and resizing", async ({
+    page,
+  }) => {
+    const layoutSource = readFileSync(
+      new URL("../../../crates/graphcal-report/tests/fixtures/report-layout.gcl", import.meta.url),
+      "utf8",
+    );
+    await page.goto(`/playground/?view=report${fragment([], layoutSource)}`);
+    await page.locator("#run").tap();
+    const frame = report(page);
+    await expect(frame.locator(".hydration-status")).toHaveText("live");
+    const jump = frame.getByRole("navigation", { name: "Report workspace", exact: true });
+    const gain = frame.getByRole("textbox", { name: "gain", exact: true });
+    await frame.getByRole("checkbox", { name: "Auto run", exact: true }).uncheck();
+    await gain.fill("3.0");
+
+    for (const [width, height] of [
+      [390, 844],
+      [320, 568],
+      [667, 375],
+      [390, 400],
+    ]) {
+      await page.setViewportSize({ width, height });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      expect(
+        await page.locator("#report iframe").evaluate((el) => el.clientHeight),
+      ).toBeGreaterThanOrEqual(height - 1);
+      expect(
+        await gain.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const row = el.closest(".outline-row")!.getBoundingClientRect();
+          return (
+            parseFloat(getComputedStyle(el).fontSize) >= 16 &&
+            box.height >= 44 &&
+            box.width >= row.width - 1
+          );
+        }),
+      ).toBe(true);
+      await jump.getByRole("button", { name: "Results", exact: true }).tap();
+      await expect(frame.locator("#workspace-results")).toBeFocused();
+      expect(
+        await frame
+          .locator("#workspace-results")
+          .evaluate(
+            (el) =>
+              el.getBoundingClientRect().top >=
+              document.querySelector(".workspace-mobile-nav")!.getBoundingClientRect().bottom,
+          ),
+      ).toBe(true);
+      await frame.getByRole("button", { name: "Plots", exact: true }).tap();
+      const plot = frame.getByRole("figure", { name: "bars plot" });
+      await expect(plot.locator("canvas, svg")).toBeVisible();
+      expect(
+        await plot.evaluate(
+          (el) =>
+            el.scrollWidth > el.clientWidth &&
+            el.tabIndex === 0 &&
+            document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      expect(
+        await frame
+          .locator(".workspace-result-body")
+          .evaluate((el) => getComputedStyle(el).overflowY),
+      ).toBe("visible");
+      await jump.getByRole("button", { name: "Inputs", exact: true }).tap();
+      await expect(frame.locator("#inputs")).toBeFocused();
+      await expect(gain).toHaveValue("3.0");
+      await expect(frame.getByRole("button", { name: "Plots", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    }
+    // The jump controls must never navigate srcdoc to the host URL or replace the report.
+    await expect(page.locator("#report iframe")).toHaveCount(1);
+    expect(page.frames().some((child) => child.url() === "about:srcdoc")).toBe(true);
+    await apply(page, "gain");
+    await frame.getByRole("button", { name: "Values", exact: true }).tap();
+    await expect(result(page, "total")).toHaveText("37.5");
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await expect(jump).toBeHidden();
+    expect(
+      await frame.locator(".outline-explorer").evaluate((el) => getComputedStyle(el).overflowY),
+    ).toBe("auto");
+    await expect(gain).toHaveValue("3.0");
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+      (await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze())
+        .violations,
+    ).toEqual([]);
+  });
+});
+
 test("report layout and controls remain accessible at desktop and narrow widths", async ({
   page,
 }) => {

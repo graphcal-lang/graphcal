@@ -23,6 +23,7 @@ node heights: Dimensionless[Category] = {
     Category#Gamma: 3.0,
 };
 plot bars = {
+    width: 900,
     mark: bar,
     encode: { x: for c: Category { c }, y: @heights },
 };

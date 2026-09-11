@@ -77,7 +77,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
         for error in &document.plot_errors {
             let _ = writeln!(
                 body,
-                "<figure class=\"plot\" data-figure=\"{name}\"><figcaption><span class=\"figure-name\">{name}</span></figcaption><div data-role=\"figure\"><p class=\"error-chip\">Plot unavailable: {message}</p></div></figure>",
+                "<figure class=\"plot\" data-figure=\"{name}\" tabindex=\"0\" aria-label=\"{name} plot\"><figcaption><span class=\"figure-name\">{name}</span></figcaption><div data-role=\"figure\"><p class=\"error-chip\">Plot unavailable: {message}</p></div></figure>",
                 name = html_escape(&error.name),
                 message = html_escape(&error.message)
             );
@@ -87,7 +87,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
             let name = html_escape(&card.figure.name);
             let _ = write!(
                 body,
-                "<figure class=\"plot\" data-figure=\"{name}\">\n<figcaption><span class=\"figure-name\">{name}</span>"
+                "<figure class=\"plot\" data-figure=\"{name}\" tabindex=\"0\" aria-label=\"{name} plot\">\n<figcaption><span class=\"figure-name\">{name}</span>"
             );
             if let Some(doc) = &card.doc {
                 let _ = write!(body, " — {}", html_escape(doc));

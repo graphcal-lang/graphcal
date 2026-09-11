@@ -54,7 +54,20 @@
     var lastKeys = [];
 
     var workspace = element("div", "report-workspace");
-    main.appendChild(workspace);
+    var mobileNav = element("nav", "workspace-mobile-nav");
+    mobileNav.setAttribute("aria-label", "Report workspace");
+    [["inputs", "Inputs"], ["workspace-results", "Results"]].forEach(function (entry) {
+      // A fragment link in srcdoc resolves against the host page's URL. Move
+      // focus/scroll locally instead, without navigating the sandboxed report.
+      var jump = button(entry[1], function () {
+        var target = document.getElementById(entry[0]);
+        target.focus({ preventScroll: true });
+        target.scrollIntoView({ block: "start" });
+      });
+      jump.setAttribute("aria-controls", entry[0]);
+      mobileNav.appendChild(jump);
+    });
+    main.append(mobileNav, workspace);
     workspace.appendChild(inputs);
     document.body.classList.add("report-workspace-active");
     var original = element("div", "outline-advanced");
