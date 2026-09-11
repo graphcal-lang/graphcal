@@ -13,15 +13,18 @@
 //! same contract the playground already uses.
 
 use graphcal_eval::eval::{
-    EvalResult, ModelIndexKind, ModelValueSchema, ParameterDomain, ParameterPort, PreparedProject,
-    ProjectCompiler,
+    EvalResult, ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelValueSchema,
+    ParameterDomain, ParameterPort, PreparedProject, ProjectCompiler,
 };
 use graphcal_eval::host_fns::demo_registry;
 use graphcal_eval::loader::{LoaderBudget, load_project_with_dependency_sources};
 use serde::Serialize;
 
 use crate::PlaygroundRequest;
-use crate::bindings::{BindingRequest, bind_one};
+use crate::bindings::{
+    BindingPathSegmentView, BindingRequest, BrowserBindingRequest, StructuredBindingRequest,
+    StructuredValueRequest, bind_browser_one, bind_one,
+};
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
 use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
@@ -131,6 +134,7 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
 pub struct BindingErrorView {
     pub name: String,
     pub message: String,
+    pub path: Vec<BindingPathSegmentView>,
 }
 
 /// Outcome of one repeated evaluation.
@@ -174,7 +178,68 @@ pub struct ParameterPortView {
     /// Whether evaluation can fall back to a compiled default when the
     /// parameter is left unbound.
     pub has_default: bool,
+    /// Legacy scalar control metadata, retained for compatibility.
     pub control: ControlView,
+    /// Recursive root schema for the structured editor.
+    pub schema: ValueSchemaView,
+    /// Finite algebraic definition arena referenced by `schema`.
+    pub definitions: Vec<AlgebraicDefinitionView>,
+}
+
+/// Recursive browser value schema. Algebraic references keep recursive and
+/// mutually recursive declarations finite.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ValueSchemaView {
+    Quantity {
+        unit: Option<String>,
+    },
+    Complex {
+        unit: Option<String>,
+    },
+    Boolean,
+    Integer,
+    Datetime {
+        time_scale: String,
+    },
+    Key {
+        axis: IndexSchemaView,
+    },
+    Algebraic {
+        definition: usize,
+    },
+    Indexed {
+        axis: IndexSchemaView,
+        element: Box<Self>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum IndexSchemaView {
+    Named { name: String, variants: Vec<String> },
+    Coordinate { name: String, labels: Vec<String> },
+    Finite { cardinality: usize },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AlgebraicDefinitionView {
+    pub id: usize,
+    pub constructors: Vec<ConstructorSchemaView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConstructorSchemaView {
+    pub id: usize,
+    pub name: String,
+    pub fields: Vec<FieldSchemaView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldSchemaView {
+    pub id: usize,
+    pub name: String,
+    pub schema: ValueSchemaView,
 }
 
 /// The control family a parameter port maps to, derived from its declared
@@ -239,6 +304,176 @@ impl PreparedPlayground {
         }
     }
 
+    /// Evaluate browser bindings, including recursively structured values.
+    #[must_use]
+    pub fn evaluate_browser(&self, bindings: &[BrowserBindingRequest]) -> EvaluateOutcome {
+        match self.evaluate_browser_result(bindings) {
+            Ok(result) => EvaluateOutcome::Evaluated {
+                evaluation: EvaluationView::from(&result),
+            },
+            Err(EvaluationFailure::BindingErrors(errors)) => {
+                EvaluateOutcome::BindingErrors { errors }
+            }
+            Err(EvaluationFailure::EvalError(message)) => EvaluateOutcome::EvalError { message },
+        }
+    }
+
+    /// Evaluate browser bindings and render a static report from the same
+    /// result. Structured bindings are rendered canonically only for the
+    /// provenance reproduction command.
+    #[must_use]
+    pub fn evaluate_report_browser(
+        &self,
+        bindings: &[BrowserBindingRequest],
+    ) -> EvaluateReportOutcome {
+        match self.evaluate_browser_result(bindings) {
+            Ok(result) => {
+                let rendered = bindings
+                    .iter()
+                    .map(|binding| self.render_browser_binding(binding))
+                    .collect::<Result<Vec<_>, _>>();
+                match rendered.and_then(|bindings| self.report.render(&result, &bindings)) {
+                    Ok(html) => EvaluateReportOutcome::Evaluated {
+                        evaluation: EvaluationView::from(&result),
+                        html,
+                    },
+                    Err(message) => EvaluateReportOutcome::EvalError { message },
+                }
+            }
+            Err(EvaluationFailure::BindingErrors(errors)) => {
+                EvaluateReportOutcome::BindingErrors { errors }
+            }
+            Err(EvaluationFailure::EvalError(message)) => {
+                EvaluateReportOutcome::EvalError { message }
+            }
+        }
+    }
+
+    fn evaluate_browser_result(
+        &self,
+        bindings: &[BrowserBindingRequest],
+    ) -> Result<EvalResult, EvaluationFailure> {
+        let mut builder = self.prepared.binding_builder();
+        let errors = bindings
+            .iter()
+            .filter_map(|binding| {
+                bind_browser_one(&mut builder, binding)
+                    .err()
+                    .map(|error| BindingErrorView {
+                        name: binding.name().to_string(),
+                        message: error.message,
+                        path: error.path,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(EvaluationFailure::BindingErrors(errors));
+        }
+        let row = builder
+            .finish()
+            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))?;
+        self.prepared
+            .evaluate(&row)
+            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
+    }
+
+    fn render_browser_binding(
+        &self,
+        binding: &BrowserBindingRequest,
+    ) -> Result<BindingRequest, String> {
+        match binding {
+            BrowserBindingRequest::Expression(binding) => Ok(binding.clone()),
+            BrowserBindingRequest::Structured(StructuredBindingRequest { name, value }) => {
+                let declared_name = graphcal_compiler::syntax::decl_name::DeclName::try_new(name)
+                    .map_err(|error| error.to_string())?;
+                let port = self
+                    .prepared
+                    .parameter_ports()
+                    .iter()
+                    .find(|port| port.name() == &declared_name)
+                    .ok_or_else(|| format!("unknown parameter `{name}`"))?;
+                let mut expr = String::new();
+                self.render_structured_value(value, port.value_schema(), &mut expr)?;
+                Ok(BindingRequest {
+                    name: name.clone(),
+                    expr,
+                })
+            }
+        }
+    }
+
+    fn render_structured_value(
+        &self,
+        value: &StructuredValueRequest,
+        schema: &ModelValueSchema,
+        output: &mut String,
+    ) -> Result<(), String> {
+        use std::fmt::Write as _;
+
+        match (value, schema) {
+            (StructuredValueRequest::Literal { expr }, _) => output.push_str(expr),
+            (
+                StructuredValueRequest::Algebraic {
+                    definition,
+                    constructor,
+                    fields,
+                },
+                ModelValueSchema::Algebraic(expected),
+            ) => {
+                let graph = self.prepared.model_schema_graph();
+                if graph.definition_index(expected) != Some(*definition) {
+                    return Err("structured constructor has the wrong definition".to_string());
+                }
+                let constructor = graph
+                    .definition_at(*definition)
+                    .and_then(|definition| definition.constructors().get(*constructor))
+                    .ok_or_else(|| "structured constructor does not exist".to_string())?;
+                if fields.len() != constructor.fields().len() {
+                    return Err("structured constructor has the wrong field count".to_string());
+                }
+                write!(output, "{}(", constructor.name()).map_err(|error| error.to_string())?;
+                for (index, (field, field_schema)) in
+                    fields.iter().zip(constructor.fields()).enumerate()
+                {
+                    if index > 0 {
+                        output.push_str(", ");
+                    }
+                    write!(output, "{}: ", field_schema.name())
+                        .map_err(|error| error.to_string())?;
+                    self.render_structured_value(field, field_schema.value(), output)?;
+                }
+                output.push(')');
+            }
+            (
+                StructuredValueRequest::Indexed { entries },
+                ModelValueSchema::Indexed { element, axis },
+            ) => {
+                let axis_name = match axis.kind() {
+                    ModelIndexKind::Finite { cardinality } => format!("Fin({cardinality})"),
+                    ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
+                        .identity()
+                        .declared_resolved()
+                        .and_then(|name| self.prepared.source_index_path(name))
+                        .map(|path| path.to_string())
+                        .ok_or_else(|| "indexed axis is not visible at the boundary".to_string())?,
+                };
+                write!(output, "table[{axis_name}] {{ ").map_err(|error| error.to_string())?;
+                for entry in entries {
+                    self.render_structured_value(entry, element, output)?;
+                    output.push_str("; ");
+                }
+                output.push('}');
+            }
+            (StructuredValueRequest::Algebraic { .. }, _) => {
+                return Err("unexpected algebraic structured value".to_string());
+            }
+            (StructuredValueRequest::Indexed { .. }, _) => {
+                return Err("unexpected indexed structured value".to_string());
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate once and derive both the complete view and static report from
     /// that exact result.
     #[must_use]
@@ -271,6 +506,7 @@ impl PreparedPlayground {
                 errors.push(BindingErrorView {
                     name: binding.name.clone(),
                     message,
+                    path: Vec::new(),
                 });
             }
         }
@@ -290,10 +526,112 @@ impl PreparedPlayground {
 }
 
 fn parameter_port_view(port: &ParameterPort, prepared: &PreparedProject) -> ParameterPortView {
+    let graph = prepared.model_schema_graph();
     ParameterPortView {
         name: port.name().to_string(),
         has_default: port.has_default(),
         control: control_view(port, prepared),
+        schema: value_schema_view(port.value_schema(), graph, prepared),
+        definitions: graph
+            .definitions()
+            .iter()
+            .enumerate()
+            .map(|(id, definition)| AlgebraicDefinitionView {
+                id,
+                constructors: definition
+                    .constructors()
+                    .iter()
+                    .enumerate()
+                    .map(|(id, constructor)| ConstructorSchemaView {
+                        id,
+                        name: constructor.name().to_string(),
+                        fields: constructor
+                            .fields()
+                            .iter()
+                            .enumerate()
+                            .map(|(id, field)| FieldSchemaView {
+                                id,
+                                name: field.name().to_string(),
+                                schema: value_schema_view(field.value(), graph, prepared),
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "model schema construction retains every algebraic reference in the same immutable arena"
+)]
+fn value_schema_view(
+    schema: &ModelValueSchema,
+    graph: &ModelSchemaGraph,
+    prepared: &PreparedProject,
+) -> ValueSchemaView {
+    match schema {
+        ModelValueSchema::Quantity(quantity) => ValueSchemaView::Quantity {
+            unit: quantity
+                .canonical_unit()
+                .map(|unit| unit.label().to_string()),
+        },
+        ModelValueSchema::Complex(quantity) => ValueSchemaView::Complex {
+            unit: quantity
+                .canonical_unit()
+                .map(|unit| unit.label().to_string()),
+        },
+        ModelValueSchema::Bool => ValueSchemaView::Boolean,
+        ModelValueSchema::Int => ValueSchemaView::Integer,
+        ModelValueSchema::Datetime(scale) => ValueSchemaView::Datetime {
+            time_scale: scale.to_string(),
+        },
+        ModelValueSchema::Key(axis) => ValueSchemaView::Key {
+            axis: index_schema_view(axis, prepared),
+        },
+        ModelValueSchema::Algebraic(id) => ValueSchemaView::Algebraic {
+            definition: graph
+                .definition_index(id)
+                .expect("parameter algebraic schema must be retained in its arena"),
+        },
+        ModelValueSchema::Indexed { element, axis } => ValueSchemaView::Indexed {
+            axis: index_schema_view(axis, prepared),
+            element: Box::new(value_schema_view(element, graph, prepared)),
+        },
+    }
+}
+
+fn index_schema_view(axis: &ModelIndexSchema, prepared: &PreparedProject) -> IndexSchemaView {
+    match axis.kind() {
+        ModelIndexKind::Named { variants } => IndexSchemaView::Named {
+            name: axis
+                .identity()
+                .declared_resolved()
+                .and_then(|name| prepared.source_index_path(name))
+                .map_or_else(|| axis.identity().to_string(), |name| name.to_string()),
+            variants: variants.iter().map(ToString::to_string).collect(),
+        },
+        ModelIndexKind::Coordinate {
+            coordinates_si,
+            display_label,
+            display_scale,
+            ..
+        } => IndexSchemaView::Coordinate {
+            name: axis.identity().to_string(),
+            labels: coordinates_si
+                .iter()
+                .map(|coordinate| {
+                    let value = coordinate / display_scale;
+                    display_label
+                        .as_ref()
+                        .map_or_else(|| value.to_string(), |label| format!("{value} {label}"))
+                })
+                .collect(),
+        },
+        ModelIndexKind::Finite { cardinality } => IndexSchemaView::Finite {
+            cardinality: *cardinality,
+        },
     }
 }
 
@@ -354,7 +692,7 @@ mod js {
     use wasm_bindgen::JsValue;
     use wasm_bindgen::prelude::wasm_bindgen;
 
-    use super::{BindingRequest, PrepareOutcome, PreparedPlayground};
+    use super::{BrowserBindingRequest, PrepareOutcome, PreparedPlayground};
     use crate::PlaygroundOutcome;
 
     /// Handle to one prepared project owned by JavaScript.
@@ -499,8 +837,9 @@ mod js {
             crate::output::to_js(&self.inner.ports()).map_err(|error| serialization_error(&error))
         }
 
-        /// Evaluate with `[{name, expr}]` closed-value bindings; unbound
-        /// parameters use their compiled defaults. Returns the tagged
+        /// Evaluate with legacy `{name, expr}` or recursively structured
+        /// `{name, value}` closed-value bindings; unbound parameters use their
+        /// compiled defaults. Returns the tagged
         /// `EvaluateOutcome` (`evaluated` / `binding_errors` / `eval_error`).
         #[wasm_bindgen(js_name = evaluateBindings)]
         #[expect(
@@ -508,9 +847,9 @@ mod js {
             reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
         )]
         pub fn evaluate_bindings(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
-            let bindings: Vec<BindingRequest> = serde_wasm_bindgen::from_value(bindings)
+            let bindings: Vec<BrowserBindingRequest> = serde_wasm_bindgen::from_value(bindings)
                 .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
-            crate::output::to_js(&self.inner.evaluate(&bindings))
+            crate::output::to_js(&self.inner.evaluate_browser(&bindings))
                 .map_err(|error| serialization_error(&error))
         }
 
@@ -518,9 +857,9 @@ mod js {
         /// static report whose chart runtime is supplied by the host.
         #[wasm_bindgen(js_name = evaluateReport)]
         pub fn evaluate_report(&self, bindings: JsValue) -> Result<JsValue, JsValue> {
-            let bindings: Vec<BindingRequest> = serde_wasm_bindgen::from_value(bindings)
+            let bindings: Vec<BrowserBindingRequest> = serde_wasm_bindgen::from_value(bindings)
                 .map_err(|error| JsValue::from_str(&format!("invalid bindings: {error}")))?;
-            crate::output::to_js(&self.inner.evaluate_report(&bindings))
+            crate::output::to_js(&self.inner.evaluate_report_browser(&bindings))
                 .map_err(|error| serialization_error(&error))
         }
     }
@@ -530,6 +869,10 @@ mod js {
 mod tests {
     use super::*;
 
+    use crate::bindings::{
+        BrowserBindingRequest, StructuredBindingRequest, StructuredValueRequest,
+    };
+    use crate::output::{DeclarationOutcomeView, ValueView};
     use crate::{PlaygroundFile, PlaygroundRequest};
 
     fn single_file(source: &str) -> PlaygroundRequest {
@@ -610,6 +953,127 @@ assert positive = @delta_v > 0.0 m/s;
         };
         assert!(!evaluation.has_errors);
         assert_eq!(evaluation.assertions.len(), 1);
+    }
+
+    #[test]
+    fn structured_bindings_select_constructors_and_validate_shape() {
+        let prepared = prepare_ok(
+            "pub type Choice { Amount(value: Dimensionless), Switch(enabled: Bool), }\n\
+             param choice: Choice = Amount(value: 2.0);",
+        );
+        let ports = prepared.ports();
+        assert!(matches!(
+            ports[0].schema,
+            ValueSchemaView::Algebraic { definition: 0 }
+        ));
+        assert_eq!(ports[0].definitions.len(), 1);
+        assert_eq!(ports[0].definitions[0].constructors[1].name, "Switch");
+        assert_eq!(
+            ports[0].definitions[0].constructors[1].fields[0].name,
+            "enabled"
+        );
+
+        let binding = BrowserBindingRequest::Structured(StructuredBindingRequest {
+            name: "choice".to_string(),
+            value: StructuredValueRequest::Algebraic {
+                definition: 0,
+                constructor: 1,
+                fields: vec![StructuredValueRequest::Literal {
+                    expr: "true".to_string(),
+                }],
+            },
+        });
+        let EvaluateOutcome::Evaluated { evaluation } =
+            prepared.evaluate_browser(std::slice::from_ref(&binding))
+        else {
+            panic!("expected structured evaluation");
+        };
+        let DeclarationOutcomeView::Value {
+            value: ValueView::Struct {
+                type_name, fields, ..
+            },
+            ..
+        } = &evaluation.values[0].outcome
+        else {
+            panic!("expected structured parameter value");
+        };
+        assert_eq!(type_name, "Switch");
+        assert!(matches!(
+            fields[0].value,
+            ValueView::Bool { value: true, .. }
+        ));
+        let rendered = prepared.render_browser_binding(&binding).unwrap();
+        assert_eq!(rendered.expr, "Switch(enabled: true)");
+        assert!(matches!(
+            prepared.evaluate(std::slice::from_ref(&rendered)),
+            EvaluateOutcome::Evaluated { .. }
+        ));
+        let EvaluateReportOutcome::Evaluated { html, .. } =
+            prepared.evaluate_report_browser(&[binding])
+        else {
+            panic!("expected a report with a structured baseline");
+        };
+        assert!(html.contains("Switch(enabled: true)"));
+
+        let malformed = BrowserBindingRequest::Structured(StructuredBindingRequest {
+            name: "choice".to_string(),
+            value: StructuredValueRequest::Algebraic {
+                definition: 0,
+                constructor: 1,
+                fields: Vec::new(),
+            },
+        });
+        let EvaluateOutcome::BindingErrors { errors } = prepared.evaluate_browser(&[malformed])
+        else {
+            panic!("expected an addressed binding error");
+        };
+        assert!(errors[0].message.contains("expects 1 fields"));
+
+        let invalid_leaf = BrowserBindingRequest::Structured(StructuredBindingRequest {
+            name: "choice".to_string(),
+            value: StructuredValueRequest::Algebraic {
+                definition: 0,
+                constructor: 1,
+                fields: vec![StructuredValueRequest::Literal {
+                    expr: "1".to_string(),
+                }],
+            },
+        });
+        let EvaluateOutcome::BindingErrors { errors } = prepared.evaluate_browser(&[invalid_leaf])
+        else {
+            panic!("expected a field-local literal error");
+        };
+        assert!(matches!(
+            errors[0].path.as_slice(),
+            [BindingPathSegmentView::Field { index: 0 }]
+        ));
+    }
+
+    #[test]
+    fn structured_indexed_leaf_errors_retain_the_entry_path() {
+        let prepared =
+            prepare_ok("param samples: Length[Fin(2)] = table[Fin(2)] { 1.0 m; 2.0 m; };");
+        let binding = BrowserBindingRequest::Structured(StructuredBindingRequest {
+            name: "samples".to_string(),
+            value: StructuredValueRequest::Indexed {
+                entries: vec![
+                    StructuredValueRequest::Literal {
+                        expr: "3.0 m".to_string(),
+                    },
+                    StructuredValueRequest::Literal {
+                        expr: "4.0 s".to_string(),
+                    },
+                ],
+            },
+        });
+        let EvaluateOutcome::BindingErrors { errors } = prepared.evaluate_browser(&[binding])
+        else {
+            panic!("expected an entry-local unit error");
+        };
+        assert!(matches!(
+            errors[0].path.as_slice(),
+            [BindingPathSegmentView::Entry { index: 1 }]
+        ));
     }
 
     #[test]

@@ -128,6 +128,7 @@ export async function testReportLayout({ temporary, openReport }) {
       await evaluate(`(() => {
         const field = document.querySelector('[data-decl="gain"] .control-field');
         field.value = '3.0'; field.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('[data-decl="gain"] .control-apply').click();
         window.savedRegion = ${region("wide")};
         window.savedRegion.focus(); window.savedRegion.scrollLeft = 100;
       })()`);
@@ -140,6 +141,7 @@ export async function testReportLayout({ temporary, openReport }) {
       await evaluate(`(() => {
         const field = document.querySelector('[data-decl="gain"] .control-field');
         field.value = '0.0'; field.dispatchEvent(new Event('input', { bubbles: true }));
+        document.querySelector('[data-decl="gain"] .control-apply').click();
       })()`);
       await wait("document.querySelector('.report-nav a[href=\"#presentation\"]')");
       assert.equal(await evaluate("document.getElementById('presentation').querySelector('h2').textContent"), "Presentation diagnostics");

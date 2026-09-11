@@ -663,6 +663,23 @@ fn push_unit_factor(
     Some(())
 }
 
+/// Render an exact closed epoch literal in its declared time scale.
+#[must_use]
+pub fn datetime_literal(
+    epoch: &hifitime::Epoch,
+    scale: graphcal_compiler::registry::time_scale::TimeScale,
+) -> String {
+    let (year, month, day, hour, minute, second, nanos) = epoch.to_gregorian(scale.to_hifitime());
+    let fractional = if nanos == 0 {
+        String::new()
+    } else {
+        format!(".{nanos:09}")
+    };
+    format!(
+        "epoch<{scale}>(\"{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{fractional}\")"
+    )
+}
+
 /// Format an `hifitime::Epoch` with an optional IANA timezone.
 ///
 /// If `tz` is `Some`, converts to that timezone via jiff and formats as

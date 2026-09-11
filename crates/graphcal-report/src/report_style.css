@@ -73,11 +73,23 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
   footer#provenance { break-before: page; }
 }
 .control { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
-.control-field { font: inherit; font-variant-numeric: tabular-nums; padding: 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; width: 100%; }
-.control-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.control-field, .control-raw-field { font: inherit; font-variant-numeric: tabular-nums; padding: 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; width: 100%; }
+.control-field:focus, .control-raw-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .control-slider { width: 100%; accent-color: var(--accent); }
 .control-select { font: inherit; padding: 0.3rem 0.4rem; border: 1px solid var(--line); border-radius: 6px; }
 .control-toggle { font-size: 0.9rem; }
+.control-editor, .control-structure, .control-indexed { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.control-constructor { align-self: flex-start; min-width: 10rem; }
+.control-fieldset { min-width: 0; margin: 0; padding: 0.45rem 0.55rem 0.55rem; border: 1px solid var(--line); border-radius: 6px; }
+.control-legend { padding: 0 0.25rem; color: var(--muted); font-size: 0.78rem; }
+.control-index-entry { background: color-mix(in srgb, var(--panel) 75%, transparent); }
+.control-actions, .control-modes { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.control-actions button, .control-mode, .control-more { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 0.25rem 0.55rem; cursor: pointer; }
+.control-apply { color: #fff; background: var(--accent) !important; border-color: var(--accent) !important; }
+.control-mode--active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.control-raw-field { min-height: 5rem; resize: vertical; }
+.control-snapshot-note, .control-draft-status { margin: 0; color: var(--muted); font-size: 0.76rem; }
+.control-draft-status { color: var(--warn); }
 .control-error { margin: 0; color: var(--fail); font-size: 0.8rem; }
 .hydration-status { position: fixed; right: 0.75rem; bottom: 0.75rem; font-size: 0.75rem; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 0.2rem 0.7rem; }
 .hydration-status--busy { color: var(--accent); }

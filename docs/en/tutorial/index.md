@@ -34,9 +34,14 @@ Single-file steps link to the [standalone playground](https://graphcal.org/playg
 
 Select **Report** to view an interactive HTML report with parameter controls,
 values, plots, checks, and source provenance. Controls accept closed Graphcal
-values with explicit units (for example, `36.0 km/h`); changing a control does not
-edit the source. Invalid inputs show errors and leave the last successful results
-visible. **Reset parameters** restores source defaults; editing source clears all
+values with explicit units (for example, `36.0 km/h`). Algebraic parameters expose
+a constructor selector with recursive field controls, and fixed-axis indexed
+parameters expose every entry; changing a control does not edit the source.
+Edits remain in a draft until **Apply** validates and replaces the complete
+parameter. **Discard edits** restores the accepted snapshot, while **Raw literal**
+keeps advanced whole-value entry available. Invalid inputs show errors and leave
+the last successful results visible. **Reset parameters** restores source defaults;
+editing source clears all
 parameter overrides. **Stop** cancels evaluation; **Run** retries with the last
 applied parameters.
 

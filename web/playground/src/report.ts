@@ -1,4 +1,5 @@
 import { z } from "zod";
+import formState from "../../../crates/graphcal-report/src/report_form_state.js?raw";
 import runtime from "../../../crates/graphcal-report/src/report_runtime.js?raw";
 import bootstrap from "./report-frame.js?raw";
 import { bindingsSchema, type Binding } from "./bindings";
@@ -115,7 +116,7 @@ export class Report {
       .replace(
         "<head>",
         () =>
-          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${runtime}</script><script>${bootstrap}</script>`,
+          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${formState}</script><script>${runtime}</script><script>${bootstrap}</script>`,
       )
       .replace(
         "</body>",

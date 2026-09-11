@@ -86,6 +86,12 @@ describe("sharing source and applied parameters", () => {
   });
   it("bounds binding metadata and rejects duplicates before Wasm", () => {
     expect(bindingsSchema.parse([{ name: "x", expr: "🙂".repeat(1024) }])).toHaveLength(1);
+    let tooDeep: unknown = { kind: "literal", expr: "1" };
+    for (let depth = 0; depth < 34; depth += 1) {
+      tooDeep = { kind: "indexed", entries: [tooDeep] };
+    }
+    const cyclic: { kind: string; entries: unknown[] } = { kind: "indexed", entries: [] };
+    cyclic.entries.push(cyclic);
     for (const bindings of [
       [{ name: "x", expr: "🙂".repeat(1024) + "a" }],
       [
@@ -94,6 +100,9 @@ describe("sharing source and applied parameters", () => {
       ],
       [{ name: "x", expr: "\ud800" }],
       [{ name: "x", expr: "1", extra: true }],
+      [{ name: "x", value: { kind: "literal", expr: "1", extra: true } }],
+      [{ name: "x", value: tooDeep }],
+      [{ name: "x", value: cyclic }],
       Array.from({ length: 257 }, (_, i) => ({ name: `x${i}`, expr: "1" })),
     ])
       expect(bindingsSchema.safeParse(bindings).success).toBe(false);

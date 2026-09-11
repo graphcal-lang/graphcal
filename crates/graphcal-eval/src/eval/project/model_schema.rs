@@ -204,6 +204,28 @@ pub enum ModelValueSchema {
     },
 }
 
+impl ModelValueSchema {
+    /// Recover the checked concrete declared type represented by this schema.
+    #[must_use]
+    pub fn declared_type(&self) -> DeclaredType {
+        match self {
+            Self::Quantity(quantity) => DeclaredType::Quantity(quantity.dimension.clone()),
+            Self::Complex(quantity) => DeclaredType::Complex(quantity.dimension.clone()),
+            Self::Bool => DeclaredType::Bool,
+            Self::Int => DeclaredType::Int,
+            Self::Datetime(scale) => DeclaredType::Datetime(*scale),
+            Self::Key(index) => DeclaredType::Key(index.identity.clone()),
+            Self::Algebraic(id) => {
+                DeclaredType::Struct(id.identity.clone(), id.generic_args.clone())
+            }
+            Self::Indexed { element, axis } => DeclaredType::Indexed {
+                element: Box::new(element.declared_type()),
+                index: axis.identity.clone(),
+            },
+        }
+    }
+}
+
 /// One immutable definition stored in a [`ModelSchemaGraph`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelAlgebraicTypeSchema {
@@ -239,6 +261,18 @@ impl ModelSchemaGraph {
         self.definition_indices
             .get(id)
             .and_then(|index| self.definitions.get(*index))
+    }
+
+    /// Stable arena position of a concrete algebraic definition.
+    #[must_use]
+    pub fn definition_index(&self, id: &ModelTypeId) -> Option<usize> {
+        self.definition_indices.get(id).copied()
+    }
+
+    /// Look up a definition by its stable arena position.
+    #[must_use]
+    pub fn definition_at(&self, index: usize) -> Option<&ModelAlgebraicTypeSchema> {
+        self.definitions.get(index)
     }
 
     /// Every retained definition in deterministic discovery order.

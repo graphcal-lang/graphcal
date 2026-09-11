@@ -4,7 +4,8 @@ use graphcal_compiler::dimension::BaseDimId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DeclType, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult,
-    NodeError, Value, format_epoch_with_tz, format_number, quantity_display_value,
+    NodeError, Value, datetime_literal, format_epoch_with_tz, format_number,
+    quantity_display_value,
 };
 use serde::Serialize;
 
@@ -181,12 +182,14 @@ impl DeclarationOutcomeView {
 pub enum ValueView {
     Quantity {
         display: String,
+        literal: String,
         value: f64,
         si_value: f64,
         unit: Option<String>,
     },
     Complex {
         display: String,
+        literal: String,
         real: f64,
         imaginary: f64,
         si_real: f64,
@@ -195,14 +198,17 @@ pub enum ValueView {
     },
     Bool {
         display: String,
+        literal: String,
         value: bool,
     },
     Int {
         display: String,
+        literal: String,
         decimal: String,
     },
     Label {
         display: String,
+        literal: String,
         index: String,
         variant: String,
     },
@@ -218,6 +224,7 @@ pub enum ValueView {
     },
     Datetime {
         display: String,
+        literal: String,
         time_scale: String,
         display_timezone: Option<String>,
     },
@@ -250,12 +257,14 @@ impl ValueView {
             )?,
             Value::Bool(inner) => Self::Bool {
                 display: inner.to_string(),
+                literal: inner.to_string(),
                 value: *inner,
             },
             Value::Int(inner) => {
                 let decimal = inner.to_string();
                 Self::Int {
                     display: decimal.clone(),
+                    literal: decimal.clone(),
                     decimal,
                 }
             }
@@ -267,6 +276,7 @@ impl ValueView {
                 let variant = variant.as_str().to_string();
                 Self::Label {
                     display: format!("{index}#{variant}"),
+                    literal: format!("{index}#{variant}"),
                     index,
                     variant,
                 }
@@ -317,6 +327,7 @@ impl ValueView {
                 time_zones,
             } => Self::Datetime {
                 display: format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones),
+                literal: datetime_literal(epoch, *time_scale),
                 time_scale: time_scale.to_string(),
                 display_timezone: display_tz.as_ref().map(|tz| tz.as_str().to_string()),
             },
@@ -331,6 +342,7 @@ impl ValueView {
         let value = quantity_display_value(si_value, display_unit)?;
         Ok(Self::Quantity {
             display: display_number_with_unit(value, unit.as_deref()),
+            literal: quantity_literal(value, unit.as_deref()),
             value,
             si_value,
             unit,
@@ -347,6 +359,7 @@ impl ValueView {
         let imaginary = quantity_display_value(si_imaginary, display_unit)?;
         Ok(Self::Complex {
             display: display_complex_with_unit(real, imaginary, unit.as_deref()),
+            literal: complex_literal(real, imaginary, unit.as_deref()),
             real,
             imaginary,
             si_real,
@@ -354,6 +367,29 @@ impl ValueView {
             unit,
         })
     }
+}
+
+fn source_real(value: f64) -> String {
+    let text = value.to_string();
+    if text.contains('.') || text.contains('e') || text.contains('E') {
+        text
+    } else {
+        format!("{text}.0")
+    }
+}
+
+fn quantity_literal(value: f64, unit: Option<&str>) -> String {
+    let number = source_real(value);
+    match unit {
+        Some(unit) => format!("{number} {unit}"),
+        None => number,
+    }
+}
+
+fn complex_literal(real: f64, imaginary: f64, unit: Option<&str>) -> String {
+    let real = quantity_literal(real, unit);
+    let imaginary = quantity_literal(imaginary, unit);
+    format!("complex({real}, {imaginary})")
 }
 
 fn display_number_with_unit(value: f64, unit: Option<&str>) -> String {
@@ -579,6 +615,32 @@ mod tests {
                 ..
             }
         )));
+
+        let literals = view
+            .values
+            .iter()
+            .filter_map(|declaration| match &declaration.outcome {
+                DeclarationOutcomeView::Value {
+                    value:
+                        ValueView::Quantity { literal, .. }
+                        | ValueView::Complex { literal, .. }
+                        | ValueView::Bool { literal, .. }
+                        | ValueView::Int { literal, .. }
+                        | ValueView::Label { literal, .. }
+                        | ValueView::Datetime { literal, .. },
+                    ..
+                } => Some(literal.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(literals.contains(&"3.0 m"));
+        assert!(literals.contains(&"complex(3.0 m, 4.0 m)"));
+        assert!(literals.contains(&"epoch<UTC>(\"2024-11-05T12:00:00\")"));
+        for literal in literals {
+            graphcal_compiler::syntax::parser::Parser::new(literal)
+                .parse_single_expr()
+                .unwrap_or_else(|error| panic!("generated literal `{literal}`: {error}"));
+        }
     }
 
     #[test]

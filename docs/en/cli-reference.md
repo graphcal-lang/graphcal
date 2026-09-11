@@ -593,19 +593,31 @@ The controls follow the param's type and domain constraints: a unit-checked
 entry field for quantities (plus a slider when finite `min`/`max` bounds are
 declared), a checkbox for `Bool`, exact decimal text entry for `Int` (plus a
 unit-step slider only when both endpoints and their difference are safe
-JavaScript integers), a select for
-`Key<Index>` over a named index, and a full closed-literal field for
-everything else. Readers bind closed typed values under the same rules as
-`eval --param` — wrong or missing units are rejected at the input box, values
-clamp to declared domains, and expressions are never injected into the
-prepared model. Edits re-evaluate the embedded engine (the same compiler and
-evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
-patch values, grids, badges, and charts in place. Static and hydrated value
+JavaScript integers), and a select for `Key<Index>` over a named index.
+Algebraic values provide a constructor selector and recursively render each
+constructor field; fixed-axis indexed values render every entry recursively,
+in pages for larger axes. Leaf controls continue to accept closed literals, so
+quantities, exact integers, keys, datetimes, and nested combinations retain
+their checked types and units. **Raw literal** remains available for advanced
+whole-value input. Readers bind closed typed values under the same rules as
+`eval --param` — wrong or missing units are rejected at the exact nested field
+or entry, values must satisfy declared domains, and expressions are never
+injected into the prepared model. Keystrokes remain in an unapplied draft and
+leave the last accepted results visible. **Apply** validates and replaces the
+complete parameter atomically, including unchanged fields; **Discard edits**
+restores its starting snapshot. A newly selected constructor starts with empty
+required fields rather than fabricated zero/false/default values. Successful
+Apply re-evaluates the embedded engine (the same compiler and evaluator as this
+CLI, compiled to WebAssembly, running in a Web Worker) and patches values,
+grids, badges, and charts in place. Static and hydrated value
 cards use the same projection: rank-two values are grids, and higher ranks
 are labelled two-axis slices retaining every leaf and outer-axis label.
 Structured values stay inside labelled, keyboard-focusable scroll regions, so
-wide grids and long field paths cannot overlap neighboring cards. Focus a region
-and use the arrow keys to inspect overflowing columns. Recalculation retains the
+wide grids and long field paths cannot overlap neighboring cards. Indexed
+editors initially mount 32 entries at a time while retaining the complete value
+in their draft; **Show more entries** progressively exposes the remainder. Focus
+a result region and use the arrow keys to inspect overflowing columns.
+Recalculation retains the
 region's focus and scroll position. On screen, these regions are at most 24 rem
 (or 60% of the viewport height), and short cards do not stretch to match taller
 neighbors. All rows remain available by scrolling; no values are truncated.
@@ -619,13 +631,21 @@ recover after an input edit. Renderer failures are explicit, and a delayed
 render of an older result cannot replace the current chart. The moment any input
 differs from the as-published baseline, a persistent banner appears with a
 one-click reset. Displayed defaults remain reactive: an untouched control does
-not bind its parameter, and dependent defaults refresh after evaluation. Editing
-a control creates an explicit reader binding. Clearing its text or choosing
-**Use default** removes that binding (including a build-time override). Reset
-restores precisely the original build-time binding set, not literal copies of
+not bind its parameter, and dependent defaults refresh after evaluation. An open
+draft is not overwritten when such a default changes; the control reports the
+change and Discard reloads the accepted snapshot. Applying a control creates an
+explicit whole-parameter reader binding. Choosing **Use default** validates the
+complete binding set with that binding removed (including a build-time override);
+an empty edited leaf is instead reported as incomplete. Reset restores precisely
+the original build-time binding set, not literal copies of
 all displayed defaults. Named-key selects emit `Index#Variant` literals using
 a source-visible index spelling (including imported aliases and qualification),
 not the display-only canonical name.
+
+Each raw binding or structured leaf is limited to 4096 UTF-8 bytes. A structured
+parameter is also limited to depth 32 and 4096 value nodes; malformed, dangling,
+or oversized requests are rejected before evaluation. The existing ceiling of
+256 bindings per request remains unchanged.
 
 The artifact is a single file with everything inlined — engine, sources,
 Vega bundles, styles: it works offline, from `file://` paths, and as an

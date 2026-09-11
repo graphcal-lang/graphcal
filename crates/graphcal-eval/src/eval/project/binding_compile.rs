@@ -1,13 +1,67 @@
 //! Prepared-parameter binding compilation and row construction.
 
+use graphcal_compiler::syntax::ast::{
+    FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
+};
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::syntax::span::Spanned;
+
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalContext,
     Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, HirLocalValueMap,
-    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelValueSchema, ParameterBindingBuilder,
-    ParameterPort, ParameterPosition, ParameterValue, PreludeTypeScope, PreparedProject,
-    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, Span, builtin_functions,
-    parameter_domain,
+    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
+    ModelValueSchema, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
+    PreludeTypeScope, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
+    RuntimeValueMap, Span, builtin_functions, parameter_domain,
 };
+
+/// One checked browser-editor value. Containers carry stable schema-arena
+/// positions; only leaves contain parsed Graphcal literal syntax.
+#[derive(Debug, Clone)]
+pub enum StructuredValueExpr {
+    /// A scalar/key/datetime/complex closed literal.
+    Literal(Expr),
+    /// One constructor and its declaration-order field values.
+    Algebraic {
+        definition: usize,
+        constructor: usize,
+        fields: Vec<Self>,
+    },
+    /// Every value on one fixed axis, in schema order.
+    Indexed { entries: Vec<Self> },
+}
+
+/// Typed address into a structured editor value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StructuredBindingPathSegment {
+    Field(usize),
+    Entry(usize),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct StructuredBindingError {
+    path: Vec<StructuredBindingPathSegment>,
+    message: String,
+}
+
+impl StructuredBindingError {
+    #[must_use]
+    pub fn path(&self) -> &[StructuredBindingPathSegment] {
+        &self.path
+    }
+}
+
+fn structured_error(
+    path: &[StructuredBindingPathSegment],
+    message: impl Into<String>,
+) -> StructuredBindingError {
+    StructuredBindingError {
+        path: path.to_vec(),
+        message: message.into(),
+    }
+}
 
 impl PreparedProject {
     /// Begin constructing one plan-scoped parameter row.
@@ -56,9 +110,251 @@ impl PreparedProject {
         let index = self.parameter_index(name)?;
         self.compile_parameter_value(self.parameter_ports[index].position, expr)
     }
+
+    /// Build and compile a structured browser value without reparsing its
+    /// algebraic or indexed container syntax.
+    pub fn compile_structured_parameter_value(
+        &self,
+        position: ParameterPosition,
+        value: &StructuredValueExpr,
+    ) -> Result<ParameterValue, StructuredBindingError> {
+        let port = self
+            .port_at(position)
+            .map_err(|error| structured_error(&[], error.to_string()))?;
+        let expr = self.structured_binding_expr(
+            value,
+            &port.value_schema,
+            self.tir.root_dag_id(),
+            &mut Vec::new(),
+        )?;
+        self.compile_parameter_value(position, &expr)
+            .map_err(|error| structured_error(&[], error.to_string()))
+    }
+
+    fn structured_binding_expr(
+        &self,
+        value: &StructuredValueExpr,
+        expected: &ModelValueSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+        path: &mut Vec<StructuredBindingPathSegment>,
+    ) -> Result<Expr, StructuredBindingError> {
+        match (value, expected) {
+            (StructuredValueExpr::Literal(_), ModelValueSchema::Algebraic(_)) => Err(
+                structured_error(path, "expected an algebraic constructor value"),
+            ),
+            (StructuredValueExpr::Literal(_), ModelValueSchema::Indexed { .. }) => {
+                Err(structured_error(path, "expected a complete indexed value"))
+            }
+            (StructuredValueExpr::Literal(expr), _) => {
+                self.structured_literal_expr(expr, expected, owner, path)
+            }
+            (
+                StructuredValueExpr::Algebraic {
+                    definition,
+                    constructor,
+                    fields,
+                },
+                ModelValueSchema::Algebraic(expected_id),
+            ) => {
+                self.structured_algebraic_expr(*definition, *constructor, fields, expected_id, path)
+            }
+            (
+                StructuredValueExpr::Indexed { entries },
+                ModelValueSchema::Indexed { element, axis },
+            ) => self.structured_indexed_expr(entries, element, axis, owner, path),
+            (StructuredValueExpr::Algebraic { .. }, _) => {
+                Err(structured_error(path, "unexpected algebraic value"))
+            }
+            (StructuredValueExpr::Indexed { .. }, _) => {
+                Err(structured_error(path, "unexpected indexed value"))
+            }
+        }
+    }
+
+    fn structured_literal_expr(
+        &self,
+        expr: &Expr,
+        expected: &ModelValueSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+        path: &[StructuredBindingPathSegment],
+    ) -> Result<Expr, StructuredBindingError> {
+        let normalized = normalize_binding_literal(expr.clone(), expected, &self.schema_graph)
+            .map_err(|message| structured_error(path, message))?;
+        let hir = self
+            .lower_closed_binding_expr(&normalized, expected, owner)
+            .map_err(|error| structured_error(path, error.to_string()))?;
+        let hir = graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir)
+            .map_err(|message| structured_error(path, message.to_string()))?;
+        graphcal_compiler::tir::dim_check::check_external_value_expr_type(
+            &self.tir,
+            &self.declared_types,
+            &hir,
+            &expected.declared_type(),
+            &self.source,
+        )
+        .map_err(|error| structured_error(path, error.to_string()))?;
+        Ok(normalized)
+    }
+
+    fn structured_algebraic_expr(
+        &self,
+        definition_index: usize,
+        constructor_index: usize,
+        fields: &[StructuredValueExpr],
+        expected_id: &ModelTypeId,
+        path: &mut Vec<StructuredBindingPathSegment>,
+    ) -> Result<Expr, StructuredBindingError> {
+        let expected_definition = self
+            .schema_graph
+            .definition_index(expected_id)
+            .ok_or_else(|| structured_error(path, "missing expected algebraic schema"))?;
+        if definition_index != expected_definition {
+            return Err(structured_error(
+                path,
+                "constructor belongs to a different algebraic type",
+            ));
+        }
+        let constructor = self
+            .schema_graph
+            .definition_at(definition_index)
+            .and_then(|definition| definition.constructors().get(constructor_index))
+            .ok_or_else(|| structured_error(path, "unknown constructor"))?;
+        if fields.len() != constructor.fields().len() {
+            return Err(structured_error(
+                path,
+                format!(
+                    "constructor `{}` expects {} fields, received {}",
+                    constructor.name(),
+                    constructor.fields().len(),
+                    fields.len()
+                ),
+            ));
+        }
+        let span = Span::new(0, 0);
+        let owner = expected_id.identity().resolved().owner();
+        let fields = fields
+            .iter()
+            .zip(constructor.fields())
+            .enumerate()
+            .map(|(index, (value, schema))| {
+                path.push(StructuredBindingPathSegment::Field(index));
+                let value = self.structured_binding_expr(value, schema.value(), owner, path);
+                path.pop();
+                value.map(|value| FieldInit {
+                    name: Spanned::new(schema.name().clone(), span),
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Expr::new(
+            AstExprKind::ConstructorCall {
+                callee: IdentPath::bare(Ident {
+                    name: constructor.name().atom().clone(),
+                    span,
+                }),
+                generic_args: Vec::new(),
+                fields,
+            },
+            span,
+        ))
+    }
+
+    fn structured_indexed_expr(
+        &self,
+        entries: &[StructuredValueExpr],
+        element: &ModelValueSchema,
+        axis: &ModelIndexSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+        path: &mut Vec<StructuredBindingPathSegment>,
+    ) -> Result<Expr, StructuredBindingError> {
+        let expected_count = match axis.kind() {
+            ModelIndexKind::Named { variants } => variants.len(),
+            ModelIndexKind::Coordinate { coordinates_si, .. } => coordinates_si.len(),
+            ModelIndexKind::Finite { cardinality } => *cardinality,
+        };
+        if entries.len() != expected_count {
+            return Err(structured_error(
+                path,
+                format!(
+                    "indexed value expects {expected_count} entries, received {}",
+                    entries.len()
+                ),
+            ));
+        }
+        let span = Span::new(0, 0);
+        let entries = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                path.push(StructuredBindingPathSegment::Entry(index));
+                let value = self.structured_binding_expr(entry, element, owner, path);
+                path.pop();
+                Ok(MapEntry {
+                    keys: NonEmpty::singleton(MapEntryKey {
+                        index: Spanned::new(self.structured_map_index(axis, path)?, span),
+                        additional_index_spans: Vec::new(),
+                        variant: Spanned::new(structured_map_key(axis, index, path)?, span),
+                    }),
+                    value: value?,
+                })
+            })
+            .collect::<Result<Vec<_>, StructuredBindingError>>()?;
+        Ok(Expr::new(AstExprKind::MapLiteral { entries }, span))
+    }
+
+    fn structured_map_index(
+        &self,
+        axis: &ModelIndexSchema,
+        path: &[StructuredBindingPathSegment],
+    ) -> Result<MapEntryIndex, StructuredBindingError> {
+        match axis.kind() {
+            ModelIndexKind::Finite { cardinality } => u64::try_from(*cardinality)
+                .map(MapEntryIndex::Finite)
+                .map_err(|_| structured_error(path, "finite index cardinality is too large")),
+            ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
+                .identity()
+                .declared_resolved()
+                .and_then(|resolved| self.source_index_path(resolved))
+                .map(MapEntryIndex::Named)
+                .ok_or_else(|| {
+                    structured_error(path, "indexed axis is not visible at the boundary")
+                }),
+        }
+    }
+}
+
+fn structured_map_key(
+    axis: &ModelIndexSchema,
+    index: usize,
+    path: &[StructuredBindingPathSegment],
+) -> Result<IndexEntryKey, StructuredBindingError> {
+    match axis.kind() {
+        ModelIndexKind::Named { variants } => Ok(IndexEntryKey::Named(variants[index].clone())),
+        ModelIndexKind::Coordinate { .. } | ModelIndexKind::Finite { .. } => u64::try_from(index)
+            .map(IndexEntryKey::Position)
+            .map_err(|_| structured_error(path, "indexed entry position is too large")),
+    }
 }
 
 impl ParameterBindingBuilder<'_> {
+    /// Bind one recursively structured browser value by entry name.
+    pub fn bind_structured_expression(
+        &mut self,
+        name: &DeclName,
+        value: &StructuredValueExpr,
+    ) -> Result<(), StructuredBindingError> {
+        let index = self
+            .project
+            .parameter_index(name)
+            .map_err(|error| structured_error(&[], error.to_string()))?;
+        let parameter = self.project.compile_structured_parameter_value(
+            self.project.parameter_ports[index].position,
+            value,
+        )?;
+        self.bind_value(parameter)
+            .map_err(|error| structured_error(&[], error.to_string()))
+    }
+
     /// Validate required slots and finish this row.
     pub fn finish(self) -> Result<ParameterBindingRow, CompileError> {
         if let Some(port) = self

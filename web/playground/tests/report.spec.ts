@@ -18,6 +18,8 @@ const fragment = (bindings: { name: string; expr: string }[] = [], text = source
 const report = (page: Page) => page.frameLocator("#report iframe");
 const result = (page: Page, name = "doubled") =>
   report(page).locator(`[data-decl="${name}"] [data-role="value"]`);
+const apply = (page: Page, name: string) =>
+  report(page).locator(`[data-decl="${name}"] .control-apply`).click();
 async function open(page: Page, bindings: { name: string; expr: string }[] = []) {
   await page.goto(`/playground/?view=report${fragment(bindings)}`);
   await expect(page.locator("#report")).toContainText("Run to generate");
@@ -43,14 +45,18 @@ test("report controls update results and share exact applied bindings and focuse
   await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
   await expect(report(page).locator(".card-doc")).toHaveText("Speed <script> is plain text.");
   await report(page).getByRole("textbox", { name: "speed", exact: true }).fill("36.0 km/h");
+  await expect(result(page)).toHaveText("4 m/s");
+  await apply(page, "speed");
   await expect(result(page)).toHaveText("20 m/s");
   await expect(page.locator("#output")).toContainText("20 m/s");
   await expect(report(page).locator(".repro")).toContainText("speed=36.0 km/h");
   await report(page).getByRole("checkbox", { name: "enabled", exact: true }).uncheck();
+  await apply(page, "enabled");
   await expect(result(page, "enabled")).toHaveText("false");
   await report(page)
     .getByRole("combobox", { name: "mode", exact: true })
     .selectOption("Mode#Nominal");
+  await apply(page, "mode");
   await expect(result(page, "mode")).toContainText("Nominal");
   const { link, state } = await share(page);
   expect(new URL(link).searchParams.get("view")).toBe("report");
@@ -73,10 +79,43 @@ test("report controls update results and share exact applied bindings and focuse
   await fresh.close();
 });
 
+test("recursive structured controls apply atomically and paginate fixed axes", async ({ page }) => {
+  const structured = `pub type Choice { Amount(value: Length), Off, }
+param choice: Choice = Amount(value: 2.0 m);
+param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`;
+  await page.goto(`/playground/?view=report${fragment([], structured)}`);
+  await page.locator("#run").click();
+  const frame = report(page);
+  await expect(frame.locator(".hydration-status")).toHaveText("live");
+  await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(32);
+  await frame.locator('[data-decl="samples"] .control-more').click();
+  await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(40);
+
+  const amount = frame.getByRole("textbox", { name: "choice value", exact: true });
+  await amount.fill("3.0 s");
+  await expect(result(page, "choice")).toContainText("2 m");
+  await apply(page, "choice");
+  await expect(frame.locator('[data-decl="choice"] .control-error--nested')).toBeVisible();
+  await expect(result(page, "choice")).toContainText("2 m");
+  await amount.fill("3.0 m");
+  await apply(page, "choice");
+  await expect(result(page, "choice")).toContainText("3 m");
+
+  const constructor = frame.getByRole("combobox", { name: "choice constructor", exact: true });
+  await constructor.selectOption({ label: "Off" });
+  await apply(page, "choice");
+  await expect(result(page, "choice")).toHaveText("Off");
+  await constructor.selectOption({ label: "Amount" });
+  await expect(frame.getByRole("textbox", { name: "choice value", exact: true })).toHaveValue(
+    "3.0 m",
+  );
+});
+
 test("report section links stay inside the sandbox and survive recalculation", async ({ page }) => {
   await open(page);
   for (const speed of ["3.0 m/s", "4.0 m/s"]) {
     await report(page).getByRole("textbox", { name: "speed", exact: true }).fill(speed);
+    await apply(page, "speed");
     await expect(result(page)).toHaveText(speed === "3.0 m/s" ? "6 m/s" : "8 m/s");
     const link = report(page).getByRole("link", { name: "Plots", exact: true });
     await link.focus();
@@ -92,6 +131,7 @@ test("rejected and pending edits do not replace or share successful values", asy
   await open(page, [{ name: "speed", expr: "7.0 m/s" }]);
   const field = report(page).getByRole("textbox", { name: "speed", exact: true });
   await field.fill("3.0 kg");
+  await apply(page, "speed");
   await expect(
     report(page)
       .locator(".control-error")
@@ -105,11 +145,13 @@ test("rejected and pending edits do not replace or share successful values", asy
   await page.clock.install();
   await page.clock.pauseAt(new Date(Date.now() + 1000));
   await field.fill("9.0 m/s");
+  await apply(page, "speed");
   expect((await share(page)).state.bindings).toEqual([{ name: "speed", expr: "7.0 m/s" }]);
   await page.clock.runFor(400);
   await expect(result(page)).toHaveText("18 m/s");
   await field.fill("11.0 m/s");
   await field.fill("13.0 m/s");
+  await apply(page, "speed");
   await page.clock.runFor(400);
   await expect(result(page)).toHaveText("26 m/s");
 });
@@ -169,10 +211,12 @@ test("late evaluations cannot replace newer edits, and Stop cancels debounced co
   });
   const field = report(page).getByRole("textbox", { name: "speed", exact: true });
   await field.fill("11.0 m/s");
+  await apply(page, "speed");
   await expect.poll(state).toBe(true);
   await page.clock.install();
   await page.clock.pauseAt(new Date(Date.now() + 1000));
   await field.fill("13.0 m/s");
+  await apply(page, "speed");
   await expect(page.locator("#status")).toContainText("Parameters changed");
   await page.evaluate(() => {
     (window as unknown as { reportTestWorker: { release: () => void } }).reportTestWorker.release();
@@ -184,6 +228,7 @@ test("late evaluations cannot replace newer edits, and Stop cancels debounced co
   await page.clock.runFor(400);
   await expect(result(page)).toHaveText("26 m/s");
   await field.fill("19.0 m/s");
+  await apply(page, "speed");
   await expect(page.locator("#stop")).toBeEnabled();
   await page.locator("#stop").click();
   await page.clock.runFor(400);
@@ -252,6 +297,7 @@ test("opaque iframe denies parent access, forged messages and external plot reso
     }),
   ).toBe("denied");
   await report(page).getByRole("textbox", { name: "speed", exact: true }).fill("5.0 m/s");
+  await apply(page, "speed");
   await expect(result(page)).toHaveText("10 m/s");
   expect((await share(page)).state.bindings).toEqual([{ name: "speed", expr: "5.0 m/s" }]);
 });
