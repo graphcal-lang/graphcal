@@ -98,6 +98,29 @@ export async function testReportLayout({ temporary, openReport }) {
       await wait("document.activeElement === document.getElementById('plots')");
       assert.equal(await evaluate("document.getElementById('plots').getBoundingClientRect().top >= 0 && document.getElementById('plots').getBoundingClientRect().top < innerHeight"), true);
     }
+    async function checkMobile() {
+      for (const [width, height] of [[390, 844], [320, 568], [280, 400], [667, 375]]) {
+        await command("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: true });
+        if (interactive) {
+          await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Plots').click()`);
+          assert.equal(await evaluate(`Array.from(document.querySelectorAll('.outline-value:not([type=checkbox]), .outline-search')).every(field => parseFloat(getComputedStyle(field).fontSize) >= 16 && field.getBoundingClientRect().height >= 44)`), true, "mobile fields are readable touch targets");
+          assert.equal(await evaluate("getComputedStyle(document.querySelector('.workspace-result-body')).overflowY"), "visible", "short viewports do not trap results in a tiny pane");
+        }
+        assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true, `${width}x${height}: no page overflow with a wide chart`);
+        assert.equal(await evaluate(`(() => {
+          const plot = document.querySelector('figure.plot');
+          return plot.scrollWidth > plot.clientWidth && plot.tabIndex === 0 && plot.getAttribute('aria-label') === 'bars plot' && getComputedStyle(plot).overflowX === 'auto';
+        })()`), true, "authored chart width is preserved in a named local scroller");
+        await evaluate("document.querySelector('figure.plot').focus(); document.querySelector('figure.plot').scrollLeft = 0");
+        await command("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+        await command("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 });
+        await wait("document.querySelector('figure.plot').scrollLeft > 0");
+        await evaluate("new Promise(resolve => setTimeout(resolve, 250))");
+      }
+      // Subsequent checks exercise desktop input and chart geometry again.
+      await command("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await evaluate("document.querySelector('figure.plot').scrollLeft = 0");
+    }
     async function checkPrint() {
       await command("Emulation.setDeviceMetricsOverride", { width: 800, height: 1000, deviceScaleFactor: 1, mobile: false });
       await command("Emulation.setEmulatedMedia", { media: "print" });
@@ -128,6 +151,7 @@ export async function testReportLayout({ temporary, openReport }) {
     }
     await checkLayout();
     await checkNavigation();
+    await checkMobile();
     await checkPrint();
     await checkZoom();
     if (interactive) {
@@ -143,6 +167,7 @@ export async function testReportLayout({ temporary, openReport }) {
       assert.deepEqual(await evaluate(`({ focused: document.activeElement === window.savedRegion, same: window.savedRegion === ${region("wide")}, left: window.savedRegion.scrollLeft })`), { focused: true, same: true, left: 100 }, "recalculation preserves focus and scroll position");
       await checkLayout();
       await checkNavigation();
+      await checkMobile();
       await checkPrint();
       await checkZoom();
       await evaluate(`(() => {

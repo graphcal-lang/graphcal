@@ -305,6 +305,12 @@ footer {
   nav {
     gap: 0.35rem;
     font-size: 0.85rem;
+    max-width: 100%;
+  }
+  nav > label,
+  #examples {
+    min-width: 0;
+    max-width: 100%;
   }
   .document-bar {
     padding: 0.4rem;
@@ -318,6 +324,10 @@ footer {
   }
   .mobile-tabs [aria-pressed="true"] {
     border-color: var(--accent);
+  }
+  /* Let the toolbar scroll away so the embedded report can fill the viewport. */
+  #report {
+    min-height: 100dvh;
   }
   #workspace {
     display: block;

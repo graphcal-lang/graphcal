@@ -843,6 +843,8 @@
         target.setAttribute("data-figure", name);
         section.appendChild(target);
       }
+      target.tabIndex = 0;
+      target.setAttribute("aria-label", name + " plot");
       var caption = target.querySelector("figcaption") || element("figcaption", "figure-name", name);
       var mount = element("div");
       mount.setAttribute("data-role", "figure");

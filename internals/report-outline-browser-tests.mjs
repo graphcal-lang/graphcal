@@ -145,10 +145,19 @@ assert positive = @input_0 > 0.0 m;
   for (const width of [1440, 390, 280]) {
     await command("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false });
     assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true, `${width}px: no horizontal page overflow`);
-    assert.equal(await evaluate("document.documentElement.scrollHeight <= innerHeight + 1"), true, `${width}px: independent panes fit the viewport`);
-    assert.equal(await evaluate("document.querySelector('.outline-explorer').scrollHeight > document.querySelector('.outline-explorer').clientHeight"), true);
-    await evaluate("document.querySelector('.outline-explorer').scrollTop = 10000");
-    assert.equal(await evaluate(`${query('[data-decl="doubled"]')}.checkVisibility()`), true, "browsing inputs does not scroll pinned results away");
+    if (width === 1440) {
+      assert.equal(await evaluate("document.documentElement.scrollHeight <= innerHeight + 1"), true, "desktop panes fit the viewport");
+      assert.equal(await evaluate("document.querySelector('.outline-explorer').scrollHeight > document.querySelector('.outline-explorer').clientHeight"), true);
+      await evaluate("document.querySelector('.outline-explorer').scrollTop = 10000");
+      assert.equal(await evaluate(`${query('[data-decl="doubled"]')}.checkVisibility()`), true, "browsing inputs does not scroll pinned results away");
+    } else {
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('.outline-explorer')).overflowY"), "visible", "mobile inputs use document scrolling");
+      await click('.workspace-mobile-nav button[aria-controls="workspace-results"]');
+      assert.equal(await evaluate("document.activeElement.id"), "workspace-results");
+      assert.equal(await evaluate("document.getElementById('workspace-results').getBoundingClientRect().top >= document.querySelector('.workspace-mobile-nav').getBoundingClientRect().bottom"), true, "jump destination clears sticky navigation");
+      await click('.workspace-mobile-nav button[aria-controls="inputs"]');
+      assert.equal(await evaluate("document.activeElement.id"), "inputs");
+    }
   }
   await command("Emulation.setEmulatedMedia", { media: "print" });
   assert.equal(await evaluate("getComputedStyle(document.querySelector('.outline-advanced')).display"), "block", "print exposes the original accepted parameter values");
