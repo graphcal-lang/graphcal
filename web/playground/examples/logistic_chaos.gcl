@@ -1,0 +1,87 @@
+// ONE EQUATION, THEN CHAOS
+// 1. Try growth = 2.8, 3.2, 3.5, then 3.9. Ignore the first 40 generations:
+//    a steady population becomes a 2-cycle, then a 4-cycle, then chaos.
+// 2. At 3.9, compare initial_a = 0.5000 and initial_b = 0.5001.
+//    Almost indistinguishable starts eventually have very different futures.
+// 3. Try growth = 3.83: an island of periodic behavior reappears inside chaos!
+// Model: the discrete logistic map, x(next) = growth*x*(1-x).
+// Population is a fraction of a fixed scale, not a calibrated ecological forecast.
+// This recurrence IS the model: there is no numerical ODE integration timestep.
+// Long chaotic trajectories are sensitive to floating-point rounding too.
+param growth: Dimensionless(min: 2.0, max: 4.0) = 3.9;
+param initial_a: Dimensionless(min: 0.01, max: 0.99) = 0.5000;
+param initial_b: Dimensionless(min: 0.01, max: 0.99) = 0.5001;
+
+index Start = { InitialA, InitialB };
+index Generation = range(0.0, 120.0, step: 1.0);
+node initial: Dimensionless[Start] = {
+    Start#InitialA: @initial_a,
+    Start#InitialB: @initial_b,
+};
+node population: Dimensionless[Generation, Start] = unfold(
+    Generation,
+    @initial,
+    |previous, previous_generation, generation|
+        for start: Start { @growth * previous[start] * (1.0 - previous[start]) }
+);
+node separation: Dimensionless[Generation] = for n: Generation {
+    abs(@population[n, Start#InitialA] - @population[n, Start#InitialB])
+};
+node largest_separation: Dimensionless = maximum(@separation);
+assert population_stays_in_model_bounds = for n: Generation, start: Start {
+    @population[n, start] >= 0.0 && @population[n, start] <= 1.0
+};
+
+#[hidden]
+plot trajectories = {
+    mark: line {
+        stroke_width: 1.8,
+        opacity: 0.8,
+    },
+    encode: {
+        x: for n: Generation { coord(n) },
+        y: for n: Generation, start: Start { @population[n, start] },
+        color: for start: Start { start },
+    },
+    x_label: "Generation (look beyond 40 for long-term behavior)",
+    y_label: "Population fraction",
+};
+#[hidden]
+plot upper_bound = {
+    mark: line {
+        color: "#aaaaaa",
+        opacity: 0.4,
+    },
+    encode: {
+        x: for n: Generation { coord(n) },
+        y: 1.0,
+    },
+};
+layer population_history = {
+    plots: [trajectories, upper_bound],
+    title: "One equation: equilibrium, cycles, and chaos (fixed 0-1 reference)",
+    width: 620.0,
+    height: 300.0,
+};
+#[hidden]
+plot divergence = {
+    mark: line {
+        color: "#e45756",
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: for n: Generation { coord(n) },
+        y: for n: Generation { @separation[n] },
+    },
+    title: "How far apart are the two predictions? Watch the vertical scale",
+    x_label: "Generation",
+    y_label: "Absolute population difference",
+    width: 620.0,
+    height: 200.0,
+};
+layer prediction_difference = {
+    plots: [divergence],
+    title: "How far apart are the two predictions? Watch the vertical scale",
+    width: 620.0,
+    height: 200.0,
+};

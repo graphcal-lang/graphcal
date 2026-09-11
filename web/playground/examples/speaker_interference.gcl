@@ -1,0 +1,130 @@
+// TWO LOUDSPEAKERS: LOUDER TOGETHER, OR SILENCE?
+// Speakers are at (-separation/2, 0) and (+separation/2, 0) meters.
+// 1. Change relative_phase from 0 deg to 180 deg: the centerline goes quiet.
+// 2. Move listener_x to 1 m. Tune phase until the listener is almost silent.
+// 3. Change frequency from 250 Hz to 500 Hz: that off-center quiet spot moves.
+// The map shows interference contrast: 0 = cancellation, 1 = local maximum.
+// The lower plot compares actual modeled intensity with one speaker alone.
+// Model: coherent, equal-strength spherical sources in free space; no walls,
+// absorption, or loudspeaker directivity. All sample points stay away from sources.
+param frequency: Frequency(min: 50.0 Hz, max: 800.0 Hz) = 250.0 Hz;
+param separation: Length(min: 0.2 m, max: 4.0 m) = 2.0 m;
+param relative_phase: Angle(min: -360.0 deg, max: 360.0 deg) = 0.0 deg;
+param listener_x: Length(min: -4.0 m, max: 4.0 m) = 0.0 m;
+param listener_y: Length(min: 1.0 m, max: 7.0 m) = 4.0 m;
+
+const node sound_speed: Velocity = 343.0 m/s;
+const node intensity_at_one_meter: Power / Area = 1.0 W/m^2;
+index Horizontal = linspace(-4.0 m, 4.0 m, points: 81);
+index Depth = linspace(1.0 m, 7.0 m, points: 61);
+node left_distance: Length[Horizontal, Depth] = for x: Horizontal, y: Depth {
+    hypot(coord(x) + @separation / 2.0, coord(y))
+};
+node right_distance: Length[Horizontal, Depth] = for x: Horizontal, y: Depth {
+    hypot(coord(x) - @separation / 2.0, coord(y))
+};
+node relative_wave: Complex<Dimensionless>[Horizontal, Depth] = for x: Horizontal, y: Depth {
+    polar(
+        1.0 m / @left_distance[x, y],
+        TAU * @frequency * @left_distance[x, y] / @sound_speed * 1.0 rad
+    ) + polar(
+        1.0 m / @right_distance[x, y],
+        TAU * @frequency * @right_distance[x, y] / @sound_speed * 1.0 rad + @relative_phase
+    )
+};
+node contrast: Dimensionless[Horizontal, Depth] = for x: Horizontal, y: Depth {
+    (abs(@relative_wave[x, y]) / (1.0 m / @left_distance[x, y] + 1.0 m / @right_distance[x, y])) ^ 2
+};
+
+// Evaluate the listener directly, rather than snapping to the map grid.
+node listener_left_distance: Length = hypot(@listener_x + @separation / 2.0, @listener_y);
+node listener_right_distance: Length = hypot(@listener_x - @separation / 2.0, @listener_y);
+node listener_wave: Complex<Dimensionless> = polar(
+    1.0 m / @listener_left_distance,
+    TAU * @frequency * @listener_left_distance / @sound_speed * 1.0 rad
+) + polar(
+    1.0 m / @listener_right_distance,
+    TAU * @frequency * @listener_right_distance / @sound_speed * 1.0 rad + @relative_phase
+);
+node listener_intensity: Power / Area = @intensity_at_one_meter * abs(@listener_wave) ^ 2;
+node listener_one_speaker: Power / Area = @intensity_at_one_meter * (
+    1.0 m / @listener_left_distance
+) ^ 2;
+node louder_than_one_speaker: Dimensionless = @listener_intensity / @listener_one_speaker;
+
+#[hidden]
+plot interference_map = {
+    mark: point {
+        filled: true,
+        size: 65.0,
+    },
+    encode: {
+        x: for x: Horizontal { coord(x) -> m },
+        y: for y: Depth { coord(y) -> m },
+        color: for x: Horizontal, y: Depth { @contrast[x, y] },
+    },
+    x_label: "Horizontal position (m)",
+    y_label: "Distance in front of speakers (m)",
+};
+#[hidden]
+plot listener = {
+    mark: point {
+        color: "black",
+        stroke_width: 3.0,
+        size: 250.0,
+    },
+    encode: {
+        x: @listener_x -> m,
+        y: @listener_y -> m,
+    },
+};
+layer sound_field = {
+    plots: [interference_map, listener],
+    title: "Interference map: low values = cancellation; ring = listener",
+    width: 600.0,
+    height: 450.0,
+};
+
+index Source = { LeftOnly, BothSpeakers };
+node line_left_distance: Length[Horizontal] = for x: Horizontal {
+    hypot(coord(x) + @separation / 2.0, @listener_y)
+};
+node line_right_distance: Length[Horizontal] = for x: Horizontal {
+    hypot(coord(x) - @separation / 2.0, @listener_y)
+};
+node line_wave: Complex<Dimensionless>[Horizontal] = for x: Horizontal {
+    polar(
+        1.0 m / @line_left_distance[x],
+        TAU * @frequency * @line_left_distance[x] / @sound_speed * 1.0 rad
+    ) + polar(
+        1.0 m / @line_right_distance[x],
+        TAU * @frequency * @line_right_distance[x] / @sound_speed * 1.0 rad + @relative_phase
+    )
+};
+#[hidden]
+plot listening_line = {
+    mark: line {
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: for x: Horizontal { coord(x) -> m },
+        y: for source: Source, x: Horizontal {
+            match source {
+                Source#LeftOnly => @intensity_at_one_meter * (1.0 m / @line_left_distance[x]) ^ 2,
+                Source#BothSpeakers => @intensity_at_one_meter * abs(@line_wave[x]) ^ 2,
+            } -> W/m^2
+        },
+        color: for source: Source { source },
+    },
+    title: "Walk sideways at the listener's depth: two speakers can be quieter",
+    x_label: "Horizontal position (m)",
+    y_label: "Modeled intensity (W/m^2)",
+    width: 600.0,
+    height: 220.0,
+};
+layer sideways_walk = {
+    plots: [listening_line],
+    title: "Walk sideways at the listener's depth: two speakers can be quieter",
+    width: 600.0,
+    height: 220.0,
+};

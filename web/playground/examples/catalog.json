@@ -70,5 +70,59 @@
     "source_path": "tests/fixtures/valid/plot_line.gcl",
     "expected_values": ["y"],
     "expected_figures": 1
+  },
+  {
+    "id": "resonance",
+    "title": "Can adding weight reduce vibration?",
+    "description": "At 3.18 Hz, change mass from 10 kg to 15 kg. Then try 2.6 Hz: the heavier machine becomes worse.",
+    "filename": "resonance.gcl",
+    "source_path": "web/playground/examples/resonance.gcl",
+    "expected_values": ["your_amplitude", "reference_amplitude"],
+    "expected_figures": 2
+  },
+  {
+    "id": "speaker-interference",
+    "title": "Two loudspeakers: louder, or silence?",
+    "description": "Change relative_phase from 0 deg to 180 deg to silence the centerline, then move the listener sideways.",
+    "filename": "speaker_interference.gcl",
+    "source_path": "web/playground/examples/speaker_interference.gcl",
+    "expected_values": ["listener_intensity", "louder_than_one_speaker"],
+    "expected_figures": 2
+  },
+  {
+    "id": "aliasing",
+    "title": "Can a faster signal look slower?",
+    "description": "Keep sampling_rate at 10 Hz. Compare signal frequencies of 1, 6, 9, and 10 Hz: different signals share samples.",
+    "filename": "aliasing.gcl",
+    "source_path": "web/playground/examples/aliasing.gcl",
+    "expected_values": ["alias_frequency", "sample_disagreement"],
+    "expected_figures": 2
+  },
+  {
+    "id": "logistic-chaos",
+    "title": "One equation, then chaos",
+    "description": "Try growth values 2.8, 3.2, 3.5, 3.9, and 3.83. Look beyond generation 40 for cycles, chaos, and returning order.",
+    "filename": "logistic_chaos.gcl",
+    "source_path": "web/playground/examples/logistic_chaos.gcl",
+    "expected_values": ["population", "largest_separation"],
+    "expected_figures": 2
+  },
+  {
+    "id": "queue-cliff",
+    "title": "Why is the queue suddenly enormous?",
+    "description": "Raise arrival_rate from 48/h to 57/h: mean waiting jumps from 4 to 19 min. At 60/h, no finite steady-state mean exists.",
+    "filename": "queue_cliff.gcl",
+    "source_path": "web/playground/examples/queue_cliff.gcl",
+    "expected_values": ["current_wait", "utilization_percent"],
+    "expected_figures": 2
+  },
+  {
+    "id": "delayed-control",
+    "title": "More aggressive control can make things worse",
+    "description": "At gain = 4 Hz, change delay_steps from 0 to 10. Reduce gain to 2 Hz to turn growing oscillations into decaying ones.",
+    "filename": "delayed_control.gcl",
+    "source_path": "web/playground/examples/delayed_control.gcl",
+    "expected_values": ["sensor_delay", "maximum_overshoot", "peak_command"],
+    "expected_figures": 2
   }
 ]

@@ -1,0 +1,99 @@
+// CAN ADDING WEIGHT REDUCE VIBRATION?
+// Edit the params below; orange is your machine, blue is the 10 kg reference.
+// 1. At 3.18 Hz, change mass from 10 kg to 15 kg: vibration collapses.
+// 2. Set driving_frequency to 2.6 Hz: the heavier machine is now worse!
+// 3. Raise damping from 8 to 40 N*s/m: the resonance becomes less dramatic.
+// Model: linear spring-mass-damper, sinusoidal force, steady state only.
+// The time trace omits startup transients. Positive damping avoids singularities.
+param mass: Mass(min: 2.0 kg, max: 30.0 kg) = 10.0 kg;
+param driving_frequency: Frequency(min: 0.1 Hz, max: 8.0 Hz) = 3.18 Hz;
+param damping: Mass / Time(min: 2.0 kg/s, max: 100.0 kg/s) = 8.0 N * s/m;
+param stiffness: Force / Length(min: 1000.0 N/m, max: 8000.0 N/m) = 4000.0 N/m;
+param force_amplitude: Force(min: 0.1 N, max: 30.0 N) = 10.0 N;
+
+index Machine = { Reference10kg, YourMachine };
+index Sweep = linspace(0.0 Hz, 8.0 Hz, points: 401);
+index Moment = linspace(0.0 s, 2.0 s, points: 401);
+node masses: Mass[Machine] = {
+    Machine#Reference10kg: 10.0 kg,
+    Machine#YourMachine: @mass,
+};
+node natural_frequency: Frequency = sqrt(@stiffness / @mass) / TAU;
+node amplitude: Length[Machine, Sweep] = for machine: Machine, f: Sweep {
+    @force_amplitude / hypot(
+        @stiffness - @masses[machine] * (TAU * coord(f)) ^ 2,
+        @damping * TAU * coord(f)
+    )
+};
+node operating_amplitude: Length[Machine] = for machine: Machine {
+    @force_amplitude / hypot(
+        @stiffness - @masses[machine] * (TAU * @driving_frequency) ^ 2,
+        @damping * TAU * @driving_frequency
+    )
+};
+node phase_lag: Angle[Machine] = for machine: Machine {
+    atan2(
+        @damping * TAU * @driving_frequency,
+        @stiffness - @masses[machine] * (TAU * @driving_frequency) ^ 2
+    )
+};
+node your_amplitude: Length = @operating_amplitude[Machine#YourMachine] -> mm;
+node reference_amplitude: Length = @operating_amplitude[Machine#Reference10kg] -> mm;
+
+#[hidden]
+plot frequency_response = {
+    mark: line {
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: for f: Sweep { coord(f) -> Hz },
+        y: for machine: Machine, f: Sweep { @amplitude[machine, f] -> mm },
+        color: for machine: Machine { machine },
+    },
+    x_label: "Driving frequency (Hz)",
+    y_label: "Steady-state amplitude (mm)",
+};
+#[hidden]
+plot operating_points = {
+    mark: point {
+        filled: true,
+        size: 120.0,
+    },
+    encode: {
+        x: @driving_frequency -> Hz,
+        y: for machine: Machine { @operating_amplitude[machine] -> mm },
+        color: for machine: Machine { machine },
+    },
+};
+layer resonance = {
+    plots: [frequency_response, operating_points],
+    title: "Can adding weight reduce vibration? Dots show the operating speed",
+    width: 620.0,
+    height: 300.0,
+};
+#[hidden]
+plot motion = {
+    mark: line {
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: for t: Moment { coord(t) -> s },
+        y: for machine: Machine, t: Moment {
+            @operating_amplitude[machine] * sin(
+                TAU * @driving_frequency * coord(t) * 1.0 rad - @phase_lag[machine]
+            ) -> mm
+        },
+        color: for machine: Machine { machine },
+    },
+    title: "Steady-state motion: compare the two machines on shared axes",
+    x_label: "Time (s)",
+    y_label: "Displacement (mm)",
+    width: 620.0,
+    height: 220.0,
+};
+layer steady_state_motion = {
+    plots: [motion],
+    title: "Steady-state motion: compare the two machines on shared axes",
+    width: 620.0,
+    height: 220.0,
+};

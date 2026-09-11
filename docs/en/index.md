@@ -66,7 +66,7 @@ delta_v    = 3778.221 m/s
 
     ---
 
-    Try alpha-stage Graphcal immediately—no installation required.
+    Try alpha-stage Graphcal immediately—no installation required. Choose an example from the **Examples** menu and change its inputs to explore resonance, sound interference, aliasing, chaos, queueing, or delayed feedback through reactive plots. Each experiment includes suggested input changes and model assumptions.
 
     [:octicons-arrow-right-24: Open the playground](https://graphcal.org/playground/)
 
