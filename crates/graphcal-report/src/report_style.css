@@ -72,6 +72,11 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
   figure.plot { break-inside: avoid; }
   footer#provenance { break-before: page; }
 }
+.input-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.35rem 0.75rem; margin: -0.25rem 0 0.65rem; }
+.auto-run-toggle { font-size: 0.9rem; font-weight: 600; white-space: nowrap; }
+.auto-run-toggle input { accent-color: var(--accent); }
+.auto-run-description { color: var(--muted); font-size: 0.78rem; }
+.card--interactive > .value-scroll { max-height: 3rem; font-size: 0.78rem; }
 .control { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
 .control-field, .control-raw-field { font: inherit; font-variant-numeric: tabular-nums; padding: 0.3rem 0.5rem; border: 1px solid var(--line); border-radius: 6px; width: 100%; }
 .control-field:focus, .control-raw-field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -79,6 +84,7 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
 .control-select { font: inherit; padding: 0.3rem 0.4rem; border: 1px solid var(--line); border-radius: 6px; }
 .control-toggle { font-size: 0.9rem; }
 .control-editor, .control-structure, .control-indexed { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
+.control-editor, .control-raw { max-height: min(14rem, 35vh); overflow: auto; overscroll-behavior: contain; padding-right: 0.15rem; }
 .control-constructor { align-self: flex-start; min-width: 10rem; }
 .control-fieldset { min-width: 0; margin: 0; padding: 0.45rem 0.55rem 0.55rem; border: 1px solid var(--line); border-radius: 6px; }
 .control-legend { padding: 0 0.25rem; color: var(--muted); font-size: 0.78rem; }
@@ -99,6 +105,7 @@ footer#provenance h2 { font-size: 0.95rem; margin-top: 0; }
 .modified-banner { position: sticky; top: 0; z-index: 10; display: flex; justify-content: center; gap: 1rem; align-items: center; background: #fff8e1; border-bottom: 1px solid #e5d9a8; color: #6b5c1e; font-size: 0.85rem; padding: 0.4rem 1rem; }
 .modified-banner__reset { font: inherit; border: 1px solid #cbb662; background: #fff; border-radius: 6px; padding: 0.15rem 0.6rem; cursor: pointer; }
 @media print {
-  .hydration-status, .control { display: none; }
+  .hydration-status, .control, .input-toolbar { display: none; }
+  .card--interactive > .value-scroll { max-height: none; font-size: 0.9rem; }
   .modified-banner { position: static; }
 }

@@ -8,8 +8,8 @@
     },
     {
       "path": "cli-reference.md",
-      "english_sha256": "93ca48bab8c9fa71226efdb51cdd15e29ffd9ebdfd2ed3f2f12fd79edd9f786e",
-      "japanese_sha256": "faedf594c875c52aa88ef25fb51c242d23392809fab5d9b08842c07b10bd1884"
+      "english_sha256": "eba6969a575f4c31ce63dd790c83faad692e3a39cfafd9f6cf9a003b1c0eea93",
+      "japanese_sha256": "1d948fe8b241572a0cc9b0e899cf6355a0bc918a6bf5e2d7813d71f652a1151d"
     },
     {
       "path": "editor-setup.md",
@@ -98,8 +98,8 @@
     },
     {
       "path": "tutorial/index.md",
-      "english_sha256": "7ca8fa70f7b2b885276b067537f3a52e67ec97980ff99dcdf5fc9d2c5a85eea4",
-      "japanese_sha256": "5a782c0ac4bc5c613134f2b6a7a193bfedf28a51f274ab9c97b7f91976369fef"
+      "english_sha256": "7f74ce9fb9599869e18fd5a91b5956728c9e24f4eb36e9d1a316647b624c573c",
+      "japanese_sha256": "e97dd70fc49d99098a76a4fc71fd52cc1b4a16512cfc1cb76f46cde2a2dd18ce"
     },
     {
       "path": "tutorial/step1-hello-graphcal.md",

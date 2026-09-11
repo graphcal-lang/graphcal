@@ -14,29 +14,38 @@ globalThis.self = globalThis;
 await reportEngine({ module_or_path: readFileSync("target/wasm-report/pkg/graphcal_wasm_bg.wasm") });
 
 class Element {
-  constructor(tag = "div") { this.tag = tag; this.children = []; this.events = {}; this.textContent = ""; }
+  constructor(tag = "div") { this.tag = tag; this.children = []; this.events = {}; this.textContent = ""; this.className = ""; }
   appendChild(child) { this.children.push(child); return child; }
   insertBefore(child) { return this.appendChild(child); }
   addEventListener(event, listener) { this.events[event] = listener; }
   setAttribute(name, value) { this[name] = value; }
   replaceChildren(...children) { this.children = children; }
+  querySelector(selector) { return selector === ".cards" ? this.children.find(child => child.className === "cards") : null; }
 }
-function runtime(source, baseline = [], files = []) {
+function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const entry = files.length ? "src/demo/main.gcl" : "main.gcl";
   const project = { entry, files: [{ path: entry, content: source }, ...files] };
   const prepared = reportEngine.prepareProject(project);
   const cards = new Map(prepared.parameterPorts().map(port => [port.name, new Element()]));
+  const inputsSection = new Element("section");
+  const inputCards = new Element();
+  inputCards.className = "cards";
+  inputsSection.appendChild(inputCards);
   const payloads = {
     "graphcal-project": JSON.stringify(project), "graphcal-baseline": JSON.stringify(baseline),
     "graphcal-engine-glue": "unused", "graphcal-engine-wasm": "unused",
   };
+  let nextTimer = 0;
+  const timers = new Map();
   const context = {
     document: {
       body: new Element(), createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }),
-      getElementById: id => ({ textContent: payloads[id] }),
+      getElementById: id => id === "inputs" ? inputsSection : { textContent: payloads[id] },
       querySelector: selector => cards.get(selector.match(/data-decl="([^"]+)"/)?.[1]),
     },
-    window: {}, setTimeout() {}, clearTimeout() {},
+    window: {},
+    setTimeout(callback) { nextTimer += 1; timers.set(nextTimer, callback); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); },
   };
   // Expose the production mount's functional UI core in this test only,
   // replacing transport startup.
@@ -47,6 +56,13 @@ function runtime(source, baseline = [], files = []) {
   runInNewContext(code.replace(startup,
     "  globalThis.api = { buildControls, currentBindings, patchParamControls, controls, resetButton, renderView };\n  }"), context);
   context.window.GraphcalReport.mount({ baselineBindings: baseline, createTransport() {} });
+  const toolbarNodes = node => [node, ...node.children.flatMap(child => child instanceof Element ? toolbarNodes(child) : [])];
+  const autoRunToggle = toolbarNodes(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
+  assert.equal(autoRunToggle.checked, true, "auto run is enabled by default");
+  if (!enableAutoRun) {
+    autoRunToggle.checked = false;
+    autoRunToggle.events.change();
+  }
   const { api } = context;
   api.buildControls(prepared.parameterPorts(), prepared.evaluateBindings(baseline).evaluation);
   const bindings = () => JSON.parse(JSON.stringify(api.currentBindings()));
@@ -60,7 +76,12 @@ function runtime(source, baseline = [], files = []) {
   const field = name => descendants(cards.get(name)).find(child => child.className === "control-field");
   const edit = (name, value) => { const input = field(name); input.value = value; input.events.input(); };
   const apply = name => descendants(cards.get(name)).find(child => child.className === "control-apply").events.click();
-  return { api, cards, descendants, field, edit, apply, bindings, evaluate, prepared };
+  const flushTimers = () => {
+    const callbacks = Array.from(timers.values());
+    timers.clear();
+    callbacks.forEach(callback => callback());
+  };
+  return { api, cards, descendants, field, edit, apply, autoRunToggle, flushTimers, bindings, evaluate, prepared };
 }
 const model = `
 param input: Dimensionless = 2.0;
@@ -70,6 +91,17 @@ param samples: Int[Fin(2)] = table[Fin(2)] { 1; 2; };
 node result: Dimensionless = @doubled;
 `;
 const value = (values, name) => values.find(item => item.name === name).outcome.value;
+{
+  const run = runtime(model, [], [], true);
+  run.edit("input", "3.0");
+  assert.deepEqual(run.bindings(), [], "auto run waits for a quiet input period");
+  run.flushTimers();
+  assert.deepEqual(run.bindings(), [{ name: "input", expr: "3.0" }]);
+  assert.equal(value(run.evaluate(), "result").value, 6);
+  run.prepared.free();
+}
+console.log("report runtime: auto run stages complete edits after a quiet period");
+
 for (const baseline of [[], [{ name: "doubled", expr: "8.0" }]]) {
   const run = runtime(model, baseline);
   assert.deepEqual(run.bindings(), baseline);
@@ -350,7 +382,13 @@ console.log("value body: static and hydrated ranks 0–5 and nested structures h
   const body = new Element();
   const context = {
     window: {},
-    document: { body, createElement: tag => new Element(tag), querySelector: () => body },
+    document: {
+      body,
+      createElement: tag => new Element(tag),
+      createTextNode: text => ({ textContent: text }),
+      getElementById: () => null,
+      querySelector: () => body,
+    },
     setTimeout(fn, milliseconds) { const id = {}; timers.set(id, { fn, milliseconds }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
