@@ -238,15 +238,12 @@ at load time before any plugin code runs:
   `ElectricCurrent`, `Amount`, `LuminousIntensity`, `Angle`) with rational
   exponents — `Velocity` is `Length^1 * Time^-1`. Quantity kinds use the
   `"quantity"` JSON tag. Array entries carry an explicit quantity, `"bool"`,
-  or `"int"` element kind. ABI v2's former `"scalar"` tag is not accepted;
-  rebuild plugins with the current SDK. User-defined base dimensions cannot
+  or `"int"` element kind. User-defined base dimensions cannot
   cross the binary boundary. The JSON payload is limited to 256 KiB and 256
   functions. Names are at most 256 UTF-8 bytes; each function may declare at
   most 32 dimension variables, 32 index variables, and 32 parameters; arrays
   have at most 31 axes; struct results have at most 256 flattened fields; and
   each monomial has at most 64 combined variable and fixed-dimension factors.
-  These limits are checked before compilation, and the payload byte limit is
-  checked before JSON decoding.
 - **Value ABI.** Each function's wasm export type follows its signature:
   quantity/`Bool`/`Int` parameters use one `f64` ABI slot each (raw SI base
   units for quantities; `Int` as exactly-representable integers, `Bool` as
@@ -280,23 +277,10 @@ at load time before any plugin code runs:
   rejected with a dedicated diagnostic (P007). A module importing `graphcal::fail`
   must export its linear memory as `"memory"` so the failure message can
   be read.
-- **Resource bounds.** The host rejects an encoded module over 16 MiB by
-  default, including for direct API callers, before hashing, manifest parsing,
-  or compilation. Wasmi's malicious-input policy bounds functions, globals,
-  memories, tables, data/element segments, function type widths, and
-  tiny-function compilation amplification while retaining eager compilation.
-  Every logical call then runs under one fuel budget (roughly an instruction
-  count). Every plugin instance separately caps
-  linear-memory bytes, the number of memories and tables, and the elements in
-  each table; an oversized initial allocation fails during instantiation and
-  growth beyond a cap is denied. Wasmi's value and call stacks have separate
-  engine-wide bounds. Compiled modules live outside this per-instance cap, so
-  a separate process-level LRU limits both resident entries and aggregate
-  encoded bytes; the entry count bounds compiled artifacts whose individual
-  structure is already limited at load time. Together with the
-  filesystem/network sandbox, these limits protect the
-  language server during keystroke-frequency re-evaluation, not just one CLI
-  run.
+- **Resource bounds.** Plugin modules may be at most 16 MiB by default.
+  Calls run under a fuel budget (roughly an instruction count) and memory
+  limits. Exceeding a limit produces an error. See
+  [Project Fuel Policies](#project-fuel-policies) to configure fuel budgets.
 - **Determinism.** Plugin arithmetic is IEEE-754 deterministic and the
   math is compiled into the module, so results are bit-identical across
   platforms.
@@ -330,8 +314,7 @@ limits. The application package does not silently override a dependency's
 budgets, and dependencies cannot change the interpreter's hard limits. Two
 versions of a package have separate plugin identities and policies.
 
-Selectors are structured as separate plugin path and function fields rather
-than a combined string. The plugin path must be a portable root-relative
+The plugin path must be a portable root-relative
 `.wasm` path. Whenever that plugin is loaded by an entry point, the selector
 must match one of its declared extern functions; a stale or misspelled function
 for an active plugin is a manifest error. The selected budget
@@ -347,13 +330,6 @@ To report a domain failure (say, an out-of-range property lookup), a
 plugin calls `graphcal::fail` with a UTF-8 message; the call is aborted
 and the message surfaces in the node's diagnostic. Traps and exhausted
 fuel are reported the same way, without a custom message.
-
-A bounded LRU caches immutable compiled modules, validated metadata, and
-deterministic load failures by content hash. Concurrent misses for one hash
-share a single compilation. The default policy retains at most 32 outcomes
-charged against 64 MiB of aggregate encoded input; edited bytes naturally use
-a new hash, and least-recently used outcomes are evicted. Live instances are
-deliberately never cached or pooled.
 
 ### Authoring
 
@@ -406,14 +382,10 @@ At load time the pin is enforced, hard errors and never prompts: a plugin
 without a pin fails with P009 ("run `graphcal deps lock`"), and a plugin
 whose bytes hash differently from the pin fails with P010. New or changed
 plugin code can therefore only enter the project through a reviewable
-`graphcal.lock` diff. The loader first canonicalizes the package root and
-artifact, requires the artifact itself to be a regular file (not a symlink),
-and checks canonical containment before reading and hashing the accepted path.
-This containment rule also applies to ad-hoc projects whose caller supplied an
-unrestricted filesystem. Plugin ingestion is rejected before allocation above
-16 MiB and also counts against the project-wide loader budget.
+`graphcal.lock` diff. Plugin artifacts must be regular files within the package
+root, not symbolic links, and are subject to project loading limits.
 
-Two boundary cases:
+Package handling:
 
 - **Ad-hoc files** (no `graphcal.toml` anywhere above) load plugins
   unpinned — there is no lock regime to audit against, and the sandbox
@@ -425,8 +397,7 @@ Two boundary cases:
   Paths resolve within the declaring package root; traversal and symbolic
   links are rejected. Native evaluation and LSP analysis execute only the
   verified captured bytes. Changing a binary requires a new reviewed dependency
-  lock. Regenerate older locks for packages with out-of-source plugins using
-  `graphcal deps lock`.
+  lock.
 - **Package instances** scope Wasm identity: two versions can both import
   `plugins/solver.wasm` without collisions. Embedder-provided host functions
   remain global identities.

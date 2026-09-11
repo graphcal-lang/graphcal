@@ -784,13 +784,6 @@ Rules:
 - If `package` is present, the dependency key is a local alias and `package`
   names the fetched package's real package name.
 
-!!! warning "Migration from local or unsupported Git sources"
-    Manifests and lockfiles that used a filesystem path, `file://`, `http://`,
-    or another previously accepted spelling must switch to a reachable HTTPS or
-    SSH remote and then regenerate `graphcal.lock` with `graphcal deps lock`.
-    Graphcal currently has no local-path dependency form; local development
-    repositories must be served through a supported remote transport.
-
 ```toml
 [dependencies]
 units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev = "1111111111111111111111111111111111111111" }
@@ -810,18 +803,8 @@ tool-maintained lockfile that records package instances, exact Git commits,
 source tree hashes, direct dependency edges, and the Graphcal/standard-library
 versions used for resolution. The lockfile records dependency graph edges
 between package instances; it is not a flat "one version per package name" map,
-so multiple revisions of the same package can coexist. For the current lock
-version, every fixed table is a closed schema: unknown root, package, source,
-tree-hash, and plugin fields are rejected rather than ignored and then dropped
-by reserialization. Source-tree and plugin SHA-256 values must be exactly 64
-lowercase hexadecimal digits. Entries for the same canonical Git URL and commit
-must agree on the source-tree digest. Cycle validation uses an explicit typed
-work stack, so a deeply nested acyclic dependency graph cannot exhaust the Rust
-or WebAssembly call stack; cycle diagnostics retain the package-instance path
-that closes the cycle. The only path source is the root package itself, fixed
-to `.`; every dependency entry must be Git-backed, and every package entry must
-be reachable from the declared root. Arbitrary absolute/parent paths and orphan
-entries are rejected before the loader derives or canonicalizes source roots.
+so multiple revisions of the same package can coexist. Generate this file with
+`graphcal deps lock` rather than editing it by hand.
 
 `graphcal check`, `graphcal eval`, `graphcal graph`, and the LSP read only the
 lockfile and locally materialized cache entries. They do not fetch dependencies
@@ -829,66 +812,18 @@ or update `graphcal.lock`; if the lockfile is missing, stale, version-mismatched
 or points at a missing or hash-mismatched cached source, they fail and ask you
 to run `graphcal deps lock`.
 
-`graphcal deps lock` reuses a cached checkout without fetching only after its
-source-tree digest matches the prior validated lock. Cache identity is typed:
-the canonical remote URL and immutable commit select a source directory, and
-the verified tree digest selects an immutable generation. Same-source writers
-serialize with an advisory lock, stage fetches inside that cache directory, and
-publish generations by rename. Valid older generations are not replaced, so a
-concurrent evaluator holding a rooted filesystem capability remains usable.
-`GRAPHCAL_CACHE_DIR` overrides the cache root; relative values are resolved to
-one absolute identity before producer and loader paths are derived.
+`graphcal deps lock` reuses a cached checkout without fetching when its source
+hash matches the validated lock. `GRAPHCAL_CACHE_DIR` overrides the cache root.
 
-!!! note "Cache layout migration"
-    Existing lockfiles remain valid, but the content-addressed layout does not
-    reuse checkout directories written by older Graphcal versions. Run
-    `graphcal deps lock` once with network access to materialize the new cache
-    layout.
+The source hash covers `graphcal.toml`, the declared source directory, and all
+Wasm plugins imported by those sources, including plugins outside the source
+directory. Package paths must stay within the package root and use UTF-8 names;
+symbolic links and special files are not supported.
 
-Loading also binds every lock entry to exactly one materialized manifest before
-resolving modules. Package names, source directories, and dependency alias sets
-must match in both directions. This ensures the source directory used for
-module resolution is exactly the directory covered by integrity verification;
-a stale or hand-edited lockfile cannot redirect imports to an unhashed tree.
-
-Existing hand-edited lockfiles with custom fields, uppercase hashes, malformed
-hashes, non-root path sources, or unreachable package entries must remove those
-fields/entries and run `graphcal deps lock` to regenerate canonical pins. Do not
-preserve private metadata inside `graphcal.lock`; keep it in a separate file.
-Plugin paths containing absolute, `.`/`..`, backslash, drive-prefix-like colon,
-or control-character components must move the artifact to a portable relative
-path and regenerate the lock.
-
-Lock creation and loading use the same deterministic source-tree algorithm.
-It includes `graphcal.toml`, the declared source directory, and all Wasm plugin
-artifacts imported by those sources, even outside that directory. Source and
-plugin bytes are captured once; verification and evaluation use that immutable
-snapshot. Unrelated files outside this closure are neither hashed nor executed.
-Package trees may contain only ordinary directories and regular files: symbolic
-links and special files are rejected rather than followed, every canonical path
-must remain under its locked package root, and relative path names must be UTF-8.
-Rooted disk access is handle-relative to an open directory capability, so a
-concurrent file, parent-directory, or directory-listing symlink swap cannot
-escape after validation.
-The root package continues to use editor overlays, while each cached dependency
-is read through its own immutable rooted filesystem capability. Overlay
-construction is itself capability-preserving: existing buffers use a canonical
-base identity, and unsaved buffers are accepted only after their nearest
-existing parent is canonicalized through the rooted base. Relative paths,
-paths outside that root, and file/directory collisions are rejected. Open
-buffers from unrelated workspace roots are not added to the active project's
-snapshot.
-
-Project ingestion is bounded before allocation. CLI and LSP loads, `graphcal
-deps lock`, and plugin inspection share limits of 16 MiB per `.gcl` source,
-source-tree file, or WASM plugin, 1 MiB per manifest, and 4 MiB per lockfile,
-with a shared ceiling of 10,000 loaded artifacts/source-tree entries and 256
-MiB. Plugin pinning validates a portable root-relative artifact path before any
-filesystem lookup and hashes regular files incrementally instead of allocating
-the complete module. Lock parsing additionally limits the
-number of package entries to the configured file-count ceiling before graph
-validation. Exceeding a limit is a loader error; evaluator work budgets do not
-replace these earlier I/O bounds.
+Project loading allows up to 16 MiB per `.gcl` source, source-tree file, or Wasm
+plugin, 1 MiB per manifest, and 4 MiB per lockfile, with an aggregate limit of
+10,000 artifacts/source-tree entries and 256 MiB. Exceeding a limit is a loader
+error.
 
 ### Dependency Visibility
 
@@ -1465,10 +1400,8 @@ it does not evaluate or propagate assertions. Attempting to import an assertion
 is rejected (`M024`).
 
 Every explicit `include` creates a concrete runtime instance and evaluates the
-assertions in that instance, including nested included assertions. Nested
-instances preserve their full concrete owner path when rebased into the
-importer; inconsistent internal ownership is an error rather than a stale
-reference to the template. Select an assertion in the include braces when an
+assertions in that instance, including nested included assertions. Select an
+assertion in the include braces when an
 importer declaration needs to name that instance-local outcome in
 `#[assumes(...)]`:
 

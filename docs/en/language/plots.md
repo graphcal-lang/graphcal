@@ -119,8 +119,6 @@ Display-only failures do not discard a valid numeric channel. The evaluator repo
 `graphcal check` infers every encoding expression before evaluation. It rejects
 invalid operators or calls, non-plottable leaves such as algebraic and `Complex`
 values, ineffective nested display conversions, and incompatible channel axes.
-Runtime alignment retains the same checks as defense in depth for malformed
-values.
 
 All channels of one plot are flattened onto a single shared row set:
 
@@ -145,22 +143,16 @@ coordinate axis quantitatively by extracting the coordinate explicitly
 
 ### Unit-Aware Axis Titles
 
-Graphcal auto-generates axis titles from the channel's checked inferred
-dimension and display provenance. The result does not depend on where a
-quantity appears syntactically: equivalent expressions such as
-`@distance * 2.0` and `2.0 * @distance` receive the same title. A dimensioned
-axis title is formatted as "Dimension (unit)":
+Graphcal auto-generates axis titles from each channel's dimension and display
+unit, in the form "Dimension (unit)":
 
 - `@velocity` with display unit `km/s` produces axis title **"Velocity (km/s)"**
 - `@power` with display unit `W` produces axis title **"Power (W)"**
 - Dimensionless values produce no automatic title
 
-A display-unit conversion in an encoding also converts the rendered numeric
-data: Graphcal divides each canonical value by the target unit's scale before
-serializing the Vega-Lite rows. This applies consistently to scalar and indexed
-channels; calculation values remain canonical internally. If a dynamic display
-unit cannot be resolved, rendering fails rather than emitting unconverted data
-under a converted label.
+A display-unit conversion in an encoding changes both the numeric display and
+its unit label, without changing the values used in calculations. See
+[Presentation failures](#presentation-failures) if a display conversion fails.
 
 You can override auto-generated titles with explicit `x_label` or `y_label`
 properties. A label override changes only the title, not the channel's numeric

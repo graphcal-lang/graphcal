@@ -132,31 +132,12 @@ numeric value silently.
 ## Evaluation Order
 
 1. **Parse** -- Source files are parsed into an AST
-2. **Resolve** -- Imports are loaded; references are resolved while lowering to the compiler's internal representation
+2. **Resolve** -- Imports are loaded and references are resolved
 3. **Dimension check** -- All expressions are checked for dimensional consistency
 4. **Const evaluation** -- Constants are evaluated in dependency order
 5. **DAG construction** -- A dependency graph is built from `param` defaults and `node` declarations
 6. **Topological evaluation** -- Unsupplied param defaults and nodes are evaluated in dependency order
 7. **Assertion checking** -- Assert declarations are evaluated and reported
-
-Checking retains each expression's type, collection shape, and constructor
-application for evaluation. Reusable DAG instances specialize these checked
-results; inherited defaults are not accepted by rechecking the source under a
-different Static binding. Supplied literal inputs are checked separately in the
-prepared project's environment. Runtime value checks—such as field bounds,
-finite arithmetic, and index membership—still apply.
-
-An unused generic definition may retain symbolic static requirements, but those
-requirements must be discharged before the expression executes. A scalar result
-is not an exemption: `to_int(key(Fin(N), 1))` still requires a valid axis with
-`N > 1`. Invalid concrete specializations are rejected during checking. An
-unresolved requirement in a descendant blocks its enclosing expression before
-earlier siblings can perform work, including plugin calls.
-
-Evaluation consumes checked axes rather than re-evaluating authored Nat
-arithmetic. Dynamic `fin_key` positions still receive runtime bounds checks.
-Constructors used inside nominal field bounds resolve in the bound's defining
-scope, including when the nominal type is imported.
 
 ### Cycle Detection
 
@@ -174,10 +155,6 @@ inline `@dag(args)::out` expression form — each **syntactic call site** is a
 fresh instantiation. Two textually distinct occurrences with identical
 arguments denote two distinct sub-graphs in the underlying DAG, not a shared
 sub-graph. Programs must not rely on sharing across call sites.
-
-An eval engine is free to detect structurally identical sub-graphs and reuse
-their computation as an internal optimization, but this is not part of the
-language semantics.
 
 ## Fault Isolation
 
