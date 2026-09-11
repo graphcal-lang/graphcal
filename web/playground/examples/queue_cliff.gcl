@@ -1,0 +1,102 @@
+// WHY IS THE QUEUE SUDDENLY ENORMOUS?
+// 1. Keep service_time = 1 min. Change arrival_rate from 48/h to 57/h:
+//    utilization rises from 80% to 95%, but average queueing jumps 4 -> 19 min.
+// 2. At 57/h, reduce service_time to 0.9 min: a small speedup helps enormously.
+// 3. At 60/h or above, current_wait becomes NoFiniteSteadyStateMean.
+//    That is NOT zero wait, nor a finite number we can honestly put on the curve.
+// The orange vertical line marks current utilization; gray marks capacity.
+// Model: one server, Poisson arrivals, independent exponential service times,
+// unlimited waiting space, steady state. NOT deterministic periodic arrivals.
+// Waiting time excludes the customer's own service time.
+param arrival_rate: Frequency(min: 0.0 1/h, max: 120.0 1/h) = 48.0 1/h;
+param service_time: Time(min: 0.25 min, max: 2.0 min) = 1.0 min;
+
+index Load = linspace(0.0, 0.98, points: 197);
+index Vertical = { Bottom, Top };
+type QueueWait {
+    FiniteMean(wait: Time),
+    NoFiniteSteadyStateMean,
+}
+node utilization: Dimensionless = @arrival_rate * @service_time;
+node utilization_percent: Dimensionless = 100.0 * @utilization;
+node service_capacity: Frequency = 1.0 / @service_time -> 1/h;
+node current_wait: QueueWait = if @utilization < 1.0 {
+    FiniteMean(wait: @utilization * @service_time / (1.0 - @utilization) -> min)
+} else {
+    NoFiniteSteadyStateMean
+};
+node steady_state_exists: Bool = @utilization < 1.0;
+node mean_wait: Time[Load] = for load: Load { coord(load) * @service_time / (1.0 - coord(load)) };
+node vertical_extent: Time[Vertical] = {
+    Vertical#Bottom: 0.0 min,
+    Vertical#Top: 49.0 * @service_time,
+};
+node wait_at_80_percent: Time = 4.0 * @service_time -> min;
+node wait_at_95_percent: Time = 19.0 * @service_time -> min;
+
+#[hidden]
+plot waiting_curve = {
+    mark: line {
+        stroke_width: 2.5,
+    },
+    encode: {
+        x: for load: Load { 100.0 * coord(load) },
+        y: for load: Load { @mean_wait[load] -> min },
+    },
+    x_label: "Utilization (%)",
+    y_label: "Mean waiting time before service (min)",
+};
+#[hidden]
+plot your_load = {
+    mark: line {
+        color: "#f58518",
+        stroke_width: 3.0,
+    },
+    encode: {
+        x: @utilization_percent,
+        y: for end: Vertical { @vertical_extent[end] -> min },
+    },
+};
+#[hidden]
+plot capacity = {
+    mark: line {
+        color: "#888888",
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: 100.0,
+        y: for end: Vertical { @vertical_extent[end] -> min },
+    },
+};
+layer queue_cliff = {
+    plots: [waiting_curve, your_load, capacity],
+    title: "Small load increase, huge wait: orange = you, gray = capacity",
+    width: 620.0,
+    height: 340.0,
+};
+
+// A second view compares four vs nineteen service times at two fixed loads.
+index Comparison = { Utilization80Percent, Utilization95Percent };
+node waits_in_service_times: Dimensionless[Comparison] = {
+    Comparison#Utilization80Percent: 4.0,
+    Comparison#Utilization95Percent: 19.0,
+};
+#[hidden]
+plot familiar_comparison = {
+    mark: bar,
+    encode: {
+        x: for case: Comparison { case },
+        y: for case: Comparison { @waits_in_service_times[case] * @service_time -> min },
+        color: for case: Comparison { case },
+    },
+    title: "80% vs 95% utilization: four vs nineteen service times of waiting",
+    y_label: "Mean waiting time (min)",
+    width: 620.0,
+    height: 220.0,
+};
+layer utilization_comparison = {
+    plots: [familiar_comparison],
+    title: "80% vs 95% utilization: four vs nineteen service times of waiting",
+    width: 620.0,
+    height: 220.0,
+};

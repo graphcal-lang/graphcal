@@ -43,21 +43,23 @@ test("full-height editor, keyboard resizing, no tab trap, theme and accessibilit
   await page.screenshot({ path: "test-results/playground-desktop.png" });
 });
 
-test("all catalog examples evaluate in a real module worker; plots stay local", async ({
-  page,
-  context,
-}) => {
-  const requests: string[] = [];
-  const errors: string[] = [];
-  context.on("request", (request) => {
-    requests.push(request.url());
-    expect(request.method()).toBe("GET");
-    expect(request.postData()).toBeNull();
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
-  await ready(page);
-  expect(requests.some((url) => url.includes("/vega/"))).toBe(false);
-  for (const example of catalog) {
+for (const example of catalog) {
+  test(`catalog example ${example.id} evaluates in a real module worker; plots stay local`, async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    test.slow(browserName === "webkit", "Trace snapshots of large indexed tables are expensive");
+    const requests: string[] = [];
+    const errors: string[] = [];
+    context.on("request", (request) => {
+      requests.push(request.url());
+      expect(request.method()).toBe("GET");
+      expect(request.postData()).toBeNull();
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    await ready(page);
+    expect(requests.some((url) => url.includes("/vega/"))).toBe(false);
     await page.getByLabel("Examples", { exact: true }).selectOption(example.id);
     await page.getByRole("button", { name: "Load example", exact: true }).click();
     await expect(page.getByLabel("Filename", { exact: true })).toHaveValue(example.filename);
@@ -65,12 +67,14 @@ test("all catalog examples evaluate in a real module worker; plots stay local", 
     await expect(page.locator("#status")).toHaveText("Up to date");
     for (const name of example.expected_values)
       await expect(page.locator("#output")).toContainText(name);
-    if (example.expected_figures)
-      await expect(page.locator("#output figure svg, #output figure canvas")).toBeVisible();
-  }
-  expect(requests.every((url) => new URL(url).origin === "http://127.0.0.1:4173")).toBe(true);
-  expect(errors).toEqual([]);
-});
+    await expect(page.locator("#output figure")).toHaveCount(example.expected_figures);
+    const charts = page.locator("#output figure svg, #output figure canvas");
+    await expect(charts).toHaveCount(example.expected_figures);
+    for (let i = 0; i < example.expected_figures; i++) await expect(charts.nth(i)).toBeVisible();
+    expect(requests.every((url) => new URL(url).origin === "http://127.0.0.1:4173")).toBe(true);
+    expect(errors).toEqual([]);
+  });
+}
 
 test("renders multidimensional indexed values as two-dimensional table slices", async ({
   page,

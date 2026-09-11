@@ -1,0 +1,109 @@
+// MORE AGGRESSIVE CONTROL CAN MAKE THINGS WORSE
+// Move a motorized stage from 0 m to target. Each sample, command a velocity
+// proportional to the measured position error; hold it until the next sample.
+// 1. Keep delay_steps = 0. Raise gain from 1 Hz to 4 Hz: faster, no overshoot.
+// 2. At gain = 4 Hz, set delay_steps = 10 (0.5 s): oscillations GROW.
+// 3. Keep that delay, reduce gain to 2 Hz: oscillations decay instead.
+// Blue is the same controller without delay; orange includes your sensor delay.
+// Model: ideal velocity actuator, no speed/travel limits, zero initial history.
+// Updates integrate the held velocity EXACTLY. This is a sampled-data model,
+// not an Euler approximation of continuous feedback. Delay is an integer
+// number of 0.05 s samples. Allowed gains make the zero-delay model monotonic.
+// Large unstable outputs are intentional; watch the automatically changing axes.
+param gain: Frequency(min: 0.1 Hz, max: 8.0 Hz) = 4.0 Hz;
+param delay_steps: Int(min: 0, max: 20) = 0;
+param target: Length(min: 0.1 m, max: 5.0 m) = 1.0 m;
+
+const node sample_period: Time = 0.05 s;
+index Moment = range(0.0 s, 20.0 s, step: 0.05 s);
+index Controller = { NoDelay, YourDelay };
+node sensor_delay: Time = to_float(@delay_steps) * @sample_period;
+node feedback_slot: Key<Fin(21)> = fin_key(Fin(21), @delay_steps);
+node initial_history: Length[Fin(21)] = for slot: Fin(21) { 0.0 m };
+
+// Slot 0 is current position, slot 1 one sample ago, etc. Every new slot
+// reads the same frozen snapshot; the shift cannot overwrite another input.
+node history: Length[Moment, Fin(21)] = unfold(
+    Moment,
+    @initial_history,
+    |previous, previous_time, time|
+        for slot: Fin(21) {
+            if to_int(slot) == 0 {
+                previous[0] + @gain * (@target - previous[@feedback_slot]) * (
+                    coord(time) - coord(previous_time)
+                )
+            } else {
+                previous[fin_key(Fin(21), to_int(slot) - 1)]
+            }
+        }
+);
+node position: Length[Moment, Controller] = for t: Moment, controller: Controller {
+    match controller {
+        Controller#NoDelay => @target * (
+            1.0 - (1.0 - @gain * @sample_period) ^ (coord(t) / @sample_period)
+        ),
+        Controller#YourDelay => @history[t, 0],
+    }
+};
+node velocity_command: Velocity[Moment] = for t: Moment {
+    @gain * (@target - @history[t, @feedback_slot])
+};
+node maximum_overshoot: Length = greatest(
+    0.0 m,
+    maximum(for t: Moment { @history[t, 0] }) - @target
+);
+node peak_command: Velocity = maximum(for t: Moment { abs(@velocity_command[t]) });
+
+#[hidden]
+plot responses = {
+    mark: line {
+        stroke_width: 2.0,
+    },
+    encode: {
+        x: for t: Moment { coord(t) -> s },
+        y: for t: Moment, controller: Controller { @position[t, controller] -> m },
+        color: for controller: Controller { controller },
+    },
+    x_label: "Time (s)",
+    y_label: "Stage position (m)",
+};
+#[hidden]
+plot desired_position = {
+    mark: line {
+        color: "#777777",
+        stroke_width: 1.0,
+    },
+    encode: {
+        x: for t: Moment { coord(t) -> s },
+        y: @target -> m,
+    },
+};
+layer feedback_response = {
+    plots: [responses, desired_position],
+    title: "Chasing old information: gray = target, orange = delayed controller",
+    width: 620.0,
+    height: 300.0,
+};
+#[hidden]
+plot actuator_effort = {
+    mark: line {
+        color: "#e45756",
+        stroke_width: 2.0,
+        interpolate: "step-after",
+    },
+    encode: {
+        x: for t: Moment { coord(t) -> s },
+        y: for t: Moment { @velocity_command[t] -> m/s },
+    },
+    title: "Held velocity command: is the controller fighting itself?",
+    x_label: "Time (s)",
+    y_label: "Velocity command (m/s)",
+    width: 620.0,
+    height: 200.0,
+};
+layer controller_effort = {
+    plots: [actuator_effort],
+    title: "Held velocity command: is the controller fighting itself?",
+    width: 620.0,
+    height: 200.0,
+};
