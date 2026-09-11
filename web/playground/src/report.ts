@@ -1,6 +1,9 @@
 import { z } from "zod";
 import formState from "../../../crates/graphcal-report/src/report_form_state.js?raw";
 import runtime from "../../../crates/graphcal-report/src/report_runtime.js?raw";
+import outlineState from "../../../crates/graphcal-report/src/report_outline_state.js?raw";
+import workspace from "../../../crates/graphcal-report/src/report_workspace.js?raw";
+import results from "../../../crates/graphcal-report/src/report_results.js?raw";
 import bootstrap from "./report-frame.js?raw";
 import { bindingsSchema, type Binding } from "./bindings";
 import type { ReportOutcome, ParameterPort } from "./protocol";
@@ -116,7 +119,7 @@ export class Report {
       .replace(
         "<head>",
         () =>
-          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${formState}</script><script>${runtime}</script><script>${bootstrap}</script>`,
+          `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${scripts}<script>${formState}</script><script>${outlineState}</script><script>${results}</script><script>${workspace}</script><script>${runtime}</script><script>${bootstrap}</script>`,
       )
       .replace(
         "</body>",

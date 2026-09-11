@@ -74,9 +74,14 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
       const later = page.locator('[data-decl="later_result"] [data-role="value"]');
       await expect(first).toHaveText("8");
       await expect(later).toHaveText("12");
-      const input = page.locator('[data-decl="input"] .control-field');
+      const input = page.getByRole('textbox', { name: 'input', exact: true });
+      async function apply() {
+        const actions = page.locator('.outline-row[data-parameter="input"] .outline-row-actions');
+        await actions.locator('summary').click();
+        await actions.getByRole('button', { name: 'Apply', exact: true }).click();
+      }
       await input.fill("5.0");
-      await page.locator('[data-decl="input"] .control-apply').click();
+      await apply();
       await expect(first).toHaveText("10");
       await expect(later).toHaveText("15");
       await page.locator(".modified-banner__reset").click();
@@ -97,7 +102,7 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
       // Negative input enters a metered loop in a dependency-owned plugin.
       // The worker deadline must tear down that interpreter, then recover.
       await input.fill("-1.0");
-      await page.locator('[data-decl="input"] .control-apply').click();
+      await apply();
       try {
         await expect.poll(() => page.evaluate(() => globalThis.__timeoutObserved), { timeout: 30000 }).toBe(true);
       } catch (error) {
@@ -105,7 +110,7 @@ if (process.env.GRAPHCAL_PACKAGE_BROWSER_TEST === "1") {
       }
       await page.evaluate(() => { window.setTimeout = globalThis.__originalSetTimeout; });
       await input.fill("5.0");
-      await page.locator('[data-decl="input"] .control-apply').click();
+      await apply();
       await expect(status).toHaveText("live", { timeout: 20000 });
       await expect(first).toHaveText("10");
       await expect(later).toHaveText("15");

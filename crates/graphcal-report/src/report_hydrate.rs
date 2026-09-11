@@ -16,6 +16,12 @@ use crate::escape::escape_json_for_script;
 
 /// Pure recursive form-state transitions embedded into hydrated pages.
 const REPORT_FORM_STATE_JS: &str = include_str!("report_form_state.js");
+/// Pure adaptive-outline selection and projection.
+const REPORT_OUTLINE_STATE_JS: &str = include_str!("report_outline_state.js");
+/// Result navigation, disclosure and pinning DOM shell.
+const REPORT_RESULTS_JS: &str = include_str!("report_results.js");
+/// The shared adaptive workspace DOM shell.
+const REPORT_WORKSPACE_JS: &str = include_str!("report_workspace.js");
 /// The report runtime script embedded into hydrated pages.
 const REPORT_RUNTIME_JS: &str = include_str!("report_runtime.js");
 /// The standalone embedded-Wasm transport bootstrap.
@@ -82,6 +88,9 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
             "<script id=\"graphcal-engine-glue\" type=\"text/plain\">{glue}</script>\n",
             "<script id=\"graphcal-engine-wasm\" type=\"application/wasm;base64\">{wasm}</script>\n",
             "<script>{form_state}</script>\n",
+            "<script>{outline_state}</script>\n",
+            "<script>{results}</script>\n",
+            "<script>{workspace}</script>\n",
             "<script>{runtime}</script>\n",
             "<script>{standalone}</script>\n",
         ),
@@ -90,6 +99,9 @@ pub(crate) fn render_hydration_block(hydration: &Hydration<'_>) -> String {
         glue = engine.encode(hydration.engine.glue_js),
         wasm = engine.encode(hydration.engine.wasm),
         form_state = REPORT_FORM_STATE_JS,
+        outline_state = REPORT_OUTLINE_STATE_JS,
+        results = REPORT_RESULTS_JS,
+        workspace = REPORT_WORKSPACE_JS,
         runtime = REPORT_RUNTIME_JS,
         standalone = REPORT_STANDALONE_JS,
     )
@@ -157,6 +169,12 @@ mod tests {
         assert!(
             !REPORT_FORM_STATE_JS.contains("</script")
                 && !REPORT_FORM_STATE_JS.contains("<!--")
+                && !REPORT_OUTLINE_STATE_JS.contains("</script")
+                && !REPORT_OUTLINE_STATE_JS.contains("<!--")
+                && !REPORT_RESULTS_JS.contains("</script")
+                && !REPORT_RESULTS_JS.contains("<!--")
+                && !REPORT_WORKSPACE_JS.contains("</script")
+                && !REPORT_WORKSPACE_JS.contains("<!--")
                 && !REPORT_RUNTIME_JS.contains("</script")
                 && !REPORT_RUNTIME_JS.contains("<!--"),
             "the form state and runtime scripts must not contain inline-script terminators"

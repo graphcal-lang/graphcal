@@ -607,7 +607,9 @@ short pause in editing, a structurally complete draft is validated and replaces
 the complete parameter atomically, including unchanged fields. Incomplete or
 rejected drafts leave the last accepted results visible. Turn **Auto run** off
 to keep edits unapplied until **Apply** is selected; **Discard edits** restores
-the starting snapshot in either mode. A newly selected constructor starts with
+the starting snapshot in either mode. If an unbound parameter's reactive default
+changed while its draft was open, discarding reloads that latest default instead.
+A newly selected constructor starts with
 empty required fields rather than fabricated zero/false/default values. Each
 successful automatic or manual run re-evaluates the embedded engine (the same
 compiler and evaluator as this CLI, compiled to WebAssembly, running in a Web
@@ -615,19 +617,41 @@ Worker) and patches values, grids, badges, and charts in place. Static and hydra
 cards use the same projection: rank-two values are grids, and higher ranks
 are labelled two-axis slices retaining every leaf and outer-axis label.
 Structured values stay inside labelled, keyboard-focusable scroll regions, so
-wide grids and long field paths cannot overlap neighboring cards. Hydrated input
-cards keep the accepted-value preview to 3 rem and the editor to 14 rem (or 35%
-of the viewport height), with the complete content available by scrolling, so
-results remain nearby while editing. Indexed editors initially mount 32 entries
-at a time while retaining the complete value
-in their draft; **Show more entries** progressively exposes the remainder. Focus
+wide grids and long field paths cannot overlap neighboring cards.
+
+Interactive reports use an adaptive input outline beside an independently
+scrolling results pane (stacked on narrow screens). Scalars and one-field
+records are directly editable rows; small records start expanded, and larger
+structures can be opened as needed. **Search inputs** matches names, field
+paths, and parameter descriptions, revealing matching branches. Stars pin
+editable inputs with their full paths; **Pinned only** hides other inputs.
+Pins belong to the current browser session, not the source or shared bindings,
+and nested pins stay associated with their constructor rather than transferring
+to another constructor's same-named field.
+
+Each row's **⋯** menu offers **Apply**, **Discard edits**, and **Use default**
+when available. These actions affect the **whole containing parameter**, not
+just that row. **Advanced controls** exposes parameter metadata, bounded
+sliders, the original recursive form, and **Raw literal** entry; returning to
+the outline retains the draft. Indexed editors initially mount 32 entries per
+axis while retaining the complete draft. **Show more entries** exposes more;
+search also loads further pages from currently selected constructors, stopping
+after 128 additional pages or once 4096 fields are loaded. A notice identifies
+limited searches; use **Show more entries** to continue. Inactive constructor
+fields are not searched.
+
+Result tabs switch between values, plots, checks, diagnostics when present,
+and provenance. Pin outputs to keep them visible across tabs and name filters.
+Structured output cards start collapsed; choose **View value** to inspect them.
+Focus
 a result region and use the arrow keys to inspect overflowing columns.
 Recalculation retains the
 region's focus and scroll position. On screen, these regions are at most 24 rem
 (or 60% of the viewport height), and short cards do not stretch to match taller
 neighbors. All rows remain available by scrolling; no values are truncated.
-The **Report sections** navigation jumps directly to inputs, values, plots,
-checks, diagnostics when present, and provenance. Printing removes the height
+Static reports retain their **Report sections** links and document layout.
+Printing includes accepted input values and all result tabs, ignoring input
+search, output filters, and collapsed output cards. It removes the height
 limit, wraps table cells, and lays out cards in a single column so long tables
 can span pages. Markdown output continues to include every value.
 Every accepted result also reconciles all charts: failed or missing plots lose

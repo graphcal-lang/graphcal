@@ -18,8 +18,13 @@ const fragment = (bindings: { name: string; expr: string }[] = [], text = source
 const report = (page: Page) => page.frameLocator("#report iframe");
 const result = (page: Page, name = "doubled") =>
   report(page).locator(`[data-decl="${name}"] [data-role="value"]`);
-const apply = (page: Page, name: string) =>
-  report(page).locator(`[data-decl="${name}"] .control-apply`).click();
+async function apply(page: Page, name: string) {
+  const menu = report(page)
+    .locator(`.outline-row[data-parameter="${name}"] .outline-row-actions`)
+    .first();
+  await menu.locator("summary").click();
+  await menu.getByRole("button", { name: "Apply", exact: true }).click();
+}
 async function open(page: Page, bindings: { name: string; expr: string }[] = []) {
   await page.goto(`/playground/?view=report${fragment(bindings)}`);
   await expect(page.locator("#report")).toContainText("Run to generate");
@@ -42,7 +47,9 @@ test("report controls auto-run, support manual Apply, and share accepted binding
 }) => {
   await open(page);
   await expect(result(page)).toHaveText("4 m/s");
+  await report(page).getByRole("button", { name: "Plots", exact: true }).click();
   await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
+  await report(page).getByRole("button", { name: "Values", exact: true }).click();
   await expect(report(page).locator(".card-doc")).toHaveText("Speed <script> is plain text.");
   const autoRun = report(page).getByRole("checkbox", { name: "Auto run", exact: true });
   const speed = report(page).getByRole("textbox", { name: "speed", exact: true });
@@ -96,14 +103,21 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`;
   const frame = report(page);
   await expect(frame.locator(".hydration-status")).toHaveText("live");
   await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(32);
-  await frame.locator('[data-decl="samples"] .control-more').click();
+  await frame.getByRole("searchbox", { name: "Search inputs" }).fill("samples #39");
   await expect(frame.locator('[data-decl="samples"] .control-index-entry')).toHaveCount(40);
+  await frame.getByRole("textbox", { name: "samples #39", exact: true }).fill("7");
+  await expect(result(page, "samples")).toContainText("7");
+  await frame.getByRole("searchbox", { name: "Search inputs" }).fill("");
 
   const amount = frame.getByRole("textbox", { name: "choice value", exact: true });
   await amount.fill("3.0 s");
   await expect(result(page, "choice")).toContainText("2 m");
   await apply(page, "choice");
-  await expect(frame.locator('[data-decl="choice"] .control-error--nested')).toBeVisible();
+  await expect(
+    frame
+      .locator('.outline-row[data-parameter="choice"] .outline-error')
+      .filter({ hasText: /dimension|unit|type/i }),
+  ).toBeVisible();
   await expect(result(page, "choice")).toContainText("2 m");
   await amount.fill("3.0 m");
   await apply(page, "choice");
@@ -119,16 +133,16 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`;
   );
 });
 
-test("report section links stay inside the sandbox and survive recalculation", async ({ page }) => {
+test("report result tabs stay inside the sandbox and survive recalculation", async ({ page }) => {
   await open(page);
   for (const speed of ["3.0 m/s", "4.0 m/s"]) {
     await report(page).getByRole("textbox", { name: "speed", exact: true }).fill(speed);
     await apply(page, "speed");
     await expect(result(page)).toHaveText(speed === "3.0 m/s" ? "6 m/s" : "8 m/s");
-    const link = report(page).getByRole("link", { name: "Plots", exact: true });
-    await link.focus();
+    const tab = report(page).getByRole("button", { name: "Plots", exact: true });
+    await tab.focus();
     await page.keyboard.press("Enter");
-    await expect(report(page).locator("#plots")).toBeFocused();
+    await expect(tab).toHaveAttribute("aria-pressed", "true");
     await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
     await expect(page.locator("#report iframe")).toHaveCount(1);
     expect(page.frames().some((frame) => frame.url() === "about:srcdoc")).toBe(true);
@@ -142,7 +156,7 @@ test("rejected and pending edits do not replace or share successful values", asy
   await apply(page, "speed");
   await expect(
     report(page)
-      .locator(".control-error")
+      .locator(".outline-error")
       .filter({ hasText: /dimension|unit|type/i }),
   ).toBeVisible();
   await expect(result(page)).toHaveText("14 m/s");
@@ -322,6 +336,13 @@ test("structured report tables are contained, bounded and accessible", async ({ 
     (await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze())
       .violations,
   ).toEqual([]);
+  await report(page)
+    .locator(".workspace-output-details")
+    .evaluateAll((details) => {
+      details.forEach((detail) => {
+        (detail as HTMLDetailsElement).open = true;
+      });
+    });
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     const samples = report(page).getByRole("region", { name: "samples values", exact: true });
@@ -347,6 +368,30 @@ test("structured report tables are contained, bounded and accessible", async ({ 
         ),
     ).toBe(true);
   }
+});
+
+test("outline search and editable pins share the native evaluator in the sandbox", async ({
+  page,
+}) => {
+  await open(page);
+  const frame = report(page);
+  await frame.getByRole("searchbox", { name: "Search inputs" }).fill("plain text");
+  await expect(frame.locator(".outline-content .outline-row")).toHaveCount(1);
+  await frame.getByRole("button", { name: "Pin input speed", exact: true }).click();
+  await frame.getByRole("searchbox", { name: "Search inputs" }).fill("");
+  await frame.getByRole("checkbox", { name: "Pinned only", exact: true }).check();
+  await expect(frame.locator(".outline-content")).toBeHidden();
+  await frame.getByRole("button", { name: "Pin output doubled", exact: true }).click();
+  await frame.getByRole("button", { name: "Checks", exact: true }).click();
+  await frame.getByRole("textbox", { name: "speed", exact: true }).fill("5.0 m/s");
+  await expect(result(page)).toHaveText("10 m/s");
+  await expect(result(page)).toBeVisible();
+  expect((await share(page)).state.bindings).toEqual([{ name: "speed", expr: "5.0 m/s" }]);
+  await frame.getByRole("textbox", { name: "speed", exact: true }).fill("5.0 kg");
+  await expect(frame.locator(".outline-favorites .outline-error")).toBeVisible();
+  await expect(result(page)).toHaveText("10 m/s");
+  await frame.getByRole("textbox", { name: "speed", exact: true }).fill("6.0 m/s");
+  await expect(result(page)).toHaveText("12 m/s");
 });
 
 test("report layout and controls remain accessible at desktop and narrow widths", async ({

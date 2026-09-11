@@ -52,6 +52,7 @@ export async function testReportLayout({ temporary, openReport }) {
     if (interactive) await wait("document.querySelector('.hydration-status')?.textContent === 'live'");
     const region = name => `document.querySelector('[data-decl="${name}"] .value-scroll')`;
     async function checkLayout() {
+      if (interactive) await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Values').click(); document.querySelectorAll('.workspace-output-details').forEach(detail => detail.open = true)`);
       for (const width of [1440, 390, 280]) {
         await command("Emulation.setDeviceMetricsOverride", { width, height: 1000, deviceScaleFactor: 1, mobile: false });
         const geometry = await evaluate(`(${horizontalGeometry})()`);
@@ -86,6 +87,11 @@ export async function testReportLayout({ temporary, openReport }) {
     async function checkNavigation() {
       const links = await evaluate("Array.from(document.querySelectorAll('.report-nav a'), link => link.getAttribute('href'))");
       assert.deepEqual(links, ["#inputs", "#values", "#plots", "#checks", "#provenance"]);
+      if (interactive) {
+        await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Plots').click()`);
+        assert.equal(await evaluate("getComputedStyle(document.getElementById('plots')).display !== 'none'"), true);
+        return;
+      }
       await evaluate("document.querySelector('.report-nav a[href=\"#plots\"]').focus()");
       await command("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
       await command("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
@@ -125,6 +131,7 @@ export async function testReportLayout({ temporary, openReport }) {
     await checkPrint();
     await checkZoom();
     if (interactive) {
+      await evaluate(`Array.from(document.querySelectorAll('.workspace-result-tabs button')).find(button => button.textContent === 'Values').click()`);
       await evaluate(`(() => {
         const field = document.querySelector('[data-decl="gain"] .control-field');
         field.value = '3.0'; field.dispatchEvent(new Event('input', { bubbles: true }));

@@ -41,8 +41,16 @@ parameters expose every entry; changing a control does not edit the source.
 short pause in editing. Turn it off to keep drafts unapplied until **Apply** is
 selected. **Discard edits** restores the accepted snapshot, while **Raw literal**
 keeps advanced whole-value entry available. Invalid inputs show errors and leave
-the last successful results visible. Input previews and editors have bounded,
-scrollable heights so the result cards remain nearby while you make changes. **Reset parameters** restores source defaults;
+the last successful results visible.
+
+The adaptive input outline shows scalars and one-field records as editable
+rows, with larger structures expandable on demand. Search names, paths, or
+parameter descriptions, and star frequently used inputs to pin editable rows.
+The **⋯** menu applies or discards the whole containing parameter.
+**Advanced controls** provides metadata, sliders, and raw entry. Results scroll
+independently; their tabs and output pins keep useful values in view while you
+edit. Pins are session-only and are not included in shared links.
+**Reset parameters** restores source defaults;
 editing source clears all
 parameter overrides. **Stop** cancels evaluation; **Run** retries with the last
 applied parameters.

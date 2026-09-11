@@ -1,5 +1,6 @@
 // Exercise the production report functions with a minimal DOM adapter and the
 // actual embedded Wasm exports. DOM layout is not modeled by this Node suite.
+import "./report-outline-tests.mjs";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,6 +134,18 @@ for (const baseline of [[], [{ name: "doubled", expr: "8.0" }]]) {
     run.descendants(run.cards.get("samples")).filter(child => child.className === "control-field").map(child => child.value),
     ["1", "2"],
   );
+  run.prepared.free();
+}
+{
+  const run = runtime(model);
+  run.edit("doubled", "99.0");
+  run.edit("input", "3.0");
+  run.apply("input");
+  assert.equal(value(run.evaluate(), "doubled").value, 6);
+  assert.equal(run.field("doubled").value, "99.0", "a reactive update does not overwrite an open draft");
+  run.api.controls.get("doubled").restore();
+  assert.equal(run.field("doubled").value, "6.0", "discard reloads the latest reactive default, not an obsolete snapshot");
+  assert.deepEqual(run.bindings(), [{ name: "input", expr: "3.0" }]);
   run.prepared.free();
 }
 console.log("report runtime: reactive defaults, explicit bindings, clear and reset passed");

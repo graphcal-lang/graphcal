@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { once } from "node:events";
 import { testReportLayout } from "./report-layout-browser-tests.mjs";
+import { testReportOutline } from "./report-outline-browser-tests.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 
 const temporary = mkdtempSync(join(tmpdir(), "graphcal-browser-"));
@@ -146,11 +147,12 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
     const { evaluate, wait, exceptions, close } = await openReport(output);
     await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
     assert.equal(await evaluate(`document.querySelector('.auto-run-toggle input').checked`), true, "auto run is enabled by default");
+    await evaluate(`Array.from(document.querySelectorAll('.outline-options button')).find(button => button.textContent === 'Advanced controls').click()`);
     assert.equal(await evaluate(`(() => {
       const card = document.querySelector('[data-decl="samples"]');
       const preview = card.querySelector(':scope > [data-role="value"]');
       const editor = card.querySelector('.control-editor');
-      return preview.clientHeight <= 48 && editor.clientHeight <= 224 && editor.scrollHeight > editor.clientHeight && card.clientHeight < 420;
+      return preview.clientHeight <= 48 && editor.clientHeight <= 224 && editor.scrollHeight > editor.clientHeight;
     })()`), true, "interactive input cards keep accepted previews and editors compact");
     assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 32);
     await evaluate(`document.querySelector('[data-decl="samples"] .control-more').click()`);
@@ -180,6 +182,7 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
     assert.deepEqual(exceptions, [], "structured controls must not throw browser exceptions");
     await close();
   }
+  await testReportOutline({ temporary, openReport });
   await testReportLayout({ temporary, openReport });
   console.log("Chrome: initial failure, success/failure/recovery, mixed plots, missing targets/assets, renderer rejection, late completion and reset passed");
 } finally {
