@@ -43,6 +43,40 @@ test("full-height editor, keyboard resizing, no tab trap, theme and accessibilit
   await page.screenshot({ path: "test-results/playground-desktop.png" });
 });
 
+test("lexical highlighting works before Run, after edits/undo, and in both themes", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  const text = '// 🙂 node\nnode value: Length = 1.0 m;\n"unfinished\ntrue';
+  await page.goto(`/playground/${fragment(text)}`);
+  await expect(page.locator("#status")).toContainText("press Run");
+  const editor = page.getByRole("textbox", { name: "Graphcal source editor" });
+  await expect(editor.locator(".tok-comment")).toHaveText("// 🙂 node");
+  await expect(editor.locator(".tok-keyword")).toHaveText("node");
+  await expect(editor.locator(".tok-number")).toHaveText("1.0");
+  await expect(editor.locator(".tok-string")).toHaveText('"unfinished');
+  await expect(editor.locator(".tok-bool")).toHaveText("true");
+  await expect(editor.locator(".tok-keyword")).toHaveCSS("color", "rgb(117, 48, 160)");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(editor.locator(".tok-keyword")).toHaveCSS("color", "rgb(217, 167, 255)");
+  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(editor.locator(".tok-keyword")).toHaveCSS("color", "rgb(117, 48, 160)");
+  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.emulateMedia({ colorScheme: "light" });
+  // Explicit dark selection must also win over the system's light preference.
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(editor.locator(".tok-keyword")).toHaveCSS("color", "rgb(217, 167, 255)");
+  await editor.fill("// replaced\nnode other = false;");
+  await expect(editor.locator(".tok-string")).toHaveCount(0);
+  await expect(editor.locator(".tok-comment")).toHaveText("// replaced");
+  await expect(editor.locator(".tok-bool")).toHaveText("false");
+  await editor.press("ControlOrMeta+z");
+  await expect(editor.locator(".tok-string")).toHaveText('"unfinished');
+  await expect(editor.locator(".tok-bool")).toHaveText("true");
+  await expect(page.locator("#output")).not.toContainText("Compile error");
+});
+
 for (const example of catalog) {
   test(`catalog example ${example.id} evaluates in a real module worker; plots stay local`, async ({
     page,
@@ -64,6 +98,7 @@ for (const example of catalog) {
     await page.getByRole("button", { name: "Load example", exact: true }).click();
     await expect(page.getByLabel("Filename", { exact: true })).toHaveValue(example.filename);
     await expect(page.locator("#example-description")).toHaveText(example.description);
+    await expect(page.locator("#editor .tok-keyword").first()).toBeVisible();
     await expect(page.locator("#status")).toHaveText("Up to date");
     for (const name of example.expected_values)
       await expect(page.locator("#output")).toContainText(name);
@@ -133,6 +168,7 @@ test("shares the edited filename/source and restores without auto-execution", as
   context.on("request", (request) => requests.push(request.url()));
   await fresh.goto(url);
   await expect(fresh.locator("#status")).toContainText("press Run");
+  await expect(fresh.locator("#editor .tok-keyword")).toHaveText("node");
   await expect(fresh.getByLabel("Filename", { exact: true })).toHaveValue("snippet.gcl");
   expect(
     requests.some((request) => request.includes(".wasm") || request.includes("evaluation-worker")),

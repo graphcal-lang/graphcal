@@ -9,6 +9,10 @@
   --border: #9aa9b7;
   --accent: #145eb0;
   --error: #b62020;
+  --syntax-keyword: #7530a0;
+  --syntax-string: #216329;
+  --syntax-number: #934500;
+  --syntax-comment: #52616e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -19,6 +23,10 @@
     --border: #627b8e;
     --accent: #8ec7ff;
     --error: #ff9a9a;
+    --syntax-keyword: #d9a7ff;
+    --syntax-string: #9cdb9f;
+    --syntax-number: #ffc18a;
+    --syntax-comment: #a9b7c4;
   }
 }
 :root[data-theme="dark"] {
@@ -29,6 +37,10 @@
   --border: #627b8e;
   --accent: #8ec7ff;
   --error: #ff9a9a;
+  --syntax-keyword: #d9a7ff;
+  --syntax-string: #9cdb9f;
+  --syntax-number: #ffc18a;
+  --syntax-comment: #a9b7c4;
 }
 * {
   box-sizing: border-box;
@@ -286,6 +298,21 @@ footer {
   background: var(--panel);
   color: var(--fg);
   border-color: var(--border);
+}
+/* Stable classes supplied by Lezer's classHighlighter. Ambiguous names and
+   punctuation/operators retain the normal foreground instead of guessing roles. */
+.cm-editor .tok-keyword,
+.cm-editor .tok-bool {
+  color: var(--syntax-keyword);
+}
+.cm-editor .tok-string {
+  color: var(--syntax-string);
+}
+.cm-editor .tok-number {
+  color: var(--syntax-number);
+}
+.cm-editor .tok-comment {
+  color: var(--syntax-comment);
 }
 .cm-editor .cm-activeLine,
 .cm-editor .cm-activeLineGutter {

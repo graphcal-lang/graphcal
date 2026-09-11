@@ -29,6 +29,14 @@ part of `just lint` and `just test`.
   restrictive CSP, and rejecting plot loaders prevent source-selected resources.
   The host worker alone prepares/evaluates the model and enforces cancellation.
 - `example-catalog.ts`: allowlisted metadata lookup, never user-selected URLs.
+- `graphcal-language.ts`: stateless CodeMirror stream tokenizer following the lexical
+  rules in `grammar.ebnf`. Reserved keywords, booleans, numbers, strings, comments,
+  operators, and punctuation receive standard highlight tags; contextual words and
+  all identifier roles remain neutral. Strings have no escapes and unfinished
+  strings recover at the next physical line. This is coloring, not validation.
+- `editor.ts` installs the tokenizer and Lezer's standard CSS-class highlighter
+  on every state creation; `styles.css` owns the light/dark token palette. Neither
+  highlighting nor source restoration requires loading or running the Wasm engine.
 - Browser effects belong in editor, worker, and app shells, not document state.
 
 The supported baseline is current Chrome, Firefox, and Safari with WebAssembly,
@@ -39,7 +47,8 @@ are not transmitted in HTTP requests but are not secret or encrypted.
 The standalone app replaces embedded documentation playgrounds. Multi-file
 lessons remain static/CLI-based; their backend regression tests remain. Download
 is optional and is not required for release. Oversized source remains available
-for manual copying. Syntax highlighting and full LSP integration are deferred.
+for manual copying. Context-aware/semantic highlighting and full LSP integration
+are deferred; basic lexical highlighting is available without compilation.
 
 ## Development and publishing
 
@@ -122,5 +131,5 @@ devices. Actual GitHub Pages deployment and its redirects still require a
 post-merge smoke check; local tests use the assembled artifact and preview server.
 
 No production grammar, Rust compiler dependency, or LSP/editor-extension protocol
-changed. Syntax highlighting, full LSP, and the optional Download feature remain
-deferred.
+changed. Context-aware/semantic highlighting, full LSP, and the optional Download
+feature remain deferred.
