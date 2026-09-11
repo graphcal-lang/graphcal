@@ -11,6 +11,10 @@
 
 ## Documentation
 
+- **Do not update user-facing documentation by default when fixing bugs or adding/changing features.** It is a learning resource, not a changelog or an implementation log. Add or change content only when it provides substantial, lasting value to someone learning Graphcal, or corrects materially misleading existing guidance.
+  - Document essential concepts, syntax, and workflows users need to understand or use Graphcal correctly. Do not add implementation details, regression-test scenarios, obscure edge cases, or notes that merely announce a fix/change.
+  - A bug fix that restores documented behavior does not need a documentation edit. A feature addition alone is not sufficient justification either; apply the learner-value criterion above.
+  - When an update is justified, integrate the minimum necessary explanation into the relevant existing section. If the benefit to a new learner is unclear, leave the documentation unchanged.
 - The user-facing documentation is in `docs/en/` (English) and `docs/ja/` (Japanese). The entry points are `docs/en/index.md` and `docs/ja/index.md`. Update both languages together; see `internals/docs-localization.md` for the translation and validation workflow.
   - It is a Zensical site, so you can run it locally with `zensical serve` in the project root and open `http://localhost:8000` in the browser.
 - The formal grammar is in `grammar.ebnf` at the repository root. It serves as the source of truth referenced by tree-sitter and TextMate grammars.
@@ -31,7 +35,7 @@
 - When you add/modify/remove a feature, please also update the followings accordingly:
   - The test cases in the codebase (unit tests, integration tests, snapshot tests, property-based tests, etc.).
   - The corresponding LSP features in the `crates/graphcal-lsp/` directory (diagnostics, code actions, inlay hints, etc.).
-  - The user-facing documentation in the `docs/` directory.
+  - The user-facing documentation in the `docs/` directory **only when warranted by the Documentation policy above; leaving it unchanged is the default**.
   - The tree-sitter grammar in the `graphcal-lang/tree-sitter-graphcal` repository.
   - The Zed extension in the `graphcal-lang/zed-graphcal` repository (syntax highlighting, LSP features, etc.).
   - The VS Code extension in the `graphcal-lang/vscode-graphcal` repository, including the TextMate grammar and LSP features.
