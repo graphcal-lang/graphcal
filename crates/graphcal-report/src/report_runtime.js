@@ -7,6 +7,7 @@
   "use strict";
 
   var DEBOUNCE_MS = 200;
+  var AUTO_RUN_DELAY_MS = 300;
   var EVALUATION_TIMEOUT_MS = 10000;
 
   function mount(options) {
@@ -46,6 +47,29 @@
   banner.appendChild(bannerText);
   banner.appendChild(resetButton);
   document.body.insertBefore(banner, document.body.firstChild);
+
+  var autoRun = true;
+  var autoRunToggle = element("input");
+  autoRunToggle.type = "checkbox";
+  autoRunToggle.checked = true;
+  autoRunToggle.setAttribute("aria-describedby", "auto-run-description");
+  var autoRunLabel = element("label", "auto-run-toggle");
+  autoRunLabel.appendChild(autoRunToggle);
+  autoRunLabel.appendChild(document.createTextNode(" Auto run"));
+  var autoRunDescription = element(
+    "span",
+    "auto-run-description",
+    "Runs complete edits after a short pause.",
+  );
+  autoRunDescription.id = "auto-run-description";
+  var inputToolbar = element("div", "input-toolbar");
+  inputToolbar.appendChild(autoRunLabel);
+  inputToolbar.appendChild(autoRunDescription);
+  var inputsSection = document.getElementById("inputs");
+  if (inputsSection) {
+    var inputCards = inputsSection.querySelector ? inputsSection.querySelector(".cards") : null;
+    inputsSection.insertBefore(inputToolbar, inputCards);
+  }
 
   function fatal(message) {
     setStatus("interactive mode unavailable", "error");
@@ -274,6 +298,7 @@
   function makeControl(port, paramView) {
     var card = cardFor(port.name);
     if (!card) return null;
+    card.className += " card--interactive";
     var holder = element("div", "control");
     var editorHolder = element("div", "control-editor");
     var errorLine = element("p", "control-error");
@@ -296,6 +321,7 @@
     var revision = 0;
     var pendingRevision = 0;
     var submittedRequest = null;
+    var autoRunTimer = null;
     var rawHolder = element("div", "control-raw");
     var rawField = element("textarea", "control-raw-field");
     rawField.setAttribute("aria-label", port.name + " complete closed value");
@@ -367,6 +393,8 @@
         updateDraftStatus();
       },
       stageBaseline: function () {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
         pending = true;
         pendingBinding = initialBinding;
         pendingMode = "baseline";
@@ -382,6 +410,8 @@
         render();
       },
       restore: function () {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
         draft = cloneStructured(startingDraft);
         rawDraft = startingRawDraft;
         dirty = false;
@@ -389,17 +419,31 @@
         control.setError("");
         render();
       },
+      setAutoRun: function (enabled) {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
+        if (enabled && dirty) queueAutoRun();
+      },
     };
 
     function updateDraftStatus() {
       draftStatus.textContent = pending
-        ? "Applying complete parameter value…"
+        ? "Updating the complete parameter value…"
         : sourceChanged
-          ? "Unapplied edits. The reactive default changed; discard to reload it."
+          ? "The reactive default changed; discard to reload it."
           : dirty
-            ? "Unapplied edits. The last accepted results remain visible."
+            ? autoRun
+              ? "Draft differs from the last accepted value. Auto run will retry after the next edit."
+              : "Unapplied edits. The last accepted results remain visible."
             : "";
       draftStatus.hidden = !draftStatus.textContent;
+    }
+    function queueAutoRun() {
+      if (autoRunTimer) clearTimeout(autoRunTimer);
+      autoRunTimer = setTimeout(function () {
+        autoRunTimer = null;
+        submitDraft(false);
+      }, AUTO_RUN_DELAY_MS);
     }
     function editDraft() {
       revision += 1;
@@ -407,7 +451,12 @@
       sourceChanged = false;
       control.setError("");
       updateDraftStatus();
-      setStatus("unapplied parameter edits · showing last successful evaluation", "warn");
+      if (autoRun) {
+        queueAutoRun();
+        setStatus("auto run waiting for input · showing last successful evaluation", "warn");
+      } else {
+        setStatus("unapplied parameter edits · showing last successful evaluation", "warn");
+      }
     }
     function render() {
       editorHolder.replaceChildren();
@@ -451,22 +500,26 @@
     holder.appendChild(element(
       "p",
       "control-snapshot-note",
-      "Applying overrides the whole parameter, including unchanged fields.",
+      "Each run overrides the whole parameter, including unchanged fields.",
     ));
-    var actions = element("div", "control-actions");
-    var apply = element("button", "control-apply", "Apply");
-    apply.type = "button";
-    apply.addEventListener("click", function () {
+    function submitDraft(reportIncomplete) {
       var incomplete = mode === "form"
         ? incompleteDraft(draft, [])
         : rawDraft.trim()
           ? null
           : { path: [], message: "Enter a complete closed value before applying." };
       if (incomplete) {
-        control.setError(incomplete.message, incomplete.path);
-        setStatus("incomplete parameter draft · showing last successful evaluation", "warn");
+        if (reportIncomplete) control.setError(incomplete.message, incomplete.path);
+        updateDraftStatus();
+        setStatus(
+          (reportIncomplete ? "incomplete parameter draft" : "auto run waiting for complete input") +
+            " · showing last successful evaluation",
+          "warn",
+        );
         return;
       }
+      if (autoRunTimer) clearTimeout(autoRunTimer);
+      autoRunTimer = null;
       pending = true;
       pendingMode = mode;
       pendingDraft = mode === "form" ? cloneStructured(draft) : rawDraft;
@@ -477,7 +530,12 @@
         : { name: port.name, expr: mode === "form" ? pendingDraft.expr : pendingDraft };
       updateDraftStatus();
       scheduleEvaluate();
-    });
+    }
+
+    var actions = element("div", "control-actions");
+    var apply = element("button", "control-apply", "Apply");
+    apply.type = "button";
+    apply.addEventListener("click", function () { submitDraft(true); });
     var discard = element("button", "control-discard", "Discard edits");
     discard.type = "button";
     discard.addEventListener("click", control.restore);
@@ -487,6 +545,8 @@
       var clear = element("button", "control-clear", "Use default");
       clear.type = "button";
       clear.addEventListener("click", function () {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
         pending = true;
         pendingBinding = null;
         pendingMode = "default";
@@ -527,6 +587,11 @@
       scheduleEvaluate();
     });
   }
+
+  autoRunToggle.addEventListener("change", function () {
+    autoRun = autoRunToggle.checked;
+    controls.forEach(function (control) { control.setAutoRun(autoRun); });
+  });
 
   function currentBindings() {
     var bindings = baselineBindings.filter(function (binding) {

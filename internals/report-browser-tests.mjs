@@ -145,27 +145,31 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
     assert.equal(built.status, 0, built.stderr);
     const { evaluate, wait, exceptions, close } = await openReport(output);
     await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('live')`);
+    assert.equal(await evaluate(`document.querySelector('.auto-run-toggle input').checked`), true, "auto run is enabled by default");
+    assert.equal(await evaluate(`(() => {
+      const card = document.querySelector('[data-decl="samples"]');
+      const preview = card.querySelector(':scope > [data-role="value"]');
+      const editor = card.querySelector('.control-editor');
+      return preview.clientHeight <= 48 && editor.clientHeight <= 224 && editor.scrollHeight > editor.clientHeight && card.clientHeight < 420;
+    })()`), true, "interactive input cards keep accepted previews and editors compact");
     assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 32);
     await evaluate(`document.querySelector('[data-decl="samples"] .control-more').click()`);
     assert.equal(await evaluate(`document.querySelectorAll('[data-decl="samples"] .control-index-entry').length`), 40);
     await evaluate(`(() => {
       const field = document.querySelector('[data-decl="choice"] .control-field');
       field.value = '3.0 s'; field.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('[data-decl="choice"] .control-apply').click();
     })()`);
     await wait(`document.querySelector('[data-decl="choice"] .control-error--nested')`);
     assert.equal(await evaluate(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.includes('2 m')`), true, "invalid nested input retains the accepted result");
     await evaluate(`(() => {
       const field = document.querySelector('[data-decl="choice"] .control-field');
       field.value = '3.0 m'; field.dispatchEvent(new Event('input', { bubbles: true }));
-      document.querySelector('[data-decl="choice"] .control-apply').click();
     })()`);
     await wait(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.includes('3 m')`);
     const draft = await evaluate(`document.querySelector('[data-decl="choice"] .control-field').value`);
     await evaluate(`(() => {
       const select = document.querySelector('[data-decl="choice"] .control-constructor');
       select.value = '1'; select.dispatchEvent(new Event('change', { bubbles: true }));
-      document.querySelector('[data-decl="choice"] .control-apply').click();
     })()`);
     await wait(`document.querySelector('[data-decl="choice"] [data-role="value"]').textContent.trim() === 'Off'`);
     await evaluate(`(() => {

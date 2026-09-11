@@ -602,19 +602,24 @@ their checked types and units. **Raw literal** remains available for advanced
 whole-value input. Readers bind closed typed values under the same rules as
 `eval --param` — wrong or missing units are rejected at the exact nested field
 or entry, values must satisfy declared domains, and expressions are never
-injected into the prepared model. Keystrokes remain in an unapplied draft and
-leave the last accepted results visible. **Apply** validates and replaces the
-complete parameter atomically, including unchanged fields; **Discard edits**
-restores its starting snapshot. A newly selected constructor starts with empty
-required fields rather than fabricated zero/false/default values. Successful
-Apply re-evaluates the embedded engine (the same compiler and evaluator as this
-CLI, compiled to WebAssembly, running in a Web Worker) and patches values,
-grids, badges, and charts in place. Static and hydrated value
+injected into the prepared model. **Auto run** is enabled by default: after a
+short pause in editing, a structurally complete draft is validated and replaces
+the complete parameter atomically, including unchanged fields. Incomplete or
+rejected drafts leave the last accepted results visible. Turn **Auto run** off
+to keep edits unapplied until **Apply** is selected; **Discard edits** restores
+the starting snapshot in either mode. A newly selected constructor starts with
+empty required fields rather than fabricated zero/false/default values. Each
+successful automatic or manual run re-evaluates the embedded engine (the same
+compiler and evaluator as this CLI, compiled to WebAssembly, running in a Web
+Worker) and patches values, grids, badges, and charts in place. Static and hydrated value
 cards use the same projection: rank-two values are grids, and higher ranks
 are labelled two-axis slices retaining every leaf and outer-axis label.
 Structured values stay inside labelled, keyboard-focusable scroll regions, so
-wide grids and long field paths cannot overlap neighboring cards. Indexed
-editors initially mount 32 entries at a time while retaining the complete value
+wide grids and long field paths cannot overlap neighboring cards. Hydrated input
+cards keep the accepted-value preview to 3 rem and the editor to 14 rem (or 35%
+of the viewport height), with the complete content available by scrolling, so
+results remain nearby while editing. Indexed editors initially mount 32 entries
+at a time while retaining the complete value
 in their draft; **Show more entries** progressively exposes the remainder. Focus
 a result region and use the arrow keys to inspect overflowing columns.
 Recalculation retains the
@@ -633,8 +638,8 @@ differs from the as-published baseline, a persistent banner appears with a
 one-click reset. Displayed defaults remain reactive: an untouched control does
 not bind its parameter, and dependent defaults refresh after evaluation. An open
 draft is not overwritten when such a default changes; the control reports the
-change and Discard reloads the accepted snapshot. Applying a control creates an
-explicit whole-parameter reader binding. Choosing **Use default** validates the
+change and Discard reloads the accepted snapshot. An automatic or manual run
+creates an explicit whole-parameter reader binding. Choosing **Use default** validates the
 complete binding set with that binding removed (including a build-time override);
 an empty edited leaf is instead reported as incomplete. Reset restores precisely
 the original build-time binding set, not literal copies of

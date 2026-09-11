@@ -36,7 +36,7 @@ async function share(page: Page) {
   return { link, state: JSON.parse(gunzipSync(Buffer.from(encoded, "base64url")).toString()) };
 }
 
-test("report controls update results and share exact applied bindings and focused view", async ({
+test("report controls auto-run, support manual Apply, and share accepted bindings", async ({
   page,
   context,
 }) => {
@@ -44,20 +44,28 @@ test("report controls update results and share exact applied bindings and focuse
   await expect(result(page)).toHaveText("4 m/s");
   await expect(report(page).locator("figure canvas, figure svg")).toBeVisible();
   await expect(report(page).locator(".card-doc")).toHaveText("Speed <script> is plain text.");
-  await report(page).getByRole("textbox", { name: "speed", exact: true }).fill("36.0 km/h");
-  await expect(result(page)).toHaveText("4 m/s");
-  await apply(page, "speed");
+  const autoRun = report(page).getByRole("checkbox", { name: "Auto run", exact: true });
+  const speed = report(page).getByRole("textbox", { name: "speed", exact: true });
+  await expect(autoRun).toBeChecked();
+  await speed.fill("36.0 km/h");
   await expect(result(page)).toHaveText("20 m/s");
   await expect(page.locator("#output")).toContainText("20 m/s");
   await expect(report(page).locator(".repro")).toContainText("speed=36.0 km/h");
   await report(page).getByRole("checkbox", { name: "enabled", exact: true }).uncheck();
-  await apply(page, "enabled");
   await expect(result(page, "enabled")).toHaveText("false");
   await report(page)
     .getByRole("combobox", { name: "mode", exact: true })
     .selectOption("Mode#Nominal");
-  await apply(page, "mode");
   await expect(result(page, "mode")).toContainText("Nominal");
+  await autoRun.uncheck();
+  await speed.fill("5.0 m/s");
+  await page.waitForTimeout(700);
+  await expect(result(page)).toHaveText("20 m/s");
+  await apply(page, "speed");
+  await expect(result(page)).toHaveText("10 m/s");
+  await autoRun.check();
+  await speed.fill("36.0 km/h");
+  await expect(result(page)).toHaveText("20 m/s");
   const { link, state } = await share(page);
   expect(new URL(link).searchParams.get("view")).toBe("report");
   expect(state.document.source).toBe(source);
