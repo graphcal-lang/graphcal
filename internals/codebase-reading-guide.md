@@ -1432,7 +1432,7 @@ a pure output adapter. Immutable constant selections are not invocation state.
 The frontend is a consumer of `graphcal-wasm`, not an upstream compiler layer.
 Read `web/playground/src/` in this dependency order: `document.ts`,
 `example-catalog.ts`, `location.ts`, `protocol.ts`, `output-budget.ts`, `dom.ts`, `figures.ts`,
-`share-codec.ts`, `examples.ts`, `editor.ts`, `output.ts`, `layout.ts`,
+`share-codec.ts`, `examples.ts`, `graphcal-language.ts`, `editor.ts`, `output.ts`, `layout.ts`,
 `evaluation-worker.ts`, `worker-client.ts`, then `app.ts`. The worker client loads
 its worker at the I/O boundary. See [playground architecture](playground.md) for
 build, sharing, and safety contracts. No compiler/LSP dependency edges changed.

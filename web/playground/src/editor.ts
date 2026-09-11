@@ -2,6 +2,9 @@ import { basicSetup } from "codemirror";
 import { EditorState, type Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
+import { syntaxHighlighting } from "@codemirror/language";
+import { classHighlighter } from "@lezer/highlight";
+import { graphcalLanguage } from "./graphcal-language";
 import type { Diagnostic, SourceRange } from "./protocol";
 
 export function offsetAt(document: Text, position: SourceRange["start"]): number {
@@ -31,6 +34,8 @@ export class SourceEditor {
       doc: source,
       extensions: [
         basicSetup,
+        graphcalLanguage,
+        syntaxHighlighting(classHighlighter),
         lintGutter(),
         EditorState.lineSeparator.of("\n"),
         EditorView.contentAttributes.of({
