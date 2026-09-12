@@ -526,7 +526,7 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     )
     .unwrap()
     .for_decl(&owner);
-    let original = &tir.root().nodes()[0].expr;
+    let original = tir.root().nodes()[0].definition.formula().unwrap();
     let mut shifted = (**original).clone();
     shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
     assert_ne!(shifted.span, original.span);
@@ -560,8 +560,18 @@ fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shar
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut revised, &src).unwrap();
     assert_eq!(revised.root_dag_id(), tir.root_dag_id());
     assert_eq!(
-        revised.root().nodes()[0].expr.id().unwrap(),
-        tir.root().nodes()[0].expr.id().unwrap()
+        revised.root().nodes()[0]
+            .definition
+            .formula()
+            .unwrap()
+            .id()
+            .unwrap(),
+        tir.root().nodes()[0]
+            .definition
+            .formula()
+            .unwrap()
+            .id()
+            .unwrap()
     );
     assert_ne!(revised.root().body_revision(), tir.root().body_revision());
     assert!(matches!(
@@ -910,7 +920,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                         .errors
                         .iter()
                         .any(|(key, error)| key.member() == "dependent"
-                            && matches!(error, NodeError::DependencyFailed { .. }))
+                            && matches!(error, NodeUnavailable::DependencyFailed { .. }))
                 );
             }
         }
@@ -2842,7 +2852,7 @@ fn inline_dag_call_with_failing_assert_fails_calling_node() {
             .clone()
     };
     match node_result("y") {
-        Err(NodeError::EvalFailed { message }) => {
+        Err(NodeUnavailable::EvalFailed { message }) => {
             assert_eq!(
                 message,
                 "assertion `v_positive` failed in inline call of dag `checked` \
@@ -2900,7 +2910,7 @@ fn inline_dag_call_respects_expected_fail() {
 
     let result = compile_and_eval(&source_template("-3.0")).unwrap();
     match &result.nodes[0].1 {
-        Err(NodeError::EvalFailed { message }) => {
+        Err(NodeUnavailable::EvalFailed { message }) => {
             assert!(
                 message.contains("assertion passed but was marked #[expected_fail]"),
                 "unexpected message: {message}"
@@ -3262,7 +3272,8 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = tir.root().nodes()[0].expr.kind()
+    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } =
+        tir.root().nodes()[0].definition.formula().unwrap().kind()
     else {
         panic!("expected datetime function call");
     };
@@ -4447,7 +4458,7 @@ fn required_param_with_override_succeeds() {
 }
 // --- Module import tests ---#[test]#[test]// --- Runtime arithmetic error tests ---
 
-/// Helper: assert that a specific node in the result has a `NodeError::EvalFailed`
+/// Helper: assert that a specific node in the result has a `NodeUnavailable::EvalFailed`
 /// whose message contains `needle`.
 fn assert_node_error(source: &str, node_name: &str, needle: &str) {
     let result = compile_and_eval(source).unwrap();
@@ -4457,7 +4468,7 @@ fn assert_node_error(source: &str, node_name: &str, needle: &str) {
         .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
-        Err(NodeError::EvalFailed { message }) => {
+        Err(NodeUnavailable::EvalFailed { message }) => {
             assert!(
                 message.contains(needle),
                 "expected error containing {needle:?}, got {message:?}"
@@ -4564,7 +4575,10 @@ fn eval_error_propagates_to_dependents() {
         .find(|(n, _)| n.to_string() == "bad")
         .unwrap()
         .1;
-    assert!(matches!(bad_result, Err(NodeError::EvalFailed { .. })));
+    assert!(matches!(
+        bad_result,
+        Err(NodeUnavailable::EvalFailed { .. })
+    ));
     // downstream fails with DependencyFailed
     let ds_result = &result
         .nodes
@@ -4572,7 +4586,10 @@ fn eval_error_propagates_to_dependents() {
         .find(|(n, _)| n.to_string() == "downstream")
         .unwrap()
         .1;
-    assert!(matches!(ds_result, Err(NodeError::DependencyFailed { .. })));
+    assert!(matches!(
+        ds_result,
+        Err(NodeUnavailable::DependencyFailed { .. })
+    ));
 }
 
 #[test]
@@ -6013,7 +6030,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
         .1
         .as_ref();
     match b_bad {
-        Err(NodeError::EvalFailed { message }) => {
+        Err(NodeUnavailable::EvalFailed { message }) => {
             assert!(message.contains("minimum"), "{message}");
         }
         other => panic!("expected b_bad constraint failure, got {other:?}"),
@@ -6954,7 +6971,7 @@ mod prop {
                     let z = val.si_value().unwrap();
                     prop_assert!(z.is_finite(), "division produced non-finite: {z}");
                 }
-                Err(NodeError::EvalFailed { message }) => {
+                Err(NodeUnavailable::EvalFailed { message }) => {
                     // Complete underflow and overflow are both surfaced rather
                     // than silently becoming zero or infinity.
                     prop_assert!(
@@ -8838,7 +8855,7 @@ param schedule: Datetime(
         .iter()
         .find(|(name, _, _)| name.to_string() == "schedule")
         .expect("schedule not found");
-    let NodeError::EvalFailed { message } = schedule.as_ref().unwrap_err() else {
+    let NodeUnavailable::EvalFailed { message } = schedule.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {schedule:?}");
     };
     assert!(
@@ -8866,7 +8883,7 @@ node BAD: EventSpec = EventSpec(at: epoch<TT>("2025-01-01T00:00:00"));
         .iter()
         .find(|(name, _, _)| name.to_string() == "BAD")
         .expect("BAD not found");
-    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+    let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
     };
     assert!(
@@ -8915,7 +8932,7 @@ node BAD: Schedule = Schedule(events: {
         .iter()
         .find(|(name, _, _)| name.to_string() == "BAD")
         .expect("BAD not found");
-    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+    let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
     };
     assert!(
@@ -9005,7 +9022,7 @@ node SAT: Spec = Spec(mass: @x);
         .find(|(n, _, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     let err = sat_result.as_ref().unwrap_err();
-    let NodeError::EvalFailed { message } = err else {
+    let NodeUnavailable::EvalFailed { message } = err else {
         panic!("expected EvalFailed, got {err:?}");
     };
     assert!(
@@ -9030,7 +9047,7 @@ node R: Result = Burn(dv: 50.0 km/s);
         .find(|(n, _, _)| n.to_string() == "R")
         .expect("R not found");
     let err = r_result.as_ref().unwrap_err();
-    let NodeError::EvalFailed { message } = err else {
+    let NodeUnavailable::EvalFailed { message } = err else {
         panic!("expected EvalFailed, got {err:?}");
     };
     assert!(
@@ -9068,7 +9085,7 @@ node bad: Length = Box<Length>(x: 0.1 m).x;
         .iter()
         .find(|(name, _, _)| name.to_string() == "bad")
         .expect("bad not found");
-    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+    let NodeUnavailable::EvalFailed { message } = bad.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad:?}");
     };
     assert!(message.contains("below minimum"), "message = {message}");
@@ -9148,7 +9165,7 @@ node bad_three: AtLeastCardinality<3> = AtLeastCardinality<3>(x: 2);
         .iter()
         .find(|(name, _, _)| name.to_string() == "bad_three")
         .expect("bad_three not found");
-    let NodeError::EvalFailed { message } = bad_three.as_ref().unwrap_err() else {
+    let NodeUnavailable::EvalFailed { message } = bad_three.as_ref().unwrap_err() else {
         panic!("expected EvalFailed, got {bad_three:?}");
     };
     assert!(message.contains("below minimum"), "message = {message}");

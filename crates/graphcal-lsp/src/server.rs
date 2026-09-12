@@ -1554,13 +1554,15 @@ fn run_analysis_with_cancellation(
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredStaticInputNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
+            let todos =
+                crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
             let (mut diagnostics, eval_values) = if checked.is_library() {
                 (HashMap::new(), HashMap::new())
             } else {
                 run_eval_from_checked(checked, uri, text, &symbol_table, &host_fns, cancellation)?
             };
             cancellation.checkpoint()?;
-            diagnostics.entry(uri.clone()).or_default();
+            diagnostics.entry(uri.clone()).or_default().extend(todos);
 
             Ok(AnalysisRun::complete(AnalysisResult {
                 inputs: analysis_inputs,
@@ -1949,7 +1951,7 @@ fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, Strin
     Ok(parts.join(" * "))
 }
 
-/// Format all successfully evaluated values into display strings.
+/// Format values and explicit incompleteness outcomes for hover and inlay hints.
 fn format_eval_values(
     result: &EvalResult,
     cancellation: &CancellationToken,
@@ -1957,12 +1959,12 @@ fn format_eval_values(
     let mut map = HashMap::new();
     for (name, value_result, _decl_type) in &result.all {
         cancellation.checkpoint()?;
-        if let Ok(value) = value_result {
-            map.insert(
-                name.clone(),
-                format_value_inline(value, &result.base_dim_symbols),
-            );
-        }
+        let formatted = match value_result {
+            Ok(value) => format_value_inline(value, &result.base_dim_symbols),
+            Err(reason) if reason.is_incomplete() => reason.to_string(),
+            Err(_) => continue,
+        };
+        map.insert(name.clone(), formatted);
     }
     Ok(map)
 }
@@ -3766,6 +3768,39 @@ mod tests {
     /// `LoadedProject::from_source` branch (disk-less analysis).
     fn untitled_uri() -> Url {
         Url::parse("untitled:test.gcl").unwrap()
+    }
+
+    #[test]
+    fn unfinished_markers_are_informational_in_executables_and_libraries() {
+        let uri = untitled_uri();
+        for prefix in ["", "param required: Length;"] {
+            let source = format!(
+                "{prefix} node missing: Length = todo {{}}; node blocked: Length = @missing;"
+            );
+            let analysis = run_analysis(&uri, &source, &[], test_plugin_host());
+            let diagnostics = &analysis.diagnostics[&uri];
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert_eq!(
+                diagnostics[0].severity,
+                Some(tower_lsp::lsp_types::DiagnosticSeverity::INFORMATION)
+            );
+            assert!(diagnostics[0].message.contains("TODO"));
+            if prefix.is_empty() {
+                assert!(
+                    analysis
+                        .eval_values
+                        .values()
+                        .any(|value| value.contains("BLOCKED"))
+                );
+            }
+        }
+        let analysis = run_analysis(
+            &uri,
+            "dag unused { node missing: Length = todo {}; }",
+            &[],
+            test_plugin_host(),
+        );
+        assert_eq!(analysis.diagnostics[&uri].len(), 1);
     }
 
     #[test]

@@ -272,7 +272,13 @@ fn register_structural_finite_indexes(
                     collect_finite_indexes_from_expr(value, registry, src)?;
                 }
             }
-            DeclKind::Node(d) | DeclKind::ConstNode(d) => {
+            DeclKind::Node(d) => {
+                collect_finite_indexes_from_type_expr(&d.type_ann, registry, src)?;
+                d.definition.formula().map_or(Ok(()), |expression| {
+                    collect_finite_indexes_from_expr(expression, registry, src)
+                })?;
+            }
+            DeclKind::ConstNode(d) => {
                 collect_finite_indexes_from_type_expr(&d.type_ann, registry, src)?;
                 collect_finite_indexes_from_expr(&d.value, registry, src)?;
             }

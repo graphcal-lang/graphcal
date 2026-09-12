@@ -28,6 +28,7 @@ pub mod closed_expr;
 pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;
+pub mod node_definition;
 pub mod nominal;
 pub mod source_interface;
 pub mod types;

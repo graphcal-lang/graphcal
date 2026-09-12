@@ -97,7 +97,14 @@ const valueBodySchema: z.ZodType<ValueBody> = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("grid"), body: gridTableSchema }),
   z.object({ kind: z.literal("slices"), body: z.array(z.tuple([z.string(), gridTableSchema])) }),
 ]);
-const nodeError = z.discriminatedUnion("kind", [
+const nodeUnavailable = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("todo"), declaration: z.string(), message: z.string() }),
+  z.object({
+    kind: z.literal("blocked"),
+    unfinished: z.array(z.string()),
+    failed_dependencies: z.array(z.string()),
+    message: z.string(),
+  }),
   z.object({ kind: z.literal("evaluation_failed"), message: z.string() }),
   z.object({ kind: z.literal("dependency_failed"), failed_dependencies: z.array(z.string()) }),
 ]);
@@ -109,13 +116,15 @@ export const outcomeSchema = z.discriminatedUnion("status", [
     evaluation: z.object({
       compiler_version: z.string(),
       has_errors: z.boolean(),
+      incomplete: z.boolean(),
       values: z.array(
         z.object({
           name: z.string(),
           declaration_kind: z.enum(["const", "param", "node"]),
           outcome: z.discriminatedUnion("status", [
             z.object({ status: z.literal("value"), value: valueSchema, body: valueBodySchema }),
-            z.object({ status: z.literal("error"), error: nodeError }),
+            z.object({ status: z.literal("error"), error: nodeUnavailable }),
+            z.object({ status: z.literal("incomplete"), reason: nodeUnavailable }),
           ]),
         }),
       ),
@@ -125,13 +134,17 @@ export const outcomeSchema = z.discriminatedUnion("status", [
           affected_declarations: z.array(z.string()),
           outcome: z.discriminatedUnion("status", [
             z.object({ status: z.literal("pass") }),
-            z.object({ status: z.enum(["fail", "error"]), message: z.string() }),
+            z.object({ status: z.enum(["fail", "error", "blocked"]), message: z.string() }),
           ]),
         }),
       ),
       notices: z.array(
         z.discriminatedUnion("kind", [
-          z.object({ kind: z.literal("plot_error"), name: z.string(), message: z.string() }),
+          z.object({
+            kind: z.enum(["plot_error", "plot_incomplete", "call_incomplete"]),
+            name: z.string(),
+            message: z.string(),
+          }),
           z.object({ kind: z.enum(["presentation_error", "internal_error"]), message: z.string() }),
         ]),
       ),

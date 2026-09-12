@@ -39,6 +39,18 @@ pub enum GraphcalError {
     #[diagnostic(transparent)]
     Cancelled(#[from] crate::cancellation::Cancelled),
 
+    /// Runtime propagation of an unavailable projected value. This is not a
+    /// static checking error; evaluator boundaries retain the typed reason.
+    #[error("{reason}")]
+    #[diagnostic(code(graphcal::E050))]
+    EvaluationUnavailable {
+        reason: crate::node_unavailable::NodeUnavailable,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("value unavailable here")]
+        span: SourceSpan,
+    },
+
     #[error("duplicate name `{name}`")]
     #[diagnostic(code(graphcal::N001), help("each name must be unique within a file"))]
     DuplicateName {
@@ -2428,6 +2440,7 @@ impl GraphcalError {
             | Self::WrongArity { src, .. }
             | Self::CyclicDependency { src, .. }
             | Self::EvalError { src, .. }
+            | Self::EvaluationUnavailable { src, .. }
             | Self::InternalError { src, .. }
             | Self::DimensionOverflow { src, .. }
             | Self::DimensionMismatch { src, .. }

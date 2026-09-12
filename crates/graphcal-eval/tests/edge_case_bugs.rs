@@ -16,7 +16,7 @@
 )]
 
 use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
-use graphcal_eval::eval::{EvalResult, NodeError, Value, compile_and_eval};
+use graphcal_eval::eval::{EvalResult, NodeUnavailable, Value, compile_and_eval};
 use proptest::prelude::*;
 
 // ============================================================================
@@ -86,7 +86,7 @@ fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .and_then(|(_, r, _)| match r {
-            Err(NodeError::EvalFailed { message }) => Some(message.clone()),
+            Err(NodeUnavailable::EvalFailed { message }) => Some(message.clone()),
             _ => None,
         })
 }

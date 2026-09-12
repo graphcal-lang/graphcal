@@ -1,6 +1,6 @@
 //! Phase-specific construction of immutable expression environments.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -50,6 +50,13 @@ pub struct EvalEnvironment<'a> {
     pub current_dag: &'a DagTIR,
     pub current_decl: Option<ResolvedDeclName>,
     pub root_values: Option<&'a RuntimeValueMap>,
+    pub unavailable: Option<
+        &'a HashMap<
+            crate::decl_key::RuntimeDeclKey,
+            graphcal_compiler::node_unavailable::NodeUnavailable,
+        >,
+    >,
+    pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
     pub root_presentation_instances: Option<&'a PresentationInstanceMap>,
 }
 
@@ -88,6 +95,8 @@ impl<'a> EvalContext<'a> {
             current_dag: dag,
             current_decl: None,
             root_values: None,
+            unavailable: None,
+            unfinished_calls: None,
             root_presentation_instances: None,
         }
     }
@@ -235,6 +244,90 @@ impl<'a> EvalContext<'a> {
             Capabilities::ProvisionalConstants => None,
             Capabilities::Checked { host, .. } => Some(host),
         }
+    }
+
+    #[must_use]
+    pub const fn with_unavailable(
+        mut self,
+        unavailable: &'a HashMap<
+            crate::decl_key::RuntimeDeclKey,
+            graphcal_compiler::node_unavailable::NodeUnavailable,
+        >,
+    ) -> Self {
+        self.environment.unavailable = Some(unavailable);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_unfinished_calls(
+        mut self,
+        calls: &'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
+    ) -> Self {
+        self.environment.unfinished_calls = Some(calls);
+        self
+    }
+
+    /// Static dependency availability, including references in unselected branches.
+    pub fn unavailable_dependencies<'e>(
+        &self,
+        expressions: impl IntoIterator<Item = &'e graphcal_compiler::hir::expr::Expr>,
+    ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
+        let plan = match self.capabilities {
+            Capabilities::ProvisionalConstants => None,
+            Capabilities::Checked { plan, .. } => Some(plan),
+        };
+        if self.unavailable.is_none_or(HashMap::is_empty)
+            && plan.is_none_or(|plan| !plan.has_unfinished_definitions)
+        {
+            return Ok(None);
+        }
+        let expressions = expressions.into_iter().collect::<Vec<_>>();
+        let mut dependencies = expressions
+            .iter()
+            .flat_map(|expression| {
+                graphcal_compiler::hir::expr::collect_expr_dependencies(expression).graph_refs
+            })
+            .map(|identity| {
+                crate::decl_key::RuntimeDeclKey::resolved(
+                    self.current_dag.runtime_decl_identity(&identity),
+                )
+            })
+            .filter_map(|key| {
+                self.unavailable
+                    .and_then(|unavailable| unavailable.get(&key))
+                    .map(|reason| (key.as_resolved().clone(), reason.clone()))
+            })
+            .collect::<Vec<_>>();
+        if let Some(plan) = plan {
+            for expression in expressions {
+                dependencies.extend(crate::static_incompleteness::collect(
+                    expression,
+                    self.tir,
+                    plan,
+                    self.src,
+                    &self.cancellation,
+                )?);
+            }
+        }
+        Ok(
+            graphcal_compiler::node_unavailable::NodeUnavailable::blocked_by(
+                dependencies.iter().map(|(name, reason)| (name, reason)),
+            ),
+        )
+    }
+
+    pub fn check_dependencies(
+        &self,
+        expression: &graphcal_compiler::hir::expr::Expr,
+    ) -> Result<(), GraphcalError> {
+        self.unavailable_dependencies(std::iter::once(expression))?
+            .map_or(Ok(()), |reason| {
+                Err(GraphcalError::EvaluationUnavailable {
+                    reason,
+                    src: self.src.clone(),
+                    span: expression.span.into(),
+                })
+            })
     }
 
     #[must_use]

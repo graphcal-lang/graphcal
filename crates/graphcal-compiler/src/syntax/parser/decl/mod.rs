@@ -56,9 +56,8 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
         DeclKind::Import(d) => {
             d.visibility = visibility_without_bindability(visibility);
         }
-        DeclKind::Node(d) | DeclKind::ConstNode(d) => {
-            d.visibility = visibility_without_bindability(visibility);
-        }
+        DeclKind::Node(d) => d.visibility = visibility_without_bindability(visibility),
+        DeclKind::ConstNode(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::BaseDimension(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Dimension(d) => d.visibility = visibility,
         DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),

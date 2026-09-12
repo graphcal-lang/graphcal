@@ -151,8 +151,14 @@ fn contextual_completion_visits_each_owned_or_independent_root_once() {
     let types = tir.build_declared_types(&src).unwrap();
     let node = &tir.root().nodes[0];
     infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
-    let independent =
-        check_external_value_expr_type(&tir, &types, &node.expr, &types[&node.name], &src).unwrap();
+    let independent = check_external_value_expr_type(
+        &tir,
+        &types,
+        node.definition.formula().unwrap(),
+        &types[&node.name],
+        &src,
+    )
+    .unwrap();
     assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
     assert_eq!(count_contextual(&independent), 1);
 }
@@ -376,14 +382,19 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         "node result: Dimensionless = sum(for p: Fin(2) { 1.0 }) + sum(for q: Fin(3) { 1.0 });";
     let (mut tir, src) = module_aware_tir(source);
     let mut ids = Vec::new();
-    crate::hir::visit_expr(&tir.root().nodes()[0].expr, &mut |expr| {
-        if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
-            ids.push(expr.id().unwrap().clone());
-        }
-    });
+    crate::hir::visit_expr(
+        tir.root().nodes()[0].definition.formula().unwrap(),
+        &mut |expr| {
+            if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
+                ids.push(expr.id().unwrap().clone());
+            }
+        },
+    );
     assert_eq!(ids.len(), 2);
     tir.root_mut().nodes[0]
-        .expr
+        .definition
+        .formula_mut()
+        .unwrap()
         .map_spans_for_test(|_| Span::new(0, 1));
     check_dimensions_tir(&mut tir, &src).unwrap();
     let totals = |body: &crate::tir::typed::DagTIR| {
@@ -401,7 +412,9 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     };
     assert_eq!(totals(tir.root()), vec![2, 3]);
     tir.root_mut().nodes[0]
-        .expr
+        .definition
+        .formula_mut()
+        .unwrap()
         .map_spans_for_test(|_| Span::new(2, 3));
     check_dimensions_tir(&mut tir, &src).unwrap();
     assert_eq!(totals(tir.root()), vec![2, 3]);
@@ -417,7 +430,9 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
     tir.root_mut().nodes[0]
-        .expr
+        .definition
+        .formula_mut()
+        .unwrap()
         .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
             "not dimensionless".to_string(),
         ));
@@ -432,7 +447,9 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
     tir.root_mut().nodes[0]
-        .expr
+        .definition
+        .formula_mut()
+        .unwrap()
         .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
             "not indexed".to_string(),
         ));
@@ -1312,7 +1329,14 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
 #[test]
 fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
-    let expression = &tir.root().nodes().first().unwrap().expr;
+    let expression = &tir
+        .root()
+        .nodes()
+        .first()
+        .unwrap()
+        .definition
+        .formula()
+        .unwrap();
     assert!(matches!(
         expression.kind(),
         crate::hir::ExprKind::BinOp {

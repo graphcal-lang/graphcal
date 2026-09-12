@@ -200,6 +200,11 @@ pub fn compile_checked_with_cancellation(
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
     Ok(ExecPlan {
+        has_unfinished_definitions: tir.dag_registry().values().any(|dag| {
+            dag.nodes()
+                .iter()
+                .any(|node| node.definition.todo().is_some())
+        }),
         declaration_locations,
         root,
         callables,

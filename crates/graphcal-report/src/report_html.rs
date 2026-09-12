@@ -43,30 +43,63 @@ pub fn render_host_report_html(document: &ReportDocument) -> String {
     render_page(document, "", "")
 }
 
+fn push_unavailable_plot(body: &mut String, error: &crate::report_ir::CheckMessage) {
+    let name = html_escape(&error.name);
+    let message = html_escape(&error.message);
+    let class = if error.incomplete {
+        "notice"
+    } else {
+        "error-chip"
+    };
+    let _ = writeln!(
+        body,
+        "<figure class=\"plot\" data-figure=\"{name}\" tabindex=\"0\" aria-label=\"{name} plot\"><figcaption><span class=\"figure-name\">{name}</span></figcaption><div data-role=\"figure\"><p class=\"{class}\">Plot unavailable: {message}</p></div></figure>"
+    );
+}
+
+fn push_evaluation_notices(body: &mut String, document: &ReportDocument) {
+    if document.incomplete {
+        body.push_str("<p id=\"incomplete-notice\" class=\"notice\">Model incomplete: unfinished formulas remain.</p>\n");
+    }
+    if !document.call_notices.is_empty() {
+        body.push_str("<section id=\"call-notices\"><h2>DAG calls</h2>\n");
+        for notice in &document.call_notices {
+            let class = if notice.incomplete {
+                "notice"
+            } else {
+                "error-chip"
+            };
+            let _ = writeln!(
+                body,
+                "<p class=\"{class}\">{}: {}</p>",
+                html_escape(&notice.name),
+                html_escape(&notice.message)
+            );
+        }
+        body.push_str("</section>\n");
+    }
+}
+
 fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &str) -> String {
     let mut body = String::new();
     let title = html_escape(&document.title);
     let _ = writeln!(body, "<header><h1>{title}</h1></header>");
     push_section_navigation(&mut body, document);
-
-    if !document.params.is_empty() {
-        body.push_str(
-            "<section id=\"inputs\" tabindex=\"-1\">\n<h2>Inputs</h2>\n<div class=\"cards\">\n",
-        );
-        for card in &document.params {
-            push_value_card(&mut body, card);
+    push_evaluation_notices(&mut body, document);
+    for (id, title, cards) in [
+        ("inputs", "Inputs", &document.params),
+        ("values", "Values", &document.values),
+    ] {
+        if !cards.is_empty() {
+            let _ = writeln!(
+                body,
+                "<section id=\"{id}\" tabindex=\"-1\">\n<h2>{title}</h2>\n<div class=\"cards\">"
+            );
+            for card in cards {
+                push_value_card(&mut body, card);
+            }
+            body.push_str("</div>\n</section>\n");
         }
-        body.push_str("</div>\n</section>\n");
-    }
-
-    if !document.values.is_empty() {
-        body.push_str(
-            "<section id=\"values\" tabindex=\"-1\">\n<h2>Values</h2>\n<div class=\"cards\">\n",
-        );
-        for card in &document.values {
-            push_value_card(&mut body, card);
-        }
-        body.push_str("</div>\n</section>\n");
     }
 
     if !document.figures.is_empty() || !document.plot_errors.is_empty() {
@@ -75,12 +108,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
             "<noscript><p class=\"notice\">Charts require JavaScript; values and checks above are complete without it.</p></noscript>\n",
         );
         for error in &document.plot_errors {
-            let _ = writeln!(
-                body,
-                "<figure class=\"plot\" data-figure=\"{name}\" tabindex=\"0\" aria-label=\"{name} plot\"><figcaption><span class=\"figure-name\">{name}</span></figcaption><div data-role=\"figure\"><p class=\"error-chip\">Plot unavailable: {message}</p></div></figure>",
-                name = html_escape(&error.name),
-                message = html_escape(&error.message)
-            );
+            push_unavailable_plot(&mut body, error);
         }
         for (index, card) in document.figures.iter().enumerate() {
             let div_id = format!("graphcal-figure-{index}");
@@ -115,6 +143,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
                 CheckStatus::Pass => ("pass", "PASS"),
                 CheckStatus::Fail => ("fail", "FAIL"),
                 CheckStatus::Error => ("error", "ERROR"),
+                CheckStatus::Blocked => ("blocked", "BLOCKED"),
             };
             let name = html_escape(&check.name);
             let _ = write!(
@@ -205,6 +234,13 @@ fn push_value_card(out: &mut String, card: &ValueCard) {
     }
     match &card.body {
         CardBody::Value(body) => push_value_body(out, body, &card.name),
+        CardBody::Incomplete { message } => {
+            let _ = writeln!(
+                out,
+                "<p class=\"notice\" data-role=\"value\">{}</p>",
+                html_escape(message)
+            );
+        }
         CardBody::Error { message } => {
             let _ = writeln!(
                 out,

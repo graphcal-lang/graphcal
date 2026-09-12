@@ -16,6 +16,7 @@ use crate::execution_facts::CheckedExecutionFacts;
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
 pub struct ExecPlan {
+    pub(crate) has_unfinished_definitions: bool,
     /// Physical bodies selected from completed declaration indexes at preparation.
     pub(crate) declaration_locations: DeclarationLocations,
     pub(crate) root: CallablePlan,

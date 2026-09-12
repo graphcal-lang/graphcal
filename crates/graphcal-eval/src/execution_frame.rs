@@ -2,7 +2,7 @@
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::check_domain_constraint;
-use crate::eval::types::NodeError;
+use crate::eval::types::NodeUnavailable;
 use crate::execution_facts::RuntimeValueMap;
 use crate::execution_plan::{CallablePlan, ExecPlan};
 use crate::execution_scope::CheckedExecutionScope;
@@ -37,7 +37,7 @@ pub struct ExecutionFrame<'a> {
     policy: FailurePolicy,
     pub values: RuntimeValueMap,
     pub presentations: PresentationInstanceMap,
-    pub errors: HashMap<RuntimeDeclKey, NodeError>,
+    pub errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
 }
 
 pub struct ScheduledDeclaration<'a> {
@@ -46,11 +46,23 @@ pub struct ScheduledDeclaration<'a> {
     pub expression: &'a graphcal_compiler::hir::expr::Expr,
 }
 
-pub fn eval_failed_node_error(error: &GraphcalError) -> NodeError {
-    NodeError::EvalFailed {
-        message: match error {
-            GraphcalError::EvalError { message, .. } => message.clone(),
-            other => other.to_string(),
+pub fn eval_failed_node_error(error: &GraphcalError) -> NodeUnavailable {
+    match error {
+        GraphcalError::EvaluationUnavailable {
+            reason: NodeUnavailable::Todo { declaration },
+            ..
+        } => NodeUnavailable::Blocked {
+            unfinished: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
+                declaration.clone(),
+            ),
+            failed_deps: Vec::new(),
+        },
+        GraphcalError::EvaluationUnavailable { reason, .. } => reason.clone(),
+        GraphcalError::EvalError { message, .. } => NodeUnavailable::EvalFailed {
+            message: message.clone(),
+        },
+        other => NodeUnavailable::EvalFailed {
+            message: other.to_string(),
         },
     }
 }
@@ -90,11 +102,18 @@ impl<'a> ExecutionFrame<'a> {
         })
     }
 
+    pub fn unfinished_origins(
+        &self,
+    ) -> impl Iterator<Item = &graphcal_compiler::syntax::decl_name::ResolvedDeclName> {
+        self.errors.values().flat_map(NodeUnavailable::unfinished)
+    }
+
     fn failure(&mut self, key: &RuntimeDeclKey, error: GraphcalError) -> Result<(), GraphcalError> {
+        let only_incomplete = matches!(&error, GraphcalError::EvaluationUnavailable { reason, .. } if !reason.has_failure());
         match (&error, self.policy) {
-            (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_), _)
-            | (_, FailurePolicy::Propagate) => Err(error),
-            (_, FailurePolicy::Contain) => {
+            (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_), _) => Err(error),
+            (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
+            _ => {
                 self.errors
                     .insert(key.clone(), eval_failed_node_error(&error));
                 Ok(())
@@ -157,18 +176,23 @@ impl<'a> ExecutionFrame<'a> {
                     "scheduled declaration `{key}` has no prepared dependencies"
                 ))
             })?;
-            let failed_deps = dependencies
-                .iter()
-                .filter(|dependency| self.errors.contains_key(*dependency))
-                .map(|dependency| {
-                    graphcal_compiler::syntax::decl_name::DeclName::from_atom(
-                        dependency.as_resolved().atom().clone(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            if !failed_deps.is_empty() {
-                self.errors
-                    .insert(key.clone(), NodeError::DependencyFailed { failed_deps });
+            if scope.dag().todo(key.as_resolved()).is_some() {
+                self.errors.insert(
+                    key.clone(),
+                    NodeUnavailable::Todo {
+                        declaration: key.as_resolved().clone(),
+                    },
+                );
+                continue;
+            }
+            if let Some(reason) =
+                NodeUnavailable::blocked_by(dependencies.iter().filter_map(|dependency| {
+                    self.errors
+                        .get(dependency)
+                        .map(|reason| (dependency.as_resolved(), reason))
+                }))
+            {
+                self.errors.insert(key.clone(), reason);
                 continue;
             }
             let expression = scope

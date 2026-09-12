@@ -1,7 +1,7 @@
 //! Tests for error rendering snapshots.
 #![cfg(test)]
 
-use graphcal_eval::eval::{NodeError, compile_and_eval_named};
+use graphcal_eval::eval::{NodeUnavailable, compile_and_eval_named};
 use miette::{Diagnostic, NarratableReportHandler};
 
 /// Compile the given source and return the rendered error string.
@@ -26,7 +26,7 @@ fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
         .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
     match node_result {
-        Err(NodeError::EvalFailed { message }) => message.clone(),
+        Err(NodeUnavailable::EvalFailed { message }) => message.clone(),
         Err(other) => panic!("expected EvalFailed, got {other}"),
         Ok(val) => panic!("expected error for `{node_name}`, got {val:?}"),
     }
@@ -1443,7 +1443,7 @@ fn error_extern_fn_failure_dependents_report_dependency_failed() {
         .find(|(n, _, _)| n.to_string() == "downstream")
         .unwrap();
     match downstream {
-        Err(NodeError::DependencyFailed { failed_deps }) => {
+        Err(NodeUnavailable::DependencyFailed { failed_deps }) => {
             assert_eq!(failed_deps.len(), 1);
             assert_eq!(failed_deps[0].as_str(), "bad");
         }

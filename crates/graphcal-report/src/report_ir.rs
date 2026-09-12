@@ -16,6 +16,8 @@ use crate::vega::{RenderedFigure, UnknownPlotReference, build_figures};
 
 /// One complete auto-report at baseline values.
 pub struct ReportDocument {
+    pub(crate) incomplete: bool,
+    pub(crate) call_notices: Vec<CheckMessage>,
     /// Page title (normally the entry model name).
     pub(crate) title: String,
     /// Entry parameters in declaration order.
@@ -45,6 +47,9 @@ pub struct ValueCard {
 /// Display body of one card.
 pub enum CardBody {
     Value(ValueBody),
+    Incomplete {
+        message: String,
+    },
     /// The declaration failed to evaluate (or its display projection failed);
     /// per-node fault isolation keeps the rest of the report intact.
     Error {
@@ -70,6 +75,7 @@ pub struct CheckRow {
 /// Assertion outcome family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckStatus {
+    Blocked,
     Pass,
     Fail,
     Error,
@@ -77,6 +83,7 @@ pub enum CheckStatus {
 
 /// A named non-fatal message (currently: plot evaluation failures).
 pub struct CheckMessage {
+    pub(crate) incomplete: bool,
     pub(crate) name: String,
     pub(crate) message: String,
 }
@@ -154,6 +161,9 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
                     message: error.to_string(),
                 },
             },
+            Err(reason) if !reason.has_failure() => CardBody::Incomplete {
+                message: reason.to_string(),
+            },
             Err(error) => CardBody::Error {
                 message: error.to_string(),
             },
@@ -185,8 +195,9 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
         .plot_errors
         .iter()
         .map(|error| CheckMessage {
+            incomplete: !error.reason.has_failure(),
             name: error.name.to_string(),
-            message: error.message.clone(),
+            message: error.reason.to_string(),
         })
         .collect();
 
@@ -203,6 +214,9 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
                 });
             let (status, message) = match outcome {
                 AssertResult::Pass => (CheckStatus::Pass, None),
+                AssertResult::Blocked { reason } => {
+                    (CheckStatus::Blocked, Some(reason.to_string()))
+                }
                 AssertResult::Fail { message } => (CheckStatus::Fail, Some(message.clone())),
                 AssertResult::Error { message } => (CheckStatus::Error, Some(message.clone())),
             };
@@ -216,6 +230,16 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
         .collect();
 
     Ok(ReportDocument {
+        incomplete: result.is_incomplete(),
+        call_notices: result
+            .unfinished_calls
+            .iter()
+            .map(|name| CheckMessage {
+                name: name.to_string(),
+                message: "TODO: unfinished formula in an invoked DAG".to_string(),
+                incomplete: true,
+            })
+            .collect(),
         title: inputs.title.to_string(),
         params,
         values,

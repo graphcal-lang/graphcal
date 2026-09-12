@@ -14,6 +14,16 @@ use crate::value_display::{GridTable, ValueBody};
 pub fn render_report_markdown(document: &ReportDocument) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {}", document.title);
+    if document.incomplete {
+        out.push_str("\n> Model incomplete: unfinished formulas remain.\n");
+    }
+
+    if !document.call_notices.is_empty() {
+        out.push_str("\n## DAG calls\n\n");
+        for notice in &document.call_notices {
+            let _ = writeln!(out, "- `{}`: {}", notice.name, notice.message);
+        }
+    }
 
     if !document.params.is_empty() {
         out.push_str("\n## Inputs\n\n");
@@ -42,7 +52,12 @@ pub fn render_report_markdown(document: &ReportDocument) -> String {
             }
         }
         for error in &document.plot_errors {
-            let _ = writeln!(out, "- `{}` — ERROR: {}", error.name, error.message);
+            let status = if error.incomplete {
+                "INCOMPLETE"
+            } else {
+                "ERROR"
+            };
+            let _ = writeln!(out, "- `{}` — {status}: {}", error.name, error.message);
         }
     }
 
@@ -60,6 +75,7 @@ pub fn render_report_markdown(document: &ReportDocument) -> String {
                 CheckStatus::Pass => "PASS",
                 CheckStatus::Fail => "FAIL",
                 CheckStatus::Error => "ERROR",
+                CheckStatus::Blocked => "BLOCKED",
             };
             let _ = write!(out, "- {label} `{}`", check.name);
             if let Some(message) = &check.message {
@@ -111,6 +127,10 @@ fn push_card(out: &mut String, card: &ValueCard) {
                 let _ = writeln!(out, "\n    [{label}]\n");
                 push_grid(out, grid);
             }
+        }
+        CardBody::Incomplete { message } => {
+            let _ = write!(out, "- `{}` = {message}", card.name);
+            push_doc_suffix(out, card);
         }
         CardBody::Error { message } => {
             let _ = write!(out, "- `{}` = ERROR: {message}", card.name);

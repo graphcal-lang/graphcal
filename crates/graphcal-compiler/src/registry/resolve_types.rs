@@ -197,7 +197,7 @@ pub struct CollectedParamEntry {
 #[derive(Debug)]
 pub struct CollectedNodeEntry {
     pub(crate) name: DeclName,
-    pub(crate) expr: Expr,
+    pub(crate) definition: crate::node_definition::NodeDefinition<Expr, ScopedName>,
     pub(crate) span: Span,
 }
 

@@ -654,7 +654,7 @@ node bad_record: QuantityResult = test::non_finite_record();
             ("bad_record", "field `value`"),
         ] {
             let error = outcome(name).expect_err("invalid ABI result should fail");
-            let crate::eval::NodeError::EvalFailed { message } = error else {
+            let crate::eval::NodeUnavailable::EvalFailed { message } = error else {
                 panic!("expected EvalFailed, got {error:?}");
             };
             assert!(message.contains(expected), "{message}");
@@ -699,7 +699,7 @@ node invalid_record: IntResult = test::fractional_record();
                 .1
                 .as_ref()
                 .expect_err("fractional Int result should fail");
-            let crate::eval::NodeError::EvalFailed { message } = error else {
+            let crate::eval::NodeUnavailable::EvalFailed { message } = error else {
                 panic!("expected EvalFailed, got {error:?}");
             };
             assert!(message.contains("is not integer-valued"), "{message}");

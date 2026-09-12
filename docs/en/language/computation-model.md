@@ -79,6 +79,24 @@ node total_mass: Dimensionless = @dry_mass + @fuel_mass;
 
 Nodes are computed values. Their expressions can reference parameters, other nodes, and constants. Graphcal evaluates nodes in topological order determined by the dependency graph.
 
+#### Unfinished nodes
+
+To design a dependency graph before writing its formulas, give an entire node a `todo` definition:
+
+```
+param isp: Time = 320.0 s;
+const node g0: Acceleration = 9.80665 m/s^2;
+node v_exhaust: Velocity = todo { @isp, @g0 };
+node mass_ratio: Dimensionless = 3.0;
+node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
+```
+
+The type is mandatory. The braces list **all possible direct dependencies** while the node is unfinished; transitive dependencies need not be listed. An explicitly empty interface is `todo {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
+
+Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. Blocking follows the static dependency graph, including references in unselected branches. These outcomes are not values, `null`, or evaluation errors. `todo` is a whole-node definition, not a function or an expression hole.
+
+Replace `todo { … }` with a formula to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given. That flag never suppresses genuine evaluation or assertion failures.
+
 ### Constants
 
 ```

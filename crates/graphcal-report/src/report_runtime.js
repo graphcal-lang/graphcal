@@ -760,12 +760,13 @@
       if (declaration.outcome.status === "value") {
         replacement = renderView(declaration.outcome.body, declaration.name);
       } else {
-        var error = declaration.outcome.error;
+        var incomplete = declaration.outcome.status === "incomplete";
+        var error = incomplete ? declaration.outcome.reason : declaration.outcome.error;
         var message =
           error.kind === "dependency_failed"
             ? "dependency failed: " + error.failed_dependencies.join(", ")
             : error.message;
-        replacement = element("p", "error-chip", "ERROR: " + message);
+        replacement = element("p", incomplete ? "notice" : "error-chip", (incomplete ? "" : "ERROR: ") + message);
         replacement.setAttribute("data-role", "value");
       }
       if (slot.classList.contains("value-scroll") && replacement.classList.contains("value-scroll")) {
@@ -814,13 +815,36 @@
     }
   }
 
+  function patchEvaluationNotices(evaluation) {
+    var banner = document.getElementById("incomplete-notice");
+    if (!banner && evaluation.incomplete) {
+      banner = element("p", "notice", "Model incomplete: unfinished formulas remain.");
+      banner.id = "incomplete-notice";
+      document.querySelector("main").appendChild(banner);
+    }
+    if (banner) banner.hidden = !evaluation.incomplete;
+    var notices = evaluation.notices.filter(function (notice) { return notice.kind === "call_incomplete"; });
+    var section = document.getElementById("call-notices");
+    if (!section && notices.length === 0) return;
+    if (!section) {
+      section = element("section");
+      section.id = "call-notices";
+      document.querySelector("main").appendChild(section);
+    }
+    section.hidden = notices.length === 0;
+    section.replaceChildren(element("h2", "", "DAG calls"));
+    notices.forEach(function (notice) {
+      section.appendChild(element("p", "notice", notice.name + ": " + notice.message));
+    });
+  }
+
   var figureStates = new Map();
 
   function patchFigures(evaluation) {
     var specs = new Map(evaluation.figures.map(function (figure) { return [figure.name, figure.spec]; }));
     var failures = new Map(evaluation.notices.filter(function (notice) {
-      return notice.kind === "plot_error";
-    }).map(function (notice) { return [notice.name, notice.message]; }));
+      return notice.kind === "plot_error" || notice.kind === "plot_incomplete";
+    }).map(function (notice) { return [notice.name, { message: notice.message, incomplete: notice.kind === "plot_incomplete" }]; }));
     var targets = new Map(Array.from(document.querySelectorAll("figure[data-figure]")).map(function (target) {
       return [target.getAttribute("data-figure"), target];
     }));
@@ -852,12 +876,13 @@
       target.replaceChildren(caption, mount);
       var state = { view: null };
       figureStates.set(name, state);
-      function fail(message) {
+      function fail(message, incomplete) {
         if (figureStates.get(name) !== state) return;
-        mount.replaceChildren(element("p", "error-chip", "Plot unavailable: " + message));
+        mount.replaceChildren(element("p", incomplete ? "notice" : "error-chip", "Plot unavailable: " + message));
       }
       if (failures.has(name) || !specs.has(name)) {
-        fail(failures.get(name) || "not present in the current evaluation");
+        var failure = failures.get(name);
+        fail(failure ? failure.message : "not present in the current evaluation", failure && failure.incomplete);
         return;
       }
       if (typeof window.vegaEmbed !== "function") {
@@ -922,6 +947,7 @@
       patchParamControls(outcome.evaluation);
       patchChecks(outcome.evaluation);
       patchFigures(outcome.evaluation);
+      patchEvaluationNotices(outcome.evaluation);
       patchNotices(outcome.evaluation);
       if (outcome.html) {
         var provenance = new DOMParser().parseFromString(outcome.html, "text/html").getElementById("provenance");
@@ -930,8 +956,8 @@
       }
       patchSectionNavigation();
       setStatus(
-        outcome.evaluation.has_errors ? "live · evaluation has errors" : "live",
-        outcome.evaluation.has_errors ? "warn" : "ok",
+        outcome.evaluation.has_errors ? "live · evaluation has errors" : outcome.evaluation.incomplete ? "live · model incomplete" : "live",
+        outcome.evaluation.has_errors || outcome.evaluation.incomplete ? "warn" : "ok",
       );
     } else if (outcome.status === "binding_errors") {
       controls.forEach(function (control) { control.rejectPending(completedRequest); });

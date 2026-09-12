@@ -71,7 +71,8 @@ pub fn decl_is_explicit_export(decl: &Declaration) -> bool {
         | DeclKind::Import(_)
         | DeclKind::Include(_)
         | DeclKind::PluginImport(_) => false,
-        DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
+        DeclKind::Node(d) => d.visibility.is_public(),
+        DeclKind::ConstNode(d) => d.visibility.is_public(),
         DeclKind::BaseDimension(d) => d.visibility.is_public(),
         DeclKind::Dimension(d) => d.visibility.is_public(),
         DeclKind::Unit(d) => d.visibility.is_public(),

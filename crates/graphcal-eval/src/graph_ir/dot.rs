@@ -492,6 +492,11 @@ fn node_attrs(
         .type_label
         .as_ref()
         .map_or_else(|| name.clone(), |ty| format!("{name}\\n{}", escape(ty)));
+    let label = if node.is_unfinished {
+        format!("{label}\\nTODO")
+    } else {
+        label
+    };
     let mut attrs = match node.kind {
         GraphNodeKind::Const => format!("label=\"{label}\", shape=box, style=rounded"),
         GraphNodeKind::Param => format!("label=\"{label}\", shape=ellipse"),
@@ -500,6 +505,9 @@ fn node_attrs(
             format!("label=\"{label}\", shape=box, style=dashed")
         }
     };
+    if node.is_unfinished {
+        attrs.push_str(", style=dashed");
+    }
     if emphasize_output && node.is_public_output {
         attrs.push_str(", peripheries=2, color=\"#2E7D32\", penwidth=2");
     }
@@ -717,12 +725,14 @@ mod tests {
                     id: id(&root_id, "input"),
                     kind: GraphNodeKind::Param,
                     is_public_output: false,
+                    is_unfinished: false,
                     type_label: Some("Real".into()),
                 },
                 GraphNode {
                     id: id(&child_id, "output"),
                     kind: GraphNodeKind::Node,
                     is_public_output: true,
+                    is_unfinished: false,
                     type_label: Some("Real".into()),
                 },
             ],
@@ -750,6 +760,7 @@ mod tests {
                 id: id(&external_id, "source"),
                 kind: GraphNodeKind::External,
                 is_public_output: false,
+                is_unfinished: false,
                 type_label: None,
             }],
             edges: vec![GraphEdge {
@@ -826,6 +837,7 @@ mod tests {
                 id: id(&owner, "value"),
                 kind: GraphNodeKind::External,
                 is_public_output: false,
+                is_unfinished: false,
                 type_label: None,
             })
             .collect::<Vec<_>>();

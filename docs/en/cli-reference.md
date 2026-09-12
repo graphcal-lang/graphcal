@@ -240,6 +240,7 @@ graphcal eval [OPTIONS] <FILE>
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--output-view <VIEW>` | Values to display: `surface` (default) or `all` |
+| `--allow-incomplete` | Permit TODO/BLOCKED results without a failing exit code; genuine errors and assertion failures still fail |
 | `--param <NAME=VALUE>` | Bind one param to a closed Graphcal value (repeatable) |
 | `--params-json <JSON>` | Bind params from an inline JSON object |
 | `--params-json-file <FILE>` | Bind params from a JSON file; `-` reads stdin |
@@ -847,8 +848,10 @@ graphcal format --check
 Check `.gcl` files without runtime evaluation. This performs parsing, module and name resolution, type/dimension/policy validation, compile-time constant checks, and extern-signature verification. It does not evaluate ordinary nodes, assertions, dynamic unit scales, or callable host functions.
 
 ```bash
-graphcal check [PATHS]...
+graphcal check [OPTIONS] [PATHS]...
 ```
+
+Otherwise-valid [unfinished nodes](language/computation-model.md#unfinished-nodes) are summarized without making the check fail. Use `--deny-todo` to require complete formulas, including in unused DAG definitions. This is still a static check, not runtime domain validation.
 
 **Arguments:**
 
@@ -874,7 +877,7 @@ graphcal check my_project/
 | Code | Meaning |
 |------|---------|
 | `0` | No errors found and every requested directory was inspected completely |
-| `1` | Source errors detected |
+| `1` | Source errors detected, or unfinished formulas rejected by `--deny-todo` |
 | `2` | One or more requested directories could not be traversed completely |
 
 ---

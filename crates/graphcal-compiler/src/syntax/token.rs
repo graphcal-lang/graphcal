@@ -74,6 +74,8 @@ pub(crate) enum LexicalToken {
     Figure,
     #[token("layer")]
     Layer,
+    #[token("todo")]
+    Todo,
     #[token("scan")]
     Scan,
     #[token("unfold")]
@@ -233,6 +235,7 @@ impl LexicalToken {
             Self::Plot => LexicalItem::Syntax(Token::Plot),
             Self::Figure => LexicalItem::Syntax(Token::Figure),
             Self::Layer => LexicalItem::Syntax(Token::Layer),
+            Self::Todo => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Todo)),
             Self::Scan => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Scan)),
             Self::Unfold => {
                 LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Unfold))
@@ -310,6 +313,7 @@ impl LexicalToken {
 /// otherwise unrelated token variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextualKeyword {
+    Todo,
     Scan,
     Unfold,
     Range,
@@ -329,6 +333,7 @@ impl ContextualKeyword {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Todo => "todo",
             Self::Scan => "scan",
             Self::Unfold => "unfold",
             Self::Range => "range",

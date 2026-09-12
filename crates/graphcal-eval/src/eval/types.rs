@@ -737,32 +737,7 @@ fn epoch_to_jiff_timestamp(
     jiff::Timestamp::new(seconds, nanoseconds).map_err(Into::into)
 }
 
-/// A runtime error associated with a specific node or param evaluation.
-#[derive(Debug, Clone, PartialEq)]
-pub enum NodeError {
-    /// The expression evaluation failed directly (e.g., division by zero).
-    EvalFailed {
-        /// Human-readable error message.
-        message: String,
-    },
-    /// Could not evaluate because one or more dependencies failed.
-    DependencyFailed {
-        /// Names of the dependencies that failed.
-        failed_deps: Vec<DeclName>,
-    },
-}
-
-impl std::fmt::Display for NodeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EvalFailed { message } => write!(f, "{message}"),
-            Self::DependencyFailed { failed_deps } => {
-                let names: Vec<&str> = failed_deps.iter().map(DeclName::as_str).collect();
-                write!(f, "dependency failed: {}", names.join(", "))
-            }
-        }
-    }
-}
+pub use graphcal_compiler::node_unavailable::NodeUnavailable;
 
 /// A plot declaration that could not be evaluated, with the reason.
 ///
@@ -773,13 +748,15 @@ impl std::fmt::Display for NodeError {
 pub struct PlotError {
     /// The plot declaration name.
     pub name: ScopedName,
-    /// Human-readable reason the plot was not rendered.
-    pub message: String,
+    /// Typed reason the plot was not rendered, including incompleteness.
+    pub reason: NodeUnavailable,
 }
 
 /// The result of evaluating an assertion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssertResult {
+    /// The assertion is not yet checkable, never an expected failure or pass.
+    Blocked { reason: NodeUnavailable },
     /// The assertion passed (body evaluated to `true`).
     Pass,
     /// The assertion failed (body evaluated to `false`).
@@ -817,16 +794,19 @@ pub enum EvalOutputView {
 /// same dag never collapse onto one key (#813).
 #[derive(Debug)]
 pub struct EvalResult {
+    /// Unfinished origins reached inside invoked DAGs, including private
+    /// siblings of otherwise available projected outputs.
+    pub unfinished_calls: Vec<graphcal_compiler::syntax::decl_name::ResolvedDeclName>,
     /// Const values in source order. Const *values* are compile-time, but a
     /// const's display unit (e.g. a dynamic conversion target) resolves at
     /// runtime and can fail per-node.
-    pub consts: Vec<(ScopedName, Result<Value, NodeError>)>,
+    pub consts: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
     /// Param values in source order (may contain per-node errors).
-    pub params: Vec<(ScopedName, Result<Value, NodeError>)>,
+    pub params: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
     /// Node values in source order (may contain per-node errors).
-    pub nodes: Vec<(ScopedName, Result<Value, NodeError>)>,
+    pub nodes: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
     /// All values in source order with their declaration type.
-    pub all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    pub all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
     ///
     /// Internal include-instance values remain in [`Self::all`] for the
@@ -858,7 +838,7 @@ impl EvalResult {
     fn should_output(
         &self,
         name: &ScopedName,
-        result: &Result<Value, NodeError>,
+        result: &Result<Value, NodeUnavailable>,
         view: EvalOutputView,
     ) -> bool {
         matches!(view, EvalOutputView::All)
@@ -874,7 +854,7 @@ impl EvalResult {
     pub fn output_values(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>, DeclType)> {
+    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeUnavailable>, DeclType)> {
         self.all
             .iter()
             .filter(move |(name, result, _)| self.should_output(name, result, view))
@@ -884,7 +864,7 @@ impl EvalResult {
         &self,
         view: EvalOutputView,
         decl_type: DeclType,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
         self.all.iter().filter_map(move |(name, result, kind)| {
             (*kind == decl_type && self.should_output(name, result, view)).then_some((name, result))
         })
@@ -894,7 +874,7 @@ impl EvalResult {
     pub fn output_consts(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
         self.output_category(view, DeclType::Const)
     }
 
@@ -902,7 +882,7 @@ impl EvalResult {
     pub fn output_params(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
         self.output_category(view, DeclType::Param)
     }
 
@@ -910,18 +890,43 @@ impl EvalResult {
     pub fn output_nodes(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeError>)> {
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
         self.output_category(view, DeclType::Node)
     }
 
-    /// Returns `true` if any const/param/node/plot evaluation failed or any assertion failed.
+    /// Whether a node, assertion, plot, or invoked DAG remains incomplete.
+    #[must_use]
+    pub fn is_incomplete(&self) -> bool {
+        !self.unfinished_calls.is_empty()
+            || self
+                .plot_errors
+                .iter()
+                .any(|plot| plot.reason.is_incomplete())
+            || self
+                .all
+                .iter()
+                .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::is_incomplete))
+            || self
+                .assertions
+                .iter()
+                .any(|(_, result, _)| matches!(result, AssertResult::Blocked { .. }))
+    }
+
+    /// Whether a genuine failure occurred, independently of incompleteness.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.all.iter().any(|(_, result, _)| result.is_err())
-            || !self.plot_errors.is_empty()
+        self.all
+            .iter()
+            .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::has_failure))
+            || self
+                .plot_errors
+                .iter()
+                .any(|plot| plot.reason.has_failure())
             || !self.presentation_diagnostics.is_empty()
-            || self.assertions.iter().any(|(_, r, _)| {
-                matches!(r, AssertResult::Fail { .. } | AssertResult::Error { .. })
+            || self.assertions.iter().any(|(_, r, _)| match r {
+                AssertResult::Fail { .. } | AssertResult::Error { .. } => true,
+                AssertResult::Blocked { reason } => reason.has_failure(),
+                AssertResult::Pass => false,
             })
     }
 }
@@ -1105,6 +1110,7 @@ mod tests {
 
     fn empty_eval_result() -> EvalResult {
         EvalResult {
+            unfinished_calls: Vec::new(),
             consts: Vec::new(),
             params: Vec::new(),
             nodes: Vec::new(),
@@ -1150,7 +1156,9 @@ mod tests {
         let mut result = empty_eval_result();
         result.plot_errors.push(PlotError {
             name: ScopedName::parse("p").unwrap(),
-            message: "bad plot".to_string(),
+            reason: NodeUnavailable::EvalFailed {
+                message: "bad plot".to_string(),
+            },
         });
 
         assert!(result.has_errors());

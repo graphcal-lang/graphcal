@@ -43,6 +43,23 @@ plot dv_plot = {
 ";
 
 #[test]
+fn unfinished_reports_are_explicitly_incomplete_not_errors() {
+    let document = build_document(
+        "node missing: Length = todo {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;",
+    );
+    for rendered in [
+        render_report_html(&document, VegaScriptSource::Inline, None),
+        render_report_markdown(&document),
+    ] {
+        assert!(rendered.contains("Model incomplete"));
+        assert!(rendered.contains("TODO"));
+        assert!(rendered.contains("BLOCKED"));
+        assert!(rendered.contains("known"));
+        assert!(!rendered.contains("ERROR:"));
+    }
+}
+
+#[test]
 fn static_reports_keep_si_and_separate_presentation_notices() {
     let document = build_document(
         "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",

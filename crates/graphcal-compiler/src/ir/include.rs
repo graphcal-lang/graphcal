@@ -480,11 +480,27 @@ impl UnfrozenIR {
                         &entry.type_resolution_owner,
                         entry.type_src.resolve(src),
                     )?,
-                    expr: lower_in(
-                        &entry.expr,
-                        &entry.body_resolution_owner,
-                        entry.body_src.resolve(src),
-                    )?,
+                    definition: {
+                        let context = crate::hir::ExprLoweringContext::new(
+                            &entry.body_resolution_owner,
+                            resolver,
+                            &generic_scope,
+                            &registry.time_zones,
+                        )
+                        .with_prelude(&prelude)
+                        .with_unit_registry(&registry.units)
+                        .with_unit_bindings(&self.unit_bindings)
+                        .with_decl_bindings(&decl_bindings)
+                        .with_instance_templates(&instance_templates);
+                        super::node_definition::lower(&entry.definition, context).map_err(
+                            |error| {
+                                crate::hir::expr_lower_error_to_graphcal(
+                                    &error,
+                                    entry.body_src.resolve(src),
+                                )
+                            },
+                        )?
+                    },
                     span: entry.span,
                     type_src: entry.type_src.clone(),
                     body_src: entry.body_src.clone(),
@@ -735,7 +751,7 @@ impl UnfrozenIR {
             declaration_owner: body_resolution_owner.clone(),
             type_ann,
             type_resolution_owner,
-            expr,
+            definition: crate::node_definition::NodeDefinition::Formula(expr),
             body_resolution_owner,
             span,
             // Alias declarations and bodies are synthesized from the

@@ -269,7 +269,12 @@ impl PreparedProject {
 
         let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let EvalLoopResult { values, errors, .. } = run_eval_loop_with_bindings(
+        let EvalLoopResult {
+            values,
+            errors,
+            unfinished_calls,
+            ..
+        } = run_eval_loop_with_bindings(
             &self.plan,
             &row.bindings,
             &self.tir,
@@ -301,7 +306,9 @@ impl PreparedProject {
             cancellation,
         )
         .map_err(CompileError::from)?
-        .with_roots(&values, None);
+        .with_roots(&values, None)
+        .with_unavailable(&errors)
+        .with_unfinished_calls(&unfinished_calls);
         for assertion in self.tir.root().asserts() {
             let owner = self
                 .tir
@@ -324,21 +331,42 @@ impl PreparedProject {
                     )
                 },
             );
-            match result {
-                AssertResult::Pass => {}
-                AssertResult::Fail { message } | AssertResult::Error { message } => {
-                    let name = remap_include_debug_name(
-                        &assertion.name,
-                        &self.output_assembly.include_debug_names,
-                    );
-                    return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                        message: format!("assertion `{name}`: {message}"),
-                    }));
-                }
-            }
+            let message = match result {
+                AssertResult::Pass => continue,
+                AssertResult::Blocked { reason } => reason.to_string(),
+                AssertResult::Fail { message } | AssertResult::Error { message } => message,
+            };
+            let name = remap_include_debug_name(
+                &assertion.name,
+                &self.output_assembly.include_debug_names,
+            );
+            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
+                message: format!("assertion `{name}`: {message}"),
+            }));
         }
 
-        let outputs = model
+        if !unfinished_calls.borrow().is_empty() {
+            let names = unfinished_calls
+                .borrow()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
+                message: format!("unfinished formulas in invoked DAGs: {names}"),
+            }));
+        }
+
+        self.project_model_outputs(model, &values)
+            .map(ModelRowOutcome::Success)
+    }
+
+    fn project_model_outputs(
+        &self,
+        model: &PreparedModel,
+        values: &crate::eval_expr::RuntimeValueMap,
+    ) -> Result<Vec<Value>, ModelExecutionError> {
+        model
             .outputs
             .iter()
             .map(|output| {
@@ -352,8 +380,7 @@ impl PreparedProject {
                     .project(&self.tir, &self.source)
                     .map_err(ModelExecutionError::from)
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ModelRowOutcome::Success(outputs))
+            .collect()
     }
 
     /// Evaluate one strict v2 row and enforce Boolean output representation.

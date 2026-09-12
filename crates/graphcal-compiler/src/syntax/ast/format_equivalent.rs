@@ -556,6 +556,29 @@ impl FormatEquivalent for ParamDecl {
     }
 }
 
+impl FormatEquivalent for crate::syntax::ast::NodeDecl {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        self.visibility.format_equivalent(&other.visibility)
+            && self.name.format_equivalent(&other.name)
+            && self.type_ann.format_equivalent(&other.type_ann)
+            && match (&self.definition, &other.definition) {
+                (
+                    crate::node_definition::NodeDefinition::Formula(left),
+                    crate::node_definition::NodeDefinition::Formula(right),
+                ) => left.format_equivalent(right),
+                (
+                    crate::node_definition::NodeDefinition::Todo(left),
+                    crate::node_definition::NodeDefinition::Todo(right),
+                ) => left
+                    .value
+                    .iter()
+                    .map(|reference| &reference.value)
+                    .eq(right.value.iter().map(|reference| &reference.value)),
+                _ => false,
+            }
+    }
+}
+
 impl FormatEquivalent for ValueDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {

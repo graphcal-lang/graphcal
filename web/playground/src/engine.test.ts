@@ -55,6 +55,22 @@ it.each(catalog)(
     ).toBe(true);
   },
 );
+it("preserves TODO, static blocking, and independent values through real Wasm", () => {
+  const source =
+    "node missing: Length = todo {}; node blocked: Length = if true { 1.0 m } else { @missing }; node known: Length = 2.0 m; assert pending = @missing > 0.0 m; plot pending_plot = { mark: point, encode: { y: @missing } };";
+  const result = outcomeSchema.parse(evaluate(evaluationRequest({ filename: "main.gcl", source })));
+  if (result.status !== "evaluated") throw new Error(JSON.stringify(result));
+  expect(result.evaluation.incomplete).toBe(true);
+  expect(result.evaluation.has_errors).toBe(false);
+  expect(result.evaluation.values.map((value) => value.outcome.status)).toEqual([
+    "incomplete",
+    "incomplete",
+    "value",
+  ]);
+  expect(result.evaluation.assertions[0]?.outcome.status).toBe("blocked");
+  expect(result.evaluation.notices[0]?.kind).toBe("plot_incomplete");
+});
+
 it("retains the shared report projection for multidimensional tables", async () => {
   const source = await readFile(
     new URL("../../../tests/fixtures/valid/table_literal.gcl", import.meta.url),

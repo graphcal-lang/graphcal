@@ -191,7 +191,7 @@ pub struct NodeEntry {
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: crate::hir::TypeAnnotation,
-    pub expr: crate::hir::CheckedExpr,
+    pub definition: crate::hir::node_definition::NodeDefinition,
     pub span: Span,
     /// Source of the type annotation and declaration span.
     pub(crate) type_src: BodySource,
@@ -266,7 +266,7 @@ pub struct UnfrozenNodeEntry {
     pub(super) type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
     pub(super) type_resolution_owner: crate::dag_id::DagId,
-    pub(super) expr: Expr,
+    pub(super) definition: crate::node_definition::NodeDefinition<Expr, ScopedName>,
     /// Module scope for the declaration body expression.
     pub(super) body_resolution_owner: crate::dag_id::DagId,
     pub(super) span: Span,
@@ -1014,7 +1014,7 @@ fn build_ir_from_resolved(
                 declaration_owner: dag_id.clone(),
                 type_ann,
                 type_resolution_owner: dag_id.clone(),
-                expr: entry.expr,
+                definition: entry.definition,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
                 type_src: BodySource::own(),

@@ -1328,11 +1328,13 @@ fn check_hir_body_policies(
             body_src,
             DiagnosticAnchor::Source(entry.span),
         )?;
-        HirPolicyChecker { ctx, src: body_src }.check_expr(
-            &entry.expr,
-            BodyPhase::Runtime,
-            local(&key),
-        )?;
+        entry.definition.formula().map_or(Ok(()), |expression| {
+            HirPolicyChecker { ctx, src: body_src }.check_expr(
+                expression,
+                BodyPhase::Runtime,
+                local(&key),
+            )
+        })?;
     }
     for entry in &dag.params {
         let Some(default) = &entry.default else {

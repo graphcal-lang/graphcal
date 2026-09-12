@@ -118,7 +118,11 @@ fn rewrite_decl_exprs(
                 rewrite(value);
             }
         }
-        DeclKind::Node(node) => rewrite(&mut node.value),
+        DeclKind::Node(node) => {
+            if let Some(expression) = node.definition.formula_mut() {
+                rewrite(expression);
+            }
+        }
         DeclKind::ConstNode(constant) => rewrite(&mut constant.value),
         DeclKind::Assert(assertion) => match &mut assertion.body {
             graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(expr) => rewrite(expr),

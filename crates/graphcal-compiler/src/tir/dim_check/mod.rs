@@ -385,6 +385,16 @@ fn check_decl_expr_type(
                 src: annotation_src.clone(),
                 span: (*type_ann_span).into(),
             })?;
+    let identity = body_ctx.dag.require_bound_decl_identity(
+        name,
+        body_ctx.src,
+        DiagnosticAnchor::Source(*type_ann_span),
+    )?;
+    if body_ctx.dag.todo(&identity).is_some() {
+        // The explicit declaration type is the entire contract; there is no
+        // formula to infer or expression fact to fabricate.
+        return Ok(());
+    }
     let hir_expr =
         body_ctx
             .hir_expr_for_decl(name)

@@ -2187,8 +2187,23 @@ impl DagTIR {
                 .default
                 .as_ref()
                 .map(|default| &*default.expr),
-            Some(ValueDeclarationSlot::Node(slot)) => Some(&*self.nodes[*slot].expr),
+            Some(ValueDeclarationSlot::Node(slot)) => {
+                self.nodes[*slot].definition.formula().map(|expr| &**expr)
+            }
             Some(ValueDeclarationSlot::Const(_)) | None => None,
+        }
+    }
+
+    /// Look up an unfinished node's canonical dependency interface.
+    #[must_use]
+    pub fn todo(
+        &self,
+        key: &ResolvedDeclName,
+    ) -> Option<&crate::syntax::span::Spanned<Vec<crate::syntax::span::Spanned<ResolvedDeclName>>>>
+    {
+        match self.declaration_index.values.get(key) {
+            Some(ValueDeclarationSlot::Node(slot)) => self.nodes[*slot].definition.todo(),
+            _ => None,
         }
     }
 
@@ -2272,7 +2287,11 @@ impl DagTIR {
                     .iter()
                     .filter_map(|entry| entry.default.as_ref().map(|default| &*default.expr)),
             )
-            .chain(self.nodes.iter().map(|entry| &*entry.expr))
+            .chain(
+                self.nodes
+                    .iter()
+                    .filter_map(|entry| entry.definition.formula().map(|expr| &**expr)),
+            )
             .chain(
                 self.semantic
                     .domain_bounds

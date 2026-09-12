@@ -32,7 +32,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 use thiserror::Error;
 
-use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
     CompileError, EvalOutputView, EvalResult, ProjectCompiler, format_number,
 };
@@ -64,15 +63,14 @@ const VERSION: &str = if env!("GIT_HASH").is_empty() {
     )
 };
 
-/// True when an assertion result represents a failure (a `Fail` outcome or
-/// a runtime `Error` while evaluating the assertion). Used to decide both
-/// stderr-vs-stdout routing in text output.
+/// Whether an assertion contains a genuine failure, for output routing.
 const fn is_assert_failure(r: &graphcal_eval::eval::AssertResult) -> bool {
-    matches!(
-        r,
-        graphcal_eval::eval::AssertResult::Fail { .. }
-            | graphcal_eval::eval::AssertResult::Error { .. }
-    )
+    use graphcal_eval::eval::AssertResult;
+    match r {
+        AssertResult::Fail { .. } | AssertResult::Error { .. } => true,
+        AssertResult::Blocked { reason } => reason.has_failure(),
+        AssertResult::Pass => false,
+    }
 }
 
 /// Print `prefix: {err}` to stderr and exit with the given non-zero code.
@@ -111,6 +109,9 @@ enum Commands {
         /// path ending in `.html` writes a self-contained HTML page to that file
         #[arg(long, value_name = "browser|json|FILE.html", value_parser = parse_plot_output)]
         plot: Option<PlotOutput>,
+        /// Permit unfinished results; genuine evaluation and assertion failures still fail
+        #[arg(long)]
+        allow_incomplete: bool,
     },
     /// Format .gcl files
     Format {
@@ -122,6 +123,9 @@ enum Commands {
     },
     /// Check .gcl files for type/dimension errors without evaluation
     Check {
+        /// Reject unfinished node definitions without evaluating runtime values
+        #[arg(long)]
+        deny_todo: bool,
         /// Files or directories to check (default: current directory)
         paths: Vec<PathBuf>,
         /// Project root directory (overrides automatic graphcal.toml detection)
@@ -342,8 +346,12 @@ fn main() {
 
 fn run_command(cli: Cli) {
     match cli.command {
-        Commands::Check { paths, root } => {
-            run_check(&paths, root.as_deref());
+        Commands::Check {
+            paths,
+            root,
+            deny_todo,
+        } => {
+            run_check(&paths, root.as_deref(), deny_todo);
         }
         Commands::Format { paths, check } => {
             run_format(&paths, check);
@@ -405,6 +413,7 @@ fn run_command(cli: Cli) {
             parameters,
             root,
             plot: plot_output,
+            allow_incomplete,
         } => {
             let overrides = match parse_overrides_with_sources(&parameters) {
                 Ok(overrides) => overrides,
@@ -417,6 +426,7 @@ fn run_command(cli: Cli) {
                 &overrides,
                 root.as_deref(),
                 plot_output.as_ref(),
+                allow_incomplete,
             );
         }
     }
@@ -651,6 +661,7 @@ fn handle_eval(
     overrides: &ParsedOverrides,
     root: Option<&Path>,
     plot_output: Option<&PlotOutput>,
+    allow_incomplete: bool,
 ) {
     // Rooted sandbox: derive the project root from the loader's rules and
     // confine reads to it. `root` (the user's explicit --root) takes
@@ -691,7 +702,7 @@ fn handle_eval(
             // Plot evaluation failures are reported even without `--plot`, so
             // a normal eval run cannot hide broken plot declarations.
             for err in &result.plot_errors {
-                eprintln!("error: plot `{}` not rendered: {}", err.name, err.message);
+                eprintln!("plot `{}` not rendered: {}", err.name, err.reason);
             }
 
             for diagnostic in &result.presentation_diagnostics {
@@ -704,7 +715,16 @@ fn handle_eval(
             let plot_output_failed =
                 plot_output.is_some_and(|plot_mode| handle_plot_output(&result, plot_mode));
 
-            if result.has_errors() || plot_output_failed {
+            if result.is_incomplete() {
+                eprintln!("model incomplete: unfinished formulas remain");
+            }
+            for name in &result.unfinished_calls {
+                eprintln!("TODO: {name} (unfinished formula in an invoked DAG)");
+            }
+            if result.has_errors()
+                || plot_output_failed
+                || (result.is_incomplete() && !allow_incomplete)
+            {
                 process::exit(1);
             }
         }
@@ -844,7 +864,7 @@ fn load_project_with_plugins<F: graphcal_io::FileSystemReader>(
     Ok((project, host_fns))
 }
 
-fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
+fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
     let (targets, traversal_failures) = resolve_target_files(paths).into_parts();
     if let Some(failures) = &traversal_failures {
         report_traversal_failures(failures);
@@ -863,8 +883,29 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
             })
         });
         match outcome {
-            Ok(_) => {
-                println!("ok: {}", file.display());
+            Ok(checked) => {
+                let todos = checked
+                    .tir()
+                    .dag_registry()
+                    .values()
+                    .filter(|dag| !dag.is_semantic_instance())
+                    .flat_map(graphcal_compiler::tir::typed::DagTIR::nodes)
+                    .filter(|node| node.definition.todo().is_some())
+                    .count();
+                if todos == 0 {
+                    println!("ok: {}", file.display());
+                } else if deny_todo {
+                    eprintln!(
+                        "error: {}: {todos} unfinished node(s); --deny-todo requires complete formulas",
+                        file.display()
+                    );
+                    error_count += 1;
+                } else {
+                    println!(
+                        "ok: {} (model incomplete: {todos} unfinished node(s))",
+                        file.display()
+                    );
+                }
             }
             Err(e) => {
                 eprintln!("{:?}", miette::Report::new(e));
@@ -1013,10 +1054,11 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
 
     // Build output blocks preserving source order. Names render their full
     // alias-qualified path so multiple instantiations stay distinct (#813).
-    let rendered_names: Vec<(String, &Result<Value, graphcal_eval::eval::NodeError>)> = result
-        .output_values(output_view)
-        .map(|(name, r, _)| (name.to_string(), r))
-        .collect();
+    let rendered_names: Vec<(String, &Result<Value, graphcal_eval::eval::NodeUnavailable>)> =
+        result
+            .output_values(output_view)
+            .map(|(name, r, _)| (name.to_string(), r))
+            .collect();
     let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
     let blocks = build_output_blocks(items);
     let max_name_len = max_flat_name_len(&blocks);
@@ -1028,6 +1070,9 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 let width = max_name_len;
                 for entry in entries {
                     match entry {
+                        display::FlatEntry::Error(name, reason) if !reason.has_failure() => {
+                            println!("{name:width$} = {reason}");
+                        }
                         display::FlatEntry::Error(name, err) => {
                             eprintln!("{name:width$} = ERROR: {err}");
                         }
@@ -1137,6 +1182,7 @@ fn format_assertion_line(
         AssertResult::Error { message } => {
             format!("  {name:w$}  ERROR ({message})")
         }
+        AssertResult::Blocked { reason } => format!("  {name:w$}  {reason}"),
     }
 }
 
@@ -1148,7 +1194,7 @@ fn print_json(
     result: &EvalResult,
     output_view: EvalOutputView,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use graphcal_eval::eval::{DisplayProjectionError, NodeError, Value};
+    use graphcal_eval::eval::{DisplayProjectionError, NodeUnavailable, Value};
 
     fn value_to_json(
         v: &Value,
@@ -1272,9 +1318,20 @@ fn print_json(
         }
     }
 
-    fn node_error_to_json(err: &NodeError) -> serde_json::Value {
+    fn node_error_to_json(err: &NodeUnavailable) -> serde_json::Value {
         match err {
-            NodeError::EvalFailed { message } => {
+            NodeUnavailable::Todo { declaration } => serde_json::json!({
+                "status": "todo", "declaration": declaration.to_string(),
+            }),
+            NodeUnavailable::Blocked {
+                unfinished,
+                failed_deps,
+            } => serde_json::json!({
+                "status": "blocked",
+                "unfinished": unfinished.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "failed_deps": failed_deps.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            }),
+            NodeUnavailable::EvalFailed { message } => {
                 serde_json::json!({
                     "error": {
                         "kind": "eval_failed",
@@ -1282,8 +1339,11 @@ fn print_json(
                     }
                 })
             }
-            NodeError::DependencyFailed { failed_deps } => {
-                let deps: Vec<&str> = failed_deps.iter().map(DeclName::as_str).collect();
+            NodeUnavailable::DependencyFailed { failed_deps } => {
+                let deps: Vec<&str> = failed_deps
+                    .iter()
+                    .map(|name| name.atom().as_str())
+                    .collect();
                 serde_json::json!({
                     "error": {
                         "kind": "dependency_failed",
@@ -1295,7 +1355,7 @@ fn print_json(
     }
 
     fn result_to_json(
-        result: &Result<Value, NodeError>,
+        result: &Result<Value, NodeUnavailable>,
         symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     ) -> Result<serde_json::Value, DisplayProjectionError> {
         match result {
@@ -1306,6 +1366,20 @@ fn print_json(
 
     let symbols = &result.base_dim_symbols;
     let mut output = serde_json::Map::new();
+    output.insert(
+        "incomplete".to_string(),
+        serde_json::json!(result.is_incomplete()),
+    );
+    output.insert(
+        "unfinished_calls".to_string(),
+        serde_json::json!(
+            result
+                .unfinished_calls
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        ),
+    );
 
     let consts = result
         .output_consts(output_view)
@@ -1348,6 +1422,7 @@ fn print_json(
                     AssertResult::Error { message } => {
                         serde_json::json!({"status": "error", "message": message})
                     }
+                    AssertResult::Blocked { reason } => serde_json::json!({"status": "blocked", "reason": node_error_to_json(reason)}),
                 };
                 (n.to_string(), val)
             })

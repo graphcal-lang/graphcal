@@ -4,7 +4,7 @@ use graphcal_compiler::dimension::BaseDimId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DeclType, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult,
-    NodeError, Value, datetime_literal, format_epoch_with_tz, format_number,
+    NodeUnavailable, Value, datetime_literal, format_epoch_with_tz, format_number,
     quantity_display_value,
 };
 use serde::Serialize;
@@ -27,6 +27,7 @@ pub struct EvaluationView {
     pub figures: Vec<FigureView>,
     pub notices: Vec<NoticeView>,
     pub has_errors: bool,
+    pub incomplete: bool,
 }
 
 /// One renderable figure: a Vega-Lite spec ready for `vegaEmbed`.
@@ -89,16 +90,28 @@ impl From<&EvalResult> for EvaluationView {
                 Vec::new()
             }
         };
+        notices.extend(result.plot_errors.iter().map(|error| {
+            if error.reason.has_failure() {
+                NoticeView::PlotError {
+                    name: error.name.to_string(),
+                    message: error.reason.to_string(),
+                }
+            } else {
+                NoticeView::PlotIncomplete {
+                    name: error.name.to_string(),
+                    message: error.reason.to_string(),
+                }
+            }
+        }));
         notices.extend(
             result
-                .plot_errors
+                .unfinished_calls
                 .iter()
-                .map(|error| NoticeView::PlotError {
-                    name: error.name.to_string(),
-                    message: error.message.clone(),
+                .map(|name| NoticeView::CallIncomplete {
+                    name: name.to_string(),
+                    message: "TODO: unfinished formula in an invoked DAG".to_string(),
                 }),
         );
-
         notices.extend(result.presentation_diagnostics.iter().map(|diagnostic| {
             NoticeView::PresentationError {
                 message: diagnostic.to_string(),
@@ -111,6 +124,7 @@ impl From<&EvalResult> for EvaluationView {
             figures,
             notices,
             has_errors: result.has_errors(),
+            incomplete: result.is_incomplete(),
         }
     }
 }
@@ -149,13 +163,16 @@ pub enum DeclarationOutcomeView {
         body: graphcal_report::value_display::ValueBody,
     },
     Error {
-        error: NodeErrorView,
+        error: NodeUnavailableView,
+    },
+    Incomplete {
+        reason: NodeUnavailableView,
     },
 }
 
 impl DeclarationOutcomeView {
     fn from_result(
-        result: &Result<Value, NodeError>,
+        result: &Result<Value, NodeUnavailable>,
         symbols: &BTreeMap<BaseDimId, String>,
     ) -> Self {
         match result {
@@ -165,12 +182,15 @@ impl DeclarationOutcomeView {
                         .map(|body| Self::Value { value: view, body })
                 })
                 .unwrap_or_else(|error| Self::Error {
-                    error: NodeErrorView::EvaluationFailed {
+                    error: NodeUnavailableView::EvaluationFailed {
                         message: error.to_string(),
                     },
                 }),
+            Err(reason) if !reason.has_failure() => Self::Incomplete {
+                reason: NodeUnavailableView::from(reason),
+            },
             Err(error) => Self::Error {
-                error: NodeErrorView::from(error),
+                error: NodeUnavailableView::from(error),
             },
         }
     }
@@ -452,18 +472,43 @@ impl From<&IndexEntryKey> for IndexEntryKeyView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum NodeErrorView {
-    EvaluationFailed { message: String },
-    DependencyFailed { failed_dependencies: Vec<String> },
+pub enum NodeUnavailableView {
+    EvaluationFailed {
+        message: String,
+    },
+    DependencyFailed {
+        failed_dependencies: Vec<String>,
+    },
+    Todo {
+        declaration: String,
+        message: String,
+    },
+    Blocked {
+        unfinished: Vec<String>,
+        failed_dependencies: Vec<String>,
+        message: String,
+    },
 }
 
-impl From<&NodeError> for NodeErrorView {
-    fn from(error: &NodeError) -> Self {
+impl From<&NodeUnavailable> for NodeUnavailableView {
+    fn from(error: &NodeUnavailable) -> Self {
         match error {
-            NodeError::EvalFailed { message } => Self::EvaluationFailed {
+            NodeUnavailable::Todo { declaration } => Self::Todo {
+                declaration: declaration.to_string(),
+                message: error.to_string(),
+            },
+            NodeUnavailable::Blocked {
+                unfinished,
+                failed_deps,
+            } => Self::Blocked {
+                message: error.to_string(),
+                unfinished: unfinished.iter().map(ToString::to_string).collect(),
+                failed_dependencies: failed_deps.iter().map(ToString::to_string).collect(),
+            },
+            NodeUnavailable::EvalFailed { message } => Self::EvaluationFailed {
                 message: message.clone(),
             },
-            NodeError::DependencyFailed { failed_deps } => Self::DependencyFailed {
+            NodeUnavailable::DependencyFailed { failed_deps } => Self::DependencyFailed {
                 failed_dependencies: failed_deps
                     .iter()
                     .map(|name| name.as_str().to_string())
@@ -483,6 +528,7 @@ pub struct AssertionView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum AssertionOutcomeView {
+    Blocked { message: String },
     Pass,
     Fail { message: String },
     Error { message: String },
@@ -492,6 +538,9 @@ impl From<&AssertResult> for AssertionOutcomeView {
     fn from(result: &AssertResult) -> Self {
         match result {
             AssertResult::Pass => Self::Pass,
+            AssertResult::Blocked { reason } => Self::Blocked {
+                message: reason.to_string(),
+            },
             AssertResult::Fail { message } => Self::Fail {
                 message: message.clone(),
             },
@@ -505,6 +554,14 @@ impl From<&AssertResult> for AssertionOutcomeView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NoticeView {
+    PlotIncomplete {
+        name: String,
+        message: String,
+    },
+    CallIncomplete {
+        name: String,
+        message: String,
+    },
     /// Display failed, but the computational SI value is still present.
     PresentationError {
         message: String,
@@ -525,6 +582,34 @@ mod tests {
     use graphcal_eval::eval::compile_and_eval;
 
     use super::*;
+
+    #[test]
+    fn browser_outcomes_distinguish_unfinished_blocked_and_successful_values() {
+        let result = compile_and_eval("node missing: Length = todo {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;").unwrap();
+        let view = EvaluationView::from(&result);
+        assert!(view.incomplete);
+        assert!(!view.has_errors);
+        assert!(matches!(
+            view.values[0].outcome,
+            DeclarationOutcomeView::Incomplete {
+                reason: NodeUnavailableView::Todo { .. }
+            }
+        ));
+        assert!(matches!(
+            view.values[1].outcome,
+            DeclarationOutcomeView::Incomplete {
+                reason: NodeUnavailableView::Blocked { .. }
+            }
+        ));
+        assert!(matches!(
+            view.values[2].outcome,
+            DeclarationOutcomeView::Value { .. }
+        ));
+        assert!(matches!(
+            view.assertions[0].outcome,
+            AssertionOutcomeView::Blocked { .. }
+        ));
+    }
 
     #[test]
     fn plots_render_as_vega_lite_figures() {
@@ -655,13 +740,13 @@ mod tests {
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Error {
-                error: NodeErrorView::EvaluationFailed { .. }
+                error: NodeUnavailableView::EvaluationFailed { .. }
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Error {
-                error: NodeErrorView::DependencyFailed { .. }
+                error: NodeUnavailableView::DependencyFailed { .. }
             }
         )));
         assert!(

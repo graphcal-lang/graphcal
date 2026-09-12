@@ -479,7 +479,10 @@ fn collect_local_declarations(
             DeclKind::Param(_) => {
                 external_surface.insert_input_port(name);
             }
-            DeclKind::Node(d) | DeclKind::ConstNode(d) if d.visibility.is_public() => {
+            DeclKind::Node(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::ConstNode(d) if d.visibility.is_public() => {
                 external_surface.insert_explicit_export(name);
             }
             DeclKind::BaseDimension(d) if d.visibility.is_public() => {
@@ -647,7 +650,7 @@ fn collect_local_declarations(
             DeclKind::Node(n) => {
                 nodes.push(CollectedNodeEntry {
                     name: n.name.value.clone(),
-                    expr: n.value.clone(),
+                    definition: n.definition.clone(),
                     span: decl.span,
                 });
             }
@@ -900,7 +903,8 @@ fn validate_private_in_public(
         // kinds participate only when explicitly exported with `pub` / `pub(bind)`.
         let has_external_signature = match &decl.kind {
             DeclKind::Param(_) => true,
-            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
+            DeclKind::Node(d) => d.visibility.is_public(),
+            DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
             DeclKind::Dimension(d) => d.visibility.is_public(),
             DeclKind::Unit(d) => d.visibility.is_public(),

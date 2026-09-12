@@ -188,6 +188,17 @@ impl From<ParamDecl<Raw>> for ParamDecl<Desugared> {
     }
 }
 
+impl From<crate::syntax::ast::NodeDecl<Raw>> for crate::syntax::ast::NodeDecl<Desugared> {
+    fn from(decl: crate::syntax::ast::NodeDecl<Raw>) -> Self {
+        Self {
+            visibility: decl.visibility,
+            name: decl.name,
+            type_ann: decl.type_ann.into(),
+            definition: decl.definition.map_formula(Into::into),
+        }
+    }
+}
+
 impl From<ValueDecl<Raw>> for ValueDecl<Desugared> {
     fn from(decl: ValueDecl<Raw>) -> Self {
         Self {

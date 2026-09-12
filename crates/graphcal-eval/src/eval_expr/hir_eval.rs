@@ -67,6 +67,8 @@ pub fn eval_hir_expr(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    ctx.expression_fact(expr)?;
+    ctx.check_dependencies(expr)?;
     eval_hir_expr_evaluated(expr, values, None, local_values, ctx)
         .map(EvaluatedRuntimeValue::into_value)
 }
@@ -80,6 +82,8 @@ pub fn eval_hir_expr_with_presentation(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    ctx.expression_fact(expr)?;
+    ctx.check_dependencies(expr)?;
     eval_hir_expr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
 }
 
@@ -2668,23 +2672,30 @@ fn eval_hir_dag_call(
     );
 
     let empty_hir_locals = HirLocalValueMap::root();
-    frame.run(
+    let evaluated = frame.run(
         ctx.tir,
         dag_facts.source(),
         &ctx.cancellation,
         |entry, frame| {
             let context = ctx
                 .for_dag(entry.scope.dag(), entry.scope.facts().source())?
+                .with_unavailable(&frame.errors)
                 .for_decl(entry.key.as_resolved());
-            eval_hir_expr_evaluated(
+            eval_hir_expr_with_presentation(
                 entry.expression,
                 &frame.values,
-                Some(&frame.presentations),
+                &frame.presentations,
                 &empty_hir_locals,
                 &context,
             )
         },
-    )?;
+    );
+    if let Some(calls) = ctx.unfinished_calls {
+        calls
+            .borrow_mut()
+            .extend(frame.unfinished_origins().cloned());
+    }
+    evaluated?;
     let mut dag_presentations = frame.presentations;
     let dag_values = frame.values;
 
@@ -2693,11 +2704,16 @@ fn eval_hir_dag_call(
         &dag_values,
         target,
         output.span,
-        ctx,
+        &ctx.clone().with_unavailable(&frame.errors),
     )?;
 
     let output_key = super::dag_decl_runtime_key(&output.value);
     let output_value = dag_values.get(&output_key).cloned().ok_or_else(|| {
+        if let Some(reason) = frame.errors.get(&output_key) {
+            return GraphcalError::EvaluationUnavailable {
+                reason: reason.clone(), src: ctx.src.clone(), span: output.span.into(),
+            };
+        }
         ctx.internal_error(
             format!(
                 "dag `{}` has no projected value `{}` after evaluation (should have been caught by dim-check)",
@@ -2839,6 +2855,13 @@ fn check_inline_dag_asserts(
                     ),
                     call_span,
                 ));
+            }
+            crate::eval::types::AssertResult::Blocked { reason } => {
+                return Err(GraphcalError::EvaluationUnavailable {
+                    reason,
+                    src: ctx.src.clone(),
+                    span: call_span.into(),
+                });
             }
             crate::eval::types::AssertResult::Error { message } => {
                 return Err(ctx.eval_error(
