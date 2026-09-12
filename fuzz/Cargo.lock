@@ -332,7 +332,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-compiler"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "hifitime",
  "indexmap",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-eval"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "base64",
  "graphcal-compiler",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-fmt"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "graphcal-compiler",
  "pretty",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-io"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "cap-std",
  "libc",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-package"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "sha2",
  "thiserror",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-abi"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "serde",
  "serde_json",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-test-support"
-version = "0.0.1-alpha.30"
+version = "0.0.1-alpha.31"
 dependencies = [
  "graphcal-compiler",
  "proptest",
