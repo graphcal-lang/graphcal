@@ -23,6 +23,8 @@ pub mod function_signature;
 pub mod hir;
 pub mod ir;
 pub mod nat;
+pub mod node_definition;
+pub mod node_unavailable;
 pub mod plot_props;
 pub mod plot_shape;
 pub mod plugin_identity;

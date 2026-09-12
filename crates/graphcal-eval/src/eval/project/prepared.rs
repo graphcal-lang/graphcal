@@ -28,7 +28,7 @@ use crate::decl_key::RuntimeDeclKey;
 use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
-use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
+use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeUnavailable, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
 
 use crate::host_fns::HostFunctionRegistry;
@@ -487,8 +487,8 @@ impl PreparedProject {
 
     fn first_runtime_error<'errors>(
         &self,
-        errors: &'errors HashMap<RuntimeDeclKey, NodeError>,
-    ) -> Result<Option<(ScopedName, &'errors NodeError)>, ModelExecutionError> {
+        errors: &'errors HashMap<RuntimeDeclKey, NodeUnavailable>,
+    ) -> Result<Option<(ScopedName, &'errors NodeUnavailable)>, ModelExecutionError> {
         for (name, _) in self.tir.root().source_order() {
             let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name)
                 .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
@@ -567,6 +567,7 @@ impl PreparedProject {
         nodes.extend(eval_result.nodes);
         all.extend(eval_result.all);
         Ok(EvalResult {
+            unfinished_calls: eval_result.unfinished_calls,
             consts,
             params,
             nodes,

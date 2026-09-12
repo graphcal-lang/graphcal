@@ -212,7 +212,19 @@ param_decl
 
 (* --- node, const node --- *)
 node_decl
-   = "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+   = "node", IDENT,
+     ( [ ":", type_expr ], "=", expr
+     | ":", type_expr, "=", todo_definition ), ";";
+
+(* `todo` is contextual: only `todo {` as the entire typed runtime-node
+   body selects this form. It is not an expression or a function call.
+   The mandatory, possibly empty list is the exhaustive set of possible
+   direct dependencies while the node remains unfinished. *)
+todo_definition
+   = "todo", "{", [ todo_dependency, { ",", todo_dependency }, [ "," ] ], "}";
+
+todo_dependency
+   = "@", ident_path;
 
 const_decl
    = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";

@@ -1006,7 +1006,7 @@ mod tests {
         let full = format!("node x: Dimensionless = {input};");
         let file = Parser::new(&full).parse_file().unwrap();
         match file.declarations.into_iter().next().unwrap().kind {
-            DeclKind::Node(n) => n.value,
+            DeclKind::Node(n) => n.definition.formula().unwrap().clone(),
             _ => panic!("expected node"),
         }
     }
@@ -1187,7 +1187,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(
                         matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.member() == "speed")
@@ -1209,7 +1209,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::Convert { target, .. } => {
                     assert_eq!(target.terms.len(), 1);
                     let unit_ref = &target.terms[0].name.value;
@@ -1231,7 +1231,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::QuantityLiteral { unit, .. } => {
                     assert_eq!(unit.terms[0].name.value.to_string(), "u::mile");
                 }
@@ -1249,7 +1249,7 @@ mod tests {
         let DeclKind::Node(node) = &file.declarations[0].kind else {
             panic!("expected node");
         };
-        let ExprKind::Convert { target, .. } = &node.value.kind else {
+        let ExprKind::Convert { target, .. } = &node.definition.formula().unwrap().kind else {
             panic!("expected conversion");
         };
         assert_eq!(target.terms[0].name.value.to_string(), "app.units::mile");
@@ -1261,7 +1261,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
                     assert_eq!(target.terms[0].name.value.to_string(), "km");
@@ -1712,7 +1712,7 @@ mod tests {
         let source = "node x: Dimensionless = @transfer.dv1;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert!(
                         matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.value.member() == "transfer")
@@ -1730,7 +1730,7 @@ mod tests {
         let source = "node x: Dimensionless = @mission.transfer.dv1;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.value.kind {
+            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert_eq!(field.value.as_str(), "dv1");
                     match &expr.kind {
@@ -1766,7 +1766,7 @@ mod tests {
         };
         // The expression should be `FieldAccess(GraphRef(stage), delta_v)`,
         // not a qualified-graph-ref construct.
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::FieldAccess { expr: inner, field } => {
                 assert!(
                     matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.member() == "stage")
@@ -1786,7 +1786,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
                 assert_eq!(path.segments[0].name, "clamp");
@@ -1810,7 +1810,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
                 assert_eq!(path.segments[0].name, "scale");
@@ -1845,7 +1845,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 2);
                 assert_eq!(path.segments[0].name, "geom");
@@ -1872,7 +1872,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::FieldAccess { expr, field } => {
                 assert_eq!(field.value.as_str(), "altitude");
                 match &expr.kind {
@@ -1899,7 +1899,7 @@ mod tests {
         let ExprKind::FieldAccess {
             expr: outer_inner,
             field: c,
-        } = &node.value.kind
+        } = &node.definition.formula().unwrap().kind
         else {
             panic!("expected outer FieldAccess");
         };
@@ -1956,7 +1956,10 @@ mod tests {
                 _ => None,
             })
             .expect("doubled_result node");
-        assert!(matches!(&node.value.kind, ExprKind::InlineDagRef { .. }));
+        assert!(matches!(
+            &node.definition.formula().unwrap().kind,
+            ExprKind::InlineDagRef { .. }
+        ));
     }
 
     #[test]
@@ -1968,7 +1971,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.value.kind {
+        match &node.definition.formula().unwrap().kind {
             ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
                 assert_eq!(
                     path.owner_segments()

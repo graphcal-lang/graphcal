@@ -8,8 +8,8 @@
     },
     {
       "path": "cli-reference.md",
-      "english_sha256": "8093a9f27dc1693cf57abc78cd5fff882826d40772faf0e7c83d27387d9c93b4",
-      "japanese_sha256": "00ef5b54d0305667a6df650621bf06ac315b1740272c536c5686808a835b29d9"
+      "english_sha256": "ebeb16c44da80dae132b21fa6badbb7f8ebfe3aac5c2a988083868c1318b8eac",
+      "japanese_sha256": "0de765cd6913d3f7388d6d918e89dade483a6d27cedef5c4fe40e1bc0852a75b"
     },
     {
       "path": "editor-setup.md",
@@ -43,8 +43,8 @@
     },
     {
       "path": "language/computation-model.md",
-      "english_sha256": "64f4ab97a588659370965bf2b811e92facdc27eb68d4128fcf9626bccaa58e53",
-      "japanese_sha256": "f10fb2103811e7526f0b71f37bd00cf292a9247abfe710881424b0ca51539147"
+      "english_sha256": "3dda84cdbd440c4d8d265e8d3059dd84d3c67f11a2729c4686fd713d874cc07b",
+      "japanese_sha256": "7242b6f142935c8742bb80761ed0c9eef277dfaba76aa0770229457f99efa9f2"
     },
     {
       "path": "language/dimensions-and-units.md",

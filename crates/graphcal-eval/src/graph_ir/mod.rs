@@ -50,6 +50,8 @@ pub struct GraphNode {
     /// Parameters remain visually classified as inputs even though callers can
     /// also project their effective values.
     is_public_output: bool,
+    /// The source definition is an explicit TODO rather than a formula.
+    is_unfinished: bool,
     /// Human-readable resolved type (e.g. `"Length / Time^2"`), pre-rendered
     /// because renderers have no access to the registry. `None` when the
     /// declaration's resolved type is unknown (external nodes).
@@ -215,6 +217,7 @@ pub fn project_tir(tir: &TIR) -> Result<GraphIr, GraphProjectionError> {
                     id: id.clone(),
                     kind: GraphNodeKind::External,
                     is_public_output: false,
+                    is_unfinished: false,
                     type_label: None,
                 },
             )
@@ -354,6 +357,7 @@ fn project_dag_nodes(
                 .get(name)
                 .map(|ty| ty.format(tir.registry()));
             Ok(GraphNode {
+                is_unfinished: dag.todo(&id).is_some(),
                 id,
                 kind,
                 is_public_output,

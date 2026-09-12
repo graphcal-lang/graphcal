@@ -8,6 +8,17 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
 
+fn evaluation_error(error: GraphcalError) -> AssertResult {
+    match error {
+        GraphcalError::EvaluationUnavailable { reason, .. } if reason.is_incomplete() => {
+            AssertResult::Blocked { reason }
+        }
+        error => AssertResult::Error {
+            message: error.to_string(),
+        },
+    }
+}
+
 /// Evaluate an assertion body with optional `#[expected_fail]` handling.
 ///
 /// For `None` (no `expected_fail`): evaluate and return the result as-is.
@@ -31,7 +42,7 @@ pub fn evaluate_assert_with_expected_fail(
                     message: "assertion passed but was marked #[expected_fail]".to_string(),
                 },
                 AssertResult::Fail { .. } => AssertResult::Pass,
-                AssertResult::Error { .. } => result,
+                AssertResult::Error { .. } | AssertResult::Blocked { .. } => result,
             }
         }
         Some(ExpectedFail::Variants(keys)) => {
@@ -43,11 +54,7 @@ pub fn evaluate_assert_with_expected_fail(
                 graphcal_compiler::hir::expr::AssertBody::Expr(body_expr) => {
                     match evaluate_expression(body_expr) {
                         Ok(value) => value,
-                        Err(e) => {
-                            return AssertResult::Error {
-                                message: format!("{e}"),
-                            };
-                        }
+                        Err(error) => return evaluation_error(error),
                     }
                 }
                 graphcal_compiler::hir::expr::AssertBody::Tolerance {
@@ -348,9 +355,7 @@ fn evaluate_assert_body(
                 Ok(other) => AssertResult::Error {
                     message: format!("expected Bool, got {other:?}"),
                 },
-                Err(e) => AssertResult::Error {
-                    message: format!("{e}"),
-                },
+                Err(error) => evaluation_error(error),
             }
         }
         graphcal_compiler::hir::expr::AssertBody::Tolerance {
@@ -402,9 +407,7 @@ fn eval_tolerance_operands(
     ) -> Result<RuntimeValue, GraphcalError>,
 ) -> Result<(RuntimeValue, RuntimeValue, RuntimeValue), AssertResult> {
     let mut operand = |expr: &graphcal_compiler::hir::expr::Expr| {
-        evaluate_expression(expr).map_err(|e| AssertResult::Error {
-            message: format!("{e}"),
-        })
+        evaluate_expression(expr).map_err(evaluation_error)
     };
     Ok((operand(actual)?, operand(expected)?, operand(tolerance)?))
 }

@@ -30,7 +30,7 @@ pub use diagnostics::{
 pub use output::{
     AssertionOutcomeView, AssertionView, DeclarationKindView, DeclarationOutcomeView,
     DeclarationView, EvaluationView, FigureView, IndexEntryKeyView, IndexedEntryView,
-    NodeErrorView, NoticeView, StructFieldView, ValueView,
+    NodeUnavailableView, NoticeView, StructFieldView, ValueView,
 };
 pub use prepared::{
     BindingErrorView, ControlView, EvaluateOutcome, EvaluateReportOutcome, ParameterPortView,

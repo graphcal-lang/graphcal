@@ -62,7 +62,12 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
                     entry_src,
                     DiagnosticAnchor::Source(entry.span),
                 )?,
-                collect_unit_names(&entry.expr),
+                entry
+                    .definition
+                    .formula()
+                    .map_or_else(Default::default, |expression| {
+                        collect_unit_names(expression)
+                    }),
             ))
         }))
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -166,8 +171,17 @@ pub(super) fn collect_resolved_dag_dependencies(
             entry.declaration_owner.clone(),
             entry.name.member().clone(),
         );
-        let deps = hir::collect_expr_dependencies(&entry.expr);
-        resolved.runtime_deps.insert(key, deps.graph_refs);
+        let dependencies = match &entry.definition {
+            crate::node_definition::NodeDefinition::Formula(expression) => {
+                hir::collect_expr_dependencies(expression).graph_refs
+            }
+            crate::node_definition::NodeDefinition::Todo(dependencies) => dependencies
+                .value
+                .iter()
+                .map(|reference| reference.value.clone())
+                .collect(),
+        };
+        resolved.runtime_deps.insert(key, dependencies);
     }
 
     Ok(resolved)

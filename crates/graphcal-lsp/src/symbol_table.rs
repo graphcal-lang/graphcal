@@ -1651,7 +1651,19 @@ fn collect_node_decl(
         visibility,
     );
     collect_type_expr_refs(&n.type_ann, table, refs);
-    refs.collect_body(&n.value, table);
+    match &n.definition {
+        graphcal_compiler::node_definition::NodeDefinition::Formula(expression) => {
+            refs.collect_body(expression, table);
+        }
+        graphcal_compiler::node_definition::NodeDefinition::Todo(dependencies) => {
+            table
+                .references
+                .extend(dependencies.value.iter().map(|reference| ReferenceInfo {
+                    span: reference.span,
+                    target: refs.declaration_target(&reference.value.to_name_path()),
+                }));
+        }
+    }
 }
 
 fn collect_const_node_decl(

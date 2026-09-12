@@ -112,7 +112,7 @@ fn conversion_only_failed_dependency_does_not_poison_si_values() {
     let result = compile_and_eval(include_str!("presentation_failed_dependency.gcl")).unwrap();
     assert!(matches!(
         result.nodes[0].1,
-        Err(NodeError::EvalFailed { .. })
+        Err(NodeUnavailable::EvalFailed { .. })
     ));
     for (position, name) in [(1, "chosen"), (2, "unchosen")] {
         let value = result.nodes[position]
@@ -281,7 +281,7 @@ unit own: Length = (@self_display / 1.0 m) m;
             .find(|(name, _)| name == &scoped_name("computational"))
             .unwrap()
             .1,
-        Err(NodeError::DependencyFailed { .. })
+        Err(NodeUnavailable::DependencyFailed { .. })
     ));
     assert_eq!(result.presentation_diagnostics.len(), 1, "{result:?}");
     assert_eq!(

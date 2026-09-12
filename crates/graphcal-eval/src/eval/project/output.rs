@@ -3,11 +3,11 @@
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
-use crate::eval::types::{DeclType, EvalResult, NodeError, Value};
+use crate::eval::types::{DeclType, EvalResult, NodeUnavailable, Value};
 use crate::project_compiler::IncludeDebugNameMap;
 
 /// One typed value in normal result assembly.
-pub(super) type OutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
+pub(super) type OutputValue = (ScopedName, Result<Value, NodeUnavailable>, DeclType);
 
 pub(super) const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
     match category {
@@ -103,9 +103,9 @@ pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &Inclu
 
 pub(super) fn push_output_value(
     (name, result, decl_type): OutputValue,
-    consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    params: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    nodes: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
+    consts: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
+    params: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
+    nodes: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
     all: &mut Vec<OutputValue>,
 ) {
     match decl_type {

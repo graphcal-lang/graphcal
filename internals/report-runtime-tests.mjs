@@ -32,6 +32,7 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const inputCards = new Element();
   inputCards.className = "cards";
   inputsSection.appendChild(inputCards);
+  const main = new Element("main");
   const payloads = {
     "graphcal-project": JSON.stringify(project), "graphcal-baseline": JSON.stringify(baseline),
     "graphcal-engine-glue": "unused", "graphcal-engine-wasm": "unused",
@@ -41,8 +42,10 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const context = {
     document: {
       body: new Element(), createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }),
-      getElementById: id => id === "inputs" ? inputsSection : { textContent: payloads[id] },
-      querySelector: selector => cards.get(selector.match(/data-decl="([^"]+)"/)?.[1]),
+      getElementById: id => id === "inputs" ? inputsSection
+        : ["incomplete-notice", "call-notices"].includes(id) ? main.children.find(child => child.id === id) || null
+        : { textContent: payloads[id] },
+      querySelector: selector => selector === "main" ? main : cards.get(selector.match(/data-decl="([^"]+)"/)?.[1]),
     },
     window: {},
     setTimeout(callback) { nextTimer += 1; timers.set(nextTimer, callback); return nextTimer; },
@@ -55,7 +58,7 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   const startup = "  startTransport();\n  }";
   assert.equal(code.split(startup).length, 2);
   runInNewContext(code.replace(startup,
-    "  globalThis.api = { buildControls, currentBindings, patchParamControls, controls, resetButton, renderView };\n  }"), context);
+    "  globalThis.api = { buildControls, currentBindings, patchParamControls, patchEvaluationNotices, controls, resetButton, renderView };\n  }"), context);
   context.window.GraphcalReport.mount({ baselineBindings: baseline, createTransport() {} });
   const toolbarNodes = node => [node, ...node.children.flatMap(child => child instanceof Element ? toolbarNodes(child) : [])];
   const autoRunToggle = toolbarNodes(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
@@ -82,7 +85,7 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
     timers.clear();
     callbacks.forEach(callback => callback());
   };
-  return { api, cards, descendants, field, edit, apply, autoRunToggle, flushTimers, bindings, evaluate, prepared };
+  return { api, cards, main, descendants, field, edit, apply, autoRunToggle, flushTimers, bindings, evaluate, prepared };
 }
 const model = `
 param input: Dimensionless = 2.0;
@@ -92,6 +95,27 @@ param samples: Int[Fin(2)] = table[Fin(2)] { 1; 2; };
 node result: Dimensionless = @doubled;
 `;
 const value = (values, name) => values.find(item => item.name === name).outcome.value;
+{
+  const run = runtime(`
+    param active: Bool = true;
+    dag model { node unfinished: Length = todo {}; pub node known: Length = 2.0 m; }
+    node known: Length = if @active { @model()::known } else { 1.0 m };
+  `);
+  for (const active of [true, false, true, false]) {
+    const outcome = run.prepared.evaluateBindings([{ name: "active", expr: String(active) }]);
+    assert.equal(outcome.status, "evaluated");
+    assert.equal(outcome.evaluation.incomplete, active);
+    assert.equal(outcome.evaluation.has_errors, false);
+    run.api.patchEvaluationNotices(outcome.evaluation);
+    const banner = run.main.children.find(child => child.id === "incomplete-notice");
+    const calls = run.main.children.find(child => child.id === "call-notices");
+    assert.equal(banner.hidden, !active);
+    assert.equal(calls.hidden, !active);
+    assert.equal(calls.children.length, active ? 2 : 1, "no stale or duplicate call notices");
+  }
+  run.prepared.free();
+}
+console.log("report runtime: incomplete banners and call notices refresh with the evaluated model");
 {
   const run = runtime(model, [], [], true);
   run.edit("input", "3.0");

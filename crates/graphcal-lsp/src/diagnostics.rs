@@ -54,11 +54,36 @@ fn auto_import_data(
     .ok()
 }
 
-/// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
-///
-/// `symbol_table` is used to resolve the declaration span for each per-node
-/// error, so the diagnostic points at the failing declaration rather than the
-/// start of the file.
+/// Report source markers even in libraries and unused DAG definitions.
+pub fn unfinished_node_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
+    declarations: &[graphcal_compiler::syntax::ast::Declaration<P>],
+    source: &str,
+) -> Vec<Diagnostic> {
+    use graphcal_compiler::syntax::ast::DeclKind;
+    let lines = LineIndex::new(source);
+    declarations
+        .iter()
+        .flat_map(|declaration| match &declaration.kind {
+            DeclKind::Node(node) => node
+                .definition
+                .todo()
+                .map(|marker| Diagnostic {
+                    range: lines.span_to_range(marker.span),
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    code: Some(NumberOrString::String("graphcal::todo".to_string())),
+                    source: Some("graphcal".to_string()),
+                    message: format!("{}: TODO — formula unfinished", node.name.value),
+                    ..Default::default()
+                })
+                .into_iter()
+                .collect(),
+            DeclKind::Dag(dag) => unfinished_node_diagnostics(&dag.body, source),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+/// Locate runtime failures at their declarations; source TODOs are reported separately.
 pub fn eval_result_to_diagnostics(
     result: &graphcal_eval::eval::EvalResult,
     source: &str,
@@ -71,6 +96,11 @@ pub fn eval_result_to_diagnostics(
         .iter()
         .filter_map(|(name, r, _)| match r {
             Err(err) => {
+                // Incomplete dependents are explained by hover; report the
+                // source marker rather than flooding the DAG with warnings.
+                if !err.has_failure() {
+                    return None;
+                }
                 let range = symbol_table
                     .definition_for_scoped_decl(name)
                     .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
@@ -113,6 +143,14 @@ pub fn eval_result_to_diagnostics(
 
                 let (message, severity) = match assert_result {
                     AssertResult::Pass => return None,
+                    AssertResult::Blocked { reason } => (
+                        format!("assertion `{name}`: {reason}"),
+                        if reason.has_failure() {
+                            DiagnosticSeverity::WARNING
+                        } else {
+                            DiagnosticSeverity::INFORMATION
+                        },
+                    ),
                     AssertResult::Fail { message } => {
                         let msg = result.assumes_map.get(name).map_or_else(
                             || format!("assertion `{name}` failed: {message}"),

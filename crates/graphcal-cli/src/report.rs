@@ -215,7 +215,7 @@ pub fn run_build(
     for error in &result.plot_errors {
         eprintln!(
             "error: plot `{}` not rendered: {}",
-            error.name, error.message
+            error.name, error.reason
         );
     }
 

@@ -117,6 +117,7 @@ overflow-checks = true
 # release build. wasm-pack selects this profile explicitly.
 [profile.wasm-release]
 inherits = "release"
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 

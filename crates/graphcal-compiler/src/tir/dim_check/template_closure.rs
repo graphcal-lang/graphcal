@@ -186,14 +186,16 @@ fn check_rigid_value_bodies(
                 entry.body_src.resolve(ctx.src),
             )
         })
-        .chain(ctx.dag.nodes.iter().map(|entry| {
-            (
-                DeclarationKind::Node,
-                &entry.name,
-                entry.type_ann.span,
-                entry.expr.span,
-                entry.body_src.resolve(ctx.src),
-            )
+        .chain(ctx.dag.nodes.iter().filter_map(|entry| {
+            entry.definition.formula().map(|expression| {
+                (
+                    DeclarationKind::Node,
+                    &entry.name,
+                    entry.type_ann.span,
+                    expression.span,
+                    entry.body_src.resolve(ctx.src),
+                )
+            })
         }))
     {
         let Some(_) = local_owner(ctx.dag, name, body_src, Some(annotation_span))? else {
@@ -420,14 +422,16 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
                 entry.span,
             )
         })
-        .chain(ctx.dag.nodes.iter().map(|entry| {
-            (
-                DeclarationKind::Node,
-                &entry.name,
-                &entry.expr,
-                entry.body_src.resolve(ctx.src),
-                entry.span,
-            )
+        .chain(ctx.dag.nodes.iter().filter_map(|entry| {
+            entry.definition.formula().map(|expression| {
+                (
+                    DeclarationKind::Node,
+                    &entry.name,
+                    expression,
+                    entry.body_src.resolve(ctx.src),
+                    entry.span,
+                )
+            })
         }))
     {
         ctx.checkpoint()?;

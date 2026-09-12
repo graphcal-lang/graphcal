@@ -1,13 +1,13 @@
 //! Runtime evaluation: converting TIR execution results to Values,
 //! running execution plans, and checking asserts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
@@ -31,14 +31,15 @@ use graphcal_compiler::registry::error::GraphcalError;
 use super::display::attach_presentation;
 use super::public_projection::EvaluatedValue;
 use super::types::{
-    AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
+    AssertResult, AxisMeta, DeclType, EvalResult, NodeUnavailable, PlotFieldValue, PlotSpec, Value,
 };
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
+    pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
     pub presentation_instances: PresentationInstanceMap,
-    pub errors: HashMap<RuntimeDeclKey, NodeError>,
+    pub errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -71,15 +72,15 @@ enum OutputExposure {
 #[derive(Default)]
 struct RuntimeResultValueAssembly {
     identities: HashMap<ScopedName, RuntimeDeclKey>,
-    all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
     output_surface: std::collections::HashSet<ScopedName>,
 }
 
 struct AssembledRuntimeResultValues {
-    consts: Vec<(ScopedName, Result<Value, NodeError>)>,
-    params: Vec<(ScopedName, Result<Value, NodeError>)>,
-    nodes: Vec<(ScopedName, Result<Value, NodeError>)>,
-    all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    consts: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
+    params: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
+    nodes: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
+    all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
     output_surface: std::collections::HashSet<ScopedName>,
 }
 
@@ -88,7 +89,7 @@ impl RuntimeResultValueAssembly {
         &mut self,
         key: RuntimeDeclKey,
         name: ScopedName,
-        result: Result<Value, NodeError>,
+        result: Result<Value, NodeUnavailable>,
         decl_type: DeclType,
         exposure: OutputExposure,
         src: &NamedSource<Arc<String>>,
@@ -138,7 +139,7 @@ fn project_runtime_value(
     presentation_instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     diagnostics: &std::cell::RefCell<Vec<PresentationDiagnostic>>,
-) -> Result<Result<Value, NodeError>, GraphcalError> {
+) -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
     let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
     let notices = attach_presentation(&mut value, presentation_instance)
         .map_err(|error| ctx.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;
@@ -162,7 +163,7 @@ pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
     pub(super) presentation_instances: PresentationInstanceMap,
     pub(super) values: RuntimeValueMap,
-    pub(super) errors: HashMap<RuntimeDeclKey, NodeError>,
+    pub(super) errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
 }
 
 impl std::fmt::Debug for RuntimeEvaluation {
@@ -181,7 +182,7 @@ impl RuntimeEvaluation {
     /// Whether evaluation produced a node, assertion, or plot failure.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty() || self.result.has_errors()
+        self.errors.values().any(NodeUnavailable::has_failure) || self.result.has_errors()
     }
 
     /// Display-aware result for the directly evaluated root DAG.
@@ -204,6 +205,7 @@ pub(super) fn run_eval_loop_with_bindings(
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
     let empty_hir_locals = HirLocalValueMap::root();
+    let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
     let mut frame =
         ExecutionFrame::new(plan, tir.root_dag_id(), FailurePolicy::Contain).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
@@ -229,6 +231,8 @@ pub(super) fn run_eval_loop_with_bindings(
             cancellation.clone(),
         )?
         .with_roots(&frame.values, Some(&frame.presentations))
+        .with_unavailable(&frame.errors)
+        .with_unfinished_calls(&unfinished_calls)
         .for_decl(entry.key.as_resolved());
         eval_hir_expr_with_presentation(
             entry.expression,
@@ -239,6 +243,7 @@ pub(super) fn run_eval_loop_with_bindings(
         )
     })?;
     Ok(EvalLoopResult {
+        unfinished_calls,
         values: frame.values,
         presentation_instances: frame.presentations,
         errors: frame.errors,
@@ -269,6 +274,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let empty_hir_locals = HirLocalValueMap::root();
 
     let EvalLoopResult {
+        unfinished_calls,
         values,
         presentation_instances,
         errors,
@@ -292,7 +298,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         host_fns,
         cancellation.clone(),
     )?
-    .with_roots(&values, Some(&presentation_instances));
+    .with_roots(&values, Some(&presentation_instances))
+    .with_unavailable(&errors)
+    .with_unfinished_calls(&unfinished_calls);
     let presentation_instances = presentation_instances
         .iter()
         .map(|(key, evidence)| {
@@ -310,7 +318,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
     let make_value = |name: &ScopedName,
                       runtime: &RuntimeValue|
-     -> Result<Result<Value, NodeError>, GraphcalError> {
+     -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
         let runtime_key = local_key(name)?;
         let declaration = runtime_key.as_resolved();
         let declared_type = declared_types.get(name).ok_or_else(|| {
@@ -329,7 +337,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         )
     };
 
-    let make_result = |name: &ScopedName| -> Result<Result<Value, NodeError>, GraphcalError> {
+    let make_result = |name: &ScopedName| -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
         let key = local_key(name)?;
         errors.get(&key).map_or_else(
             || {
@@ -553,8 +561,8 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 DiagnosticAnchor::Source(entry.span),
             )?;
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
-                || {
+            let assert_result = assert_dependency_failure(&entry.body, &errors, &entry_ctx)
+                .unwrap_or_else(|| {
                     let ef = plan
                         .root
                         .expected_fail
@@ -562,9 +570,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
                         eval_hir_expr(expr, &values, &empty_hir_locals, &entry_ctx)
                     })
-                },
-                |message| AssertResult::Error { message },
-            );
+                });
             Ok((entry.name.clone(), assert_result, entry.span))
         })
         .collect::<Result<_, GraphcalError>>()?;
@@ -650,10 +656,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 &ctx.for_decl(&owner),
             ) {
                 Ok(plot) => plots.push(plot),
-                Err(PlotEvaluationError::Render(message)) => {
+                Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
                         name: entry.name.clone(),
-                        message,
+                        reason,
                     });
                 }
                 Err(PlotEvaluationError::Fatal(error)) => return Err(error),
@@ -703,10 +709,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     plot.displayed = !projection.hidden;
                     plots.push(plot);
                 }
-                Err(PlotEvaluationError::Render(message)) => {
+                Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
                         name: projection.exposed_name.clone(),
-                        message,
+                        reason,
                     });
                 }
                 Err(PlotEvaluationError::Fatal(error)) => return Err(error),
@@ -728,11 +734,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 DiagnosticAnchor::WholeFile,
             )?;
             Ok(
-                match eval_composition_fields(
-                    &entry.fields,
-                    &entry.plot_names,
-                    &values,
-                    &ctx.for_decl(&owner),
+                match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
+                    |()| {
+                        eval_composition_fields(
+                            &entry.fields,
+                            &entry.plot_names,
+                            &values,
+                            &ctx.for_decl(&owner),
+                        )
+                    },
                 ) {
                     Ok(evaluated) => Some(super::types::FigureSpec {
                         name: entry.name.clone(),
@@ -740,10 +750,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
-                    Err(PlotEvaluationError::Render(message)) => {
+                    Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
                             name: entry.name.clone(),
-                            message,
+                            reason,
                         });
                         None
                     }
@@ -767,11 +777,15 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 DiagnosticAnchor::WholeFile,
             )?;
             Ok(
-                match eval_composition_fields(
-                    &entry.fields,
-                    &entry.plot_names,
-                    &values,
-                    &ctx.for_decl(&owner),
+                match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
+                    |()| {
+                        eval_composition_fields(
+                            &entry.fields,
+                            &entry.plot_names,
+                            &values,
+                            &ctx.for_decl(&owner),
+                        )
+                    },
                 ) {
                     Ok(evaluated) => Some(super::types::LayerSpec {
                         name: entry.name.clone(),
@@ -779,10 +793,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
-                    Err(PlotEvaluationError::Render(message)) => {
+                    Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
                             name: entry.name.clone(),
-                            message,
+                            reason,
                         });
                         None
                     }
@@ -884,6 +898,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .flat_map(|plot| plot.presentation_diagnostics.iter().cloned()),
     );
     let result = EvalResult {
+        unfinished_calls: unfinished_calls.into_inner().into_iter().collect(),
         consts,
         params,
         nodes,
@@ -917,8 +932,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 /// declaration).
 fn assert_dependency_failure(
     body: &graphcal_compiler::hir::AssertBody,
-    errors: &HashMap<RuntimeDeclKey, NodeError>,
-) -> Option<String> {
+    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    ctx: &EvalContext<'_>,
+) -> Option<AssertResult> {
     let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
         graphcal_compiler::hir::AssertBody::Expr(expr) => vec![expr],
         graphcal_compiler::hir::AssertBody::Tolerance {
@@ -928,7 +944,14 @@ fn assert_dependency_failure(
             ..
         } => vec![actual, expected, tolerance],
     };
-    dependency_failure_message(body_exprs, errors)
+    match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
+        Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
+        Err(error) => Some(AssertResult::Error {
+            message: error.to_string(),
+        }),
+        _ => dependency_failure_message(body_exprs, errors)
+            .map(|message| AssertResult::Error { message }),
+    }
 }
 
 /// If any declaration referenced by the given expressions failed to
@@ -940,7 +963,7 @@ fn assert_dependency_failure(
 /// point at the root cause.
 fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
-    errors: &HashMap<RuntimeDeclKey, NodeError>,
+    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
 ) -> Option<String> {
     if errors.is_empty() {
         return None;
@@ -961,8 +984,10 @@ fn dependency_failure_message<'a>(
                 .map(|err| {
                     let leaf = DeclName::from_atom(dep.atom().clone());
                     match err {
-                        NodeError::EvalFailed { message } => format!("{leaf} ({message})"),
-                        NodeError::DependencyFailed { .. } => leaf.to_string(),
+                        NodeUnavailable::EvalFailed { message } => format!("{leaf} ({message})"),
+                        NodeUnavailable::DependencyFailed { .. } => leaf.to_string(),
+                        reason @ (NodeUnavailable::Todo { .. }
+                        | NodeUnavailable::Blocked { .. }) => format!("{leaf} ({reason})"),
                     }
                 })
         })
@@ -992,13 +1017,13 @@ fn eval_plot_property(
     let empty_locals = HirLocalValueMap::root();
     eval_hir_expr(expr, values, &empty_locals, ctx)
         .map_err(PlotEvaluationError::from)
-        .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::Render))
+        .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
 }
 
 #[derive(Debug, thiserror::Error)]
 enum PlotEvaluationError {
     #[error("{0}")]
-    Render(String),
+    Unavailable(NodeUnavailable),
     #[error(transparent)]
     Fatal(GraphcalError),
 }
@@ -1009,7 +1034,7 @@ impl From<GraphcalError> for PlotEvaluationError {
             error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_)) => {
                 Self::Fatal(error)
             }
-            error => Self::Render(eval_failed_node_error(&error).to_string()),
+            error => Self::Unavailable(eval_failed_node_error(&error)),
         }
     }
 }
@@ -1017,20 +1042,22 @@ impl From<GraphcalError> for PlotEvaluationError {
 impl PlotEvaluationError {
     fn with_property(self, property: &graphcal_compiler::ir::lower::LoweredPlotProperty) -> Self {
         match self {
-            Self::Render(message) => Self::Render(match property {
-                graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(_) => {
-                    format!("mark property `{}`: {message}", property.name())
-                }
-                property => format!("property `{}`: {message}", property.name()),
-            }),
-            fatal @ Self::Fatal(_) => fatal,
+            Self::Unavailable(NodeUnavailable::EvalFailed { message }) => {
+                Self::from(match property {
+                    graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(_) => {
+                        format!("mark property `{}`: {message}", property.name())
+                    }
+                    property => format!("property `{}`: {message}", property.name()),
+                })
+            }
+            other => other,
         }
     }
 }
 
 impl From<String> for PlotEvaluationError {
     fn from(message: String) -> Self {
-        Self::Render(message)
+        Self::Unavailable(NodeUnavailable::EvalFailed { message })
     }
 }
 
@@ -1047,7 +1074,7 @@ fn evaluate_plot(
     entry: &graphcal_compiler::ir::lower::PlotEntry,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
-    errors: &HashMap<RuntimeDeclKey, NodeError>,
+    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
     ctx: &EvalContext<'_>,
 ) -> Result<PlotSpec, PlotEvaluationError> {
     // A reference to a failed declaration must report the root cause, not a
@@ -1058,10 +1085,9 @@ fn evaluate_plot(
         .iter()
         .map(|(_, expr)| &**expr)
         .chain(lowered.mark_properties.iter().map(|field| &*field.value))
-        .chain(lowered.properties.iter().map(|field| &*field.value));
-    if let Some(message) = dependency_failure_message(body_exprs, errors) {
-        return Err(PlotEvaluationError::Render(message));
-    }
+        .chain(lowered.properties.iter().map(|field| &*field.value))
+        .collect::<Vec<_>>();
+    check_plot_expression_dependencies(&body_exprs, errors, ctx)?;
 
     let owner = ctx.current_decl.as_ref().ok_or_else(|| {
         PlotEvaluationError::Fatal(ctx.internal_error(
@@ -1255,10 +1281,10 @@ fn classify_plot_channel_error(
     error: GraphcalError,
 ) -> PlotEvaluationError {
     match PlotEvaluationError::from(error) {
-        PlotEvaluationError::Render(message) => {
-            PlotEvaluationError::Render(format!("encoding channel `{channel}`: {message}"))
+        PlotEvaluationError::Unavailable(NodeUnavailable::EvalFailed { message }) => {
+            PlotEvaluationError::from(format!("encoding channel `{channel}`: {message}"))
         }
-        fatal @ PlotEvaluationError::Fatal(_) => fatal,
+        other => other,
     }
 }
 
@@ -1294,6 +1320,54 @@ fn plot_declared_type(
 #[cfg(test)]
 mod tests;
 
+fn check_plot_expression_dependencies(
+    expressions: &[&graphcal_compiler::hir::Expr],
+    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    ctx: &EvalContext<'_>,
+) -> Result<(), PlotEvaluationError> {
+    if let Some(reason) = ctx.unavailable_dependencies(expressions.iter().copied())?
+        && reason.is_incomplete()
+    {
+        return Err(PlotEvaluationError::Unavailable(reason));
+    }
+    dependency_failure_message(expressions.iter().copied(), errors)
+        .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))
+}
+
+/// Propagate known plot unavailability without hiding unknown checked references.
+fn check_plot_dependencies(
+    references: &[graphcal_compiler::syntax::span::Spanned<ScopedName>],
+    errors: &[super::types::PlotError],
+    ctx: &EvalContext<'_>,
+) -> Result<(), PlotEvaluationError> {
+    let dependencies = references
+        .iter()
+        .filter_map(|reference| {
+            errors
+                .iter()
+                .find(|error| error.name == reference.value)
+                .map(|error| (reference, error))
+        })
+        .map(|(reference, error)| {
+            ctx.current_dag
+                .require_bound_decl_identity(
+                    &reference.value,
+                    ctx.src,
+                    DiagnosticAnchor::Source(reference.span),
+                )
+                .map(|identity| (identity, &error.reason))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    NodeUnavailable::blocked_by(
+        dependencies
+            .iter()
+            .map(|(identity, reason)| (identity, *reason)),
+    )
+    .map_or(Ok(()), |reason| {
+        Err(PlotEvaluationError::Unavailable(reason))
+    })
+}
+
 /// Evaluated fields of a figure/layer declaration.
 #[derive(Debug)]
 struct CompositionFields {
@@ -1308,6 +1382,9 @@ fn eval_composition_fields(
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<CompositionFields, PlotEvaluationError> {
+    if let Some(reason) = ctx.unavailable_dependencies(fields.iter().map(|field| &*field.value))? {
+        return Err(PlotEvaluationError::Unavailable(reason));
+    }
     let mut properties = Vec::new();
     for field in fields {
         let graphcal_compiler::ir::lower::LoweredPlotProperty::Composition(comp_prop) =

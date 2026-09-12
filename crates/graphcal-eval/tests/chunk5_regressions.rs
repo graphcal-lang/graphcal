@@ -242,7 +242,12 @@ plot p = {
 
     assert!(result.plots.is_empty());
     assert_eq!(result.plot_errors.len(), 1);
-    assert!(result.plot_errors[0].message.contains("to_float"));
+    assert!(
+        result.plot_errors[0]
+            .reason
+            .to_string()
+            .contains("to_float")
+    );
 }
 
 #[test]

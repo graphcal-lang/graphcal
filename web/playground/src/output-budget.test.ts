@@ -19,6 +19,7 @@ it("counts generated HTML toward the display budget", () => {
     evaluation: {
       compiler_version: "test",
       has_errors: false,
+      incomplete: false,
       values: [],
       assertions: [],
       notices: [],

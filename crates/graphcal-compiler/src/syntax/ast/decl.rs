@@ -937,8 +937,15 @@ pub struct ValueDecl<P: Phase = Raw> {
     pub value: Expr<P>,
 }
 
-/// Runtime node declaration: `node name: Type = expr;`
-pub type NodeDecl<P = Raw> = ValueDecl<P>;
+/// Runtime node declaration, with either a formula or an unfinished body.
+#[derive(Debug, Clone)]
+pub struct NodeDecl<P: Phase = Raw> {
+    pub visibility: Visibility,
+    pub name: Spanned<DeclName>,
+    pub type_ann: TypeExpr<P>,
+    pub definition:
+        crate::node_definition::NodeDefinition<Expr<P>, crate::syntax::module_name::ScopedName>,
+}
 
 /// Const node declaration: `const node name: Type = expr;`
 pub type ConstNodeDecl<P = Raw> = ValueDecl<P>;

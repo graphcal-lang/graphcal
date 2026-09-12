@@ -235,7 +235,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                     visibility: slot.visibility,
                     name: slot.name.clone(),
                     type_ann: slot.type_ann.clone(),
-                    value: table_expr,
+                    definition: crate::node_definition::NodeDefinition::Formula(table_expr),
                 },
                 decl_span,
             ),

@@ -170,8 +170,10 @@ export class Output {
           this.parent.append(
             element(
               "p",
-              notice.kind === "plot_error" ? `${notice.name}: ${notice.message}` : notice.message,
-              "error",
+              "name" in notice ? `${notice.name}: ${notice.message}` : notice.message,
+              notice.kind === "call_incomplete" || notice.kind === "plot_incomplete"
+                ? "muted"
+                : "error",
             ),
           );
         this.parent.append(element("h2", "Values"));
@@ -181,18 +183,21 @@ export class Output {
           const name = element("code", declaration.name);
           name.title = declaration.declaration_kind;
           const result = declaration.outcome;
-          row.append(
-            name,
-            result.status === "value"
-              ? resultValueNode(result.value, result.body)
-              : element(
-                  "span",
-                  result.error.kind === "evaluation_failed"
-                    ? result.error.message
-                    : `Dependency failed: ${result.error.failed_dependencies.join(", ")}`,
-                  "error",
-                ),
-          );
+          row.append(name);
+          if (result.status === "value") {
+            row.append(resultValueNode(result.value, result.body));
+          } else {
+            const reason = result.status === "incomplete" ? result.reason : result.error;
+            row.append(
+              element(
+                "span",
+                reason.kind === "dependency_failed"
+                  ? `Dependency failed: ${reason.failed_dependencies.join(", ")}`
+                  : reason.message,
+                result.status === "incomplete" ? "muted" : "error",
+              ),
+            );
+          }
           return row;
         });
         if (!evaluation.values.length) this.parent.append(element("p", "No values were produced."));
@@ -239,7 +244,11 @@ export class Output {
             "muted",
           ),
         );
-        return evaluation.has_errors ? "Completed with errors" : "Up to date";
+        return evaluation.has_errors
+          ? "Completed with errors"
+          : evaluation.incomplete
+            ? "Model incomplete"
+            : "Up to date";
       }
     }
   }

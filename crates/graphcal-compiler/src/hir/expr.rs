@@ -421,6 +421,14 @@ pub(crate) fn lower_expr(
     }
 }
 
+/// Resolve a declaration reference without constructing an expression.
+pub(crate) fn lower_graph_reference(
+    reference: &Spanned<ScopedName>,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
+    ExprLowerer::new(ctx).resolve_graph_ref(reference)
+}
+
 /// Lower a syntax assertion body into HIR, accumulating diagnostics.
 ///
 /// Each assertion body owns an independent lexical local-id space. Assertion
@@ -2174,6 +2182,13 @@ impl<'a> ExprLowerer<'a> {
     }
 
     fn lower_graph_ref(&self, name: &Spanned<ScopedName>) -> Result<ExprKind, ExprLowerError> {
+        self.resolve_graph_ref(name).map(ExprKind::GraphRef)
+    }
+
+    fn resolve_graph_ref(
+        &self,
+        name: &Spanned<ScopedName>,
+    ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
         let kind_identity = match self
             .ctx
@@ -2197,7 +2212,7 @@ impl<'a> ExprLowerer<'a> {
                     .decl_bindings
                     .is_some_and(|bindings| bindings.contains_key(&name.value)) =>
             {
-                return Ok(ExprKind::GraphRef(Spanned::new(resolved, name.span)));
+                return Ok(Spanned::new(resolved, name.span));
             }
             Err(source) => {
                 return Err(ExprLowerError::ModuleResolve {
@@ -2233,7 +2248,7 @@ impl<'a> ExprLowerer<'a> {
                 span: name.span,
             });
         }
-        Ok(ExprKind::GraphRef(Spanned::new(resolved, name.span)))
+        Ok(Spanned::new(resolved, name.span))
     }
 
     fn resolve_decl_scoped_name(
@@ -3112,7 +3127,9 @@ mod tests {
         file.declarations
             .iter()
             .find_map(|decl| match &decl.kind {
-                ast::DeclKind::Node(node) if node.name.value.as_str() == name => Some(&node.value),
+                ast::DeclKind::Node(node) if node.name.value.as_str() == name => {
+                    node.definition.formula()
+                }
                 _ => None,
             })
             .expect("source should contain requested node")
