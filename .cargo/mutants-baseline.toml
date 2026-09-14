@@ -490,9 +490,10 @@ function = "<impl Write for ManifestJsonWriter>::write"
 genre = "BinaryOperator"
 replacement = ">="
 span = { start = { line = 1, column = 24 }, end = { line = 1, column = 25 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/manifest.rs"
@@ -500,9 +501,10 @@ function = "<impl std::fmt::Display for ManifestListRole>::fmt"
 genre = "FnValue"
 replacement = "Ok(Default::default())"
 span = { start = { line = 1, column = 9 }, end = { line = 9, column = 11 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/manifest.rs"
@@ -510,9 +512,10 @@ function = "<impl std::fmt::Display for NameRole>::fmt"
 genre = "FnValue"
 replacement = "Ok(Default::default())"
 span = { start = { line = 1, column = 9 }, end = { line = 9, column = 11 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/manifest.rs"
@@ -520,9 +523,10 @@ function = "PluginManifest::to_json"
 genre = "MatchArmGuard"
 replacement = "true"
 span = { start = { line = 13, column = 23 }, end = { line = 13, column = 44 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/manifest.rs"
@@ -530,9 +534,10 @@ function = "function_context"
 genre = "FnValue"
 replacement = "\"xyzzy\".into()"
 span = { start = { line = 1, column = 5 }, end = { line = 1, column = 79 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/manifest.rs"
@@ -540,9 +545,10 @@ function = "function_context"
 genre = "FnValue"
 replacement = "String::new()"
 span = { start = { line = 1, column = 5 }, end = { line = 1, column = 79 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/section.rs"
@@ -550,9 +556,10 @@ function = "SectionWalker<'a>::next_section"
 genre = "BinaryOperator"
 replacement = "+"
 span = { start = { line = 20, column = 71 }, end = { line = 20, column = 72 } }
-status = "open"
+status = "resolved"
 review = "unreviewed"
 rationale = ""
+resolution = "unviable"
 
 [[finding]]
 file = "crates/graphcal-plugin-abi/src/section.rs"
@@ -602,6 +609,7 @@ function = "encode_leb128_u32"
 genre = "BinaryOperator"
 replacement = "^"
 span = { start = { line = 10, column = 23 }, end = { line = 10, column = 24 } }
-status = "open"
+status = "resolved"
 review = "unreviewed"
 rationale = ""
+resolution = "unviable"
