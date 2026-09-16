@@ -18,9 +18,9 @@ keywords = ["calculations", "engineering", "reactive", "units"]
 categories = ["compilers", "science"]
 
 [workspace.dependencies]
-arrow-array = "59.1.0"
-arrow-ipc = "59.1.0"
-arrow-schema = "59.1.0"
+arrow-array = "60.0.0"
+arrow-ipc = "60.0.0"
+arrow-schema = "60.0.0"
 base64 = "0.23.1"
 clap = { version = "4.5.58", features = ["derive"] }
 gix = { version = "0.87.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "parallel", "sha1", "worktree-mutation"] }
