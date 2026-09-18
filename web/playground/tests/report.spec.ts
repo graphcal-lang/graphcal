@@ -22,8 +22,9 @@ async function apply(page: Page, name: string) {
   const menu = report(page)
     .locator(`.outline-row[data-parameter="${name}"] .outline-row-actions`)
     .first();
-  await menu.locator("summary").click();
-  await menu.getByRole("button", { name: "Apply", exact: true }).click();
+  const applyButton = menu.getByRole("button", { name: "Apply", exact: true });
+  if (!(await applyButton.isVisible())) await menu.locator("summary").click();
+  await applyButton.click();
 }
 async function open(page: Page, bindings: { name: string; expr: string }[] = []) {
   await page.goto(`/playground/?view=report${fragment(bindings)}`);
