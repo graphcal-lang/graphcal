@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { randomBytes } from "node:crypto";
+import { replaceSource } from "./source-editor";
 
 const shared = (source: string) =>
   `#v=1&code=${gzipSync(JSON.stringify({ filename: "shared.gcl", source })).toString("base64url")}`;
@@ -16,9 +17,7 @@ test("Back and fragment navigation respect dirty-document confirmation", async (
   await expect(page.getByLabel("Filename", { exact: true })).toHaveValue("rocket.gcl");
   await expect(page.locator("#status")).toHaveText("Up to date");
   await page.getByLabel("Auto-run", { exact: true }).uncheck();
-  await page
-    .getByRole("textbox", { name: "Graphcal source editor" })
-    .fill("node keep_me: Int = 1;");
+  await replaceSource(page, "node keep_me: Int = 1;");
   const previous = page.url();
   const hash = shared("node incoming: Int = 2;");
   page.once("dialog", (dialog) => dialog.dismiss());
@@ -59,7 +58,7 @@ test("a delayed example cannot overwrite newer edits or a shared snapshot", asyn
   await page.getByLabel("Examples", { exact: true }).selectOption("hello");
   await page.getByRole("button", { name: "Load example", exact: true }).click();
   await seen;
-  await page.getByRole("textbox", { name: "Graphcal source editor" }).fill("node newer: Int = 9;");
+  await replaceSource(page, "node newer: Int = 9;");
   await page.getByRole("button", { name: "Share", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Shareable URL" })).toBeVisible();
   release();
@@ -95,7 +94,7 @@ test("clipboard denial offers a selected URL and oversized sharing keeps source"
   ).toBe("// 🙂\r\nnode x: Int = 3;\n");
   const originalUrl = page.url();
   const large = `// ${randomBytes(25_000).toString("base64")}\nnode retained: Int = 7;`;
-  await page.getByRole("textbox", { name: "Graphcal source editor" }).fill(large);
+  await replaceSource(page, large);
   await page.getByRole("button", { name: "Share", exact: true }).click();
   await expect(page.locator("#share-status")).toContainText(/limit|16 KiB/);
   expect(page.url()).toBe(originalUrl);

@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
+import { replaceSource } from "./source-editor";
 
 const source = `/// Speed <script> is plain text.
 param speed: Velocity = 2.0 m/s;
@@ -184,7 +185,7 @@ test("view history preserves dirty source and source changes clear parameter ove
 }) => {
   await open(page, [{ name: "speed", expr: "8.0 m/s" }]);
   await page.locator("#workspace-view").click();
-  await page.getByRole("textbox", { name: "Graphcal source editor" }).fill(source + "\n// edited");
+  await replaceSource(page, source + "\n// edited");
   await page.locator("#report-view").click();
   await expect(page.locator("#report")).toContainText("overrides cleared");
   page.on("dialog", () => {
