@@ -4,6 +4,7 @@ import { gzipSync } from "node:zlib";
 import { readFile } from "node:fs/promises";
 import catalog from "../examples/catalog.json" with { type: "json" };
 import { decodeFragment } from "../src/share-codec";
+import { replaceSource, sourceEditor } from "./source-editor";
 
 function fragment(source: string, filename = "main.gcl") {
   return `#v=1&code=${gzipSync(JSON.stringify({ filename, source })).toString("base64url")}`;
@@ -14,7 +15,7 @@ async function ready(page: Page) {
 }
 async function source(page: Page, text: string) {
   await page.getByLabel("Auto-run", { exact: true }).uncheck();
-  await page.getByRole("textbox", { name: "Graphcal source editor" }).fill(text);
+  await replaceSource(page, text);
 }
 
 test("full-height editor, keyboard resizing, no tab trap, theme and accessibility", async ({
@@ -50,7 +51,7 @@ test("lexical highlighting works before Run, after edits/undo, and in both theme
   const text = '// 🙂 node\nnode value: Length = 1.0 m;\n"unfinished\ntrue';
   await page.goto(`/playground/${fragment(text)}`);
   await expect(page.locator("#status")).toContainText("press Run");
-  const editor = page.getByRole("textbox", { name: "Graphcal source editor" });
+  const editor = sourceEditor(page);
   await expect(editor.locator(".tok-comment")).toHaveText("// 🙂 node");
   await expect(editor.locator(".tok-keyword")).toHaveText("node");
   await expect(editor.locator(".tok-number")).toHaveText("1.0");
@@ -67,7 +68,7 @@ test("lexical highlighting works before Run, after edits/undo, and in both theme
   // Explicit dark selection must also win over the system's light preference.
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(editor.locator(".tok-keyword")).toHaveCSS("color", "rgb(217, 167, 255)");
-  await editor.fill("// replaced\nnode other = false;");
+  await replaceSource(page, "// replaced\nnode other = false;");
   await expect(editor.locator(".tok-string")).toHaveCount(0);
   await expect(editor.locator(".tok-comment")).toHaveText("// replaced");
   await expect(editor.locator(".tok-bool")).toHaveText("false");
