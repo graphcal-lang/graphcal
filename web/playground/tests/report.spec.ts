@@ -110,6 +110,7 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`;
   await frame.getByRole("textbox", { name: "samples #39", exact: true }).fill("7");
   await expect(result(page, "samples")).toContainText("7");
   await frame.getByRole("searchbox", { name: "Search inputs" }).fill("");
+  await frame.getByRole("checkbox", { name: "Auto run", exact: true }).uncheck();
 
   const amount = frame.getByRole("textbox", { name: "choice value", exact: true });
   await amount.fill("3.0 s");
