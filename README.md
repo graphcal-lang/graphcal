@@ -40,21 +40,9 @@ graphcal eval rocket.gcl --param 'isp=450.0 s'
 graphcal report build rocket.gcl
 ```
 
-For the full CLI, see the [CLI reference](https://graphcal.org/docs/cli-reference/). For a guided introduction, start with the [tutorial](https://graphcal.org/docs/tutorial/).
+## Documentation
 
-## Editor support
-
-- **VS Code:** install the [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal).
-- **Zed:** use the [Zed extension](https://github.com/graphcal-lang/zed-graphcal) as a development extension.
-- **Neovim / Helix:** use the [tree-sitter grammar](https://github.com/graphcal-lang/tree-sitter-graphcal) with `graphcal lsp`.
-
-See the [editor setup guide](https://graphcal.org/docs/editor-setup/) for details.
-
-## Explore further
-
-- [Language reference](https://graphcal.org/docs/language/)
-- [Tenax integration](https://graphcal.org/docs/tenax-integration/)
-- [Documentation home](https://graphcal.org/docs/)
+Everything else is in the [documentation](https://graphcal.org/docs/): the [tutorial](https://graphcal.org/docs/tutorial/), the [editor setup guide](https://graphcal.org/docs/editor-setup/) for VS Code, Zed, Neovim and Helix, and the language and CLI references.
 
 ## Design influences
 
