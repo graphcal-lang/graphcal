@@ -1,4 +1,6 @@
-# Graphcal
+<h1 align="center">
+  <img alt="Graphcal" src="docs/en/assets/graphcal-wordmark-white-background.png" width="400">
+</h1>
 
 > [!WARNING]
 > Graphcal is under active development. Expect breaking changes and bugs.
