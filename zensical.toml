@@ -8,6 +8,7 @@ docs_dir = "docs/en"
 site_dir = "target/docs-site/en"
 repo_name = "graphcal-lang/graphcal"
 repo_url = "https://github.com/graphcal-lang/graphcal"
+extra_css = ["/docs/assets/stylesheets/graphcal.css"]
 nav = [
   { "Home" = "index.md" },
   { "Playground" = "https://graphcal.org/playground/" },
@@ -51,6 +52,7 @@ alternate = [
 [project.theme]
 custom_dir = "internals/docs-theme"
 language = "en"
+logo = "/docs/assets/graphcal-wordmark-white-background.png"
 features = [
   "announce.dismiss",
   "content.code.annotate",
