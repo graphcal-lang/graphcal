@@ -5,8 +5,6 @@
 > [!WARNING]
 > Graphcal is under active development. Expect breaking changes and bugs.
 
-**A type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations.**
-
 Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc scripts provide. Write plain-text calculation graphs, let the compiler check types and physical dimensions, and see dependent values update when inputs change.
 
 ![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/en/assets/rocket-screenshot.png)
@@ -27,6 +25,7 @@ Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc 
 Install the CLI with [Rust](https://rustup.rs/):
 
 ```sh
+# The version flag is needed while Graphcal is a pre-release.
 cargo install graphcal --version '^0.0.1-alpha' --locked
 ```
 
