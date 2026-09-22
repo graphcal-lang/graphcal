@@ -5,8 +5,6 @@
 > [!WARNING]
 > Graphcal is under active development. Expect breaking changes and bugs.
 
-Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc scripts provide. Write plain-text calculation graphs, let the compiler check types and physical dimensions, and see dependent values update when inputs change.
-
 ![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/en/assets/rocket-screenshot.png)
 
 *The Tsiolkovsky rocket equation in Graphcal. The language server shows computed values inline, turning a text file into a live engineering worksheet.*
@@ -14,6 +12,8 @@ Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc 
 [Try this example in the browser playground](https://graphcal.org/playground/?example=rocket) without installing anything.
 
 ## Why Graphcal?
+
+For engineers who want more confidence than spreadsheets and ad-hoc scripts provide:
 
 - **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
 - **Reactive:** changing a parameter recomputes its dependents.
