@@ -34,14 +34,10 @@ Save [`rocket.gcl`](tests/fixtures/valid/rocket.gcl), the file shown above, then
 
 ```sh
 graphcal eval rocket.gcl
-# Try a different input:
+# Change an input; dependent values recompute:
 graphcal eval rocket.gcl --param 'isp=450.0 s'
-# Or bind several params from inline JSON:
-graphcal eval rocket.gcl --params-json '{"dry_mass":"1500.0 kg","isp":"450.0 s"}'
-# Build a shareable, self-contained interactive HTML report (experimental):
+# Build a self-contained interactive HTML report (experimental):
 graphcal report build rocket.gcl
-# Or omit controls and the embedded browser engine:
-graphcal report build rocket.gcl --static
 ```
 
 For the full CLI, see the [CLI reference](https://graphcal.org/docs/cli-reference/). For a guided introduction, start with the [tutorial](https://graphcal.org/docs/tutorial/).
