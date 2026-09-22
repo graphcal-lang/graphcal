@@ -11,35 +11,15 @@ Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc 
 
 ![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/en/assets/rocket-screenshot.png)
 
-*The language server shows computed values inline, turning a text file into a live engineering worksheet.*
+*The Tsiolkovsky rocket equation in Graphcal. The language server shows computed values inline, turning a text file into a live engineering worksheet.*
 
-## See it in action
-
-This example calculates rocket delta-v. `Velocity` and `Acceleration` are prelude dimensions.
-
-```gcl
-param dry_mass: Mass = 1200.0 kg;
-param fuel_mass: Mass = 2800.0 kg;
-param isp: Time = 320.0 s;
-const node g0: Acceleration = 9.80665 m/s^2;
-
-node v_exhaust: Velocity = @isp * @g0;
-node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
-node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
-```
-
-```sh
-graphcal eval rocket.gcl
-# delta_v = 3778.221 m/s
-```
-
-[Try the example in the browser playground](https://graphcal.org/playground/?example=rocket) without installing anything.
+[Try this example in the browser playground](https://graphcal.org/playground/?example=rocket) without installing anything.
 
 ## Why Graphcal?
 
 - **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
-- **Explicit name resolution:** Static, Term, and Unit lookups are separate; `::`, `#`, and `.` make module members, index labels, and runtime fields unambiguous.
-- **Typed reusable interfaces:** `include` and direct DAG calls bind required or optional `type`, `dim`, and `index` inputs by exact category; transitive re-exports retain canonical identities, specialized ADT constructors follow their owner type, nested DAG blueprints use dotted paths, and concrete instances keep plain-unit scales isolated.
+- **Explicit name resolution:** `::`, `#`, and `.` distinguish module members, index labels, and runtime fields, so a lookup is never ambiguous.
+- **Typed reusable interfaces:** `include` and direct DAG calls bind `type`, `dim`, and `index` inputs by exact category.
 - **Reactive:** changing a parameter recomputes its dependents.
 - **Git-friendly:** `.gcl` files are plain text and diff cleanly.
 - **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.
@@ -54,7 +34,7 @@ Install the CLI with [Rust](https://rustup.rs/):
 cargo install graphcal --version '^0.0.1-alpha' --locked
 ```
 
-Save the example above as `rocket.gcl`, then run:
+Save [`rocket.gcl`](tests/fixtures/valid/rocket.gcl), the file shown above, then run:
 
 ```sh
 graphcal eval rocket.gcl
