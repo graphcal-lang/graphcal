@@ -7,9 +7,7 @@
 
 ![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/en/assets/rocket-screenshot.png)
 
-*The Tsiolkovsky rocket equation in Graphcal. The language server shows computed values inline, turning a text file into a live engineering worksheet.*
-
-[Try this example in the browser playground](https://graphcal.org/playground/?example=rocket) without installing anything.
+*The Tsiolkovsky rocket equation in Graphcal, with the language server showing computed values inline. [Try it in the browser playground](https://graphcal.org/playground/?example=rocket).*
 
 ## Why Graphcal?
 
