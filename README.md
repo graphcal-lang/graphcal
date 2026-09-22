@@ -18,13 +18,9 @@ Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc 
 ## Why Graphcal?
 
 - **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
-- **Explicit name resolution:** `::`, `#`, and `.` distinguish module members, index labels, and runtime fields, so a lookup is never ambiguous.
-- **Typed reusable interfaces:** `include` and direct DAG calls bind `type`, `dim`, and `index` inputs by exact category.
 - **Reactive:** changing a parameter recomputes its dependents.
 - **Git-friendly:** `.gcl` files are plain text and diff cleanly.
-- **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.
 - **Editor-friendly:** the LSP provides diagnostics, references, rename, and inline computed values.
-- **Sandboxed extensibility:** call pinned pure WebAssembly kernels.
 
 ## Quickstart
 
