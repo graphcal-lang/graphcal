@@ -18,6 +18,11 @@ async function source(page: Page, text: string) {
   await replaceSource(page, text);
 }
 
+test("standalone playground evaluates its default example @smoke", async ({ page }) => {
+  await ready(page);
+  await expect(page.locator("#output")).toContainText("delta_v");
+});
+
 test("full-height editor, keyboard resizing, no tab trap, theme and accessibility", async ({
   page,
 }) => {

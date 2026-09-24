@@ -21,7 +21,7 @@ async function search(page: Page, query: string, locale: "en" | "ja") {
   return results;
 }
 
-test("language home selector is keyboard accessible and changes the document language", async ({
+test("language home selector is keyboard accessible and changes the document language @smoke", async ({
   page,
 }) => {
   await page.goto("/docs/");

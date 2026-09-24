@@ -274,7 +274,7 @@ test("invalid restored overrides are explicit and recover with Reset parameters"
   await expect(result(page)).toHaveText("4 m/s");
 });
 
-test("opaque iframe denies parent access, forged messages and external plot resources", async ({
+test("opaque iframe denies parent access, forged messages and external plot resources @smoke", async ({
   page,
 }) => {
   await open(page);
@@ -321,10 +321,20 @@ test("opaque iframe denies parent access, forged messages and external plot reso
       }
     }),
   ).toBe("denied");
-  await report(page).getByRole("textbox", { name: "speed", exact: true }).fill("5.0 m/s");
+});
+
+test("sharing stays available after an identical accepted evaluation", async ({ page }) => {
+  await open(page);
+  const speed = report(page).getByRole("textbox", { name: "speed", exact: true });
+  await speed.fill("5.0 m/s");
   await apply(page, "speed");
   await expect(result(page)).toHaveText("10 m/s");
-  expect((await share(page)).state.bindings).toEqual([{ name: "speed", expr: "5.0 m/s" }]);
+  const { link, state } = await share(page);
+  expect(state.bindings).toEqual([{ name: "speed", expr: "5.0 m/s" }]);
+  await page.locator("#run").click();
+  await expect(page.locator("#status")).toHaveText("Up to date");
+  await expect(page.locator("#share-link")).toBeVisible();
+  await expect(page.locator("#share-link")).toHaveValue(link);
 });
 
 test("structured report tables are contained, bounded and accessible", async ({ page }) => {

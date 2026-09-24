@@ -1,0 +1,73 @@
+name: Browser end-to-end
+
+on:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Browser smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+        with:
+          tool: wasm-pack@0.15.0,just@1.58.0
+      - uses: voidzero-dev/setup-vp@9fd26ff49f9b5e6276c2b493da4454ad4527f7f4 # v1.20.0
+        with:
+          version: '0.3.0'
+          node-version: '24.20.0'
+          working-directory: web/playground
+          run-install: false
+          cache: true
+      - name: Install locked frontend dependencies
+        run: vp -C web/playground install --frozen-lockfile
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.x
+      - run: pip install zensical==0.0.62 uv==0.12.12
+      - name: Install Chromium for pull-request smoke tests
+        if: github.event_name == 'pull_request'
+        run: vp -C web/playground exec playwright install --with-deps chromium
+      - name: Install all browser engines for the full suite
+        if: github.event_name != 'pull_request'
+        run: vp -C web/playground exec playwright install --with-deps chromium firefox webkit
+      - name: Build the published site
+        run: just docs-build
+      - name: Run stable Chromium smoke tests on pull requests
+        if: github.event_name == 'pull_request'
+        run: vp -C web/playground exec playwright test --project=chromium --grep '@smoke'
+      - name: Run full cross-browser playground suite on schedule or demand
+        if: github.event_name != 'pull_request'
+        run: vp -C web/playground exec playwright test
+      - uses: ./.github/actions/report-engine-tools # zizmor: ignore[self-repository] -- actionlint requires ./ for local actions
+        if: github.event_name != 'pull_request'
+      - name: Verify offline SDK plugin reports in all browser engines
+        if: github.event_name != 'pull_request'
+        run: just report-plugin-browser-test
+      - name: Verify offline dependency reports and worker cancellation
+        if: github.event_name != 'pull_request'
+        run: just report-package-browser-test
+      - name: Upload browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playground-browser-failures
+          path: web/playground/test-results
+          if-no-files-found: ignore
