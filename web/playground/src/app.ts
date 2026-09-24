@@ -33,6 +33,7 @@ let parametersPending = false;
 let parametersEdited = false;
 let view: PlaygroundView = "workspace";
 let revision = 0;
+let shareRequest = 0;
 let lastLocation = window.location.href;
 let observedLocation = lastLocation;
 let pendingLoad: AbortController | undefined;
@@ -127,7 +128,14 @@ function updateShareStatus() {
     : shared && sameDocument(shared.document, current) && sameBindings(shared.bindings, bindings)
       ? "URL includes the current source and applied parameters."
       : "Edits are not saved in the URL. Use Share to create a snapshot.";
-  shareLink.hidden = true;
+  // A repeated evaluation of the same committed snapshot must not revoke its link.
+  shareLink.hidden =
+    !shareLink.value ||
+    !shared ||
+    !sameDocument(shared.document, current) ||
+    !sameBindings(shared.bindings, bindings) ||
+    new URL(shareLink.value || window.location.href).searchParams.get("view") !==
+      (view === "report" ? "report" : null);
 }
 function edited() {
   revision++;
@@ -302,7 +310,13 @@ required("#share").addEventListener("click", () => {
   }
   const snapshot = { document: current, bindings };
   const snapshotView = view;
-  const token = revision;
+  const request = ++shareRequest;
+  const stillCurrent = () =>
+    shareRequest === request &&
+    !pendingLoad &&
+    view === snapshotView &&
+    sameDocument(current, snapshot.document) &&
+    sameBindings(bindings, snapshot.bindings);
   void (async () => {
     try {
       const url = await shareUrl(
@@ -311,9 +325,10 @@ required("#share").addEventListener("click", () => {
         snapshot.bindings,
         snapshotView,
       );
-      if (revision !== token || view !== snapshotView) {
-        shareStatus.textContent =
-          "Source, parameters, or view changed while sharing. Press Share again.";
+      if (!stillCurrent()) {
+        if (shareRequest === request)
+          shareStatus.textContent =
+            "Source, parameters, or view changed while sharing. Press Share again.";
         return;
       }
       history.replaceState(null, "", url);
@@ -329,15 +344,15 @@ required("#share").addEventListener("click", () => {
         shareStatus.textContent += " Pending or rejected parameter edits were excluded.";
       try {
         await navigator.clipboard.writeText(url);
-        if (revision === token) shareStatus.textContent += " Link copied.";
+        if (stillCurrent()) shareStatus.textContent += " Link copied.";
       } catch {
-        if (revision === token) {
+        if (stillCurrent()) {
           shareLink.focus();
           shareLink.select();
         }
       }
     } catch (error) {
-      if (revision === token) shareStatus.textContent = message(error);
+      if (stillCurrent()) shareStatus.textContent = message(error);
     }
   })();
 });
