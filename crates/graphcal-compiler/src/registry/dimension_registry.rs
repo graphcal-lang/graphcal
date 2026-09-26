@@ -4,47 +4,45 @@ use thiserror::Error;
 
 use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
 use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, RationalError};
-use crate::syntax::dimension::DimName;
+use crate::syntax::dimension::{DimName, DimRef};
 
 /// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DimensionResolveError {
-    /// A referenced dimension name is not registered.
+    /// A referenced dimension is not visible under its (possibly
+    /// module-qualified) source reference.
     #[error("unknown dimension `{name}`")]
-    UnknownDimension { name: DimName },
+    UnknownDimension { name: DimRef },
     /// Dimension exponent arithmetic overflowed.
     #[error(transparent)]
     Overflow(#[from] RationalError),
 }
 
-/// Shared implementation for resolving a `DimExpr` to a concrete `Dimension`.
-pub(crate) fn resolve_dim_expr_impl(
-    dimensions: &HashMap<DimName, Dimension>,
+/// Resolve a `DimExpr` by looking up each term's typed (possibly
+/// module-qualified) reference with `lookup`.
+///
+/// This is the single term-folding implementation; registries supply their
+/// alias-aware scope lookup, while boundary code that spans two scopes (for
+/// example a dependency declaration re-read under include bindings) supplies
+/// a lookup that routes each reference to its owning scope.
+///
+/// # Errors
+///
+/// Returns [`DimensionResolveError::UnknownDimension`] with the full source
+/// reference when `lookup` misses, or an overflow error from exponent
+/// arithmetic.
+pub fn resolve_dim_expr_with<'a>(
     expr: &DimExpr,
-) -> Result<Option<Dimension>, RationalError> {
-    match resolve_dim_expr_detailed_impl(dimensions, expr) {
-        Ok(dim) => Ok(Some(dim)),
-        Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
-        Err(DimensionResolveError::Overflow(err)) => Err(err),
-    }
-}
-
-/// Shared implementation for resolving a `DimExpr` while preserving the failing name.
-pub(crate) fn resolve_dim_expr_detailed_impl(
-    dimensions: &HashMap<DimName, Dimension>,
-    expr: &DimExpr,
+    mut lookup: impl FnMut(&DimRef) -> Option<&'a Dimension>,
 ) -> Result<Dimension, DimensionResolveError> {
     expr.terms
         .iter()
         .try_fold(Dimension::dimensionless(), |acc, item| {
-            let name = item.term.name.value.leaf();
-            let Some(base) = dimensions.get(name.as_str()) else {
-                return Err(DimensionResolveError::UnknownDimension {
-                    name: DimName::from_atom(name.clone()),
-                });
+            let reference = DimRef::from_name_path(item.term.name.value.clone());
+            let Some(base) = lookup(&reference) else {
+                return Err(DimensionResolveError::UnknownDimension { name: reference });
             };
-            let exp = item.term.effective_power();
-            let powered = base.pow(exp)?;
+            let powered = base.pow(item.term.effective_power())?;
             match item.op {
                 MulDivOp::Mul => acc * powered,
                 MulDivOp::Div => acc / powered,
@@ -53,23 +51,80 @@ pub(crate) fn resolve_dim_expr_detailed_impl(
         })
 }
 
-/// Shared implementation for resolving a `TypeExpr` to a concrete `Dimension`.
-pub(crate) fn resolve_type_expr_impl(
-    dimensions: &HashMap<DimName, Dimension>,
-    type_expr: &TypeExpr,
-) -> Result<Option<Dimension>, RationalError> {
-    match &type_expr.kind {
-        TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::TypeApplication { .. }
-        | TypeExprKind::DatetimeApplication { .. }
-        | TypeExprKind::ComplexApplication { .. }
-        | TypeExprKind::KeyApplication { .. } => Ok(None),
-        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr_impl(dimensions, dim_expr),
-        TypeExprKind::Indexed { base, .. } => resolve_type_expr_impl(dimensions, base),
+/// Borrowed view of a flat source-visible dimension scope.
+///
+/// Every dimension-name lookup of a registry — direct `get_dimension` calls
+/// and `DimExpr` resolution alike — goes through [`Self::lookup`], so module
+/// qualifiers and source-visible aliases are honoured uniformly.
+#[derive(Clone, Copy)]
+pub(crate) struct DimensionScope<'a> {
+    dimensions: &'a HashMap<DimRef, Dimension>,
+    aliases: &'a HashMap<DimRef, DimRef>,
+}
+
+impl<'a> DimensionScope<'a> {
+    pub(crate) const fn new(
+        dimensions: &'a HashMap<DimRef, Dimension>,
+        aliases: &'a HashMap<DimRef, DimRef>,
+    ) -> Self {
+        Self {
+            dimensions,
+            aliases,
+        }
+    }
+
+    /// Look up a dimension reference, following alias edges. The alias walk
+    /// is bounded by the number of aliases so a cyclic chain cannot loop.
+    pub(crate) fn lookup(self, reference: &DimRef) -> Option<&'a Dimension> {
+        let mut current = reference;
+        for _ in 0..=self.aliases.len() {
+            if let Some(dimension) = self.dimensions.get(current) {
+                return Some(dimension);
+            }
+            current = self.aliases.get(current)?;
+        }
+        None
+    }
+
+    /// Resolve a `DimExpr` to a concrete `Dimension`, returning `Ok(None)`
+    /// when a referenced dimension is unknown.
+    pub(crate) fn resolve_dim_expr(
+        self,
+        expr: &DimExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
+        match self.resolve_dim_expr_detailed(expr) {
+            Ok(dim) => Ok(Some(dim)),
+            Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
+            Err(DimensionResolveError::Overflow(err)) => Err(err),
+        }
+    }
+
+    /// Resolve a `DimExpr` while preserving the failing (qualified) reference.
+    pub(crate) fn resolve_dim_expr_detailed(
+        self,
+        expr: &DimExpr,
+    ) -> Result<Dimension, DimensionResolveError> {
+        resolve_dim_expr_with(expr, |reference| self.lookup(reference))
+    }
+
+    /// Resolve a `TypeExpr` to a concrete `Dimension`.
+    pub(crate) fn resolve_type_expr(
+        self,
+        type_expr: &TypeExpr,
+    ) -> Result<Option<Dimension>, RationalError> {
+        match &type_expr.kind {
+            TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
+            TypeExprKind::IndexLabel { .. }
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::TypeApplication { .. }
+            | TypeExprKind::DatetimeApplication { .. }
+            | TypeExprKind::ComplexApplication { .. }
+            | TypeExprKind::KeyApplication { .. } => Ok(None),
+            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
+            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
+        }
     }
 }
 
@@ -80,7 +135,7 @@ pub(crate) fn resolve_type_expr_impl(
 /// a matching named dimension (`Energy`) when one is registered; if several
 /// names match, the lexicographically smallest is chosen for determinism.
 fn format_dimension_preferring_alias(
-    dimensions: &HashMap<DimName, Dimension>,
+    dimensions: &HashMap<DimRef, Dimension>,
     base_dim_names: &BTreeMap<BaseDimId, String>,
     dim: &Dimension,
 ) -> Result<String, MissingBaseDimensionName> {
@@ -104,7 +159,7 @@ fn format_dimension_preferring_alias(
     reason = "RegistryBuilder::try_build validates base-dimension display metadata before Registry construction"
 )]
 pub(crate) fn format_dimension_preferring_alias_after_validation(
-    dimensions: &HashMap<DimName, Dimension>,
+    dimensions: &HashMap<DimRef, Dimension>,
     base_dim_names: &BTreeMap<BaseDimId, String>,
     dim: &Dimension,
 ) -> String {
@@ -150,7 +205,7 @@ pub enum RegistryBuildError {
 pub struct DimensionFormattingRegistry {
     base_dim_names: BTreeMap<BaseDimId, String>,
     base_dim_symbols: BTreeMap<BaseDimId, String>,
-    display_aliases: HashMap<DimName, Dimension>,
+    display_aliases: HashMap<DimRef, Dimension>,
 }
 
 impl DimensionFormattingRegistry {
@@ -187,7 +242,7 @@ impl DimensionFormattingRegistry {
         self.base_dim_symbols
             .insert(base.clone(), name.as_str().to_string());
         self.display_aliases.insert(
-            crate::syntax::dimension::DimName::from_atom(name.atom().clone()),
+            DimRef::local(DimName::from_atom(name.atom().clone())),
             Dimension::base(base),
         );
     }
@@ -227,8 +282,8 @@ pub struct DimensionRegistry {
     pub(crate) base_dim_names: BTreeMap<BaseDimId, String>,
     /// Base dimension ID → default unit symbol for runtime display.
     pub(crate) base_dim_symbols: BTreeMap<BaseDimId, String>,
-    pub(crate) dimensions: HashMap<DimName, Dimension>,
-    pub(crate) aliases: HashMap<DimName, DimName>,
+    pub(crate) dimensions: HashMap<DimRef, Dimension>,
+    pub(crate) aliases: HashMap<DimRef, DimRef>,
 }
 
 impl DimensionRegistry {
@@ -240,22 +295,25 @@ impl DimensionRegistry {
         }
     }
 
-    /// Look up a dimension by name.
+    const fn scope(&self) -> DimensionScope<'_> {
+        DimensionScope::new(&self.dimensions, &self.aliases)
+    }
+
+    /// Look up an unqualified (local, selectively imported, or prelude)
+    /// dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        let mut current = DimName::try_new(name).ok()?;
-        let mut remaining = self.aliases.len() + 1;
-        loop {
-            if let Some(dimension) = self.dimensions.get(&current) {
-                return Some(dimension);
-            }
-            current = self.aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+        self.get_dimension_ref(&DimRef::local(DimName::try_new(name).ok()?))
+    }
+
+    /// Look up a possibly module-qualified dimension reference.
+    #[must_use]
+    pub fn get_dimension_ref(&self, reference: &DimRef) -> Option<&Dimension> {
+        self.scope().lookup(reference)
     }
 
     /// Iterate over all named dimensions.
-    pub fn all_dimensions(&self) -> impl Iterator<Item = (&DimName, &Dimension)> {
+    pub fn all_dimensions(&self) -> impl Iterator<Item = (&DimRef, &Dimension)> {
         self.dimensions.iter()
     }
 
@@ -292,7 +350,7 @@ impl DimensionRegistry {
         &self,
         expr: &DimExpr,
     ) -> Result<Option<Dimension>, RationalError> {
-        resolve_dim_expr_impl(&self.dimensions, expr)
+        self.scope().resolve_dim_expr(expr)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
@@ -301,7 +359,7 @@ impl DimensionRegistry {
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {
-        resolve_dim_expr_detailed_impl(&self.dimensions, expr)
+        self.scope().resolve_dim_expr_detailed(expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -312,6 +370,6 @@ impl DimensionRegistry {
         &self,
         type_expr: &TypeExpr,
     ) -> Result<Option<Dimension>, RationalError> {
-        resolve_type_expr_impl(&self.dimensions, type_expr)
+        self.scope().resolve_type_expr(type_expr)
     }
 }

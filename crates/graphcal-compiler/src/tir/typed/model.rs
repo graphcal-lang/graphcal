@@ -569,9 +569,12 @@ impl ProjectTypeStore {
         hir: &crate::ir::lower::HirDag,
     ) -> Result<(), ProjectTypeStoreInsertError> {
         let owner = hir.dag_id();
-        for (name, dimension) in hir.registry.dimensions.all_dimensions() {
+        for (reference, dimension) in hir.registry.dimensions.all_dimensions() {
+            if reference.is_qualified() {
+                continue;
+            }
             self.insert_dimension_definition(
-                ResolvedDimName::from_def(owner.clone(), name.clone()),
+                ResolvedDimName::from_def(owner.clone(), reference.name().clone()),
                 dimension,
             )?;
         }

@@ -405,7 +405,7 @@ mod tests {
         let loaded_dims = r
             .dimensions
             .all_dimensions()
-            .map(|(name, _)| name.as_str())
+            .map(|(name, _)| name.name().as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_dims, loaded_dims);
 

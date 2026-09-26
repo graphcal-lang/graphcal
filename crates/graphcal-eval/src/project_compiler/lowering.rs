@@ -1804,8 +1804,11 @@ fn effective_index_binding_contract(
     binding_span: Span,
 ) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
-    use graphcal_compiler::registry::dimension_registry::DimensionResolveError;
+    use graphcal_compiler::registry::dimension_registry::{
+        DimensionResolveError, resolve_dim_expr_with,
+    };
     use graphcal_compiler::registry::types::{IndexBindingContract, IndexKind};
+    use graphcal_compiler::syntax::dimension::DimRef;
 
     let definition = dep_registry
         .indexes
@@ -1827,7 +1830,7 @@ fn effective_index_binding_contract(
             dimension: data.dimension.clone(),
         }),
         IndexKind::RequiredCoordinate { .. } => {
-            let mut dimension_expr = dep_declarations
+            let dimension_expr = dep_declarations
                 .iter()
                 .find_map(|declaration| match &declaration.kind {
                     DeclKind::Index(index) if index.name.value == *dep_index => match &index.kind {
@@ -1845,32 +1848,33 @@ fn effective_index_binding_contract(
                         span: binding_span.into(),
                     })
                 })?;
-            graphcal_compiler::ir::lower::substitute_dim_expr_names(
-                &mut dimension_expr,
-                dim_bindings,
-            );
-            let dimension =
-                builder
-                    .resolve_dim_expr_detailed(&dimension_expr)
-                    .map_err(|error| {
-                        CompileError::Eval(match error {
-                            DimensionResolveError::UnknownDimension { name } => {
-                                GraphcalError::UnknownDimension {
-                                    name: graphcal_compiler::syntax::names::NamePath::from(
-                                        name.atom().clone(),
-                                    ),
-                                    src: importer_src.clone(),
-                                    span: binding_span.into(),
-                                }
-                            }
-                            DimensionResolveError::Overflow(_) => {
-                                GraphcalError::DimensionOverflow {
-                                    src: importer_src.clone(),
-                                    span: binding_span.into(),
-                                }
-                            }
-                        })
-                    })?;
+            // The expression is the dependency's source: bound required
+            // dimensions resolve to the importer's binding target, every other
+            // (possibly qualified) reference in the dependency's own scope.
+            let dimension = resolve_dim_expr_with(&dimension_expr, |reference| {
+                dim_bindings
+                    .get(reference.name())
+                    .filter(|_| !reference.is_qualified())
+                    .map_or_else(
+                        || dep_registry.dimensions.get_dimension_ref(reference),
+                        |target| builder.get_dimension_ref(&DimRef::local(target.clone())),
+                    )
+            })
+            .map_err(|error| {
+                CompileError::Eval(match error {
+                    DimensionResolveError::UnknownDimension { name } => {
+                        GraphcalError::UnknownDimension {
+                            name: name.to_name_path(),
+                            src: importer_src.clone(),
+                            span: binding_span.into(),
+                        }
+                    }
+                    DimensionResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
+                        src: importer_src.clone(),
+                        span: binding_span.into(),
+                    },
+                })
+            })?;
             Ok(IndexBindingContract::Coordinate { dimension })
         }
         IndexKind::Finite { .. } => Err(CompileError::Eval(GraphcalError::InternalError {

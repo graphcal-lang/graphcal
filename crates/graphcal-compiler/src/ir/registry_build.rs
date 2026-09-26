@@ -53,7 +53,10 @@ pub(super) fn register_file_declarations(
 pub struct SelectedDeclarations {
     /// Bare items are unresolved between declaration and constructor namespaces.
     terms: HashSet<crate::syntax::names::NameAtom>,
-    dimensions: HashSet<crate::syntax::dimension::DimName>,
+    /// Selected dimensions keyed by their importer-local binding name, mapped
+    /// to the dependency's source declaration name (`dim Rate as R` stores
+    /// `R -> Rate`). Local names are what the importer's source can spell.
+    dimensions: HashMap<crate::syntax::dimension::DimName, crate::syntax::dimension::DimName>,
     units: HashSet<crate::syntax::dimension::UnitName>,
     indexes: HashSet<crate::syntax::index_name::IndexName>,
     types: HashSet<crate::syntax::type_name::StructTypeName>,
@@ -84,8 +87,8 @@ impl SelectedDeclarations {
                     .insert(crate::syntax::type_name::StructTypeName::from_atom(name));
             }
             crate::syntax::ast::ImportItemNamespace::Dimension => {
-                self.dimensions
-                    .insert(crate::syntax::dimension::DimName::from_atom(name));
+                let name = crate::syntax::dimension::DimName::from_atom(name);
+                self.dimensions.insert(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Unit => {
                 self.units
@@ -98,8 +101,26 @@ impl SelectedDeclarations {
         }
     }
 
-    /// Dimension names selected with the explicit `dim` marker.
-    pub fn dimensions(&self) -> impl Iterator<Item = &crate::syntax::dimension::DimName> {
+    /// Record one selectively imported dimension bound under an importer-local
+    /// name that may differ from its source declaration (`dim Rate as R`).
+    pub fn insert_dimension_as(
+        &mut self,
+        source: crate::syntax::dimension::DimName,
+        local: crate::syntax::dimension::DimName,
+    ) {
+        self.dimensions.insert(local, source);
+    }
+
+    /// Dimensions selected with the explicit `dim` marker, as
+    /// `(importer-local name, dependency source name)` pairs.
+    pub fn dimensions(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::syntax::dimension::DimName,
+            &crate::syntax::dimension::DimName,
+        ),
+    > {
         self.dimensions.iter()
     }
 
@@ -167,8 +188,14 @@ fn register_declarations_impl(
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
     let should_register_term = |name: &str| filter.is_none_or(|names| names.terms.contains(name));
-    let should_register_dimension =
-        |name: &str| filter.is_none_or(|names| names.dimensions.contains(name));
+    let should_register_dimension = |name: &str| {
+        filter.is_none_or(|names| {
+            names
+                .dimensions
+                .values()
+                .any(|source| source.as_str() == name)
+        })
+    };
     let should_register_unit = |name: &str| filter.is_none_or(|names| names.units.contains(name));
     let should_register_index =
         |name: &str| filter.is_none_or(|names| names.indexes.contains(name));
@@ -499,7 +526,7 @@ fn dimension_resolve_error(
 ) -> GraphcalError {
     match err {
         DimensionResolveError::UnknownDimension { name } => GraphcalError::UnknownDimension {
-            name: NamePath::from(name.into_atom()),
+            name: name.to_name_path(),
             src: src.clone(),
             span: span.into(),
         },
