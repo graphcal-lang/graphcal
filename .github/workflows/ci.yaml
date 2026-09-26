@@ -359,6 +359,27 @@ jobs:
       - name: Check MSRV
         run: cargo hack check --workspace --rust-version --ignore-private
 
+  refactor-metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.x"
+          enable-cache: false
+
+      - name: Install Nushell
+        uses: hustcer/setup-nu@9215c80adb545a85c419d5085b76eb6d082f49e7 # v3.27
+        with:
+          version: "0.115.1"
+
+      - name: Check refactor metrics ratchet
+        run: nu internals/refactor-metrics.nu check
+
   typos:
     runs-on: ubuntu-latest
     steps:
@@ -369,13 +390,13 @@ jobs:
       - uses: crate-ci/typos@512fc24f32f44ab01972217aaaf3dc86ec234d53 # v1.50.2
 
   ci-gate:
-    needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, typos]
+    needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, refactor-metrics, typos]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.refactor-metrics.result }}" "${{ needs.typos.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"

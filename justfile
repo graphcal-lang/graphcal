@@ -10,6 +10,10 @@ formal-conformance: formal
     GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-eval --test namespace_formal_conformance -- --ignored
     GRAPHCAL_EXTERNAL_SURFACE_ORACLE="$(pwd)/formal/.lake/build/bin/external-surface-oracle" cargo test --package graphcal-compiler --lib external_surface_matches_lean_oracle -- --ignored
 
+# Ratcheted refactor metrics; see internals/refactor-metrics.md.
+refactor-metrics:
+    nu internals/refactor-metrics.nu check
+
 # Syntax-aware module roles, exact dependency debt, and fail-closed fixtures.
 pipeline-layers:
     cargo test --locked --manifest-path internals/pipeline-layers/Cargo.toml
@@ -39,7 +43,7 @@ playground-check:
 playground-test: playground-assets
     cd web/playground && vp test
 
-lint: formal pipeline-layers-lint playground-check
+lint: formal pipeline-layers-lint playground-check refactor-metrics
     cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
