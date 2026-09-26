@@ -933,7 +933,11 @@ compiled modules or DAG bodies.
 LoadedProject
   files: HashMap<DagId, LoadedFile>
   root: DagId
-  load_order: Vec<DagId>  // dependencies before dependents
+  load_order: Vec<DagId>  // dependencies before dependents; root last
+  dag_owners: HashMap<DagId, DagId>  // file-root and inline DAG -> owning file
+  plugins: HashMap<PluginIdentity, PluginFileEntry>
+  plugin_call_policy: PluginCallPolicy
+  package_closure: Option<LoadedPackageClosure>
 
 LoadedFile
   path: PathBuf
@@ -941,16 +945,19 @@ LoadedFile
   source: Arc<String>
   ast: File<Desugared>
   named_source: NamedSource<Arc<String>>
-  resolved_imports: HashMap<ModulePathKey, DagId>
-  inline_dags: Vec<LoadedDag>
+  resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>
+  inline_dags: Vec<LoadedDag>  // source preorder
 
 LoadedDag
   dag_id: DagId
   parent_dag_id: DagId
-  name: String
-  body: Vec<Declaration<Desugared>>
+  body_locator: DagBodyLocator  // path into the owning file's AST
   resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>
 ```
+
+An inline DAG does not own a copy of its body. `LoadedDag::body(file)` borrows
+it from the owning `LoadedFile::ast` through the validated `DagBodyLocator`,
+so the file AST remains the single body owner.
 
 `ModulePathKey` stores import/include path segments as a vector. It avoids using
 joined strings as map keys inside the loader. `LoadedProject::build_module_resolver()`
@@ -965,31 +972,42 @@ boundary's job.
 
 ### 3.5 IR
 
-`IR` contains the semantic declaration lists for one DAG body, with bodies
-already lowered to HIR at `UnfrozenIR::freeze`:
+There is no type named `IR`. The IR stage is the pair `UnfrozenIR` (assembly)
+and `HirDag` (its frozen output), both in `ir/lower.rs`. `HirDag` holds the
+semantic declaration lists for one DAG body, with bodies already lowered to HIR
+at `UnfrozenIR::freeze`:
 
 ```text
 UnfrozenIR             // assembly stage: syntactic bodies
   consts, params, nodes, asserts, plots, figures, layers  (desugared AST)
+  + plugin imports, dynamic unit scales, unit bindings
   + typed semantic-instance edges and importer-context bindings
 
-IR = UnfrozenIR::freeze(registry, owner, resolver, src)
-  registry: Registry
+HirDag = UnfrozenIR::freeze(registry, owner, resolver, src)
+  dag_id: DagId
+  registry: SemanticRegistry
+  nominal_types: NominalTypeRegistry   // sole authority for nominal definitions
   consts, params, nodes, asserts          (hir::Expr / hir::AssertBody bodies)
   plots, figures, layers                  (LoweredPlotBody / lowered fields)
   source_order: Vec<(ScopedName, DeclCategory)>  // category contract: declaration_category.rs
-  assert_names
+  source_declarations, static_ports    // interface provenance authored in this DAG
   assumes_map
   expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>
     parsed keys + authored resolution owner + source provenance
-  imported_bindings: HashMap<ScopedName, ImportedBinding>
-    canonical target + declared type + optional pre-evaluated value
+  dynamic_unit_scales
+  imported_bindings: HashMap<ScopedName, HirImportedBinding>
+    canonical target only; checked type facts are attached at TIR construction
+  extern_functions: HashMap<ExternFnKey, ExternFunctionEntry>
   external_surface: ExternalDeclSurface
     explicit_exports  // declarations carrying `pub` / `pub(bind)`
     input_ports       // bindable and projectable annotation-free params
+  semantic_instances: Vec<HirInstanceRecord>
 ```
 
-There are no dependency maps on `IR`: the owner-qualified dependency graph is
+Imported compile-time values are never stored on a binding: they are facts of
+the defining body's checked constant pool.
+
+There are no dependency maps on `HirDag`: the owner-qualified dependency graph is
 collected from the HIR bodies during TIR construction and stored on
 `DagTIR::semantic.dependencies` (value sets use `BTreeSet` so DAG construction
 is deterministic).

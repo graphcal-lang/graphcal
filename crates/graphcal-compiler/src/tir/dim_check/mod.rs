@@ -1956,8 +1956,9 @@ fn collect_dag_call_targets_from_dag(
 /// evaluating any value. This check rejects cyclic params/nodes (`runtime_deps`)
 /// and cyclic consts (`const_deps`) at compile time so the diagnostic appears
 /// under `graphcal check`, not only at evaluation. Mirrors the toposort-based
-/// cycle detection in `graphcal-eval`'s `exec_plan::eval_consts_from_tir` and
-/// `build_runtime_dag`, which now act as defense-in-depth backstops.
+/// cycle detection in `graphcal-eval`'s `eval_const_pools_for_dags` and
+/// `build_runtime_dag` (`project_compiler/execution_check/const_schedule.rs`),
+/// which now act as defense-in-depth backstops.
 fn detect_decl_cycles(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
