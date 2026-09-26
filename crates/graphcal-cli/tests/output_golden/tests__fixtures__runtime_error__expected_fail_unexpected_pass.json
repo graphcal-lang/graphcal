@@ -1,0 +1,26 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "x_less": {
+          "message": "assertion passed but was marked #[expected_fail]",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "x": {
+          "si_value": 10.0
+        },
+        "y": {
+          "si_value": 20.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

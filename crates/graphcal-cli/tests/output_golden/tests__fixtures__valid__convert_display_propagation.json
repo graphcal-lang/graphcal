@@ -1,0 +1,130 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "c": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "arm_read": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "branch_read": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "const_read": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "entry_read": {
+          "display_value": 1.0,
+          "si_value": 1000.0,
+          "unit": "km"
+        },
+        "field_read": {
+          "display_value": 0.1,
+          "si_value": 100.0,
+          "unit": "km"
+        },
+        "inst_out": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "mydag::out": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "projected": {
+          "display_value": 1.5,
+          "si_value": 1500.0,
+          "unit": "km"
+        },
+        "s": {
+          "fields": {
+            "a": {
+              "display_value": 0.1,
+              "si_value": 100.0,
+              "unit": "km"
+            }
+          },
+          "type": "S"
+        },
+        "tz": {
+          "datetime": "2026-01-15T21:00:00+09:00[Asia/Tokyo]",
+          "display_tz": "Asia/Tokyo",
+          "time_scale": "UTC"
+        },
+        "tz_read": {
+          "datetime": "2026-01-15T21:00:00+09:00[Asia/Tokyo]",
+          "display_tz": "Asia/Tokyo",
+          "time_scale": "UTC"
+        },
+        "whole_read": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2000.0,
+              "unit": "km"
+            }
+          },
+          "index": "R"
+        }
+      },
+      "param": {
+        "a": {
+          "display_value": 1500.0,
+          "si_value": 1500.0,
+          "unit": "m"
+        },
+        "flag": true,
+        "k": {
+          "fields": {},
+          "type": "Big"
+        },
+        "mydag::x": {
+          "display_value": 1500.0,
+          "si_value": 1500.0,
+          "unit": "m"
+        },
+        "t": {
+          "datetime": "2026-01-15T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "xs": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2000.0,
+              "unit": "km"
+            }
+          },
+          "index": "R"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "also_fine::v_positive": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "also_fine::out": {
+          "si_value": 8.0
+        },
+        "checked::out": {
+          "si_value": 8.0
+        },
+        "y": {
+          "si_value": 6.0
+        },
+        "z": {
+          "si_value": 14.0
+        }
+      },
+      "param": {
+        "also_fine::v": {
+          "si_value": 4.0
+        },
+        "checked::v": {
+          "si_value": 4.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

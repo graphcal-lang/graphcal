@@ -1,0 +1,23 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "z": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "integer division by zero"
+          }
+        }
+      },
+      "param": {
+        "x": 5,
+        "y": 0
+      },
+      "unfinished_calls": []
+    }
+  }
+}

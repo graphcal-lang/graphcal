@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::N017",
+    "labels": [
+      {
+        "length": 8,
+        "location": {
+          "column": 29,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/bare_graph_declaration_ref.gcl"
+        },
+        "offset": 28,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

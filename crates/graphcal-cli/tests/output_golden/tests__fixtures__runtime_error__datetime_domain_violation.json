@@ -1,0 +1,20 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "event": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "above maximum (2024-12-31T23:59:59 UTC)"
+          }
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

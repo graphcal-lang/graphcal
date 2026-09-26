@@ -1,0 +1,29 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "transfer_time": {
+          "si_value": 40000.0,
+          "unit": "s"
+        }
+      },
+      "param": {
+        "rate": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "bit/s"
+        },
+        "storage": {
+          "display_value": 500.0,
+          "si_value": 4000000.0,
+          "unit": "kB"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

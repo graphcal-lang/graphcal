@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::P003",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 29,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/unit_numerator_not_one.gcl"
+        },
+        "offset": 131,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "lib::v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        },
+        "result": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        },
+        "v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "lib::value": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

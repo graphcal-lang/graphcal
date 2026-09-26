@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D003",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 24,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/unknown_unit.gcl"
+        },
+        "offset": 46,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

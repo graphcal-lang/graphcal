@@ -1,0 +1,185 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "population_stays_in_model_bounds": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "initial": {
+          "entries": {
+            "InitialA": {
+              "si_value": 0.5
+            },
+            "InitialB": {
+              "si_value": 0.5001
+            }
+          },
+          "index": "Start"
+        },
+        "largest_separation": {
+          "si_value": 0.8745186065526207
+        },
+        "population": {
+          "entries": {
+            "floats": {
+              "count": 242,
+              "max": 0.975,
+              "min": 0.09506250000000008,
+              "sum_abs": 142.66823928618177
+            },
+            "head": {
+              "0": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.5
+                  },
+                  "InitialB": {
+                    "si_value": 0.5001
+                  }
+                },
+                "index": "Start"
+              },
+              "1": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.975
+                  },
+                  "InitialB": {
+                    "si_value": 0.974999961
+                  }
+                },
+                "index": "Start"
+              },
+              "10": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.1040097132674683
+                  },
+                  "InitialB": {
+                    "si_value": 0.10400426829101828
+                  }
+                },
+                "index": "Start"
+              },
+              "100": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.9546299998065798
+                  },
+                  "InitialB": {
+                    "si_value": 0.4790452508044484
+                  }
+                },
+                "index": "Start"
+              },
+              "101": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.16891509677589003
+                  },
+                  "InitialB": {
+                    "si_value": 0.9732875040959909
+                  }
+                },
+                "index": "Start"
+              },
+              "102": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.5474928687426188
+                  },
+                  "InitialB": {
+                    "si_value": 0.10139586001969104
+                  }
+                },
+                "index": "Start"
+              },
+              "103": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.966203266932526
+                  },
+                  "InitialB": {
+                    "si_value": 0.35534748440317715
+                  }
+                },
+                "index": "Start"
+              },
+              "104": {
+                "entries": {
+                  "InitialA": {
+                    "si_value": 0.12735260421561603
+                  },
+                  "InitialB": {
+                    "si_value": 0.8933950339528925
+                  }
+                },
+                "index": "Start"
+              }
+            },
+            "length": 121,
+            "structure_sha256": "5fe7334051c0fbc0d115872f978444bd91f62e833ab78bae10b014a4c04ddf02"
+          },
+          "index": "Generation"
+        },
+        "separation": {
+          "entries": {
+            "floats": {
+              "count": 121,
+              "max": 0.8745186065526207,
+              "min": 3.90000000072277e-8,
+              "sum_abs": 29.80874307305979
+            },
+            "head": {
+              "0": {
+                "si_value": 0.000099999999999989
+              },
+              "1": {
+                "si_value": 3.90000000072277e-8
+              },
+              "10": {
+                "si_value": 5.444976450011407e-6
+              },
+              "100": {
+                "si_value": 0.4755847490021314
+              },
+              "101": {
+                "si_value": 0.8043724073201008
+              },
+              "102": {
+                "si_value": 0.4460970087229278
+              },
+              "103": {
+                "si_value": 0.6108557825293488
+              },
+              "104": {
+                "si_value": 0.7660424297372765
+              }
+            },
+            "length": 121,
+            "structure_sha256": "c295c7271ef1a5ddac05de70be6475673fb9570974e1f9cb386b7ccceb585174"
+          },
+          "index": "Generation"
+        }
+      },
+      "param": {
+        "growth": {
+          "si_value": 3.9
+        },
+        "initial_a": {
+          "si_value": 0.5
+        },
+        "initial_b": {
+          "si_value": 0.5001
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

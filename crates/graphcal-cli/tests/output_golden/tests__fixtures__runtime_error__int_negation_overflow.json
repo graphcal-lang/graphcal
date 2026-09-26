@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "b": -9223372036854775807,
+        "c": -9223372036854775808,
+        "d": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "integer negation overflow"
+          }
+        }
+      },
+      "param": {
+        "a": 9223372036854775807
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,344 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "mean_result": {
+          "status": "pass"
+        },
+        "nested_product_result": {
+          "status": "pass"
+        },
+        "quaternion_identity": {
+          "status": "pass"
+        },
+        "reusable_product_result": {
+          "status": "pass"
+        },
+        "rotation_trace": {
+          "status": "pass"
+        },
+        "rss_result": {
+          "status": "pass"
+        },
+        "transformed_frame": {
+          "status": "pass"
+        },
+        "vector_field": {
+          "status": "pass"
+        },
+        "volume_result": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "body_attitude": {
+          "fields": {
+            "w": {
+              "si_value": 1.0
+            },
+            "x": {
+              "si_value": 0.0
+            },
+            "y": {
+              "si_value": 0.0
+            },
+            "z": {
+              "si_value": 0.0
+            }
+          },
+          "type": "Quaternion"
+        },
+        "body_components": {
+          "entries": {
+            "#0": {
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#1": {
+              "si_value": 2.0,
+              "unit": "m"
+            },
+            "#2": {
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "body_from_eci": {
+          "fields": {
+            "elements": {
+              "entries": {
+                "#0": {
+                  "entries": {
+                    "#0": {
+                      "si_value": 1.0
+                    },
+                    "#1": {
+                      "si_value": 0.0
+                    },
+                    "#2": {
+                      "si_value": 0.0
+                    }
+                  },
+                  "index": "Fin(3)"
+                },
+                "#1": {
+                  "entries": {
+                    "#0": {
+                      "si_value": 0.0
+                    },
+                    "#1": {
+                      "si_value": 1.0
+                    },
+                    "#2": {
+                      "si_value": 0.0
+                    }
+                  },
+                  "index": "Fin(3)"
+                },
+                "#2": {
+                  "entries": {
+                    "#0": {
+                      "si_value": 0.0
+                    },
+                    "#1": {
+                      "si_value": 0.0
+                    },
+                    "#2": {
+                      "si_value": 1.0
+                    }
+                  },
+                  "index": "Fin(3)"
+                }
+              },
+              "index": "Fin(3)"
+            }
+          },
+          "type": "Rotation"
+        },
+        "body_position": {
+          "fields": {
+            "x": {
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "y": {
+              "si_value": 2.0,
+              "unit": "m"
+            },
+            "z": {
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          },
+          "type": "Vec3"
+        },
+        "box_volume": {
+          "si_value": 24.0,
+          "unit": "m^3"
+        },
+        "budget_mean": {
+          "si_value": 150.0,
+          "unit": "kg"
+        },
+        "budget_sigma": {
+          "si_value": 5.0,
+          "unit": "kg"
+        },
+        "chained_product": {
+          "si_value": 720.0
+        },
+        "generic_product::result": {
+          "si_value": 24.0
+        },
+        "position": {
+          "fields": {
+            "x": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "y": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            },
+            "z": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          },
+          "type": "Vec3"
+        },
+        "position_components": {
+          "entries": {
+            "#0": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#1": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            },
+            "#2": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "reusable_product::result": {
+          "si_value": 24.0
+        },
+        "row_products": {
+          "entries": {
+            "#0": {
+              "si_value": 6.0
+            },
+            "#1": {
+              "si_value": 120.0
+            }
+          },
+          "index": "Fin(2)"
+        }
+      },
+      "param": {
+        "edges": {
+          "entries": {
+            "Depth": {
+              "display_value": 4.0,
+              "si_value": 4.0,
+              "unit": "m"
+            },
+            "Height": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "m"
+            },
+            "Width": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Factor"
+        },
+        "factors": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 1.0
+                },
+                "#1": {
+                  "si_value": 2.0
+                },
+                "#2": {
+                  "si_value": 3.0
+                }
+              },
+              "index": "Fin(3)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 4.0
+                },
+                "#1": {
+                  "si_value": 5.0
+                },
+                "#2": {
+                  "si_value": 6.0
+                }
+              },
+              "index": "Fin(3)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "generic_product::values": {
+          "entries": {
+            "Depth": {
+              "si_value": 4.0
+            },
+            "Height": {
+              "si_value": 3.0
+            },
+            "Width": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Factor"
+        },
+        "means": {
+          "entries": {
+            "Payload": {
+              "display_value": 50.0,
+              "si_value": 50.0,
+              "unit": "kg"
+            },
+            "Structure": {
+              "display_value": 100.0,
+              "si_value": 100.0,
+              "unit": "kg"
+            }
+          },
+          "index": "BudgetLine"
+        },
+        "reusable_product::values": {
+          "entries": {
+            "Depth": {
+              "si_value": 4.0
+            },
+            "Height": {
+              "si_value": 3.0
+            },
+            "Width": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Factor"
+        },
+        "scale_factors": {
+          "entries": {
+            "Depth": {
+              "si_value": 4.0
+            },
+            "Height": {
+              "si_value": 3.0
+            },
+            "Width": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Factor"
+        },
+        "sigmas": {
+          "entries": {
+            "Payload": {
+              "display_value": 4.0,
+              "si_value": 4.0,
+              "unit": "kg"
+            },
+            "Structure": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "kg"
+            }
+          },
+          "index": "BudgetLine"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

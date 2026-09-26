@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "lib::r_earth": {
+          "display_value": 6371000.0,
+          "si_value": 6371000.0,
+          "unit": "m"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "bound_factor": {
+          "si_value": 0.5
+        },
+        "default_factor": {
+          "si_value": 1.0
+        },
+        "earth_half": {
+          "si_value": 3185500.0,
+          "unit": "m"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

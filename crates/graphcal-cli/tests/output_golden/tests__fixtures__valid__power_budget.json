@@ -1,0 +1,1172 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "battery_dod_safe": {
+          "status": "pass"
+        },
+        "sa_positive_margin": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "battery_dod": {
+          "si_value": 0.06601366010508491
+        },
+        "eclipse_energy": {
+          "si_value": 114071.60466158674,
+          "unit": "m^2*kg/s^2"
+        },
+        "peak_power": {
+          "si_value": 130.23868220528914,
+          "unit": "m^2*kg/s^3"
+        },
+        "power_with_margin": {
+          "entries": {
+            "AttitudeControl": {
+              "entries": {
+                "Comms": {
+                  "si_value": 13.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 17.25,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 13.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 13.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 23.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 13.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "CommandAndData": {
+              "entries": {
+                "Comms": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 5.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 5.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 3.3000000000000003,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Harness": {
+              "entries": {
+                "Comms": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.525,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Mechanisms": {
+              "entries": {
+                "Comms": {
+                  "si_value": 1.15,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 1.15,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 1.15,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 3.4499999999999997,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 1.15,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload1": {
+              "entries": {
+                "Comms": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 36.75,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload2": {
+              "entries": {
+                "Comms": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 23.1,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload3": {
+              "entries": {
+                "Comms": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 18.9,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "PowerElectronics": {
+              "entries": {
+                "Comms": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Propulsion": {
+              "entries": {
+                "Comms": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 54.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Software": {
+              "entries": {
+                "Comms": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 1.1,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 1.1,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 1.1,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Telecom": {
+              "entries": {
+                "Comms": {
+                  "si_value": 27.500000000000004,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 2.2,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 3.3000000000000003,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 3.3000000000000003,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 3.3000000000000003,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 3.3000000000000003,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 0.0,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Thermal": {
+              "entries": {
+                "Comms": {
+                  "si_value": 5.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Detumble": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalEclipse": {
+                  "si_value": 16.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "NominalSunlit": {
+                  "si_value": 5.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "OrbitManeuver": {
+                  "si_value": 11.0,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Safe": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                },
+                "ScienceObs": {
+                  "si_value": 5.5,
+                  "unit": "m^2*kg/s^3"
+                },
+                "Standby": {
+                  "si_value": 8.8,
+                  "unit": "m^2*kg/s^3"
+                }
+              },
+              "index": "OpMode"
+            }
+          },
+          "index": "Subsystem"
+        },
+        "sa_margin": {
+          "si_value": 29.761317794710862,
+          "unit": "m^2*kg/s^3"
+        },
+        "total_power": {
+          "entries": {
+            "Comms": {
+              "si_value": 61.67500000000001,
+              "unit": "m^2*kg/s^3"
+            },
+            "Detumble": {
+              "si_value": 37.575,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalEclipse": {
+              "si_value": 48.475,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalSunlit": {
+              "si_value": 37.475,
+              "unit": "m^2*kg/s^3"
+            },
+            "OrbitManeuver": {
+              "si_value": 108.475,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 18.125,
+              "unit": "m^2*kg/s^3"
+            },
+            "ScienceObs": {
+              "si_value": 116.22500000000002,
+              "unit": "m^2*kg/s^3"
+            },
+            "Standby": {
+              "si_value": 15.925,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "OpMode"
+        },
+        "wall_plug_power": {
+          "entries": {
+            "Comms": {
+              "si_value": 69.11138502913494,
+              "unit": "m^2*kg/s^3"
+            },
+            "Detumble": {
+              "si_value": 42.10555804571941,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalEclipse": {
+              "si_value": 54.31981174361273,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalSunlit": {
+              "si_value": 41.99350067234424,
+              "unit": "m^2*kg/s^3"
+            },
+            "OrbitManeuver": {
+              "si_value": 121.5542357687136,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 20.310398924249217,
+              "unit": "m^2*kg/s^3"
+            },
+            "ScienceObs": {
+              "si_value": 130.23868220528914,
+              "unit": "m^2*kg/s^3"
+            },
+            "Standby": {
+              "si_value": 17.84513670999552,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "OpMode"
+        }
+      },
+      "param": {
+        "battery_capacity": {
+          "display_value": 480.0,
+          "si_value": 1728000.0,
+          "unit": "Wh"
+        },
+        "converter_efficiency": {
+          "si_value": 0.92
+        },
+        "design_margin": {
+          "entries": {
+            "AttitudeControl": {
+              "si_value": 0.15
+            },
+            "CommandAndData": {
+              "si_value": 0.1
+            },
+            "Harness": {
+              "si_value": 0.05
+            },
+            "Mechanisms": {
+              "si_value": 0.15
+            },
+            "Payload1": {
+              "si_value": 0.05
+            },
+            "Payload2": {
+              "si_value": 0.05
+            },
+            "Payload3": {
+              "si_value": 0.05
+            },
+            "PowerElectronics": {
+              "si_value": 0.1
+            },
+            "Propulsion": {
+              "si_value": 0.2
+            },
+            "Software": {
+              "si_value": 0.1
+            },
+            "Telecom": {
+              "si_value": 0.1
+            },
+            "Thermal": {
+              "si_value": 0.1
+            }
+          },
+          "index": "Subsystem"
+        },
+        "eclipse_duration": {
+          "display_value": 35.0,
+          "si_value": 2100.0,
+          "unit": "min"
+        },
+        "eclipse_mode_power": {
+          "si_value": 54.31981174361273,
+          "unit": "m^2*kg/s^3"
+        },
+        "harness_efficiency": {
+          "si_value": 0.97
+        },
+        "power_draw": {
+          "entries": {
+            "AttitudeControl": {
+              "entries": {
+                "Comms": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 15.0,
+                  "si_value": 15.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 20.0,
+                  "si_value": 20.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "CommandAndData": {
+              "entries": {
+                "Comms": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Harness": {
+              "entries": {
+                "Comms": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Mechanisms": {
+              "entries": {
+                "Comms": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload1": {
+              "entries": {
+                "Comms": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 35.0,
+                  "si_value": 35.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload2": {
+              "entries": {
+                "Comms": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 22.0,
+                  "si_value": 22.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload3": {
+              "entries": {
+                "Comms": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 18.0,
+                  "si_value": 18.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "PowerElectronics": {
+              "entries": {
+                "Comms": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Propulsion": {
+              "entries": {
+                "Comms": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 45.0,
+                  "si_value": 45.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Software": {
+              "entries": {
+                "Comms": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Telecom": {
+              "entries": {
+                "Comms": {
+                  "display_value": 25.0,
+                  "si_value": 25.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Thermal": {
+              "entries": {
+                "Comms": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "Detumble": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 15.0,
+                  "si_value": 15.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "OrbitManeuver": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "ScienceObs": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "Standby": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            }
+          },
+          "index": "Subsystem"
+        },
+        "solar_array_power": {
+          "display_value": 160.0,
+          "si_value": 160.0,
+          "unit": "W"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

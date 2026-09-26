@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 26,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/datetime_scale_mismatch.gcl"
+        },
+        "offset": 144,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

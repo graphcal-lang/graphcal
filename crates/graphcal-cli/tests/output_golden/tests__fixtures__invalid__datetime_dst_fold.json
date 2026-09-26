@@ -1,0 +1,34 @@
+{
+  "check": {
+    "code": "graphcal::D025",
+    "labels": [
+      {
+        "length": 21,
+        "location": {
+          "column": 33,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/datetime_dst_fold.gcl"
+        },
+        "offset": 96,
+        "primary": false
+      },
+      {
+        "length": 18,
+        "location": {
+          "column": 56,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/datetime_dst_fold.gcl"
+        },
+        "offset": 119,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

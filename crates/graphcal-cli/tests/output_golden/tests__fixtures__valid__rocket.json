@@ -1,0 +1,47 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "g0": {
+          "display_value": 9.80665,
+          "si_value": 9.80665,
+          "unit": "m/s^2"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "delta_v": {
+          "si_value": 3778.2207684937407,
+          "unit": "m/s"
+        },
+        "mass_ratio": {
+          "si_value": 3.3333333333333335
+        },
+        "v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "dry_mass": {
+          "display_value": 1200.0,
+          "si_value": 1200.0,
+          "unit": "kg"
+        },
+        "fuel_mass": {
+          "display_value": 2800.0,
+          "si_value": 2800.0,
+          "unit": "kg"
+        },
+        "isp": {
+          "display_value": 320.0,
+          "si_value": 320.0,
+          "unit": "s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

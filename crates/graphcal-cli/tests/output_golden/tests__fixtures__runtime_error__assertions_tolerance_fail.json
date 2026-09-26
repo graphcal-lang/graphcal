@@ -1,0 +1,23 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "tight_check": {
+          "message": "actual 100, expected 110 +/- 1, off by 10",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "actual": {
+          "si_value": 100.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

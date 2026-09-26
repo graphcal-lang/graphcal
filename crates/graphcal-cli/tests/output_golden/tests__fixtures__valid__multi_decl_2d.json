@@ -1,0 +1,115 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "mass_per_unit": {
+          "entries": {
+            "ComponentA": {
+              "display_value": 2.5,
+              "si_value": 2.5,
+              "unit": "kg"
+            },
+            "ComponentB": {
+              "display_value": 3.1,
+              "si_value": 3.1,
+              "unit": "kg"
+            }
+          },
+          "index": "Component"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "power_per_mode": {
+          "entries": {
+            "ComponentA": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OperationMode"
+            },
+            "ComponentB": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OperationMode"
+            }
+          },
+          "index": "Component"
+        },
+        "total_mass": {
+          "si_value": 5.6,
+          "unit": "kg"
+        },
+        "total_safe_power": {
+          "si_value": 10.0,
+          "unit": "m^2*kg/s^3"
+        }
+      },
+      "param": {
+        "n_installed": {
+          "entries": {
+            "ComponentA": 1,
+            "ComponentB": 2
+          },
+          "index": "Component"
+        },
+        "power_consumption": {
+          "entries": {
+            "ComponentA": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "W"
+            },
+            "ComponentB": {
+              "display_value": 12.0,
+              "si_value": 12.0,
+              "unit": "W"
+            }
+          },
+          "index": "Component"
+        },
+        "power_mode_active": {
+          "entries": {
+            "ComponentA": {
+              "entries": {
+                "Nominal": true,
+                "Safe": true
+              },
+              "index": "OperationMode"
+            },
+            "ComponentB": {
+              "entries": {
+                "Nominal": true,
+                "Safe": false
+              },
+              "index": "OperationMode"
+            }
+          },
+          "index": "Component"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "student_score": {
+          "si_value": 1.0
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "another_learner": {
+          "fields": {},
+          "type": "WeightlessStudent"
+        },
+        "learner": {
+          "fields": {
+            "mass": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "kg"
+            }
+          },
+          "type": "StudentConstructor"
+        },
+        "score": {
+          "si_value": 1.0
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

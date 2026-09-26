@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::E001",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 14,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/key_non_index_argument.gcl"
+        },
+        "offset": 98,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

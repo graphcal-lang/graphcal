@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "y": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "invalid argument for clamp (result is NaN)"
+          }
+        }
+      },
+      "param": {
+        "x": {
+          "si_value": 5.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

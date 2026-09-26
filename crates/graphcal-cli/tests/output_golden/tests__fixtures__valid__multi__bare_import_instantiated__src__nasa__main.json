@@ -1,0 +1,70 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "rocket::g0": {
+          "display_value": 9.80665,
+          "si_value": 9.80665,
+          "unit": "m/s^2"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "dv": {
+          "si_value": 5050.622177270998,
+          "unit": "m/s"
+        },
+        "rocket::delta_v": {
+          "si_value": 5050.622177270998,
+          "unit": "m/s"
+        },
+        "rocket::mass_ratio": {
+          "si_value": 5.0
+        },
+        "rocket::v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
+        },
+        "stage::delta_v": {
+          "si_value": 5050.622177270998,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "rocket::dry_mass": {
+          "display_value": 800.0,
+          "si_value": 800.0,
+          "unit": "kg"
+        },
+        "rocket::fuel_mass": {
+          "display_value": 3200.0,
+          "si_value": 3200.0,
+          "unit": "kg"
+        },
+        "rocket::isp": {
+          "display_value": 320.0,
+          "si_value": 320.0,
+          "unit": "s"
+        },
+        "stage::dry_mass": {
+          "display_value": 800.0,
+          "si_value": 800.0,
+          "unit": "kg"
+        },
+        "stage::fuel_mass": {
+          "display_value": 3200.0,
+          "si_value": 3200.0,
+          "unit": "kg"
+        },
+        "stage::isp": {
+          "display_value": 320.0,
+          "si_value": 320.0,
+          "unit": "s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

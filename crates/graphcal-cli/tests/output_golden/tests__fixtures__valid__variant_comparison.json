@@ -1,0 +1,128 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "not_correction": {
+          "entries": {
+            "Correction": {
+              "si_value": 0.0,
+              "unit": "m/s"
+            },
+            "Departure": {
+              "si_value": 2460.0,
+              "unit": "m/s"
+            },
+            "Insertion": {
+              "si_value": 1830.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "selective": {
+          "entries": {
+            "Correction": {
+              "si_value": 120.0,
+              "unit": "m/s"
+            },
+            "Departure": {
+              "si_value": 4920.0,
+              "unit": "m/s"
+            },
+            "Insertion": {
+              "si_value": 1830.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "selective2": {
+          "entries": {
+            "Correction": {
+              "si_value": 120.0,
+              "unit": "m/s"
+            },
+            "Departure": {
+              "si_value": 2460.0,
+              "unit": "m/s"
+            },
+            "Insertion": {
+              "si_value": 5490.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "param": {
+        "correction_mask": {
+          "entries": {
+            "Correction": {
+              "si_value": 0.0
+            },
+            "Departure": {
+              "si_value": 1.0
+            },
+            "Insertion": {
+              "si_value": 1.0
+            }
+          },
+          "index": "Maneuver"
+        },
+        "delta_v": {
+          "entries": {
+            "Correction": {
+              "display_value": 0.12,
+              "si_value": 120.0,
+              "unit": "km/s"
+            },
+            "Departure": {
+              "display_value": 2.46,
+              "si_value": 2460.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.83,
+              "si_value": 1830.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "scale_factor": {
+          "entries": {
+            "Correction": {
+              "si_value": 1.0
+            },
+            "Departure": {
+              "si_value": 2.0
+            },
+            "Insertion": {
+              "si_value": 1.0
+            }
+          },
+          "index": "Maneuver"
+        },
+        "scale_factor2": {
+          "entries": {
+            "Correction": {
+              "si_value": 1.0
+            },
+            "Departure": {
+              "si_value": 1.0
+            },
+            "Insertion": {
+              "si_value": 3.0
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

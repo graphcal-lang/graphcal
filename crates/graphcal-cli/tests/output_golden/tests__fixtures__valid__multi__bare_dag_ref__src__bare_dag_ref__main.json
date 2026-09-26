@@ -1,0 +1,27 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "answer": {
+          "si_value": 42.0
+        },
+        "double::result": {
+          "si_value": 42.0
+        },
+        "y": {
+          "si_value": 42.0
+        }
+      },
+      "param": {
+        "double::x": {
+          "si_value": 21.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

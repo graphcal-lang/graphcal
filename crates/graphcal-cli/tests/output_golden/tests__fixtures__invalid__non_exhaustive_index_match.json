@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::E001",
+    "labels": [
+      {
+        "length": 86,
+        "location": {
+          "column": 5,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/non_exhaustive_index_match.gcl"
+        },
+        "offset": 189,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

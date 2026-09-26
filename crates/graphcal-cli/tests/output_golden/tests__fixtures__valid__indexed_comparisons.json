@@ -1,0 +1,66 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "all_below": {
+          "status": "pass"
+        },
+        "none_above": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "actual": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "below": {
+          "entries": {
+            "A": true,
+            "B": true
+          },
+          "index": "Case"
+        },
+        "expected": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.5,
+              "si_value": 2.5,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "same": {
+          "entries": {
+            "A": true,
+            "B": false
+          },
+          "index": "Case"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

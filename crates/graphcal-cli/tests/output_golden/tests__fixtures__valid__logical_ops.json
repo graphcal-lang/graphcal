@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "and_ab": false,
+        "demorgan_eq": true,
+        "demorgan_lhs": false,
+        "demorgan_rhs": false,
+        "grouped_or_and": true,
+        "mixed_or_and": true,
+        "not_a": false,
+        "not_b": true,
+        "not_grouped_and": true,
+        "not_not_a": true,
+        "not_then_and": false,
+        "or_ab": true
+      },
+      "param": {
+        "a": true,
+        "b": false,
+        "c": true
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "contingency": {
+          "si_value": 1.1
+        },
+        "critical": {
+          "index": "Maneuver",
+          "variant": "Departure"
+        },
+        "differs": true,
+        "fallback": {
+          "index": "Maneuver",
+          "variant": "Correction"
+        },
+        "is_critical_first": true,
+        "report": {
+          "fields": {
+            "factor": {
+              "si_value": 1.1
+            },
+            "which": {
+              "index": "Maneuver",
+              "variant": "Departure"
+            }
+          },
+          "type": "Report"
+        },
+        "roundtrip": {
+          "si_value": 1.1
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

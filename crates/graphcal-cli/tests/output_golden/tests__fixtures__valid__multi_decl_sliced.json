@@ -1,0 +1,225 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "mass_per_unit": {
+          "entries": {
+            "Arrival": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 2.5,
+                  "si_value": 2.5,
+                  "unit": "kg"
+                },
+                "ComponentB": {
+                  "display_value": 3.1,
+                  "si_value": 3.1,
+                  "unit": "kg"
+                }
+              },
+              "index": "Component"
+            },
+            "Cruise": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 2.5,
+                  "si_value": 2.5,
+                  "unit": "kg"
+                },
+                "ComponentB": {
+                  "display_value": 3.1,
+                  "si_value": 3.1,
+                  "unit": "kg"
+                }
+              },
+              "index": "Component"
+            },
+            "Launch": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 2.5,
+                  "si_value": 2.5,
+                  "unit": "kg"
+                },
+                "ComponentB": {
+                  "display_value": 3.1,
+                  "si_value": 3.1,
+                  "unit": "kg"
+                }
+              },
+              "index": "Component"
+            }
+          },
+          "index": "Phase"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "peak_active_power": {
+          "si_value": 46.0,
+          "unit": "m^2*kg/s^3"
+        },
+        "total_active_power": {
+          "entries": {
+            "Arrival": {
+              "si_value": 46.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Cruise": {
+              "si_value": 32.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Launch": {
+              "si_value": 5.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Phase"
+        }
+      },
+      "param": {
+        "n_installed": {
+          "entries": {
+            "Arrival": {
+              "entries": {
+                "ComponentA": 1,
+                "ComponentB": 2
+              },
+              "index": "Component"
+            },
+            "Cruise": {
+              "entries": {
+                "ComponentA": 1,
+                "ComponentB": 2
+              },
+              "index": "Component"
+            },
+            "Launch": {
+              "entries": {
+                "ComponentA": 1,
+                "ComponentB": 1
+              },
+              "index": "Component"
+            }
+          },
+          "index": "Phase"
+        },
+        "power_consumption": {
+          "entries": {
+            "Arrival": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "ComponentB": {
+                  "display_value": 15.0,
+                  "si_value": 15.0,
+                  "unit": "W"
+                }
+              },
+              "index": "Component"
+            },
+            "Cruise": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "W"
+                },
+                "ComponentB": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                }
+              },
+              "index": "Component"
+            },
+            "Launch": {
+              "entries": {
+                "ComponentA": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "ComponentB": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "W"
+                }
+              },
+              "index": "Component"
+            }
+          },
+          "index": "Phase"
+        },
+        "power_mode_active": {
+          "entries": {
+            "Arrival": {
+              "entries": {
+                "ComponentA": {
+                  "entries": {
+                    "Nominal": true,
+                    "Safe": true
+                  },
+                  "index": "OperationMode"
+                },
+                "ComponentB": {
+                  "entries": {
+                    "Nominal": true,
+                    "Safe": true
+                  },
+                  "index": "OperationMode"
+                }
+              },
+              "index": "Component"
+            },
+            "Cruise": {
+              "entries": {
+                "ComponentA": {
+                  "entries": {
+                    "Nominal": true,
+                    "Safe": true
+                  },
+                  "index": "OperationMode"
+                },
+                "ComponentB": {
+                  "entries": {
+                    "Nominal": true,
+                    "Safe": false
+                  },
+                  "index": "OperationMode"
+                }
+              },
+              "index": "Component"
+            },
+            "Launch": {
+              "entries": {
+                "ComponentA": {
+                  "entries": {
+                    "Nominal": false,
+                    "Safe": true
+                  },
+                  "index": "OperationMode"
+                },
+                "ComponentB": {
+                  "entries": {
+                    "Nominal": false,
+                    "Safe": false
+                  },
+                  "index": "OperationMode"
+                }
+              },
+              "index": "Component"
+            }
+          },
+          "index": "Phase"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "imported_x": {
+          "si_value": 42.0
+        },
+        "y": {
+          "si_value": 43.0
+        }
+      },
+      "param": {
+        "lib::x": {
+          "si_value": 42.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

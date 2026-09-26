@@ -1,0 +1,48 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "gm": {
+          "display_value": 398600441800000.0,
+          "si_value": 398600441800000.0,
+          "unit": "m^3/s^2"
+        },
+        "r_earth": {
+          "display_value": 6371000.0,
+          "si_value": 6371000.0,
+          "unit": "m"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "circular_velocity::v": {
+          "si_value": 7672.598648385013,
+          "unit": "m/s"
+        },
+        "orbital_v": {
+          "si_value": 7672.598648385013,
+          "unit": "m/s"
+        },
+        "result": {
+          "si_value": 7672.598648385013,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "altitude": {
+          "display_value": 400000.0,
+          "si_value": 400000.0,
+          "unit": "m"
+        },
+        "circular_velocity::alt": {
+          "display_value": 400000.0,
+          "si_value": 400000.0,
+          "unit": "m"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

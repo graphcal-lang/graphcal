@@ -1,0 +1,19 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "r_earth": {
+          "display_value": 6371000.0,
+          "si_value": 6371000.0,
+          "unit": "m"
+        }
+      },
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

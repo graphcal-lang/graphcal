@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D018",
+    "labels": [
+      {
+        "length": 4,
+        "location": {
+          "column": 35,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/const_node_runtime_unit.gcl"
+        },
+        "offset": 66,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

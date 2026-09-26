@@ -1,0 +1,23 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "double_neg": 3,
+        "neg_pow_even": 9,
+        "neg_pow_odd": -27,
+        "not_and": true,
+        "not_or": false
+      },
+      "param": {
+        "a": true,
+        "b": false,
+        "n": 3
+      },
+      "unfinished_calls": []
+    }
+  }
+}

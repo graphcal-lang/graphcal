@@ -1,0 +1,42 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "before_is_before": {
+          "status": "pass"
+        },
+        "later_is_after": {
+          "status": "pass"
+        },
+        "same_equals": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "duration": {
+          "si_value": 3600.0,
+          "unit": "s"
+        },
+        "one_hour_before": {
+          "datetime": "2024-11-05T11:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "one_hour_later": {
+          "datetime": "2024-11-05T13:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "param": {
+        "launch": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}
