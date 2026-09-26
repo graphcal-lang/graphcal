@@ -184,10 +184,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
         | Value::Datetime { .. } => {
             entries.push(FlatEntry::Value(prefix.to_string(), value));
         }
-        Value::Struct {
-            type_name: _,
-            fields,
-        } => {
+        Value::Struct { fields, .. } => {
             if fields.is_empty() {
                 entries.push(FlatEntry::Value(prefix.to_string(), value));
             } else {
@@ -422,7 +419,7 @@ mod tests {
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
-    use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
+    use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
     use indexmap::IndexMap;
 
     fn quantity(si: f64) -> Value {
@@ -556,8 +553,12 @@ mod tests {
         let mut fields = IndexMap::new();
         fields.insert(FieldName::expect_valid("x"), quantity(1.0));
         fields.insert(FieldName::expect_valid("y"), quantity(2.0));
-        let s =
-            Value::struct_with_owner(test_owner(), StructTypeName::expect_valid("Pair"), fields);
+        let s = Value::struct_with_owner(
+            test_owner(),
+            StructTypeName::expect_valid("Pair"),
+            ConstructorName::expect_valid("Pair"),
+            fields,
+        );
         let mut out = Vec::new();
         flatten_value("p", &s, &mut out);
         let names: Vec<&str> = out
@@ -574,6 +575,7 @@ mod tests {
         let s = Value::struct_with_owner(
             test_owner(),
             StructTypeName::expect_valid("Unit"),
+            ConstructorName::expect_valid("Unit"),
             IndexMap::new(),
         );
         let mut out = Vec::new();

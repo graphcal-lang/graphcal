@@ -251,6 +251,30 @@ pub enum ValueView {
 }
 
 impl ValueView {
+    fn from_struct<'a>(
+        constructor: &str,
+        fields: impl Iterator<
+            Item = (
+                &'a graphcal_compiler::syntax::type_name::FieldName,
+                &'a Value,
+            ),
+        >,
+        symbols: &BTreeMap<BaseDimId, String>,
+    ) -> Result<Self, DisplayProjectionError> {
+        Ok(Self::Struct {
+            display: constructor.to_string(),
+            type_name: constructor.to_string(),
+            fields: fields
+                .map(|(name, field_value)| {
+                    Self::from_value(field_value, symbols).map(|value| StructFieldView {
+                        name: name.as_str().to_string(),
+                        value,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
     fn from_value(
         value: &Value,
         symbols: &BTreeMap<BaseDimId, String>,
@@ -301,22 +325,11 @@ impl ValueView {
                     variant,
                 }
             }
-            Value::Struct { type_name, fields } => {
-                let type_name = type_name.as_str().to_string();
-                Self::Struct {
-                    display: type_name.clone(),
-                    type_name,
-                    fields: fields
-                        .iter()
-                        .map(|(name, field_value)| {
-                            Self::from_value(field_value, symbols).map(|value| StructFieldView {
-                                name: name.as_str().to_string(),
-                                value,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                }
-            }
+            Value::Struct {
+                constructor,
+                fields,
+                ..
+            } => Self::from_struct(constructor.as_str(), fields.iter(), symbols)?,
             Value::Indexed {
                 index_name,
                 entries,
