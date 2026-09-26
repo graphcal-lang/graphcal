@@ -827,7 +827,7 @@ figure f = { plots: [p] };
             ("other.gcl", "pub const node y: Dimensionless = 40.0;\n"),
             (
                 "main.gcl",
-                "import helper.lib::{ y };\nimport helper.a::{ y as through_a, a_value };\nimport helper.b::{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = @y + @through_a + @a_value + @b_value + @other.y;\n",
+                "import helper.lib::{ y };\nimport helper.a::{ y as through_a, a_value };\nimport helper.b::{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = @y + @through_a + @a_value + @b_value + @other::y;\n",
             ),
         ];
         for (name, source) in files {

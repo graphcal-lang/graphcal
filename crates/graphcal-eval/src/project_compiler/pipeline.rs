@@ -69,13 +69,6 @@ fn lower_single_file_to_hir(
         &mut ctx,
         cancellation,
     )?;
-    // Resolve qualified references in both the body and pending include
-    // bindings before lowering either representation.
-    let file_ast = rewrite_qualified_refs_in_compilation_body(
-        loaded_file.ast(),
-        &ctx.imported_names,
-        &mut ctx.include_instances,
-    );
 
     let (hir, root_interface) = lowering::lower_file_to_hir(
         ProjectSemanticContext {
@@ -85,7 +78,7 @@ fn lower_single_file_to_hir(
         },
         file_dag_id,
         file_src,
-        &file_ast,
+        loaded_file.ast(),
         ctx,
         module_artifacts,
         cancellation,

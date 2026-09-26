@@ -41,7 +41,6 @@ mod imports;
 mod lowering;
 mod model;
 mod pipeline;
-mod qualified_refs;
 mod recursion;
 mod registry_merge;
 mod session;
@@ -84,7 +83,6 @@ use model::{
     ModuleArtifactStore, ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias,
     RuntimeUnitBoundary, UnitProjectionAlias,
 };
-use qualified_refs::rewrite_qualified_refs_in_compilation_body;
 pub(crate) use session::CheckedProjectRuntimeParts;
 pub use session::{CheckedProject, ProjectCompiler, check_project};
 #[cfg(test)]
