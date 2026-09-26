@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::syntax::{ast::DeclKind, parser::Parser, plugin::PluginSourceKind};
+use graphcal_compiler::syntax::{parser::Parser, plugin::PluginSourceKind};
 use graphcal_io::{CancellationSignal, FileSystemReader, SourceTreeHashLimits, SourceTreeSnapshot};
 use thiserror::Error;
 
@@ -43,20 +43,11 @@ pub fn capture_package(
                 path: path.to_path_buf(),
                 message: error.to_string(),
             })?;
-        let mut pending = vec![ast.declarations.as_slice()];
-        while let Some(declarations) = pending.pop() {
-            for declaration in declarations {
-                match &declaration.kind {
-                    DeclKind::PluginImport(plugin)
-                        if plugin.path.value.source_kind() == PluginSourceKind::WasmModule =>
-                    {
-                        plugins.insert(graphcal_package::PluginArtifactPath::new(
-                            plugin.path.value.as_str(),
-                        )?);
-                    }
-                    DeclKind::Dag(dag) => pending.push(&dag.body),
-                    _ => {}
-                }
+        for plugin in ast.plugin_imports() {
+            if plugin.path.value.source_kind() == PluginSourceKind::WasmModule {
+                plugins.insert(graphcal_package::PluginArtifactPath::new(
+                    plugin.path.value.as_str(),
+                )?);
             }
         }
     }

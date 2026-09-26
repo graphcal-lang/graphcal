@@ -60,21 +60,38 @@ pub struct File<P: Phase = Raw> {
 }
 
 impl<P: Phase> File<P> {
+    /// Every `import plugin` block in this file, including those inside
+    /// (arbitrarily nested) `dag` bodies, in source order.
+    ///
+    /// This is the single authority for file-wide plugin scans (plugin file
+    /// loading, lockfile pinning, snapshot capture, call policy): a plugin
+    /// imported by a nested DAG is as much a dependency of the file as a
+    /// top-level one.
+    #[must_use]
+    pub fn plugin_imports(&self) -> Vec<&PluginImportDecl<P>> {
+        fn collect<'a, P: Phase>(
+            declarations: &'a [Declaration<P>],
+            out: &mut Vec<&'a PluginImportDecl<P>>,
+        ) {
+            for declaration in declarations {
+                match &declaration.kind {
+                    DeclKind::PluginImport(plugin) => out.push(plugin),
+                    DeclKind::Dag(dag) => collect(&dag.body, out),
+                    _ => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        collect(&self.declarations, &mut out);
+        out
+    }
+
     /// Whether any declaration (including inside nested `dag` bodies) is a
     /// plugin import. Environments without a plugin host (the browser wasm
     /// engine) use this to reject plugin projects loudly and early.
     #[must_use]
     pub fn uses_plugins(&self) -> bool {
-        fn any_plugin<P: Phase>(declarations: &[Declaration<P>]) -> bool {
-            declarations
-                .iter()
-                .any(|declaration| match &declaration.kind {
-                    DeclKind::PluginImport(_) => true,
-                    DeclKind::Dag(dag) => any_plugin(&dag.body),
-                    _ => false,
-                })
-        }
-        any_plugin(&self.declarations)
+        !self.plugin_imports().is_empty()
     }
 }
 /// A top-level declaration.
