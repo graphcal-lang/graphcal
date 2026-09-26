@@ -292,13 +292,9 @@ fn project_runtime_value(
                 })
                 .collect::<Result<IndexMap<_, _>, _>>()?;
             Ok(Value::Struct {
-                type_name:
-                    graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
-                        graphcal_compiler::syntax::type_name::StructTypeName::from_atom(
-                            runtime_constructor.atom().clone(),
-                        ),
-                        type_name.clone(),
-                    ),
+                type_name: declared_identity.clone(),
+                constructor: runtime_constructor.clone(),
+                generic_args: runtime_args.clone(),
                 fields: projected_fields,
             })
         }
