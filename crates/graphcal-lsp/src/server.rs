@@ -4419,7 +4419,7 @@ node bad: Mass = mass + length;
     }
 
     /// Issue #830: goto-definition and hover must resolve symbols brought in
-    /// by module imports — bare (`import gotom.lib;` → `@lib.g0`) and aliased
+    /// by module imports — bare (`import gotom.lib;` → `@lib::g0`) and aliased
     /// (`import gotom.lib as alias_lib;` → `@alias_lib::g0`).
     #[test]
     fn module_imported_symbols_resolve_for_goto_and_hover() {
@@ -4784,7 +4784,7 @@ node momentum: Force * Time = @mass * @velocity;
             ),
             (
                 "src/staleo/main.gcl",
-                "import staleo.lib;\nnode x: Acceleration = @lib.g0;\n",
+                "import staleo.lib;\nnode x: Acceleration = @lib::g0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/staleo/main.gcl");
