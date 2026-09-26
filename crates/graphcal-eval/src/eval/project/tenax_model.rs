@@ -1,10 +1,15 @@
 //! Transport-independent model and strict Tenax-v2 projections.
 
+use std::collections::HashMap;
+
+use crate::eval::runtime::{evaluate_assertions, root_source_names};
+use crate::eval::types::NodeUnavailable;
+
 use super::{
     Arc, AssertResult, CompileError, DeclName, DeclaredType, Error, EvalContext, EvalLoopResult,
-    GraphcalError, HashSet, HirLocalValueMap, IndexKind, IndexVariantName, ModelSchemaGraph,
-    ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject, RuntimeDeclKey,
-    Span, TimeScale, Value, builtin_functions, index_def_for_ref, remap_include_debug_name,
+    GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema,
+    ParameterBindingRow, ParameterPosition, PreparedProject, RuntimeDeclKey, Span, TimeScale,
+    Value, builtin_functions, index_def_for_ref, remap_include_debug_name,
     run_eval_loop_with_bindings,
 };
 
@@ -284,18 +289,10 @@ impl PreparedProject {
             &cancellation,
         )?;
 
-        if !errors.is_empty() {
-            let (name, error) = self.first_runtime_error(&errors)?.ok_or_else(|| {
-                ModelExecutionError::Internal(
-                    "runtime error map contains no declaration from root source order".to_string(),
-                )
-            })?;
-            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                message: format!("{name}: {error}"),
-            }));
+        if let Some(failure) = self.runtime_error_failure(&errors)? {
+            return Ok(ModelRowOutcome::Failure(failure));
         }
 
-        let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext::checked(
             &self.tir,
             &self.plan,
@@ -309,37 +306,18 @@ impl PreparedProject {
         .with_roots(&values, None)
         .with_unavailable(&errors)
         .with_unfinished_calls(&unfinished_calls);
-        for assertion in self.tir.root().asserts() {
-            let owner = self
-                .tir
-                .root()
-                .lookup_decl_identity(&assertion.name)
-                .into_bound()
-                .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
-            let result = crate::assertion_eval::evaluate_assert_with_expected_fail(
-                &assertion.body,
-                self.plan
-                    .root
-                    .expected_fail
-                    .get(&RuntimeDeclKey::resolved(owner.clone())),
-                &mut |expr| {
-                    crate::eval_expr::eval_hir_expr(
-                        expr,
-                        &values,
-                        &empty_locals,
-                        &ctx.for_decl(&owner),
-                    )
-                },
-            );
-            let message = match result {
-                AssertResult::Pass => continue,
-                AssertResult::Blocked { reason } => reason.to_string(),
-                AssertResult::Fail { message } | AssertResult::Error { message } => message,
-            };
-            let name = remap_include_debug_name(
-                &assertion.name,
-                &self.output_assembly.include_debug_names,
-            );
+        let first_failed_assertion =
+            evaluate_assertions(&self.tir, &self.plan, &self.source, &ctx, &values, &errors)?
+                .into_iter()
+                .find_map(|(name, result, _)| match result {
+                    AssertResult::Pass => None,
+                    AssertResult::Blocked { reason } => Some((name, reason.to_string())),
+                    AssertResult::Fail { message } | AssertResult::Error { message } => {
+                        Some((name, message))
+                    }
+                });
+        if let Some((name, message)) = first_failed_assertion {
+            let name = remap_include_debug_name(&name, &self.output_assembly.include_debug_names);
             return Ok(ModelRowOutcome::Failure(ModelRowFailure {
                 message: format!("assertion `{name}`: {message}"),
             }));
@@ -381,6 +359,35 @@ impl PreparedProject {
                     .map_err(ModelExecutionError::from)
             })
             .collect()
+    }
+
+    /// Row failure for the first runtime error, or `None` when evaluation
+    /// produced no runtime error.
+    ///
+    /// Errors on declarations the root exposes (root declarations and
+    /// semantic-instance projections) are reported under their source name in
+    /// root-exposure order. An error confined to a declaration private to an
+    /// included DAG falls back to the smallest failed runtime identity.
+    fn runtime_error_failure(
+        &self,
+        errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    ) -> Result<Option<ModelRowFailure>, ModelExecutionError> {
+        let exposed = root_source_names(&self.tir, &self.source)?
+            .into_iter()
+            .find_map(|(key, name)| {
+                errors.get(&key).map(|error| {
+                    let name =
+                        remap_include_debug_name(&name, &self.output_assembly.include_debug_names);
+                    format!("{name}: {error}")
+                })
+            });
+        let message = exposed.or_else(|| {
+            errors
+                .iter()
+                .min_by(|(left, _), (right, _)| left.cmp(right))
+                .map(|(key, error)| format!("{key}: {error}"))
+        });
+        Ok(message.map(|message| ModelRowFailure { message }))
     }
 
     /// Evaluate one strict v2 row and enforce Boolean output representation.
