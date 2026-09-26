@@ -1,0 +1,63 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "absorbed_power_positive": {
+          "status": "pass"
+        },
+        "charge_time_positive": {
+          "status": "pass"
+        },
+        "voltage_correct": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "absorbed_power": {
+          "si_value": 1148.25,
+          "unit": "m^2*kg/s^3"
+        },
+        "charge_time": {
+          "si_value": 0.01,
+          "unit": "s"
+        },
+        "voltage": {
+          "si_value": 50.0,
+          "unit": "m^2*kg/A/s^3"
+        }
+      },
+      "param": {
+        "capacitance": {
+          "display_value": 0.001,
+          "si_value": 0.001,
+          "unit": "F"
+        },
+        "current": {
+          "display_value": 5.0,
+          "si_value": 5.0,
+          "unit": "A"
+        },
+        "panel_area": {
+          "display_value": 2.5,
+          "si_value": 2.5,
+          "unit": "m^2"
+        },
+        "resistance": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "ohm"
+        },
+        "solar_flux": {
+          "display_value": 459.3,
+          "si_value": 459.3,
+          "unit": "kg/s^3"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

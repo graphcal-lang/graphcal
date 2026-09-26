@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D004",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 23,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/complex_unit_is_not_dimension.gcl"
+        },
+        "offset": 22,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

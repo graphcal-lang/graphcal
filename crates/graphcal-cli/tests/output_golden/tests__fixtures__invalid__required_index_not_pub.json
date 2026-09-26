@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::V002",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 7,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/required_index_not_pub.gcl"
+        },
+        "offset": 52,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

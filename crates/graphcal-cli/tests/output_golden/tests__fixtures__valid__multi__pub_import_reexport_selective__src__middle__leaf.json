@@ -1,0 +1,19 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "g0": {
+          "display_value": 9.80665,
+          "si_value": 9.80665,
+          "unit": "m/s^2"
+        }
+      },
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

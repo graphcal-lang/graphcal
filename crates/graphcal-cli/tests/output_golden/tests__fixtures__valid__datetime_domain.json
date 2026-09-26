@@ -1,0 +1,50 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "TT_END": {
+          "datetime": "2024-12-31T23:59:59 TT",
+          "time_scale": "TT"
+        },
+        "TT_START": {
+          "datetime": "2024-01-01T00:00:00 TT",
+          "time_scale": "TT"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "observation": {
+          "fields": {
+            "at": {
+              "datetime": "2024-07-01T00:00:00 TT",
+              "time_scale": "TT"
+            }
+          },
+          "type": "Observation"
+        }
+      },
+      "param": {
+        "civil_event": {
+          "datetime": "2024-06-01T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "scientific_events": {
+          "entries": {
+            "End": {
+              "datetime": "2024-12-31T23:59:59 TT",
+              "time_scale": "TT"
+            },
+            "Start": {
+              "datetime": "2024-01-01T00:00:00 TT",
+              "time_scale": "TT"
+            }
+          },
+          "index": "Milestone"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "pos3_default_y": {
+          "display_value": 20.0,
+          "si_value": 20000.0,
+          "unit": "km"
+        },
+        "pos3_eci_x": {
+          "display_value": 100.0,
+          "si_value": 100000.0,
+          "unit": "km"
+        },
+        "pos_body": {
+          "fields": {
+            "x": {
+              "display_value": 6878.0,
+              "si_value": 6878000.0,
+              "unit": "km"
+            },
+            "y": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "km"
+            },
+            "z": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "km"
+            }
+          },
+          "type": "Vec3"
+        },
+        "pos_body_x": {
+          "display_value": 6878.0,
+          "si_value": 6878000.0,
+          "unit": "km"
+        },
+        "total_dv": {
+          "si_value": 300.0,
+          "unit": "m/s"
+        },
+        "transfer": {
+          "fields": {
+            "dv1": {
+              "display_value": 100.0,
+              "si_value": 100.0,
+              "unit": "m/s"
+            },
+            "dv2": {
+              "display_value": 200.0,
+              "si_value": 200.0,
+              "unit": "m/s"
+            }
+          },
+          "type": "TransferResult"
+        },
+        "x_pos": {
+          "display_value": 6878.0,
+          "si_value": 6878000.0,
+          "unit": "km"
+        },
+        "y_vel": {
+          "display_value": 7.67,
+          "si_value": 7670.0,
+          "unit": "km/s"
+        }
+      },
+      "param": {
+        "pos3_default": {
+          "fields": {
+            "x": {
+              "display_value": 10.0,
+              "si_value": 10000.0,
+              "unit": "km"
+            },
+            "y": {
+              "display_value": 20.0,
+              "si_value": 20000.0,
+              "unit": "km"
+            },
+            "z": {
+              "display_value": 30.0,
+              "si_value": 30000.0,
+              "unit": "km"
+            }
+          },
+          "type": "Pos3"
+        },
+        "pos3_eci": {
+          "fields": {
+            "x": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "y": {
+              "display_value": 200.0,
+              "si_value": 200000.0,
+              "unit": "km"
+            },
+            "z": {
+              "display_value": 300.0,
+              "si_value": 300000.0,
+              "unit": "km"
+            }
+          },
+          "type": "Pos3"
+        },
+        "pos_eci": {
+          "fields": {
+            "x": {
+              "display_value": 6878.0,
+              "si_value": 6878000.0,
+              "unit": "km"
+            },
+            "y": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "km"
+            },
+            "z": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "km"
+            }
+          },
+          "type": "Vec3"
+        },
+        "vel_eci": {
+          "fields": {
+            "x": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m/s"
+            },
+            "y": {
+              "display_value": 7.67,
+              "si_value": 7670.0,
+              "unit": "km/s"
+            },
+            "z": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m/s"
+            }
+          },
+          "type": "Vec3"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::M002",
+    "labels": [
+      {
+        "length": 16,
+        "location": {
+          "column": 9,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/multi/cross_file_dag/src/lib/main.gcl"
+        },
+        "offset": 91,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

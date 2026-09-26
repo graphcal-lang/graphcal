@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "bad": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "invalid argument for acos (result is NaN)"
+          }
+        }
+      },
+      "param": {
+        "x": {
+          "si_value": -2.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

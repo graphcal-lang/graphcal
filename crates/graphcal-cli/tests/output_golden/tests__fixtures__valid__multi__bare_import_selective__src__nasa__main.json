@@ -1,0 +1,39 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "dry_mass": {
+          "display_value": 1200.0,
+          "si_value": 1200.0,
+          "unit": "kg"
+        },
+        "fuel_mass": {
+          "display_value": 2800.0,
+          "si_value": 2800.0,
+          "unit": "kg"
+        },
+        "total_mass": {
+          "si_value": 4000.0,
+          "unit": "kg"
+        }
+      },
+      "param": {
+        "rocket::dry_mass": {
+          "display_value": 1200.0,
+          "si_value": 1200.0,
+          "unit": "kg"
+        },
+        "rocket::fuel_mass": {
+          "display_value": 2800.0,
+          "si_value": 2800.0,
+          "unit": "kg"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

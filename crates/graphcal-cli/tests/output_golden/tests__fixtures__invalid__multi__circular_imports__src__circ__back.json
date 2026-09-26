@@ -1,0 +1,13 @@
+{
+  "check": {
+    "code": "graphcal::M001",
+    "labels": [],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

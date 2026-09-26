@@ -1,0 +1,71 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "current_status": {
+          "fields": {},
+          "type": "Nominal"
+        },
+        "fuel_proxy": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "N"
+        },
+        "maneuver": {
+          "fields": {
+            "duration": {
+              "display_value": 3600.0,
+              "si_value": 3600.0,
+              "unit": "s"
+            },
+            "thrust": {
+              "display_value": 0.5,
+              "si_value": 0.5,
+              "unit": "N"
+            }
+          },
+          "type": "LowThrust"
+        },
+        "status_code": {
+          "si_value": 0.0
+        },
+        "total_dv": {
+          "si_value": 300.0,
+          "unit": "m/s"
+        },
+        "transfer": {
+          "fields": {
+            "dv1": {
+              "display_value": 100.0,
+              "si_value": 100.0,
+              "unit": "m/s"
+            },
+            "dv2": {
+              "display_value": 200.0,
+              "si_value": 200.0,
+              "unit": "m/s"
+            }
+          },
+          "type": "TransferResult"
+        }
+      },
+      "param": {
+        "burn_duration": {
+          "display_value": 3600.0,
+          "si_value": 3600.0,
+          "unit": "s"
+        },
+        "thrust_level": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "N"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

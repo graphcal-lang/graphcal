@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D007",
+    "labels": [
+      {
+        "length": 22,
+        "location": {
+          "column": 26,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/invalid_timezone.gcl"
+        },
+        "offset": 116,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D027",
+    "labels": [
+      {
+        "length": 7,
+        "location": {
+          "column": 39,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/product_abstract_axis.gcl"
+        },
+        "offset": 189,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

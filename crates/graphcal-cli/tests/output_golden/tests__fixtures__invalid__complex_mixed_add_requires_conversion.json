@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 38,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/complex_mixed_add_requires_conversion.gcl"
+        },
+        "offset": 86,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

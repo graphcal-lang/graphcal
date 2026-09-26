@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 48,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/complex_component_dimension_mismatch.gcl"
+        },
+        "offset": 47,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

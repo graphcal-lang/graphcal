@@ -1,0 +1,53 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "day_check": {
+          "status": "pass"
+        },
+        "day_of_year_check": {
+          "status": "pass"
+        },
+        "hour_check": {
+          "status": "pass"
+        },
+        "minute_check": {
+          "status": "pass"
+        },
+        "month_check": {
+          "status": "pass"
+        },
+        "second_check": {
+          "status": "pass"
+        },
+        "weekday_check": {
+          "status": "pass"
+        },
+        "year_check": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "d": 5,
+        "doy": 310,
+        "h": 14,
+        "mi": 30,
+        "mo": 11,
+        "s": 45,
+        "wd": 2,
+        "y": 2024
+      },
+      "param": {
+        "t": {
+          "datetime": "2024-11-05T14:30:45 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

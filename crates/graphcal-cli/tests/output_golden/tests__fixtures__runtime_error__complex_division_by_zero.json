@@ -1,0 +1,32 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "invalid": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "complex division by zero"
+          }
+        },
+        "numerator": {
+          "si_value": {
+            "im": 2.0,
+            "re": 1.0
+          }
+        },
+        "zero": {
+          "si_value": {
+            "im": 0.0,
+            "re": 0.0
+          }
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

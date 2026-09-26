@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::V006",
+    "labels": [
+      {
+        "length": 75,
+        "location": {
+          "column": 1,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/multi/pub_include_leaks_private_generic_default/src/generic_default/main.gcl"
+        },
+        "offset": 59,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

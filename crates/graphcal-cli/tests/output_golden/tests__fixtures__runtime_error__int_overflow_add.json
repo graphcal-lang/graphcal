@@ -1,0 +1,22 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "b": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "integer arithmetic overflow"
+          }
+        }
+      },
+      "param": {
+        "a": 9223372036854775807
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 36,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/extern_dim_var_mismatch.gcl"
+        },
+        "offset": 200,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

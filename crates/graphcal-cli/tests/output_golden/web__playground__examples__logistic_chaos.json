@@ -1,0 +1,1747 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "population_stays_in_model_bounds": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "initial": {
+          "entries": {
+            "InitialA": {
+              "si_value": 0.5
+            },
+            "InitialB": {
+              "si_value": 0.5001
+            }
+          },
+          "index": "Start"
+        },
+        "largest_separation": {
+          "si_value": 0.8745186065526207
+        },
+        "population": {
+          "entries": {
+            "0": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.5
+                },
+                "InitialB": {
+                  "si_value": 0.5001
+                }
+              },
+              "index": "Start"
+            },
+            "1": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.975
+                },
+                "InitialB": {
+                  "si_value": 0.974999961
+                }
+              },
+              "index": "Start"
+            },
+            "10": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.1040097132674683
+                },
+                "InitialB": {
+                  "si_value": 0.10400426829101828
+                }
+              },
+              "index": "Start"
+            },
+            "100": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9546299998065798
+                },
+                "InitialB": {
+                  "si_value": 0.4790452508044484
+                }
+              },
+              "index": "Start"
+            },
+            "101": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.16891509677589003
+                },
+                "InitialB": {
+                  "si_value": 0.9732875040959909
+                }
+              },
+              "index": "Start"
+            },
+            "102": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.5474928687426188
+                },
+                "InitialB": {
+                  "si_value": 0.10139586001969104
+                }
+              },
+              "index": "Start"
+            },
+            "103": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.966203266932526
+                },
+                "InitialB": {
+                  "si_value": 0.35534748440317715
+                }
+              },
+              "index": "Start"
+            },
+            "104": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.12735260421561603
+                },
+                "InitialB": {
+                  "si_value": 0.8933950339528925
+                }
+              },
+              "index": "Start"
+            },
+            "105": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.43342228181895515
+                },
+                "InitialB": {
+                  "si_value": 0.37143735431868985
+                }
+              },
+              "index": "Start"
+            },
+            "106": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9577128890230407
+                },
+                "InitialB": {
+                  "si_value": 0.9105394199281454
+                }
+              },
+              "index": "Start"
+            },
+            "107": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.15794575376650777
+                },
+                "InitialB": {
+                  "si_value": 0.31768380027174153
+                }
+              },
+              "index": "Start"
+            },
+            "108": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.5186956812711861
+                },
+                "InitialB": {
+                  "si_value": 0.8453671329349185
+                }
+              },
+              "index": "Start"
+            },
+            "109": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9736368388570442
+                },
+                "InitialB": {
+                  "si_value": 0.509814019604426
+                }
+              },
+              "index": "Start"
+            },
+            "11": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.36344760197260056
+                },
+                "InitialB": {
+                  "si_value": 0.3634307838262459
+                }
+              },
+              "index": "Start"
+            },
+            "110": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.10010576502227468
+                },
+                "InitialB": {
+                  "si_value": 0.9746243715748952
+                }
+              },
+              "index": "Start"
+            },
+            "111": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.35132994324316125
+                },
+                "InitialB": {
+                  "si_value": 0.09645365303782914
+                }
+              },
+              "index": "Start"
+            },
+            "112": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8887991354732815
+                },
+                "InitialB": {
+                  "si_value": 0.33988634882860014
+                }
+              },
+              "index": "Start"
+            },
+            "113": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3854574057953927
+                },
+                "InitialB": {
+                  "si_value": 0.8750181129633968
+                }
+              },
+              "index": "Start"
+            },
+            "114": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9238319770402268
+                },
+                "InitialB": {
+                  "si_value": 0.42650951830255446
+                }
+              },
+              "index": "Start"
+            },
+            "115": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.27442917542887374
+                },
+                "InitialB": {
+                  "si_value": 0.9539366814895218
+                }
+              },
+              "index": "Start"
+            },
+            "116": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.7765594320989785
+                },
+                "InitialB": {
+                  "si_value": 0.17137180787329362
+                }
+              },
+              "index": "Start"
+            },
+            "117": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.676708034016653
+                },
+                "InitialB": {
+                  "si_value": 0.5538136942241769
+                }
+              },
+              "index": "Start"
+            },
+            "118": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8532196557844807
+                },
+                "InitialB": {
+                  "si_value": 0.9637059366243924
+                }
+              },
+              "index": "Start"
+            },
+            "119": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4884199115932226
+                },
+                "InitialB": {
+                  "si_value": 0.13640953692324995
+                }
+              },
+              "index": "Start"
+            },
+            "12": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.90227842611257
+                },
+                "InitialB": {
+                  "si_value": 0.902260511855377
+                }
+              },
+              "index": "Start"
+            },
+            "120": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9744770160547156
+                },
+                "InitialB": {
+                  "si_value": 0.45942770312257447
+                }
+              },
+              "index": "Start"
+            },
+            "13": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.34387106474913476
+                },
+                "InitialB": {
+                  "si_value": 0.34392727434721526
+                }
+              },
+              "index": "Start"
+            },
+            "14": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8799326467519814
+                },
+                "InitialB": {
+                  "si_value": 0.8800010867985113
+                }
+              },
+              "index": "Start"
+            },
+            "15": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4120396173349332
+                },
+                "InitialB": {
+                  "si_value": 0.41183677872460606
+                }
+              },
+              "index": "Start"
+            },
+            "16": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9448255872175184
+                },
+                "InitialB": {
+                  "si_value": 0.9446862610159492
+                }
+              },
+              "index": "Start"
+            },
+            "17": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.20330776813070028
+                },
+                "InitialB": {
+                  "si_value": 0.2037911041282548
+                }
+              },
+              "index": "Start"
+            },
+            "18": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.6316975062388134
+                },
+                "InitialB": {
+                  "si_value": 0.6328151310251223
+                }
+              },
+              "index": "Start"
+            },
+            "19": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.907357490716863
+                },
+                "InitialB": {
+                  "si_value": 0.9062045497860404
+                }
+              },
+              "index": "Start"
+            },
+            "2": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.09506250000000008
+                },
+                "InitialB": {
+                  "si_value": 0.09506264449499416
+                }
+              },
+              "index": "Start"
+            },
+            "20": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3278335115517574
+                },
+                "InitialB": {
+                  "si_value": 0.33149166855916895
+                }
+              },
+              "index": "Start"
+            },
+            "21": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8593989309960643
+                },
+                "InitialB": {
+                  "si_value": 0.8642592747166055
+                }
+              },
+              "index": "Start"
+            },
+            "22": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4712463927556561
+                },
+                "InitialB": {
+                  "si_value": 0.45752920505343697
+                }
+              },
+              "index": "Start"
+            },
+            "23": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9717755972747084
+                },
+                "InitialB": {
+                  "si_value": 0.9679653031487672
+                }
+              },
+              "index": "Start"
+            },
+            "24": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.10696836468275976
+                },
+                "InitialB": {
+                  "si_value": 0.12093305269064114
+                }
+              },
+              "index": "Start"
+            },
+            "25": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3725519211954379
+                },
+                "InitialB": {
+                  "si_value": 0.41460217288449863
+                }
+              },
+              "index": "Start"
+            },
+            "26": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.911652250115202
+                },
+                "InitialB": {
+                  "si_value": 0.9465581233834086
+                }
+              },
+              "index": "Start"
+            },
+            "27": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3141154574028559
+                },
+                "InitialB": {
+                  "si_value": 0.1972847855171248
+                }
+              },
+              "index": "Start"
+            },
+            "28": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8402430536114569
+                },
+                "InitialB": {
+                  "si_value": 0.6176176457902888
+                }
+              },
+              "index": "Start"
+            },
+            "29": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.5235151914296899
+                },
+                "InitialB": {
+                  "si_value": 0.9210477486551256
+                }
+              },
+              "index": "Start"
+            },
+            "3": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.33549992226562525
+                },
+                "InitialB": {
+                  "si_value": 0.3355003786547889
+                }
+              },
+              "index": "Start"
+            },
+            "30": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9728434395108976
+                },
+                "InitialB": {
+                  "si_value": 0.28360329407455526
+                }
+              },
+              "index": "Start"
+            },
+            "31": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.10303441867486574
+                },
+                "InitialB": {
+                  "si_value": 0.7923726160920048
+                }
+              },
+              "index": "Start"
+            },
+            "32": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.360431476248473
+                },
+                "InitialB": {
+                  "si_value": 0.6416211881021169
+                }
+              },
+              "index": "Start"
+            },
+            "33": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8990304459934958
+                },
+                "InitialB": {
+                  "si_value": 0.8967794124141247
+                }
+              },
+              "index": "Start"
+            },
+            "34": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.35402134236390415
+                },
+                "InitialB": {
+                  "si_value": 0.3610077817487775
+                }
+              },
+              "index": "Start"
+            },
+            "35": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8918919029075777
+                },
+                "InitialB": {
+                  "si_value": 0.8996565367358575
+                }
+              },
+              "index": "Start"
+            },
+            "36": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.376040872098363
+                },
+                "InitialB": {
+                  "si_value": 0.35207114531277056
+                }
+              },
+              "index": "Start"
+            },
+            "37": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9150731249784758
+                },
+                "InitialB": {
+                  "si_value": 0.8896565104086058
+                }
+              },
+              "index": "Start"
+            },
+            "38": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3030857735903501
+                },
+                "InitialB": {
+                  "si_value": 0.3828544351951334
+                }
+              },
+              "index": "Start"
+            },
+            "39": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8237766710062077
+                },
+                "InitialB": {
+                  "si_value": 0.9214799749215402
+                }
+              },
+              "index": "Start"
+            },
+            "4": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8694649252590003
+                },
+                "InitialB": {
+                  "si_value": 0.8694655108514004
+                }
+              },
+              "index": "Start"
+            },
+            "40": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.566157802517338
+                },
+                "InitialB": {
+                  "si_value": 0.2821830598865376
+                }
+              },
+              "index": "Start"
+            },
+            "41": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9579302661477
+                },
+                "InitialB": {
+                  "si_value": 0.7899675443384724
+                }
+              },
+              "index": "Start"
+            },
+            "42": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.15716949824899712
+                },
+                "InitialB": {
+                  "si_value": 0.6470834105982326
+                }
+              },
+              "index": "Start"
+            },
+            "43": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.516622263569707
+                },
+                "InitialB": {
+                  "si_value": 0.8906292342744876
+                }
+              },
+              "index": "Start"
+            },
+            "44": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9739224313798948
+                },
+                "InitialB": {
+                  "si_value": 0.3798943251874971
+                }
+              },
+              "index": "Start"
+            },
+            "45": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.09905036323637888
+                },
+                "InitialB": {
+                  "si_value": 0.91874104482355
+                }
+              },
+              "index": "Start"
+            },
+            "46": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3480336162385691
+                },
+                "InitialB": {
+                  "si_value": 0.2911581557823186
+                }
+              },
+              "index": "Start"
+            },
+            "47": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8849342510052466
+                },
+                "InitialB": {
+                  "si_value": 0.8049018280046549
+                }
+              },
+              "index": "Start"
+            },
+            "48": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3971199273718163
+                },
+                "InitialB": {
+                  "si_value": 0.6124360135897373
+                }
+              },
+              "index": "Start"
+            },
+            "49": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9337211935584768
+                },
+                "InitialB": {
+                  "si_value": 0.9256967571073887
+                }
+              },
+              "index": "Start"
+            },
+            "5": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.44263310911310905
+                },
+                "InitialB": {
+                  "si_value": 0.44263142153612345
+                }
+              },
+              "index": "Start"
+            },
+            "50": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.24135511240702048
+                },
+                "InitialB": {
+                  "si_value": 0.2682508568541862
+                }
+              },
+              "index": "Start"
+            },
+            "51": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.7141010062758585
+                },
+                "InitialB": {
+                  "si_value": 0.7655401051396064
+                }
+              },
+              "index": "Start"
+            },
+            "52": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.7962269605354927
+                },
+                "InitialB": {
+                  "si_value": 0.7000049649935426
+                }
+              },
+              "index": "Start"
+            },
+            "53": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.6327733926224242
+                },
+                "InitialB": {
+                  "si_value": 0.818992254513934
+                }
+              },
+              "index": "Start"
+            },
+            "54": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9062477822249732
+                },
+                "InitialB": {
+                  "si_value": 0.5781513720844584
+                }
+              },
+              "index": "Start"
+            },
+            "55": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.33135468380543404
+                },
+                "InitialB": {
+                  "si_value": 0.9511802158611344
+                }
+              },
+              "index": "Start"
+            },
+            "56": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8640791535699761
+                },
+                "InitialB": {
+                  "si_value": 0.1811020099804509
+                }
+              },
+              "index": "Start"
+            },
+            "57": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.458040842749502
+                },
+                "InitialB": {
+                  "si_value": 0.5783858806498171
+                }
+              },
+              "index": "Start"
+            },
+            "58": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9681337735790292
+                },
+                "InitialB": {
+                  "si_value": 0.9510370494875352
+                }
+              },
+              "index": "Start"
+            },
+            "59": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.1203180031351671
+                },
+                "InitialB": {
+                  "si_value": 0.181605761959357
+                }
+              },
+              "index": "Start"
+            },
+            "6": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.962165255336889
+                },
+                "InitialB": {
+                  "si_value": 0.9621645001996328
+                }
+              },
+              "index": "Start"
+            },
+            "60": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4127821669012588
+                },
+                "InitialB": {
+                  "si_value": 0.5796379258118217
+                }
+              },
+              "index": "Start"
+            },
+            "61": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9453328933992844
+                },
+                "InitialB": {
+                  "si_value": 0.950265423012324
+                }
+              },
+              "index": "Start"
+            },
+            "62": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.20154659482082424
+                },
+                "InitialB": {
+                  "si_value": 0.1843180904741781
+                }
+              },
+              "index": "Start"
+            },
+            "63": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.6276097032541235
+                },
+                "InitialB": {
+                  "si_value": 0.5863452347927101
+                }
+              },
+              "index": "Start"
+            },
+            "64": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9114914781780388
+                },
+                "InitialB": {
+                  "si_value": 0.945923551671508
+                }
+              },
+              "index": "Start"
+            },
+            "65": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3146315772087253
+                },
+                "InitialB": {
+                  "si_value": 0.19949352565220535
+                }
+              },
+              "index": "Start"
+            },
+            "66": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8409903365443133
+                },
+                "InitialB": {
+                  "si_value": 0.6228138496127272
+                }
+              },
+              "index": "Start"
+            },
+            "67": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.5215298024952442
+                },
+                "InitialB": {
+                  "si_value": 0.9161753575388796
+                }
+              },
+              "index": "Start"
+            },
+            "68": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9731922236576114
+                },
+                "InitialB": {
+                  "si_value": 0.29951247993180474
+                }
+              },
+              "index": "Start"
+            },
+            "69": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.10174756593286384
+                },
+                "InitialB": {
+                  "si_value": 0.8182385417579295
+                }
+              },
+              "index": "Start"
+            },
+            "7": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.1419727793616139
+                },
+                "InitialB": {
+                  "si_value": 0.1419755015453723
+                }
+              },
+              "index": "Start"
+            },
+            "70": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3564404951624454
+                },
+                "InitialB": {
+                  "si_value": 0.5800244991051674
+                }
+              },
+              "index": "Start"
+            },
+            "71": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8946236074261049
+                },
+                "InitialB": {
+                  "si_value": 0.9500247102175714
+                }
+              },
+              "index": "Start"
+            },
+            "72": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.367661613001829
+                },
+                "InitialB": {
+                  "si_value": 0.18516326475500447
+                }
+              },
+              "index": "Start"
+            },
+            "73": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.906697550174217
+                },
+                "InitialB": {
+                  "si_value": 0.5884235375470631
+                }
+              },
+              "index": "Start"
+            },
+            "74": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3299287004609318
+                },
+                "InitialB": {
+                  "si_value": 0.9445069842298862
+                }
+              },
+              "index": "Start"
+            },
+            "75": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8621954369850608
+                },
+                "InitialB": {
+                  "si_value": 0.20441280978632156
+                }
+              },
+              "index": "Start"
+            },
+            "76": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4633764151660832
+                },
+                "InitialB": {
+                  "si_value": 0.6342500306281724
+                }
+              },
+              "index": "Start"
+            },
+            "77": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9697689808322604
+                },
+                "InitialB": {
+                  "si_value": 0.9047100241777056
+                }
+              },
+              "index": "Start"
+            },
+            "78": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.114336708126496
+                },
+                "InitialB": {
+                  "si_value": 0.3362182056873156
+                }
+              },
+              "index": "Start"
+            },
+            "79": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.3949289186750406
+                },
+                "InitialB": {
+                  "si_value": 0.8703845430216984
+                }
+              },
+              "index": "Start"
+            },
+            "8": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4750843861996143
+                },
+                "InitialB": {
+                  "si_value": 0.475091988174618
+                }
+              },
+              "index": "Start"
+            },
+            "80": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9319442646898946
+                },
+                "InitialB": {
+                  "si_value": 0.4399796321333697
+                }
+              },
+              "index": "Start"
+            },
+            "81": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.24735419358587463
+                },
+                "InitialB": {
+                  "si_value": 0.960950466220502
+                }
+              },
+              "index": "Start"
+            },
+            "82": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.7260633763552895
+                },
+                "InitialB": {
+                  "si_value": 0.14634620399529735
+                }
+              },
+              "index": "Start"
+            },
+            "83": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.7756918644963023
+                },
+                "InitialB": {
+                  "si_value": 0.48722307102871015
+                }
+              },
+              "index": "Start"
+            },
+            "84": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.6785765838171546
+                },
+                "InitialB": {
+                  "si_value": 0.974363325335644
+                }
+              },
+              "index": "Start"
+            },
+            "85": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8506305744775596
+                },
+                "InitialB": {
+                  "si_value": 0.09741979874838862
+                }
+              },
+              "index": "Start"
+            },
+            "86": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4955269809419923
+                },
+                "InitialB": {
+                  "si_value": 0.3429238080848271
+                }
+              },
+              "index": "Start"
+            },
+            "87": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.974921969191976
+                },
+                "InitialB": {
+                  "si_value": 0.8787755727403682
+                }
+              },
+              "index": "Start"
+            },
+            "88": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.09535158039738144
+                },
+                "InitialB": {
+                  "si_value": 0.4154633554313034
+                }
+              },
+              "index": "Start"
+            },
+            "89": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.33641266040110224
+                },
+                "InitialB": {
+                  "si_value": 0.9471288673277568
+                }
+              },
+              "index": "Start"
+            },
+            "9": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9725789275369048
+                },
+                "InitialB": {
+                  "si_value": 0.9725804046929356
+                }
+              },
+              "index": "Start"
+            },
+            "90": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.8706328110595242
+                },
+                "InitialB": {
+                  "si_value": 0.1952955264085689
+                }
+              },
+              "index": "Start"
+            },
+            "91": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4392621455278487
+                },
+                "InitialB": {
+                  "si_value": 0.6129052167161385
+                }
+              },
+              "index": "Start"
+            },
+            "92": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.960612560833067
+                },
+                "InitialB": {
+                  "si_value": 0.9252844069492988
+                }
+              },
+              "index": "Start"
+            },
+            "93": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.14756066833093617
+                },
+                "InitialB": {
+                  "si_value": 0.2696193755025541
+                }
+              },
+              "index": "Start"
+            },
+            "94": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.49056741822138816
+                },
+                "InitialB": {
+                  "si_value": 0.7680065946390506
+                }
+              },
+              "index": "Start"
+            },
+            "95": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.9746530029638604
+                },
+                "InitialB": {
+                  "si_value": 0.6948726143969204
+                }
+              },
+              "index": "Start"
+            },
+            "96": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.09634765443181968
+                },
+                "InitialB": {
+                  "si_value": 0.8268961902166257
+                }
+              },
+              "index": "Start"
+            },
+            "97": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.33955265727749473
+                },
+                "InitialB": {
+                  "si_value": 0.558241635205237
+                }
+              },
+              "index": "Start"
+            },
+            "98": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.874600935831819
+                },
+                "InitialB": {
+                  "si_value": 0.9617708565216184
+                }
+              },
+              "index": "Start"
+            },
+            "99": {
+              "entries": {
+                "InitialA": {
+                  "si_value": 0.4277291416083092
+                },
+                "InitialB": {
+                  "si_value": 0.1433939366624345
+                }
+              },
+              "index": "Start"
+            }
+          },
+          "index": "Generation"
+        },
+        "separation": {
+          "entries": {
+            "0": {
+              "si_value": 0.000099999999999989
+            },
+            "1": {
+              "si_value": 3.90000000072277e-8
+            },
+            "10": {
+              "si_value": 5.444976450011407e-6
+            },
+            "100": {
+              "si_value": 0.4755847490021314
+            },
+            "101": {
+              "si_value": 0.8043724073201008
+            },
+            "102": {
+              "si_value": 0.4460970087229278
+            },
+            "103": {
+              "si_value": 0.6108557825293488
+            },
+            "104": {
+              "si_value": 0.7660424297372765
+            },
+            "105": {
+              "si_value": 0.0619849275002653
+            },
+            "106": {
+              "si_value": 0.047173469094895504
+            },
+            "107": {
+              "si_value": 0.15973804650523377
+            },
+            "108": {
+              "si_value": 0.32667145166373235
+            },
+            "109": {
+              "si_value": 0.46382281925261826
+            },
+            "11": {
+              "si_value": 0.000016818146354680152
+            },
+            "110": {
+              "si_value": 0.8745186065526207
+            },
+            "111": {
+              "si_value": 0.2548762902053321
+            },
+            "112": {
+              "si_value": 0.5489127866446813
+            },
+            "113": {
+              "si_value": 0.4895607071680041
+            },
+            "114": {
+              "si_value": 0.4973224587376722
+            },
+            "115": {
+              "si_value": 0.6795075060606481
+            },
+            "116": {
+              "si_value": 0.6051876242256848
+            },
+            "117": {
+              "si_value": 0.1228943397924761
+            },
+            "118": {
+              "si_value": 0.11048628083991184
+            },
+            "119": {
+              "si_value": 0.35201037466997265
+            },
+            "12": {
+              "si_value": 0.000017914257192996885
+            },
+            "120": {
+              "si_value": 0.5150493129321412
+            },
+            "13": {
+              "si_value": 0.0000562095980805033
+            },
+            "14": {
+              "si_value": 0.0000684400465299495
+            },
+            "15": {
+              "si_value": 0.00020283861032716064
+            },
+            "16": {
+              "si_value": 0.00013932620156931197
+            },
+            "17": {
+              "si_value": 0.0004833359975545404
+            },
+            "18": {
+              "si_value": 0.001117624786308946
+            },
+            "19": {
+              "si_value": 0.0011529409308226324
+            },
+            "2": {
+              "si_value": 1.44494994094857e-7
+            },
+            "20": {
+              "si_value": 0.0036581570074115666
+            },
+            "21": {
+              "si_value": 0.004860343720541116
+            },
+            "22": {
+              "si_value": 0.013717187702219136
+            },
+            "23": {
+              "si_value": 0.0038102941259410272
+            },
+            "24": {
+              "si_value": 0.013964688007881393
+            },
+            "25": {
+              "si_value": 0.042050251689060736
+            },
+            "26": {
+              "si_value": 0.03490587326820671
+            },
+            "27": {
+              "si_value": 0.1168306718857311
+            },
+            "28": {
+              "si_value": 0.22262540782116813
+            },
+            "29": {
+              "si_value": 0.3975325572254358
+            },
+            "3": {
+              "si_value": 4.563891636277795e-7
+            },
+            "30": {
+              "si_value": 0.6892401454363424
+            },
+            "31": {
+              "si_value": 0.6893381974171391
+            },
+            "32": {
+              "si_value": 0.2811897118536439
+            },
+            "33": {
+              "si_value": 0.0022510335793710645
+            },
+            "34": {
+              "si_value": 0.006986439384873366
+            },
+            "35": {
+              "si_value": 0.007764633828279854
+            },
+            "36": {
+              "si_value": 0.02396972678559245
+            },
+            "37": {
+              "si_value": 0.02541661456986999
+            },
+            "38": {
+              "si_value": 0.0797686616047833
+            },
+            "39": {
+              "si_value": 0.09770330391533256
+            },
+            "4": {
+              "si_value": 5.855924001263446e-7
+            },
+            "40": {
+              "si_value": 0.28397474263080047
+            },
+            "41": {
+              "si_value": 0.16796272180922756
+            },
+            "42": {
+              "si_value": 0.4899139123492355
+            },
+            "43": {
+              "si_value": 0.3740069707047806
+            },
+            "44": {
+              "si_value": 0.5940281061923975
+            },
+            "45": {
+              "si_value": 0.8196906815871712
+            },
+            "46": {
+              "si_value": 0.056875460456250526
+            },
+            "47": {
+              "si_value": 0.08003242300059166
+            },
+            "48": {
+              "si_value": 0.21531608621792103
+            },
+            "49": {
+              "si_value": 0.008024436451087968
+            },
+            "5": {
+              "si_value": 1.6875769855984046e-6
+            },
+            "50": {
+              "si_value": 0.026895744447165748
+            },
+            "51": {
+              "si_value": 0.05143909886374787
+            },
+            "52": {
+              "si_value": 0.0962219955419501
+            },
+            "53": {
+              "si_value": 0.18621886189150985
+            },
+            "54": {
+              "si_value": 0.3280964101405147
+            },
+            "55": {
+              "si_value": 0.6198255320557002
+            },
+            "56": {
+              "si_value": 0.6829771435895252
+            },
+            "57": {
+              "si_value": 0.12034503790031507
+            },
+            "58": {
+              "si_value": 0.017096724091493987
+            },
+            "59": {
+              "si_value": 0.06128775882418991
+            },
+            "6": {
+              "si_value": 7.551372562808467e-7
+            },
+            "60": {
+              "si_value": 0.16685575891056292
+            },
+            "61": {
+              "si_value": 0.004932529613039693
+            },
+            "62": {
+              "si_value": 0.017228504346646134
+            },
+            "63": {
+              "si_value": 0.041264468461413406
+            },
+            "64": {
+              "si_value": 0.034432073493469106
+            },
+            "65": {
+              "si_value": 0.11513805155651992
+            },
+            "66": {
+              "si_value": 0.2181764869315861
+            },
+            "67": {
+              "si_value": 0.3946455550436353
+            },
+            "68": {
+              "si_value": 0.6736797437258066
+            },
+            "69": {
+              "si_value": 0.7164909758250657
+            },
+            "7": {
+              "si_value": 2.7221837584356923e-6
+            },
+            "70": {
+              "si_value": 0.223584003942722
+            },
+            "71": {
+              "si_value": 0.05540110279146648
+            },
+            "72": {
+              "si_value": 0.1824983482468245
+            },
+            "73": {
+              "si_value": 0.31827401262715393
+            },
+            "74": {
+              "si_value": 0.6145782837689544
+            },
+            "75": {
+              "si_value": 0.6577826271987393
+            },
+            "76": {
+              "si_value": 0.17087361546208923
+            },
+            "77": {
+              "si_value": 0.06505895665455463
+            },
+            "78": {
+              "si_value": 0.2218814975608196
+            },
+            "79": {
+              "si_value": 0.47545562434665783
+            },
+            "8": {
+              "si_value": 7.601975003712624e-6
+            },
+            "80": {
+              "si_value": 0.4919646325565248
+            },
+            "81": {
+              "si_value": 0.7135962726346273
+            },
+            "82": {
+              "si_value": 0.5797171723599921
+            },
+            "83": {
+              "si_value": 0.2884687934675922
+            },
+            "84": {
+              "si_value": 0.2957867415184895
+            },
+            "85": {
+              "si_value": 0.7532107757291711
+            },
+            "86": {
+              "si_value": 0.15260317285716524
+            },
+            "87": {
+              "si_value": 0.09614639645160784
+            },
+            "88": {
+              "si_value": 0.320111775033922
+            },
+            "89": {
+              "si_value": 0.6107162069266547
+            },
+            "9": {
+              "si_value": 1.477156030826876e-6
+            },
+            "90": {
+              "si_value": 0.6753372846509553
+            },
+            "91": {
+              "si_value": 0.1736430711882898
+            },
+            "92": {
+              "si_value": 0.03532815388376809
+            },
+            "93": {
+              "si_value": 0.12205870717161792
+            },
+            "94": {
+              "si_value": 0.27743917641766247
+            },
+            "95": {
+              "si_value": 0.2797803885669399
+            },
+            "96": {
+              "si_value": 0.730548535784806
+            },
+            "97": {
+              "si_value": 0.21868897792774225
+            },
+            "98": {
+              "si_value": 0.08716992068979945
+            },
+            "99": {
+              "si_value": 0.2843352049458747
+            }
+          },
+          "index": "Generation"
+        }
+      },
+      "param": {
+        "growth": {
+          "si_value": 3.9
+        },
+        "initial_a": {
+          "si_value": 0.5
+        },
+        "initial_b": {
+          "si_value": 0.5001
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

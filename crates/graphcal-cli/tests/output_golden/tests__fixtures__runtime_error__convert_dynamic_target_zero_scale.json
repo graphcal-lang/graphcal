@@ -1,0 +1,33 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "bad": {
+          "si_value": 100.0,
+          "unit": "USD"
+        }
+      },
+      "param": {
+        "price": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "USD"
+        },
+        "rate": {
+          "si_value": 0.0
+        }
+      },
+      "presentation_diagnostics": [
+        {
+          "kind": "presentation_error",
+          "message": "convert_dynamic_target_zero_scale.bad: display scale unavailable in <root>/tests/fixtures/runtime_error/convert_dynamic_target_zero_scale.gcl: dynamic unit scale must be greater than zero, got 0 (SI value retained)"
+        }
+      ],
+      "unfinished_calls": []
+    }
+  }
+}

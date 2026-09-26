@@ -1,0 +1,44 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "g0": {
+          "display_value": 9.80665,
+          "si_value": 9.80665,
+          "unit": "m/s^2"
+        },
+        "half_pi": {
+          "si_value": 1.5707963267948966
+        },
+        "sqrt2": {
+          "si_value": 1.4142135623730951
+        },
+        "two_g0": {
+          "si_value": 19.6133,
+          "unit": "m/s^2"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "area": {
+          "si_value": 31415.926535897932,
+          "unit": "m^2"
+        },
+        "circumference": {
+          "si_value": 628.3185307179587,
+          "unit": "m"
+        }
+      },
+      "param": {
+        "radius": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "m"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

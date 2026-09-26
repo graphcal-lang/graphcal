@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "invalid": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "to_int() argument is not integer-valued (got 3.7); apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
+          }
+        }
+      },
+      "param": {
+        "value": {
+          "si_value": 3.7
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

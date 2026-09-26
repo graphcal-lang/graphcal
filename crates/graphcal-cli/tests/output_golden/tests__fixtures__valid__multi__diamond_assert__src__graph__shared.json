@@ -1,0 +1,22 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "base_val_positive": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "base_val": {
+          "si_value": 10.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

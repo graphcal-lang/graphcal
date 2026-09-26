@@ -1,0 +1,34 @@
+{
+  "check": {
+    "code": "graphcal::A019",
+    "labels": [
+      {
+        "length": 16,
+        "location": {
+          "column": 1,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/repeated_expected_fail_attribute.gcl"
+        },
+        "offset": 17,
+        "primary": false
+      },
+      {
+        "length": 16,
+        "location": {
+          "column": 1,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/repeated_expected_fail_attribute.gcl"
+        },
+        "offset": 0,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

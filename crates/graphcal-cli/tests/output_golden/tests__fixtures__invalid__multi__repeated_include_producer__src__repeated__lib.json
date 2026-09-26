@@ -1,0 +1,23 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "okay": {
+          "message": "assertion evaluated to false",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "x": {
+          "si_value": 1.0
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

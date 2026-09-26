@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "lib::y": {
+          "si_value": 20.0
+        },
+        "x": {
+          "si_value": 10.0
+        },
+        "y": {
+          "si_value": 20.0
+        },
+        "z": {
+          "si_value": 21.0
+        }
+      },
+      "param": {
+        "lib::x": {
+          "si_value": 10.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

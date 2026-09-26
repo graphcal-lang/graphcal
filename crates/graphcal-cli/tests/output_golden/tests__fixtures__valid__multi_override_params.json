@@ -1,0 +1,80 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "fuel_proxy": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "N"
+        },
+        "gain_proxy": {
+          "si_value": 0.0
+        },
+        "total_dv": {
+          "si_value": 4000.0,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "boost": {
+          "entries": {
+            "Cruise": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km/s"
+            },
+            "Launch": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Phase"
+        },
+        "delta_v": {
+          "entries": {
+            "Departure": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "guidance": {
+          "fields": {
+            "bias": {
+              "si_value": 0.0
+            }
+          },
+          "type": "Open"
+        },
+        "maneuver": {
+          "fields": {
+            "duration": {
+              "display_value": 3600.0,
+              "si_value": 3600.0,
+              "unit": "s"
+            },
+            "thrust": {
+              "display_value": 0.5,
+              "si_value": 0.5,
+              "unit": "N"
+            }
+          },
+          "type": "LowThrust"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "no_unique_solution": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "matrix is singular and cannot be solved"
+          }
+        }
+      },
+      "param": {
+        "rhs": {
+          "entries": {
+            "#0": {
+              "si_value": 1.0
+            },
+            "#1": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "singular": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 1.0
+                },
+                "#1": {
+                  "si_value": 2.0
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 2.0
+                },
+                "#1": {
+                  "si_value": 4.0
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(2)"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

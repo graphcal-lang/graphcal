@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 17,
+        "location": {
+          "column": 22,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/complex_is_unordered.gcl"
+        },
+        "offset": 21,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

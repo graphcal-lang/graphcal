@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::S006",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 27,
+          "line": 8,
+          "source": "<root>/tests/fixtures/invalid/index_label_constructor_payload.gcl"
+        },
+        "offset": 175,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

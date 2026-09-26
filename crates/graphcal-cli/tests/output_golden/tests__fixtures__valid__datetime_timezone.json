@@ -1,0 +1,76 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "arith_works": {
+          "status": "pass"
+        },
+        "display_preserves_instant": {
+          "status": "pass"
+        },
+        "same_instant": {
+          "status": "pass"
+        },
+        "same_instant_ny": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "check_same": {
+          "si_value": 0.0,
+          "unit": "s"
+        },
+        "delta": {
+          "si_value": 0.0,
+          "unit": "s"
+        },
+        "delta_ny": {
+          "si_value": 0.0,
+          "unit": "s"
+        },
+        "dur": {
+          "si_value": 3600.0,
+          "unit": "s"
+        },
+        "later": {
+          "datetime": "2024-11-05T02:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "launch_ny": {
+          "datetime": "2024-11-05T07:00:00-05:00[America/New_York]",
+          "display_tz": "America/New_York",
+          "time_scale": "UTC"
+        },
+        "launch_tokyo": {
+          "datetime": "2024-11-05T21:00:00+09:00[Asia/Tokyo]",
+          "display_tz": "Asia/Tokyo",
+          "time_scale": "UTC"
+        },
+        "meeting_displayed": {
+          "datetime": "2024-11-04T20:00:00-05:00[America/New_York]",
+          "display_tz": "America/New_York",
+          "time_scale": "UTC"
+        }
+      },
+      "param": {
+        "launch": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "meeting_ny": {
+          "datetime": "2024-11-05T15:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "meeting_tokyo": {
+          "datetime": "2024-11-05T01:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

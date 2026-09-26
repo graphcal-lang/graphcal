@@ -1,0 +1,43 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "tt_equal": {
+          "status": "pass"
+        },
+        "tt_later": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "t_tt_later": {
+          "datetime": "2024-11-05T13:00:00 TT",
+          "time_scale": "TT"
+        },
+        "tt_dur": {
+          "si_value": 3600.0,
+          "unit": "s"
+        }
+      },
+      "param": {
+        "t_gpst": {
+          "datetime": "2024-11-05T12:00:00 GPST",
+          "time_scale": "GPST"
+        },
+        "t_tai": {
+          "datetime": "2024-11-05T12:00:00 TAI",
+          "time_scale": "TAI"
+        },
+        "t_tt": {
+          "datetime": "2024-11-05T12:00:00 TT",
+          "time_scale": "TT"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

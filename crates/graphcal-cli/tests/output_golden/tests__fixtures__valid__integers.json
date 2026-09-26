@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "seven": 7
+      },
+      "incomplete": false,
+      "node": {
+        "a_eq_b": false,
+        "a_float": {
+          "si_value": 10.0
+        },
+        "a_gt_b": true,
+        "a_le_b": false,
+        "back_to_int": 3,
+        "clamped": 7,
+        "diff": 7,
+        "int_sum": 13,
+        "neg_a": -10,
+        "power": 9,
+        "prod": 30,
+        "quot": 3,
+        "rem": 1,
+        "truncated_to_int": 3
+      },
+      "param": {
+        "a": 10,
+        "b": 3
+      },
+      "unfinished_calls": []
+    }
+  }
+}

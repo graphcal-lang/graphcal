@@ -1,0 +1,34 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "values": {
+          "entries": {
+            "First": {
+              "si_value": 1.0
+            },
+            "Fourth": {
+              "si_value": 8.0
+            },
+            "Second": {
+              "si_value": 2.0
+            },
+            "Third": {
+              "si_value": 4.0
+            }
+          },
+          "index": "Step"
+        },
+        "x0": {
+          "si_value": 1.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

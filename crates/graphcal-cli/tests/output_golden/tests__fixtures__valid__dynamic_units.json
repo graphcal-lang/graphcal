@@ -1,0 +1,32 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "price_eur": {
+          "display_value": 100.0,
+          "si_value": 108.0,
+          "unit": "EUR"
+        },
+        "price_usd": {
+          "display_value": 108.0,
+          "si_value": 108.0,
+          "unit": "USD"
+        },
+        "total": {
+          "si_value": 158.0,
+          "unit": "USD"
+        }
+      },
+      "param": {
+        "usd_per_eur": {
+          "si_value": 1.08
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

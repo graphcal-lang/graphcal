@@ -1,0 +1,203 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "departure_share": {
+          "status": "pass"
+        },
+        "matrix_axes_are_reordered": {
+          "status": "pass"
+        },
+        "scale_is_geometric": {
+          "status": "pass"
+        },
+        "shares_sum_to_one": {
+          "status": "pass"
+        },
+        "spread_is_range": {
+          "status": "pass"
+        },
+        "v_mid_interpolates": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "delta_v": {
+          "entries": {
+            "Correction": {
+              "display_value": 0.5,
+              "si_value": 500.0,
+              "unit": "km/s"
+            },
+            "Departure": {
+              "display_value": 2.0,
+              "si_value": 2000.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.5,
+              "si_value": 1500.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "dv_share": {
+          "entries": {
+            "Correction": {
+              "si_value": 0.125
+            },
+            "Departure": {
+              "si_value": 0.5
+            },
+            "Insertion": {
+              "si_value": 0.375
+            }
+          },
+          "index": "Maneuver"
+        },
+        "dv_share_total": {
+          "si_value": 1.0
+        },
+        "dv_span": {
+          "fields": {
+            "max": {
+              "si_value": 2000.0,
+              "unit": "m/s"
+            },
+            "min": {
+              "si_value": 500.0,
+              "unit": "m/s"
+            }
+          },
+          "type": "DvRange"
+        },
+        "dv_spread": {
+          "si_value": 1500.0,
+          "unit": "m/s"
+        },
+        "pace": {
+          "si_value": 0.006666666666666667,
+          "unit": "s/m"
+        },
+        "scale": {
+          "si_value": 6.0,
+          "unit": "m"
+        },
+        "transposed_thrust": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 1.0,
+                  "unit": "m*kg/s^2"
+                },
+                "#1": {
+                  "si_value": 4.0,
+                  "unit": "m*kg/s^2"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 2.0,
+                  "unit": "m*kg/s^2"
+                },
+                "#1": {
+                  "si_value": 5.0,
+                  "unit": "m*kg/s^2"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#2": {
+              "entries": {
+                "#0": {
+                  "si_value": 3.0,
+                  "unit": "m*kg/s^2"
+                },
+                "#1": {
+                  "si_value": 6.0,
+                  "unit": "m*kg/s^2"
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "v_mid": {
+          "si_value": 150.0,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "t_frac": {
+          "si_value": 0.25
+        },
+        "thrust_grid": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "N"
+                },
+                "#1": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "N"
+                },
+                "#2": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "N"
+                }
+              },
+              "index": "Fin(3)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "N"
+                },
+                "#1": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "N"
+                },
+                "#2": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "N"
+                }
+              },
+              "index": "Fin(3)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "v0": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "m/s"
+        },
+        "v1": {
+          "display_value": 300.0,
+          "si_value": 300.0,
+          "unit": "m/s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

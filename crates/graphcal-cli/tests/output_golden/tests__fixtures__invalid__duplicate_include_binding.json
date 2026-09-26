@@ -1,0 +1,34 @@
+{
+  "check": {
+    "code": "graphcal::P025",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 25,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/duplicate_include_binding.gcl"
+        },
+        "offset": 24,
+        "primary": false
+      },
+      {
+        "length": 1,
+        "location": {
+          "column": 17,
+          "line": 1,
+          "source": "<root>/tests/fixtures/invalid/duplicate_include_binding.gcl"
+        },
+        "offset": 16,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

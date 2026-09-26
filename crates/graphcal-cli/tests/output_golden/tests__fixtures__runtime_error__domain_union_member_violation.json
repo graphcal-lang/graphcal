@@ -1,0 +1,20 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "R": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "field `Burn.dv` above maximum (10 km/s)"
+          }
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

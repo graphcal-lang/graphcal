@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "earth_half": {
+          "si_value": 3185500.0,
+          "unit": "m"
+        },
+        "out": {
+          "si_value": 3185500.0,
+          "unit": "m"
+        },
+        "scale_earth::result": {
+          "si_value": 3185500.0,
+          "unit": "m"
+        }
+      },
+      "param": {
+        "scale_earth::factor": {
+          "si_value": 0.5
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

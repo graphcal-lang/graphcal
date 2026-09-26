@@ -1,0 +1,53 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "add_then_mul": {
+          "si_value": 18.0
+        },
+        "cmp_after_sub": true,
+        "div_mul_left": {
+          "si_value": 18.0
+        },
+        "div_then_pow": {
+          "si_value": 3.0
+        },
+        "neg_pow_i": -9,
+        "neg_pow_x": {
+          "si_value": -9.0
+        },
+        "not_then_eq": true,
+        "paren_neg_pow_i": 9,
+        "pow_chain": {
+          "si_value": 512.0
+        },
+        "pow_chain_int": 512,
+        "sub_left": {
+          "si_value": 7.0
+        }
+      },
+      "param": {
+        "bf": false,
+        "bt": true,
+        "i": 3,
+        "ten": {
+          "si_value": 10.0
+        },
+        "x": {
+          "si_value": 3.0
+        },
+        "y": {
+          "si_value": 2.0
+        },
+        "z": {
+          "si_value": 12.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

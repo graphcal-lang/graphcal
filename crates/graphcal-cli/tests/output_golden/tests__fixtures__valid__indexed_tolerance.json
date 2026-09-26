@@ -1,0 +1,89 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "known_off": {
+          "status": "pass"
+        },
+        "near_unindexed": {
+          "status": "pass"
+        },
+        "per_key": {
+          "status": "pass"
+        },
+        "relative": {
+          "status": "pass"
+        },
+        "unindexed_tol": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "actual": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "expected": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.5,
+              "si_value": 2.5,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "per_key_tol": {
+          "entries": {
+            "A": {
+              "display_value": 0.01,
+              "si_value": 0.01,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 0.6,
+              "si_value": 0.6,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "relative_tol": {
+          "entries": {
+            "A": {
+              "si_value": 0.25,
+              "unit": "m"
+            },
+            "B": {
+              "si_value": 0.625,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

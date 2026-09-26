@@ -1,0 +1,94 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "gm_earth": {
+          "display_value": 398600.4418,
+          "si_value": 398600441800000.0,
+          "unit": "km^3/s^2"
+        },
+        "r_earth": {
+          "display_value": 6371.0,
+          "si_value": 6371000.0,
+          "unit": "km"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "a": {
+          "si_value": 24364000.0,
+          "unit": "m"
+        },
+        "dv1": {
+          "si_value": 2456.553179989527,
+          "unit": "m/s"
+        },
+        "dv2": {
+          "si_value": 1478.0297917383489,
+          "unit": "m/s"
+        },
+        "r1": {
+          "si_value": 6571000.0,
+          "unit": "m"
+        },
+        "r2": {
+          "si_value": 42157000.0,
+          "unit": "m"
+        },
+        "tof_hours": {
+          "display_value": 5.256556905790572,
+          "si_value": 18923.60486084606,
+          "unit": "h"
+        },
+        "total_dv": {
+          "si_value": 3934.582971727876,
+          "unit": "m/s"
+        },
+        "transfer": {
+          "fields": {
+            "dv1": {
+              "si_value": 2456.553179989527,
+              "unit": "m/s"
+            },
+            "dv2": {
+              "si_value": 1478.0297917383489,
+              "unit": "m/s"
+            },
+            "tof": {
+              "si_value": 18923.60486084606,
+              "unit": "s"
+            },
+            "total_dv": {
+              "si_value": 3934.582971727876,
+              "unit": "m/s"
+            }
+          },
+          "type": "TransferResult"
+        },
+        "v1": {
+          "si_value": 7788.487984973157,
+          "unit": "m/s"
+        },
+        "v2": {
+          "si_value": 3074.921541506354,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "parking_alt": {
+          "display_value": 200.0,
+          "si_value": 200000.0,
+          "unit": "km"
+        },
+        "target_alt": {
+          "display_value": 35786.0,
+          "si_value": 35786000.0,
+          "unit": "km"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}
