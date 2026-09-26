@@ -66,8 +66,8 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
     } = d;
     match kind {
         DeclKind::Sugar(RawDeclSugar::Multi(multi)) => {
-            // `expand_multi_decl` produces `Declaration<Raw>` values (one per
-            // slot, all Param/Node/ConstNode — never `Sugar`). Lift each to
+            // `expand_multi_decl` produces one `ExpandedSlotDecl` per slot
+            // (Param/Node/ConstNode only — never `Sugar`). Lift each to
             // `Declaration<Desugared>` so the rest of the pass sees a uniform
             // post-desugar type. A doc block above the multi-decl documents
             // every expanded slot.
