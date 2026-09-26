@@ -1374,6 +1374,123 @@ fn eval_same_leaf_imported_indexes_keep_names_and_display_metadata() {
 }
 
 #[test]
+fn same_leaf_imported_dimensions_resolve_qualified_in_declarations() {
+    // Dimension references in `dim` definitions, `unit` dimensions, and
+    // required coordinate indexes resolve exactly like node annotations:
+    // qualifier-aware, alias-aware, and limited to source-visible names.
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/collide");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collide\"\n",
+    )
+    .unwrap();
+    std::fs::write(root_dir.join("a.gcl"), "pub dim Rate = Length / Time;\n").unwrap();
+    std::fs::write(root_dir.join("b.gcl"), "pub dim Rate = Mass / Time;\n").unwrap();
+    std::fs::write(
+        root_dir.join("lib.gcl"),
+        "import collide.a as a;\n\
+         import collide.b as b;\n\
+         pub(bind) index Step: a::Rate;\n\
+         pub node ones: Dimensionless[Step] = for s: Step { 1.0 };\n",
+    )
+    .unwrap();
+
+    let run = |name: &str, source: &str| {
+        let path = root_dir.join(format!("{name}.gcl"));
+        std::fs::write(&path, source).unwrap();
+        let output = graphcal_bin()
+            .args(["eval", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal");
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let modules = "import collide.a as a;\nimport collide.b as b;\n";
+
+    // `a::Rate` is Length / Time; `b::Rate` is Mass / Time. A local `Rate`
+    // must not hijack either qualified reference.
+    let (ok, stdout, stderr) = run(
+        "qualified_ok",
+        &format!(
+            "{modules}dim Rate = Energy;\n\
+             dim Da = a::Rate * Time;\n\
+             dim Db = b::Rate * Time;\n\
+             unit spd: a::Rate = 1.0 m/s;\n\
+             node xa: Da = 2.0 m;\n\
+             node xb: Db = 3.0 kg;\n\
+             node v: a::Rate = 4.0 spd;\n\
+             node e: Rate = 5.0 J;\n"
+        ),
+    );
+    assert!(ok, "stderr: {stderr}");
+    let has_line = |stdout: &str, name: &str, value: &str| {
+        stdout.lines().any(|line| {
+            line.split_once('=')
+                .is_some_and(|(lhs, rhs)| lhs.trim() == name && rhs.trim() == value)
+        })
+    };
+    assert!(has_line(&stdout, "xa", "2 m"), "stdout: {stdout}");
+    assert!(has_line(&stdout, "xb", "3 kg"), "stdout: {stdout}");
+    assert!(has_line(&stdout, "v", "4 spd"), "stdout: {stdout}");
+
+    let (ok, _, stderr) = run(
+        "qualified_mismatch",
+        &format!("{modules}dim D = a::Rate * Time;\nnode x: D = 2.0 kg;\n"),
+    );
+    assert!(!ok && stderr.contains("D002"), "stderr: {stderr}");
+
+    let (ok, _, stderr) = run(
+        "unbound_qualifier",
+        &format!("{modules}dim D = zzz::Length * Time;\n"),
+    );
+    assert!(
+        !ok && stderr.contains("D004") && stderr.contains("zzz::Length"),
+        "stderr: {stderr}"
+    );
+
+    // Module imports make only `a::Rate` visible, never the bare leaf.
+    for (name, source) in [
+        ("bare_dim", format!("{modules}dim D = Rate * Time;\n")),
+        ("bare_unit", format!("{modules}unit spd: Rate = 1.0 m/s;\n")),
+    ] {
+        let (ok, _, stderr) = run(name, &source);
+        assert!(!ok && stderr.contains("D004"), "{name} stderr: {stderr}");
+    }
+
+    // A selective `as` import binds only its local name.
+    let (ok, stdout, stderr) = run(
+        "selective_alias",
+        "import collide.a::{dim Rate as R};\n\
+         dim D = R * Time;\n\
+         unit spd: R = 1.0 m/s;\n\
+         node x: D = 2.0 m;\n\
+         node v: R = 3.0 spd;\n",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(has_line(&stdout, "x", "2 m"), "stdout: {stdout}");
+    let (ok, _, stderr) = run(
+        "selective_alias_leak",
+        "import collide.a::{dim Rate as R};\ndim D = Rate * Time;\n",
+    );
+    assert!(!ok && stderr.contains("D004"), "stderr: {stderr}");
+
+    // The library's `pub(bind)` index dimension is `a::Rate`, so a velocity
+    // coordinate index satisfies it.
+    let (ok, stdout, stderr) = run(
+        "bound_index",
+        "index Speeds = range(1.0 m/s, 2.0 m/s, step: 1.0 m/s);\n\
+         include collide.lib(index Step: Speeds)::{ ones };\n",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(has_line(&stdout, "ones[2 m/s]", "1"), "stdout: {stdout}");
+}
+
+#[test]
 fn eval_output_view_selects_surface_or_all_include_values() {
     // #394/#480/#909: normal output follows the consumer surface while the
     // explicit debug view retains private instance state.

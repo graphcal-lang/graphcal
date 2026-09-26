@@ -1678,10 +1678,20 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                             import_item.name.span,
                         )?;
                     }
-                    ctx.imported_type_system_names
+                    let selected = ctx
+                        .imported_type_system_names
                         .entry(module_target.clone())
-                        .or_default()
-                        .insert(import_item.namespace, orig_name.clone());
+                        .or_default();
+                    if import_item.namespace == ImportItemNamespace::Dimension {
+                        // Bind the dimension under its importer-local name
+                        // only (`dim Rate as R` makes `R`, not `Rate`, visible).
+                        selected.insert_dimension_as(
+                            DimName::from_atom(orig_name.clone()),
+                            DimName::from_atom(import_item.local_name_atom().clone()),
+                        );
+                    } else {
+                        selected.insert(import_item.namespace, orig_name.clone());
+                    }
                     continue;
                 }
 

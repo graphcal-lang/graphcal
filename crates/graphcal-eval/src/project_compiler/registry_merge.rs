@@ -3,6 +3,7 @@
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::static_dependencies::static_import_rejection;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
+use graphcal_compiler::syntax::dimension::DimRef;
 
 #[allow(
     clippy::wildcard_imports,
@@ -91,6 +92,15 @@ pub(super) fn seed_imported_type_system(
                 names,
                 dep_dag_id,
             )?;
+            // Source registration installs the inline DAG's declaration
+            // names; renamed selections (`dim Rate as R`) additionally bind
+            // their importer-local name.
+            for (local, source) in names.dimensions().filter(|(local, source)| local != source) {
+                builder.register_dimension_alias(
+                    DimRef::local(local.clone()),
+                    DimRef::local(source.clone()),
+                );
+            }
         }
     }
     for alias in projected_static_aliases {
@@ -99,7 +109,10 @@ pub(super) fn seed_imported_type_system(
                 builder.register_type_alias(alias.clone(), target.clone());
             }
             ProjectedStaticAlias::Dimension { alias, target } => {
-                builder.register_dimension_alias(alias.clone(), target.clone());
+                builder.register_dimension_alias(
+                    DimRef::local(alias.clone()),
+                    DimRef::local(target.clone()),
+                );
             }
             ProjectedStaticAlias::Index { alias, target } => {
                 builder.register_index_alias(alias.clone(), target.clone());
@@ -144,11 +157,10 @@ fn register_selected_resolved_dimensions_and_units(
     ) {
         for (base_id, _) in dimension.iter() {
             if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id) {
-                // Multiple package instances may use the same display leaf for
-                // distinct nominal base IDs. Register every ID's metadata even
-                // though the flat boundary registry keeps only one leaf value.
-                builder.register_base_dimension(
-                    graphcal_compiler::syntax::dimension::DimName::expect_valid(base_name),
+                // Display metadata only: the base dimension may be private to
+                // the dependency, so it must not become source-visible here.
+                builder.register_base_dimension_display_name(
+                    &graphcal_compiler::syntax::dimension::DimName::expect_valid(base_name),
                     base_id.clone(),
                 );
             }
@@ -158,20 +170,24 @@ fn register_selected_resolved_dimensions_and_units(
         }
     }
 
-    for name in selected.dimensions() {
+    for (local, source) in selected.dimensions() {
         let dimension = dep_registry
             .dimensions
-            .get_dimension(name.as_str())
+            .get_dimension_ref(&DimRef::local(source.clone()))
             .cloned()
             .ok_or_else(|| {
                 GraphcalError::internal_error(
-                    format!("resolved dependency registry is missing selected dimension `{name}`"),
+                    format!(
+                        "resolved dependency registry is missing selected dimension `{source}`"
+                    ),
                     dep_src,
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
         register_base_dimension_metadata(builder, dep_registry, &dimension);
-        builder.register_dimension(name.clone(), dimension);
+        // Only the importer-local binding is source-visible (`dim Rate as R`
+        // binds `R`, not `Rate`).
+        builder.register_dimension(DimRef::local(local.clone()), dimension);
     }
 
     for name in selected.units() {
@@ -239,7 +255,7 @@ fn merge_registry_into_builder_filtered(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     external_surface: Option<&ExternalDeclSurface>,
-    unit_alias: Option<&ModuleAliasName>,
+    module_alias: Option<&ModuleAliasName>,
     runtime_unit_boundary: RuntimeUnitBoundary,
     pure_import_declarations: Option<&[graphcal_compiler::desugar::desugared_ast::Declaration]>,
 ) -> Result<(), UnitMergeConflict> {
@@ -251,8 +267,9 @@ fn merge_registry_into_builder_filtered(
     };
     // Import base-dimension metadata for display formatting and registry
     // invariants. This includes private transitive dependencies of exported
-    // dimensions and units; module resolution still prevents those names from
-    // becoming source-visible in the importer.
+    // dimensions and units. Module imports record display metadata only so
+    // those names never become source-visible in the importer; include merges
+    // inline the dependency's body and keep its bare base-dimension scope.
     for (id, name) in dep_registry.dimensions.base_dim_names() {
         let dimension_name = graphcal_compiler::syntax::dimension::DimName::expect_valid(name);
         if dim_bindings.contains_key(name.as_str())
@@ -260,12 +277,23 @@ fn merge_registry_into_builder_filtered(
         {
             continue;
         }
-        builder.register_base_dimension(dimension_name, id.clone());
+        if module_alias.is_some() {
+            builder.register_base_dimension_display_name(&dimension_name, id.clone());
+        } else {
+            builder.register_base_dimension(dimension_name, id.clone());
+        }
     }
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
-    for (name, dim) in dep_registry.dimensions.all_dimensions() {
-        if dim_bindings.contains_key(name.as_str())
+    //
+    // Like units below: module imports expose only the dependency's own `pub`
+    // dimensions, re-keyed under the import alias (`alias::Rate`), so two
+    // modules exporting the same leaf never collide and nothing lands in the
+    // importer's bare dimension scope. Include merges copy the dependency's
+    // dimension scope unchanged.
+    for (reference, dim) in dep_registry.dimensions.all_dimensions() {
+        let name = reference.name();
+        if (!reference.is_qualified() && dim_bindings.contains_key(name.as_str()))
             || pure_import_rejects(name.atom(), ImportItemNamespace::Dimension)
         {
             continue;
@@ -273,7 +301,19 @@ fn merge_registry_into_builder_filtered(
         if external_surface.is_some_and(|surface| !surface.is_static_explicit_export(name.atom())) {
             continue;
         }
-        builder.register_dimension(name.clone(), dim.clone());
+        let target = match module_alias {
+            Some(alias) => {
+                if reference.is_qualified() {
+                    continue;
+                }
+                DimRef::qualified(
+                    graphcal_compiler::syntax::names::NamespacePath::root(alias.atom().clone()),
+                    name.clone(),
+                )
+            }
+            None => reference.clone(),
+        };
+        builder.register_dimension(target, dim.clone());
     }
 
     // Import base dimension symbols (for SI unit string display).
@@ -283,14 +323,14 @@ fn merge_registry_into_builder_filtered(
 
     // Import units.
     //
-    // Module imports (`unit_alias` present) expose only the dependency's own
+    // Module imports (`module_alias` present) expose only the dependency's own
     // `pub` units, re-keyed under the import alias (`alias::unit`); the
     // dependency's alias-qualified imports and non-pub units stay internal to
     // it, and nothing lands in the importer's bare unit scope. Bare names in
     // the importer come only from its own declarations, selective imports,
     // and the prelude.
     //
-    // Include merges (`unit_alias` absent) copy the dependency's full unit
+    // Include merges (`module_alias` absent) copy the dependency's full unit
     // scope unchanged because the dependency's body is inlined into the
     // importer and its unit references must keep resolving. Re-merging an
     // identical definition (diamond includes, prelude units present in every
@@ -302,7 +342,7 @@ fn merge_registry_into_builder_filtered(
         {
             continue;
         }
-        let target = if let Some(alias) = unit_alias {
+        let target = if let Some(alias) = module_alias {
             if name.is_qualified() {
                 continue;
             }
