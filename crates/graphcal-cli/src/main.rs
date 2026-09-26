@@ -1257,9 +1257,13 @@ fn print_json(
                 "index": index_name.display_name().as_str(),
                 "variant": variant.as_str()
             })),
-            Value::Struct { type_name, fields } => {
+            Value::Struct {
+                constructor,
+                fields,
+                ..
+            } => {
                 let mut map = serde_json::Map::new();
-                map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
+                map.insert("type".to_string(), serde_json::json!(constructor.as_str()));
                 let fields_map = fields
                     .iter()
                     .map(|(name, value)| {

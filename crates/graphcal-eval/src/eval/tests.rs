@@ -5892,10 +5892,15 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
             .1
             .as_ref()
             .unwrap_or_else(|e| panic!("node `{name}` failed: {e}"));
-        let Value::Struct { type_name, .. } = value else {
+        let Value::Struct {
+            type_name,
+            constructor,
+            ..
+        } = value
+        else {
             panic!("expected struct value for `{name}`, got {value:?}");
         };
-        assert_eq!(type_name.name().as_str(), "Pick");
+        assert_eq!(constructor.as_str(), "Pick");
         type_name.resolved().clone()
     };
 
@@ -9414,5 +9419,37 @@ fn eval_extern_plugin_fixture() {
             .all(|(_, r, _)| matches!(r, super::types::AssertResult::Pass)),
         "all fixture assertions must pass: {:?}",
         result.assertions
+    );
+}
+
+#[test]
+fn public_value_equality_distinguishes_constructor_and_generic_args() {
+    let result = compile_and_eval(
+        "type Mode { Coast, Burn }\n\
+         type Eci { Eci }\n\
+         type Ecef { Ecef }\n\
+         type Framed<F: Type> { Framed(v: Dimensionless) }\n\
+         node a: Mode = Coast;\n\
+         node b: Mode = Burn;\n\
+         node c: Framed<Eci> = Framed<Eci>(v: 1.0);\n\
+         node d: Framed<Ecef> = Framed<Ecef>(v: 1.0);",
+    )
+    .unwrap();
+    let node = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(n, _)| n.to_string() == name)
+            .unwrap()
+            .1
+            .as_ref()
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(node("a"), node("a"));
+    assert_ne!(node("a"), node("b"));
+    assert_ne!(node("c"), node("d"));
+    assert!(
+        matches!(node("a"), Value::Struct { ref constructor, .. } if constructor.as_str() == "Coast")
     );
 }
