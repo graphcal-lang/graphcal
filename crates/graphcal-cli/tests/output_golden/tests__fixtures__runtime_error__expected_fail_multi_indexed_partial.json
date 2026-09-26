@@ -1,0 +1,96 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "within_limits": {
+          "message": "failed at (Mode#Eco, Phase#Cruise)",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "actual": {
+          "entries": {
+            "Boost": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 58.0
+                },
+                "Launch": {
+                  "si_value": 55.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Eco": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 20.0
+                },
+                "Launch": {
+                  "si_value": 3.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Normal": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 25.0
+                },
+                "Launch": {
+                  "si_value": 8.0
+                }
+              },
+              "index": "Phase"
+            }
+          },
+          "index": "Mode"
+        },
+        "threshold": {
+          "entries": {
+            "Boost": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 60.0
+                },
+                "Launch": {
+                  "si_value": 50.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Eco": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 15.0
+                },
+                "Launch": {
+                  "si_value": 5.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Normal": {
+              "entries": {
+                "Cruise": {
+                  "si_value": 20.0
+                },
+                "Launch": {
+                  "si_value": 10.0
+                }
+              },
+              "index": "Phase"
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

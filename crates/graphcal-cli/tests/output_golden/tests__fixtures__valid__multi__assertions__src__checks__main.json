@@ -1,0 +1,32 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "limit_positive": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "limit": {
+          "si_value": 100.0
+        },
+        "ratio": {
+          "si_value": 0.42
+        }
+      },
+      "param": {
+        "lib::limit": {
+          "si_value": 100.0
+        },
+        "value": {
+          "si_value": 42.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

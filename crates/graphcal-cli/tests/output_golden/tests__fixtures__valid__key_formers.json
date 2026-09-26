@@ -1,0 +1,146 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "after_event": {
+          "display_value": 4.0,
+          "si_value": 4.0,
+          "unit": "s"
+        },
+        "altitude": {
+          "entries": {
+            "0 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "1 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "10 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "2 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "3 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "4 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "5 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "6 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "7 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "8 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            },
+            "9 s": {
+              "display_value": 100.0,
+              "si_value": 100000.0,
+              "unit": "km"
+            }
+          },
+          "index": "TimeStep"
+        },
+        "altitude_at_event": {
+          "display_value": 100.0,
+          "si_value": 100000.0,
+          "unit": "km"
+        },
+        "at_event": {
+          "display_value": 3.0,
+          "si_value": 3.0,
+          "unit": "s"
+        },
+        "before_event": {
+          "display_value": 3.0,
+          "si_value": 3.0,
+          "unit": "s"
+        },
+        "channel": 5,
+        "second_key": 1,
+        "second_reading": {
+          "si_value": 103.4
+        },
+        "selected": {
+          "si_value": 101.0
+        },
+        "t_after": {
+          "si_value": 4.0,
+          "unit": "s"
+        },
+        "t_before": {
+          "si_value": 3.0,
+          "unit": "s"
+        }
+      },
+      "param": {
+        "event_time": {
+          "display_value": 3.4,
+          "si_value": 3.4,
+          "unit": "s"
+        },
+        "readings": {
+          "entries": {
+            "#0": {
+              "si_value": 101.2
+            },
+            "#1": {
+              "si_value": 103.4
+            },
+            "#2": {
+              "si_value": 99.8
+            },
+            "#3": {
+              "si_value": 103.4
+            },
+            "#4": {
+              "si_value": 100.1
+            },
+            "#5": {
+              "si_value": 101.0
+            },
+            "#6": {
+              "si_value": 102.2
+            },
+            "#7": {
+              "si_value": 100.7
+            }
+          },
+          "index": "Fin(8)"
+        },
+        "requested": 5
+      },
+      "unfinished_calls": []
+    }
+  }
+}

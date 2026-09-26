@@ -1,0 +1,48 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "power_ok": {
+          "message": "failed at Mode#Eco",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "power_gen": {
+          "entries": {
+            "Boost": {
+              "si_value": 200.0
+            },
+            "Eco": {
+              "si_value": 50.0
+            },
+            "Normal": {
+              "si_value": 100.0
+            }
+          },
+          "index": "Mode"
+        },
+        "power_use": {
+          "entries": {
+            "Boost": {
+              "si_value": 250.0
+            },
+            "Eco": {
+              "si_value": 60.0
+            },
+            "Normal": {
+              "si_value": 80.0
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

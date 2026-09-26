@@ -1,0 +1,54 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "jd_roundtrip": {
+          "status": "pass"
+        },
+        "mjd_roundtrip": {
+          "status": "pass"
+        },
+        "unix_roundtrip": {
+          "status": "pass"
+        },
+        "unix_value": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "jd": {
+          "si_value": 2460620.0
+        },
+        "mjd": {
+          "si_value": 60619.5
+        },
+        "t_from_jd": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "t_from_mjd": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "t_from_unix": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "unix_ts": {
+          "si_value": 1730808000.0
+        }
+      },
+      "param": {
+        "t": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

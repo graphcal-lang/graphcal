@@ -1,0 +1,117 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "total_power": {
+          "entries": {
+            "Nominal": {
+              "si_value": 22.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Safe": {
+              "si_value": 10.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Science": {
+              "si_value": 55.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "OpMode"
+        }
+      },
+      "param": {
+        "power_draw": {
+          "entries": {
+            "Attitude": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Science": {
+                  "display_value": 12.0,
+                  "si_value": 12.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Comms": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "Science": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Payload": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "Science": {
+                  "display_value": 35.0,
+                  "si_value": 35.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            },
+            "Thermal": {
+              "entries": {
+                "Nominal": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "Safe": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "Science": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OpMode"
+            }
+          },
+          "index": "Subsystem"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

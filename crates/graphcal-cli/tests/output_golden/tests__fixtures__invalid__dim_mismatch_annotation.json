@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D002",
+    "labels": [
+      {
+        "length": 4,
+        "location": {
+          "column": 13,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/dim_mismatch_annotation.gcl"
+        },
+        "offset": 92,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

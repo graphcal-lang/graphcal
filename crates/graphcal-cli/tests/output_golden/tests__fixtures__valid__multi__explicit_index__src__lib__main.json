@@ -1,0 +1,28 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "favorite": {
+          "entries": {
+            "Blue": {
+              "si_value": 3.0
+            },
+            "Green": {
+              "si_value": 2.0
+            },
+            "Red": {
+              "si_value": 1.0
+            }
+          },
+          "index": "Color"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

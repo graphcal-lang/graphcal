@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::E001",
+    "labels": [
+      {
+        "length": 12,
+        "location": {
+          "column": 28,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/multi/module_import_mixed/src/lib/main.gcl"
+        },
+        "offset": 144,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

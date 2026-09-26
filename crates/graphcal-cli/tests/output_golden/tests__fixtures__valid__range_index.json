@@ -1,0 +1,37 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "x": {
+          "entries": {
+            "0 s": {
+              "si_value": 1.0
+            },
+            "0.5 s": {
+              "si_value": 1.25
+            },
+            "1 s": {
+              "si_value": 1.5625
+            }
+          },
+          "index": "TimeStep"
+        }
+      },
+      "param": {
+        "rate": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "Hz"
+        },
+        "x0": {
+          "si_value": 1.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

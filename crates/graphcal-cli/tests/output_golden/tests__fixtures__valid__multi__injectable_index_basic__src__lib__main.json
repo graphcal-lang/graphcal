@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "lib::total": {
+          "si_value": 30.0
+        },
+        "result": {
+          "si_value": 30.0
+        },
+        "total": {
+          "si_value": 30.0
+        }
+      },
+      "param": {
+        "lib::cost": {
+          "entries": {
+            "Build": {
+              "si_value": 20.0
+            },
+            "Design": {
+              "si_value": 10.0
+            }
+          },
+          "index": "MyPhase"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

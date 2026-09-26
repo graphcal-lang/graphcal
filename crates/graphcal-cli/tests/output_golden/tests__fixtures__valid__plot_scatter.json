@@ -1,0 +1,54 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "delta_v": {
+          "entries": {
+            "Departure": {
+              "display_value": 3.2,
+              "si_value": 3200.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.8,
+              "si_value": 1800.0,
+              "unit": "km/s"
+            },
+            "MidCourse": {
+              "display_value": 0.15,
+              "si_value": 150.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "spacecraft_mass": {
+          "entries": {
+            "Departure": {
+              "display_value": 5000.0,
+              "si_value": 5000.0,
+              "unit": "kg"
+            },
+            "Insertion": {
+              "display_value": 3800.0,
+              "si_value": 3800.0,
+              "unit": "kg"
+            },
+            "MidCourse": {
+              "display_value": 4200.0,
+              "si_value": 4200.0,
+              "unit": "kg"
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

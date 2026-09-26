@@ -1,0 +1,55 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "lib::g0": {
+          "display_value": 9.80665,
+          "si_value": 9.80665,
+          "unit": "m/s^2"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "delta_v": {
+          "si_value": 4719.987392990735,
+          "unit": "m/s"
+        },
+        "lib::delta_v": {
+          "si_value": 4719.987392990735,
+          "unit": "m/s"
+        },
+        "lib::mass_ratio": {
+          "si_value": 4.5
+        },
+        "lib::v_exhaust": {
+          "si_value": 3138.1279999999997,
+          "unit": "m/s"
+        },
+        "result": {
+          "si_value": 4719.987392990735,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "lib::dry_mass": {
+          "display_value": 800.0,
+          "si_value": 800.0,
+          "unit": "kg"
+        },
+        "lib::fuel_mass": {
+          "display_value": 2800.0,
+          "si_value": 2800.0,
+          "unit": "kg"
+        },
+        "lib::isp": {
+          "display_value": 320.0,
+          "si_value": 320.0,
+          "unit": "s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "k": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "fin_key: 7 out of bounds for Fin(3)"
+          }
+        }
+      },
+      "param": {
+        "requested": 7
+      },
+      "unfinished_calls": []
+    }
+  }
+}

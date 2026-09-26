@@ -1,0 +1,33 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "inv_length_sq": {
+          "si_value": 0.25,
+          "unit": "m^-2"
+        },
+        "inv_square": {
+          "si_value": 0.25
+        },
+        "neg_one": {
+          "si_value": 0.5
+        }
+      },
+      "param": {
+        "length": {
+          "display_value": 2.0,
+          "si_value": 2.0,
+          "unit": "m"
+        },
+        "x": {
+          "si_value": 2.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "epoch_unix": {
+          "si_value": 0.0
+        },
+        "feb29": {
+          "datetime": "2020-02-29T00:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "feb29_d": 29,
+        "feb29_m": 2,
+        "feb29_y": 2020,
+        "leap_doy": 366,
+        "nonleap_doy": 365,
+        "y1900_doy": 365,
+        "y2000_doy": 366
+      },
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

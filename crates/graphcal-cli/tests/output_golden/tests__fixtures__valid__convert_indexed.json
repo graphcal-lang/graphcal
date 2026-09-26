@@ -1,0 +1,120 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "unchanged": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "grid_km": {
+          "entries": {
+            "A": {
+              "entries": {
+                "X": {
+                  "display_value": 1.0,
+                  "si_value": 1000.0,
+                  "unit": "km"
+                },
+                "Y": {
+                  "display_value": 2.0,
+                  "si_value": 2000.0,
+                  "unit": "km"
+                }
+              },
+              "index": "C"
+            },
+            "B": {
+              "entries": {
+                "X": {
+                  "display_value": 3.0,
+                  "si_value": 3000.0,
+                  "unit": "km"
+                },
+                "Y": {
+                  "display_value": 4.0,
+                  "si_value": 4000.0,
+                  "unit": "km"
+                }
+              },
+              "index": "C"
+            }
+          },
+          "index": "R"
+        },
+        "y": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1000.0,
+              "unit": "km"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2000.0,
+              "unit": "km"
+            }
+          },
+          "index": "R"
+        }
+      },
+      "param": {
+        "grid": {
+          "entries": {
+            "A": {
+              "entries": {
+                "X": {
+                  "display_value": 1000.0,
+                  "si_value": 1000.0,
+                  "unit": "m"
+                },
+                "Y": {
+                  "display_value": 2000.0,
+                  "si_value": 2000.0,
+                  "unit": "m"
+                }
+              },
+              "index": "C"
+            },
+            "B": {
+              "entries": {
+                "X": {
+                  "display_value": 3000.0,
+                  "si_value": 3000.0,
+                  "unit": "m"
+                },
+                "Y": {
+                  "display_value": 4000.0,
+                  "si_value": 4000.0,
+                  "unit": "m"
+                }
+              },
+              "index": "C"
+            }
+          },
+          "index": "R"
+        },
+        "x": {
+          "entries": {
+            "A": {
+              "display_value": 1000.0,
+              "si_value": 1000.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2000.0,
+              "si_value": 2000.0,
+              "unit": "m"
+            }
+          },
+          "index": "R"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

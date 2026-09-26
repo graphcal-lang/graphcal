@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "doubled": {
+          "si_value": 20.0
+        },
+        "left::base_val": {
+          "si_value": 10.0
+        },
+        "left::doubled": {
+          "si_value": 20.0
+        },
+        "right::base_val": {
+          "si_value": 10.0
+        },
+        "right::tripled": {
+          "si_value": 30.0
+        },
+        "total": {
+          "si_value": 50.0
+        },
+        "tripled": {
+          "si_value": 30.0
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

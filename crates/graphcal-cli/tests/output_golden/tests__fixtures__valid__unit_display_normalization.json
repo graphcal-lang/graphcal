@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "chained": {
+          "display_value": 1.0,
+          "si_value": 1.0,
+          "unit": "m/s^2"
+        },
+        "explicit": {
+          "display_value": 2.0,
+          "si_value": 2.0,
+          "unit": "m/s^2"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

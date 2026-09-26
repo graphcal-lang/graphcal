@@ -1,0 +1,37 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "double_speed::result": {
+          "si_value": 20.0,
+          "unit": "m/s"
+        },
+        "doubled": {
+          "si_value": 20.0,
+          "unit": "m/s"
+        },
+        "final_result": {
+          "si_value": 20.0,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "double_speed::v": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        },
+        "speed": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

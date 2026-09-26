@@ -1,0 +1,29 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "doubled_positive": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "base_val": {
+          "si_value": 10.0
+        },
+        "doubled": {
+          "si_value": 20.0
+        }
+      },
+      "param": {
+        "shared::base_val": {
+          "si_value": 10.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

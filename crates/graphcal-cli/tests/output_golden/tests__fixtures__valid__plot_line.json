@@ -1,0 +1,43 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "y": {
+          "entries": {
+            "0 s": {
+              "si_value": 10.0
+            },
+            "0.5 s": {
+              "si_value": 5.0
+            },
+            "1 s": {
+              "si_value": 2.5
+            },
+            "1.5 s": {
+              "si_value": 1.25
+            },
+            "2 s": {
+              "si_value": 0.625
+            }
+          },
+          "index": "TimeStep"
+        }
+      },
+      "param": {
+        "decay_rate": {
+          "display_value": 1.0,
+          "si_value": 1.0,
+          "unit": "Hz"
+        },
+        "initial_value": {
+          "si_value": 10.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

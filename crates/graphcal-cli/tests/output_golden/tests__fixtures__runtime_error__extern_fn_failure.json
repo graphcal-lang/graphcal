@@ -1,0 +1,32 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "bad": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "extern function `demo::inverse` (plugin \"graphcal:demo\") failed: division by zero"
+          }
+        },
+        "downstream": {
+          "error": {
+            "failed_deps": [
+              "bad"
+            ],
+            "kind": "dependency_failed"
+          }
+        },
+        "ok": {
+          "si_value": 0.5,
+          "unit": "s/m"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

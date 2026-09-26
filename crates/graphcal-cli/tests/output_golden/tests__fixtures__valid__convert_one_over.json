@@ -1,0 +1,40 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "same": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "per_minute": {
+          "display_value": 120.0,
+          "si_value": 2.0,
+          "unit": "1/min"
+        },
+        "per_minute_pow": {
+          "display_value": 120.0,
+          "si_value": 2.0,
+          "unit": "1/min"
+        },
+        "via_decl": {
+          "display_value": 120.0,
+          "si_value": 2.0,
+          "unit": "per_min"
+        }
+      },
+      "param": {
+        "f": {
+          "display_value": 2.0,
+          "si_value": 2.0,
+          "unit": "Hz"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "mixed": {
+          "status": "pass"
+        },
+        "single_finite": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

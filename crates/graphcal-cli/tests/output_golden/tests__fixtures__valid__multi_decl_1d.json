@@ -1,0 +1,95 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "mass_per_unit": {
+          "entries": {
+            "ComponentA": {
+              "display_value": 2.5,
+              "si_value": 2.5,
+              "unit": "kg"
+            },
+            "ComponentB": {
+              "display_value": 3.1,
+              "si_value": 3.1,
+              "unit": "kg"
+            },
+            "ComponentC": {
+              "display_value": 0.8,
+              "si_value": 0.8,
+              "unit": "kg"
+            }
+          },
+          "index": "Component"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "avg_power": {
+          "entries": {
+            "ComponentA": {
+              "si_value": 5.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "ComponentB": {
+              "si_value": 12.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "ComponentC": {
+              "si_value": 1.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "Component"
+        },
+        "peak_power": {
+          "si_value": 12.0,
+          "unit": "m^2*kg/s^3"
+        },
+        "total_mass": {
+          "si_value": 6.3999999999999995,
+          "unit": "kg"
+        }
+      },
+      "param": {
+        "duty_cycle": {
+          "entries": {
+            "ComponentA": {
+              "si_value": 0.5
+            },
+            "ComponentB": {
+              "si_value": 1.0
+            },
+            "ComponentC": {
+              "si_value": 0.25
+            }
+          },
+          "index": "Component"
+        },
+        "power_consumption": {
+          "entries": {
+            "ComponentA": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "W"
+            },
+            "ComponentB": {
+              "display_value": 12.0,
+              "si_value": 12.0,
+              "unit": "W"
+            },
+            "ComponentC": {
+              "display_value": 4.0,
+              "si_value": 4.0,
+              "unit": "W"
+            }
+          },
+          "index": "Component"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

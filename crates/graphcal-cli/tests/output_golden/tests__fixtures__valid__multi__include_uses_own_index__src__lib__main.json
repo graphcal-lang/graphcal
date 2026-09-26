@@ -1,0 +1,80 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "s::first": {
+          "si_value": 10.0
+        },
+        "s::scaled": {
+          "entries": {
+            "A": {
+              "si_value": 10.0
+            },
+            "B": {
+              "si_value": 20.0
+            }
+          },
+          "index": "Step"
+        },
+        "s::total": {
+          "si_value": 30.0
+        },
+        "scaling::first": {
+          "si_value": 10.0
+        },
+        "scaling::scaled": {
+          "entries": {
+            "A": {
+              "si_value": 10.0
+            },
+            "B": {
+              "si_value": 20.0
+            }
+          },
+          "index": "Step"
+        },
+        "scaling::total": {
+          "si_value": 30.0
+        }
+      },
+      "param": {
+        "own": {
+          "si_value": 5.0
+        },
+        "s::scale": {
+          "si_value": 10.0
+        },
+        "s::vals": {
+          "entries": {
+            "A": {
+              "si_value": 1.0
+            },
+            "B": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Step"
+        },
+        "scaling::scale": {
+          "si_value": 10.0
+        },
+        "scaling::vals": {
+          "entries": {
+            "A": {
+              "si_value": 1.0
+            },
+            "B": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Step"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

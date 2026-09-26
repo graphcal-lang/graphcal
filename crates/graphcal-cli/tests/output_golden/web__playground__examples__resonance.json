@@ -1,0 +1,194 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "amplitude": {
+          "entries": {
+            "Reference10kg": {
+              "entries": {
+                "floats": {
+                  "count": 401,
+                  "max": 0.062486847873918526,
+                  "min": 0.00047014599226846145,
+                  "sum_abs": 1.942233676329243
+                },
+                "head": {
+                  "0 Hz": {
+                    "si_value": 0.0025,
+                    "unit": "m"
+                  },
+                  "0.02 Hz": {
+                    "si_value": 0.002500098620974345,
+                    "unit": "m"
+                  },
+                  "0.04 Hz": {
+                    "si_value": 0.0025003945305507595,
+                    "unit": "m"
+                  },
+                  "0.06 Hz": {
+                    "si_value": 0.0025008878687445245,
+                    "unit": "m"
+                  },
+                  "0.08 Hz": {
+                    "si_value": 0.002501578869098365,
+                    "unit": "m"
+                  },
+                  "0.1 Hz": {
+                    "si_value": 0.002502467858958764,
+                    "unit": "m"
+                  },
+                  "0.12 Hz": {
+                    "si_value": 0.0025035552598636525,
+                    "unit": "m"
+                  },
+                  "0.14 Hz": {
+                    "si_value": 0.002504841588042339,
+                    "unit": "m"
+                  }
+                },
+                "length": 401,
+                "structure_sha256": "2a905658142922a50fc0158bdb0becf5182741ede2348b0bd419bfc7f9a0c3f2"
+              },
+              "index": "Sweep"
+            },
+            "YourMachine": {
+              "entries": {
+                "floats": {
+                  "count": 401,
+                  "max": 0.062486847873918526,
+                  "min": 0.00047014599226846145,
+                  "sum_abs": 1.942233676329243
+                },
+                "head": {
+                  "0 Hz": {
+                    "si_value": 0.0025,
+                    "unit": "m"
+                  },
+                  "0.02 Hz": {
+                    "si_value": 0.002500098620974345,
+                    "unit": "m"
+                  },
+                  "0.04 Hz": {
+                    "si_value": 0.0025003945305507595,
+                    "unit": "m"
+                  },
+                  "0.06 Hz": {
+                    "si_value": 0.0025008878687445245,
+                    "unit": "m"
+                  },
+                  "0.08 Hz": {
+                    "si_value": 0.002501578869098365,
+                    "unit": "m"
+                  },
+                  "0.1 Hz": {
+                    "si_value": 0.002502467858958764,
+                    "unit": "m"
+                  },
+                  "0.12 Hz": {
+                    "si_value": 0.0025035552598636525,
+                    "unit": "m"
+                  },
+                  "0.14 Hz": {
+                    "si_value": 0.002504841588042339,
+                    "unit": "m"
+                  }
+                },
+                "length": 401,
+                "structure_sha256": "2a905658142922a50fc0158bdb0becf5182741ede2348b0bd419bfc7f9a0c3f2"
+              },
+              "index": "Sweep"
+            }
+          },
+          "index": "Machine"
+        },
+        "masses": {
+          "entries": {
+            "Reference10kg": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "kg"
+            },
+            "YourMachine": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "kg"
+            }
+          },
+          "index": "Machine"
+        },
+        "natural_frequency": {
+          "si_value": 3.183098861837907,
+          "unit": "s^-1"
+        },
+        "operating_amplitude": {
+          "entries": {
+            "Reference10kg": {
+              "si_value": 0.062486847873918526,
+              "unit": "m"
+            },
+            "YourMachine": {
+              "si_value": 0.062486847873918526,
+              "unit": "m"
+            }
+          },
+          "index": "Machine"
+        },
+        "phase_lag": {
+          "entries": {
+            "Reference10kg": {
+              "si_value": 1.5221342484498592,
+              "unit": "rad"
+            },
+            "YourMachine": {
+              "si_value": 1.5221342484498592,
+              "unit": "rad"
+            }
+          },
+          "index": "Machine"
+        },
+        "reference_amplitude": {
+          "display_value": 62.48684787391853,
+          "si_value": 0.062486847873918526,
+          "unit": "mm"
+        },
+        "your_amplitude": {
+          "display_value": 62.48684787391853,
+          "si_value": 0.062486847873918526,
+          "unit": "mm"
+        }
+      },
+      "param": {
+        "damping": {
+          "display_value": 8.0,
+          "si_value": 8.0,
+          "unit": "N * s/m"
+        },
+        "driving_frequency": {
+          "display_value": 3.18,
+          "si_value": 3.18,
+          "unit": "Hz"
+        },
+        "force_amplitude": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "N"
+        },
+        "mass": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "kg"
+        },
+        "stiffness": {
+          "display_value": 4000.0,
+          "si_value": 4000.0,
+          "unit": "N/m"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

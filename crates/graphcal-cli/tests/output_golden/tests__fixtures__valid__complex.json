@@ -1,0 +1,243 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "conjugate_imaginary": {
+          "status": "pass"
+        },
+        "euler_imaginary": {
+          "status": "pass"
+        },
+        "euler_real": {
+          "status": "pass"
+        },
+        "magnitude_is_five": {
+          "status": "pass"
+        },
+        "negated_real": {
+          "status": "pass"
+        },
+        "phase_matches_atan2": {
+          "status": "pass"
+        },
+        "polar_imaginary": {
+          "status": "pass"
+        },
+        "polar_real": {
+          "status": "pass"
+        },
+        "product_imaginary": {
+          "status": "pass"
+        },
+        "product_real": {
+          "status": "pass"
+        },
+        "rectangular_equality": {
+          "status": "pass"
+        },
+        "sample_count_is_two": {
+          "status": "pass"
+        },
+        "sum_imaginary": {
+          "status": "pass"
+        },
+        "sum_real": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "a": {
+          "si_value": {
+            "im": 4.0,
+            "re": 3.0
+          },
+          "unit": "m"
+        },
+        "angle": {
+          "si_value": 0.9272952180016122,
+          "unit": "rad"
+        },
+        "b": {
+          "si_value": {
+            "im": 6.0,
+            "re": 5.0
+          },
+          "unit": "m"
+        },
+        "complex_product": {
+          "si_value": {
+            "im": 38.0,
+            "re": -9.0
+          },
+          "unit": "m^2"
+        },
+        "complex_sum": {
+          "si_value": {
+            "im": 10.0,
+            "re": 8.0
+          },
+          "unit": "m"
+        },
+        "conjugate": {
+          "si_value": {
+            "im": -4.0,
+            "re": 3.0
+          },
+          "unit": "m"
+        },
+        "copied_cm": {
+          "display_value": {
+            "im": 400.0,
+            "re": 300.0
+          },
+          "si_value": {
+            "im": 4.0,
+            "re": 3.0
+          },
+          "unit": "cm"
+        },
+        "difference": {
+          "si_value": {
+            "im": -2.0,
+            "re": -2.0
+          },
+          "unit": "m"
+        },
+        "display_cm": {
+          "display_value": {
+            "im": 400.0,
+            "re": 300.0
+          },
+          "si_value": {
+            "im": 4.0,
+            "re": 3.0
+          },
+          "unit": "cm"
+        },
+        "divided_by_scalar": {
+          "si_value": {
+            "im": 2.0,
+            "re": 1.5
+          },
+          "unit": "m"
+        },
+        "euler": {
+          "si_value": {
+            "im": 1.2246467991473532e-16,
+            "re": -1.0
+          }
+        },
+        "from_polar": {
+          "si_value": {
+            "im": 4.0,
+            "re": 3.0
+          },
+          "unit": "m"
+        },
+        "imaginary_part": {
+          "si_value": 4.0,
+          "unit": "m"
+        },
+        "lifted": {
+          "si_value": {
+            "im": 0.0,
+            "re": 2.0
+          },
+          "unit": "m"
+        },
+        "magnitude": {
+          "si_value": 5.0,
+          "unit": "m"
+        },
+        "negated": {
+          "si_value": {
+            "im": -4.0,
+            "re": -3.0
+          },
+          "unit": "m"
+        },
+        "quotient": {
+          "si_value": {
+            "im": 0.03278688524590164,
+            "re": 0.639344262295082
+          }
+        },
+        "real_part": {
+          "si_value": 3.0,
+          "unit": "m"
+        },
+        "sample_count": 2,
+        "scalar_divided_by_complex": {
+          "si_value": {
+            "im": -0.32,
+            "re": 0.24
+          },
+          "unit": "m^-1"
+        },
+        "scaled_left": {
+          "si_value": {
+            "im": 8.0,
+            "re": 6.0
+          },
+          "unit": "m"
+        },
+        "scaled_right": {
+          "si_value": {
+            "im": 8.0,
+            "re": 6.0
+          },
+          "unit": "m"
+        },
+        "series": {
+          "entries": {
+            "First": {
+              "si_value": {
+                "im": 4.0,
+                "re": 3.0
+              },
+              "unit": "m"
+            },
+            "Second": {
+              "si_value": {
+                "im": 6.0,
+                "re": 5.0
+              },
+              "unit": "m"
+            }
+          },
+          "index": "Sample"
+        },
+        "wrapped": {
+          "fields": {
+            "value": {
+              "si_value": {
+                "im": 4.0,
+                "re": 3.0
+              },
+              "unit": "m"
+            }
+          },
+          "type": "ComplexHolder"
+        },
+        "wrapped_rate": {
+          "fields": {
+            "value": {
+              "si_value": {
+                "im": 2.0,
+                "re": 1.0
+              },
+              "unit": "m/s"
+            }
+          },
+          "type": "ComplexRateHolder"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

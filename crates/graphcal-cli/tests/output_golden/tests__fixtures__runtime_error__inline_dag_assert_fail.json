@@ -1,0 +1,23 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "independent": {
+          "si_value": 1.0
+        },
+        "y": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "assertion `v_positive` failed in inline call of dag `checked` (assertion evaluated to false)"
+          }
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

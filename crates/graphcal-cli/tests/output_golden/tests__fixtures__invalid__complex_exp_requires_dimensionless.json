@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 2,
+        "location": {
+          "column": 44,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/complex_exp_requires_dimensionless.gcl"
+        },
+        "offset": 92,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

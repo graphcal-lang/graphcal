@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "UTC": {
+          "si_value": 1.0
+        },
+        "copied": {
+          "si_value": 1.0
+        },
+        "event": {
+          "datetime": "2024-01-01T00:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

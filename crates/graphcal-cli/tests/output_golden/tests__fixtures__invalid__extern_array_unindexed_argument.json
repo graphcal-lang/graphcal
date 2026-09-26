@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D001",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 43,
+          "line": 6,
+          "source": "<root>/tests/fixtures/invalid/extern_array_unindexed_argument.gcl"
+        },
+        "offset": 232,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

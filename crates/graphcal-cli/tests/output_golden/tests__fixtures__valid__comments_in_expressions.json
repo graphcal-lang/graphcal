@@ -1,0 +1,193 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "delta_v": {
+          "entries": {
+            "Correction": {
+              "display_value": 0.12,
+              "si_value": 120.0,
+              "unit": "km/s"
+            },
+            "Departure": {
+              "display_value": 2.46,
+              "si_value": 2460.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.83,
+              "si_value": 1830.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "dv_map": {
+          "entries": {
+            "Correction": {
+              "display_value": 0.12,
+              "si_value": 120.0,
+              "unit": "km/s"
+            },
+            "Departure": {
+              "display_value": 2.46,
+              "si_value": 2460.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.83,
+              "si_value": 1830.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "dv_map2": {
+          "entries": {
+            "Correction": {
+              "display_value": 0.12,
+              "si_value": 120.0,
+              "unit": "km/s"
+            },
+            "Departure": {
+              "display_value": 2.46,
+              "si_value": 2460.0,
+              "unit": "km/s"
+            },
+            "Insertion": {
+              "display_value": 1.83,
+              "si_value": 1830.0,
+              "unit": "km/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "fuel": {
+          "entries": {
+            "Correction": {
+              "display_value": 50.0,
+              "si_value": 50.0,
+              "unit": "kg"
+            },
+            "Departure": {
+              "display_value": 500.0,
+              "si_value": 500.0,
+              "unit": "kg"
+            },
+            "Insertion": {
+              "display_value": 200.0,
+              "si_value": 200.0,
+              "unit": "kg"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "mass": {
+          "entries": {
+            "Correction": {
+              "display_value": 4500.0,
+              "si_value": 4500.0,
+              "unit": "kg"
+            },
+            "Departure": {
+              "display_value": 5000.0,
+              "si_value": 5000.0,
+              "unit": "kg"
+            },
+            "Insertion": {
+              "display_value": 4000.0,
+              "si_value": 4000.0,
+              "unit": "kg"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "mass_2d": {
+          "entries": {
+            "Arrival": {
+              "entries": {
+                "Correction": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                },
+                "Departure": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                },
+                "Insertion": {
+                  "display_value": 4000.0,
+                  "si_value": 4000.0,
+                  "unit": "kg"
+                }
+              },
+              "index": "Maneuver"
+            },
+            "Cruise": {
+              "entries": {
+                "Correction": {
+                  "display_value": 4500.0,
+                  "si_value": 4500.0,
+                  "unit": "kg"
+                },
+                "Departure": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                },
+                "Insertion": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                }
+              },
+              "index": "Maneuver"
+            },
+            "Launch": {
+              "entries": {
+                "Correction": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                },
+                "Departure": {
+                  "display_value": 5000.0,
+                  "si_value": 5000.0,
+                  "unit": "kg"
+                },
+                "Insertion": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "kg"
+                }
+              },
+              "index": "Maneuver"
+            }
+          },
+          "index": "Phase"
+        },
+        "scale": {
+          "entries": {
+            "Correction": {
+              "si_value": 0.5
+            },
+            "Departure": {
+              "si_value": 2.0
+            },
+            "Insertion": {
+              "si_value": 1.5
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

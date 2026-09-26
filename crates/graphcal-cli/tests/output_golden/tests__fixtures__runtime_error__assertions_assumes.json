@@ -1,0 +1,33 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "pressure_safe": {
+          "affected_nodes": [
+            "margin"
+          ],
+          "message": "assertion evaluated to false",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "margin": {
+          "si_value": -50.0
+        }
+      },
+      "param": {
+        "max_pressure": {
+          "si_value": 150.0
+        },
+        "pressure": {
+          "si_value": 200.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

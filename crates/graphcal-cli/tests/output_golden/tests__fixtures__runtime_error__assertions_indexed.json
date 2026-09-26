@@ -1,0 +1,146 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "power_ok": {
+          "message": "failed at Mode#Boost",
+          "status": "fail"
+        },
+        "within_limits": {
+          "message": "failed at (Mode#Normal, Phase#Cruise), (Mode#Eco, Phase#Arrival), (Mode#Boost, Phase#Launch), (Mode#Boost, Phase#Arrival)",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "actual": {
+          "entries": {
+            "Boost": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 75.0
+                },
+                "Cruise": {
+                  "si_value": 58.0
+                },
+                "Launch": {
+                  "si_value": 55.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Eco": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 30.0
+                },
+                "Cruise": {
+                  "si_value": 10.0
+                },
+                "Launch": {
+                  "si_value": 3.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Normal": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 28.0
+                },
+                "Cruise": {
+                  "si_value": 25.0
+                },
+                "Launch": {
+                  "si_value": 8.0
+                }
+              },
+              "index": "Phase"
+            }
+          },
+          "index": "Mode"
+        },
+        "power_gen": {
+          "entries": {
+            "Boost": {
+              "si_value": 200.0
+            },
+            "Eco": {
+              "si_value": 50.0
+            },
+            "Normal": {
+              "si_value": 100.0
+            }
+          },
+          "index": "Mode"
+        },
+        "power_use": {
+          "entries": {
+            "Boost": {
+              "si_value": 250.0
+            },
+            "Eco": {
+              "si_value": 30.0
+            },
+            "Normal": {
+              "si_value": 80.0
+            }
+          },
+          "index": "Mode"
+        },
+        "threshold": {
+          "entries": {
+            "Boost": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 70.0
+                },
+                "Cruise": {
+                  "si_value": 60.0
+                },
+                "Launch": {
+                  "si_value": 50.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Eco": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 25.0
+                },
+                "Cruise": {
+                  "si_value": 15.0
+                },
+                "Launch": {
+                  "si_value": 5.0
+                }
+              },
+              "index": "Phase"
+            },
+            "Normal": {
+              "entries": {
+                "Arrival": {
+                  "si_value": 30.0
+                },
+                "Cruise": {
+                  "si_value": 20.0
+                },
+                "Launch": {
+                  "si_value": 10.0
+                }
+              },
+              "index": "Phase"
+            }
+          },
+          "index": "Mode"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

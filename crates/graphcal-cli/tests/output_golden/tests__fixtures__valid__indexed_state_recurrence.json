@@ -1,0 +1,143 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "input": {
+          "entries": {
+            "0 s": {
+              "si_value": 0.0
+            },
+            "1 s": {
+              "si_value": 1.0
+            },
+            "2 s": {
+              "si_value": 2.0
+            }
+          },
+          "index": "TimeStep"
+        },
+        "scanned_state": {
+          "entries": {
+            "0 s": {
+              "entries": {
+                "A": {
+                  "si_value": 1.0
+                },
+                "B": {
+                  "si_value": 2.0
+                }
+              },
+              "index": "Element"
+            },
+            "1 s": {
+              "entries": {
+                "A": {
+                  "si_value": 2.0
+                },
+                "B": {
+                  "si_value": 3.0
+                }
+              },
+              "index": "Element"
+            },
+            "2 s": {
+              "entries": {
+                "A": {
+                  "si_value": 4.0
+                },
+                "B": {
+                  "si_value": 5.0
+                }
+              },
+              "index": "Element"
+            }
+          },
+          "index": "TimeStep"
+        },
+        "trajectory": {
+          "entries": {
+            "0 s": {
+              "entries": {
+                "A": {
+                  "si_value": 1.0
+                },
+                "B": {
+                  "si_value": 2.0
+                }
+              },
+              "index": "Element"
+            },
+            "1 s": {
+              "entries": {
+                "A": {
+                  "si_value": 3.0
+                },
+                "B": {
+                  "si_value": 1.0
+                }
+              },
+              "index": "Element"
+            },
+            "2 s": {
+              "entries": {
+                "A": {
+                  "si_value": 4.0
+                },
+                "B": {
+                  "si_value": 3.0
+                }
+              },
+              "index": "Element"
+            }
+          },
+          "index": "TimeStep"
+        }
+      },
+      "param": {
+        "coupling": {
+          "entries": {
+            "A": {
+              "entries": {
+                "A": {
+                  "si_value": 1.0
+                },
+                "B": {
+                  "si_value": 1.0
+                }
+              },
+              "index": "Element"
+            },
+            "B": {
+              "entries": {
+                "A": {
+                  "si_value": 1.0
+                },
+                "B": {
+                  "si_value": 0.0
+                }
+              },
+              "index": "Element"
+            }
+          },
+          "index": "Element"
+        },
+        "initial": {
+          "entries": {
+            "A": {
+              "si_value": 1.0
+            },
+            "B": {
+              "si_value": 2.0
+            }
+          },
+          "index": "Element"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

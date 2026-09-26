@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::N005",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 28,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/datetime_domain_runtime_bound.gcl"
+        },
+        "offset": 162,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

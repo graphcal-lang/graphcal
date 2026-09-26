@@ -1,0 +1,217 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "cumulative_max": {
+          "entries": {
+            "Correction": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "m/s"
+            },
+            "Departure": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "m/s"
+            },
+            "Insertion": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "max_v": {
+          "entries": {
+            "Correction": {
+              "si_value": 5.0,
+              "unit": "m/s"
+            },
+            "Departure": {
+              "si_value": 10.0,
+              "unit": "m/s"
+            },
+            "Insertion": {
+              "si_value": -0.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "total_v": {
+          "entries": {
+            "0 s": {
+              "si_value": 0.0,
+              "unit": "m/s"
+            },
+            "0.5 s": {
+              "si_value": 6.0,
+              "unit": "m/s"
+            },
+            "1 s": {
+              "si_value": 12.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "TimeStep"
+        },
+        "v_for": {
+          "entries": {
+            "Correction": {
+              "entries": {
+                "0 s": {
+                  "si_value": 0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": 2.5,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": 5.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            },
+            "Departure": {
+              "entries": {
+                "0 s": {
+                  "si_value": 0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": 5.0,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": 10.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            },
+            "Insertion": {
+              "entries": {
+                "0 s": {
+                  "si_value": -0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": -1.5,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": -3.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "param": {
+        "accel": {
+          "entries": {
+            "Correction": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "m/s^2"
+            },
+            "Departure": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "m/s^2"
+            },
+            "Insertion": {
+              "si_value": -3.0,
+              "unit": "m/s^2"
+            }
+          },
+          "index": "Maneuver"
+        },
+        "departure_v": {
+          "entries": {
+            "0 s": {
+              "si_value": 0.0,
+              "unit": "m/s"
+            },
+            "0.5 s": {
+              "si_value": 5.0,
+              "unit": "m/s"
+            },
+            "1 s": {
+              "si_value": 10.0,
+              "unit": "m/s"
+            }
+          },
+          "index": "TimeStep"
+        },
+        "v_map": {
+          "entries": {
+            "Correction": {
+              "entries": {
+                "0 s": {
+                  "si_value": 0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": 2.5,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": 5.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            },
+            "Departure": {
+              "entries": {
+                "0 s": {
+                  "si_value": 0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": 5.0,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": 10.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            },
+            "Insertion": {
+              "entries": {
+                "0 s": {
+                  "si_value": -0.0,
+                  "unit": "m/s"
+                },
+                "0.5 s": {
+                  "si_value": -1.5,
+                  "unit": "m/s"
+                },
+                "1 s": {
+                  "si_value": -3.0,
+                  "unit": "m/s"
+                }
+              },
+              "index": "TimeStep"
+            }
+          },
+          "index": "Maneuver"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

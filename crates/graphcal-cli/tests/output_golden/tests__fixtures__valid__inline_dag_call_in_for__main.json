@@ -1,0 +1,45 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "distances": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Region"
+        }
+      },
+      "param": {
+        "dist": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Region"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

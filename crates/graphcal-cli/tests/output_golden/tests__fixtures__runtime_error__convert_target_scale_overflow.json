@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "bad": {
+          "si_value": 1.0,
+          "unit": "m"
+        }
+      },
+      "param": {
+        "a": {
+          "display_value": 1.0,
+          "si_value": 1.0,
+          "unit": "m"
+        }
+      },
+      "presentation_diagnostics": [
+        {
+          "kind": "presentation_error",
+          "message": "convert_target_scale_overflow.bad: display scale unavailable in <root>/tests/fixtures/runtime_error/convert_target_scale_overflow.gcl: compound unit scale must be finite, got inf (SI value retained)"
+        }
+      ],
+      "unfinished_calls": []
+    }
+  }
+}

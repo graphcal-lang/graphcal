@@ -1,0 +1,129 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "current_wait": {
+          "fields": {
+            "wait": {
+              "display_value": 3.9999999999999982,
+              "si_value": 239.9999999999999,
+              "unit": "min"
+            }
+          },
+          "type": "FiniteMean"
+        },
+        "mean_wait": {
+          "entries": {
+            "floats": {
+              "count": 197,
+              "max": 2939.9999999999973,
+              "min": 0.0,
+              "sum_abs": 36716.371377457326
+            },
+            "head": {
+              "0": {
+                "si_value": 0.0,
+                "unit": "s"
+              },
+              "0.005": {
+                "si_value": 0.30150753768844213,
+                "unit": "s"
+              },
+              "0.01": {
+                "si_value": 0.606060606060606,
+                "unit": "s"
+              },
+              "0.015": {
+                "si_value": 0.9137055837563453,
+                "unit": "s"
+              },
+              "0.02": {
+                "si_value": 1.2244897959183672,
+                "unit": "s"
+              },
+              "0.025": {
+                "si_value": 1.5384615384615383,
+                "unit": "s"
+              },
+              "0.03": {
+                "si_value": 1.8556701030927831,
+                "unit": "s"
+              },
+              "0.035": {
+                "si_value": 2.176165803108808,
+                "unit": "s"
+              }
+            },
+            "length": 197,
+            "structure_sha256": "804932fc6c7eedb9f8981430c88b63a824ad0d7b291a1c5d34c98629731d698a"
+          },
+          "index": "Load"
+        },
+        "service_capacity": {
+          "display_value": 60.0,
+          "si_value": 0.016666666666666666,
+          "unit": "1/h"
+        },
+        "steady_state_exists": true,
+        "utilization": {
+          "si_value": 0.7999999999999999
+        },
+        "utilization_percent": {
+          "si_value": 80.0
+        },
+        "vertical_extent": {
+          "entries": {
+            "Bottom": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "min"
+            },
+            "Top": {
+              "si_value": 2940.0,
+              "unit": "s"
+            }
+          },
+          "index": "Vertical"
+        },
+        "wait_at_80_percent": {
+          "display_value": 4.0,
+          "si_value": 240.0,
+          "unit": "min"
+        },
+        "wait_at_95_percent": {
+          "display_value": 19.0,
+          "si_value": 1140.0,
+          "unit": "min"
+        },
+        "waits_in_service_times": {
+          "entries": {
+            "Utilization80Percent": {
+              "si_value": 4.0
+            },
+            "Utilization95Percent": {
+              "si_value": 19.0
+            }
+          },
+          "index": "Comparison"
+        }
+      },
+      "param": {
+        "arrival_rate": {
+          "display_value": 48.0,
+          "si_value": 0.013333333333333332,
+          "unit": "1/h"
+        },
+        "service_time": {
+          "display_value": 1.0,
+          "si_value": 60.0,
+          "unit": "min"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

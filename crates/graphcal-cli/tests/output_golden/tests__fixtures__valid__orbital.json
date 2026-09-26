@@ -1,0 +1,44 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "r_earth": {
+          "display_value": 6371.0,
+          "si_value": 6371000.0,
+          "unit": "km"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "circumference": {
+          "si_value": 42543447.71491298,
+          "unit": "m"
+        },
+        "speed": {
+          "si_value": 7878.416243502404,
+          "unit": "m/s"
+        },
+        "speed_kmh": {
+          "display_value": 28362.298476608652,
+          "si_value": 7878.416243502404,
+          "unit": "km/h"
+        }
+      },
+      "param": {
+        "alt": {
+          "display_value": 400.0,
+          "si_value": 400000.0,
+          "unit": "km"
+        },
+        "period": {
+          "display_value": 90.0,
+          "si_value": 5400.0,
+          "unit": "min"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

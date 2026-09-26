@@ -1,0 +1,20 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "mass": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "above maximum (2000 kg)"
+          }
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

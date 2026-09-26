@@ -1,0 +1,26 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "SAT": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "field `SatelliteSpec.mass` above maximum (2000 kg)"
+          }
+        }
+      },
+      "param": {
+        "x": {
+          "display_value": 5000.0,
+          "si_value": 5000.0,
+          "unit": "kg"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

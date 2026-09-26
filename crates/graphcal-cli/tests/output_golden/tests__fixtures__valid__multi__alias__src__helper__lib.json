@@ -1,0 +1,17 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "x": {
+          "si_value": 42.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

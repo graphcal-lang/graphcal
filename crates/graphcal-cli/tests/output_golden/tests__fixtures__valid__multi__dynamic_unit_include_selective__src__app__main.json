@@ -1,0 +1,43 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "converted": {
+          "display_value": 92.59259259259258,
+          "si_value": 100.0,
+          "unit": "euros"
+        },
+        "fx::p": {
+          "display_value": 92.59259259259258,
+          "si_value": 100.0,
+          "unit": "EUR"
+        },
+        "p": {
+          "display_value": 92.59259259259258,
+          "si_value": 100.0,
+          "unit": "EUR"
+        }
+      },
+      "param": {
+        "fx::mine": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "USD"
+        },
+        "fx::rate": {
+          "si_value": 1.08
+        },
+        "mine": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "USD"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

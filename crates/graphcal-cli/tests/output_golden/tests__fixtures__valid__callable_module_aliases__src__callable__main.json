@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "file_param_result": {
+          "si_value": 7.0
+        },
+        "file_result": {
+          "si_value": 4.0
+        },
+        "inline_result": {
+          "si_value": 9.0
+        },
+        "nested_scope_result": {
+          "si_value": 40.0
+        },
+        "selected_result": {
+          "si_value": 12.0
+        },
+        "unaliased_file_result": {
+          "si_value": 10.0
+        },
+        "unaliased_inline_result": {
+          "si_value": 18.0
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

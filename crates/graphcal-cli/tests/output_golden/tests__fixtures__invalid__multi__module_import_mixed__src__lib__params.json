@@ -1,0 +1,29 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "dry_mass": {
+          "display_value": 1200.0,
+          "si_value": 1200.0,
+          "unit": "kg"
+        },
+        "fuel_mass": {
+          "display_value": 2800.0,
+          "si_value": 2800.0,
+          "unit": "kg"
+        },
+        "isp": {
+          "display_value": 320.0,
+          "si_value": 320.0,
+          "unit": "s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}
