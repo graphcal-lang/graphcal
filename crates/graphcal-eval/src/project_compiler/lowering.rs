@@ -537,13 +537,8 @@ fn compile_loaded_dag_module_ir<'a>(
     let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
         declarations: self_imports.stripped_body,
     };
-    let dag_ast = rewrite_qualified_refs_in_compilation_body(
-        &dag_ast,
-        &ctx.imported_names,
-        &mut ctx.include_instances,
-    );
     validate_direct_dag_calls(
-        dag_ast.as_ref(),
+        &dag_ast,
         project,
         loaded_dag.dag_id(),
         module_resolver,
@@ -562,7 +557,7 @@ fn compile_loaded_dag_module_ir<'a>(
     };
     let (mut builder, mut unfrozen) =
         graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
-            dag_ast.as_ref(),
+            &dag_ast,
             Some(parent_registry),
             &ctx.imported_names,
             ctx.imported_bindings,
@@ -580,7 +575,7 @@ fn compile_loaded_dag_module_ir<'a>(
         module_resolver,
         module_templates,
         file_src,
-        dag_ast.as_ref(),
+        &dag_ast,
         &mut builder,
         &mut unfrozen,
         cancellation,
@@ -1393,18 +1388,8 @@ fn elaborate_include_instances(
                 &mut body_ctx,
                 cancellation,
             )?;
-            let rewritten_body = rewrite_qualified_refs_in_compilation_body(
-                dep_loaded.ast(),
-                &body_ctx.imported_names,
-                &mut body_ctx.include_instances,
-            );
-            validate_direct_dag_calls(
-                rewritten_body.as_ref(),
-                project,
-                dep_dag_id,
-                module_resolver,
-                dep_src,
-            )?;
+            let dep_body = dep_loaded.ast();
+            validate_direct_dag_calls(dep_body, project, dep_dag_id, module_resolver, dep_src)?;
             let mut registry_seed = |builder: &mut RegistryBuilder| {
                 seed_imported_type_system(
                     builder,
@@ -1417,7 +1402,7 @@ fn elaborate_include_instances(
                 )
             };
             let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
-                        rewritten_body.as_ref(),
+                        dep_body,
                         dep_src,
                         &body_ctx.imported_names,
                         body_ctx.imported_bindings,
@@ -1433,7 +1418,7 @@ fn elaborate_include_instances(
                 module_resolver,
                 module_templates,
                 dep_src,
-                rewritten_body.as_ref(),
+                dep_body,
                 &mut dep_builder,
                 &mut dep_unfrozen,
                 cancellation,
@@ -1518,13 +1503,8 @@ fn elaborate_include_instances(
             let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
                 declarations: self_imports.stripped_body,
             };
-            let stripped_body = rewrite_qualified_refs_in_compilation_body(
-                &stripped_body,
-                &body_ctx.imported_names,
-                &mut body_ctx.include_instances,
-            );
             validate_direct_dag_calls(
-                stripped_body.as_ref(),
+                &stripped_body,
                 project,
                 dag_id,
                 module_resolver,
@@ -1543,7 +1523,7 @@ fn elaborate_include_instances(
                 )
             };
             let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
-                        stripped_body.as_ref(),
+                        &stripped_body,
                         None,
                         &body_ctx.imported_names,
                         imported_bindings,
@@ -1560,7 +1540,7 @@ fn elaborate_include_instances(
                 module_resolver,
                 module_templates,
                 importer_src,
-                stripped_body.as_ref(),
+                &stripped_body,
                 &mut dag_builder,
                 &mut dag_unfrozen,
                 cancellation,

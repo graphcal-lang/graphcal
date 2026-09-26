@@ -8259,6 +8259,49 @@ fn eval_inline_dag_namespace_alias_at_field() {
 }
 
 #[test]
+fn field_access_on_value_is_not_hijacked_by_include_alias() {
+    // `.` after a graph reference is always struct field access; `::` is the
+    // only namespace-member boundary, even when a value shares an alias name.
+    let source = "dag d { pub node out: Dimensionless = 8.0; }\n\
+                  include d() as inst;\n\
+                  type S { S(out: Dimensionless) }\n\
+                  node inst: S = S(out: 1.0);\n\
+                  node y: Dimensionless = @inst.out;\n\
+                  node z: Dimensionless = @inst::out;";
+    let result = compile_and_eval(source).unwrap();
+    let y = find_value(&result, "y");
+    let z = find_value(&result, "z");
+    assert!((y - 1.0).abs() < 1e-10, "y = {y}");
+    assert!((z - 8.0).abs() < 1e-10, "z = {z}");
+}
+
+#[test]
+fn dot_member_access_on_include_alias_is_rejected_everywhere() {
+    // `.` is always field access, so `@inst.LIM` is an unknown graph
+    // reference in nodes, plot encodings, and type-annotation domain bounds
+    // alike; the namespace member is spelled `@inst::LIM`.
+    let prelude = "index Step = { A, B };\n\
+                   dag d { pub const node LIM: Dimensionless = 5.0; }\n\
+                   include d() as inst;\n";
+    for body in [
+        "node y: Dimensionless = @inst.LIM;",
+        "plot p = { mark: point, encode: { x: for s: Step { @inst.LIM }, \
+         y: for s: Step { @inst.LIM } }, title: \"t\" };",
+        "param p: Dimensionless(max: @inst.LIM) = 3.0;",
+    ] {
+        let error = compile_and_eval(&format!("{prelude}{body}")).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CompileError::Eval(GraphcalError::UnknownGraphRef { name, .. })
+                    if name == &scoped_name("inst")
+            ),
+            "`{body}`: unexpected error: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn eval_cross_file_include_namespace_alias_at_field() {
     // Issue #518: `include path(...) as alias; @alias::member` across files.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
