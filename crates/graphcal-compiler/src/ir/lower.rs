@@ -517,6 +517,15 @@ impl HirDag {
     pub fn static_ports(&self) -> &[crate::hir::StaticPort] {
         &self.static_ports
     }
+
+    /// Extern signatures declared by this DAG's own `import plugin` blocks,
+    /// keyed by canonical plugin identity plus function name.
+    #[must_use]
+    pub const fn extern_functions(
+        &self,
+    ) -> &HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry> {
+        &self.extern_functions
+    }
 }
 
 /// Lower an AST into a [`HirDag`].

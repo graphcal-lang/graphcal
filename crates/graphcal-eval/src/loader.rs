@@ -816,20 +816,17 @@ pub struct LoadedDependency {
 /// Outcome of locating and reading one wasm plugin file.
 pub type PluginFileEntry = Result<LoadedPlugin, PluginFileError>;
 
-/// The wasm plugin paths declared by one file's `import plugin` blocks.
+/// The wasm plugin paths declared by one file's `import plugin` blocks,
+/// including blocks inside nested `dag` bodies.
 fn wasm_plugin_paths(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> impl Iterator<Item = &graphcal_compiler::syntax::plugin::PluginPath> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
-    ast.declarations.iter().filter_map(|decl| match &decl.kind {
-        DeclKind::PluginImport(plugin)
-            if plugin.path.value.source_kind() == PluginSourceKind::WasmModule =>
-        {
-            Some(&plugin.path.value)
-        }
-        _ => None,
-    })
+    ast.plugin_imports()
+        .into_iter()
+        .map(|plugin| &plugin.path.value)
+        .filter(|path| path.source_kind() == PluginSourceKind::WasmModule)
 }
 
 fn validate_plugin_call_policy(
@@ -840,12 +837,8 @@ fn validate_plugin_call_policy(
         .values()
         .flat_map(|file| {
             file.ast
-                .declarations
-                .iter()
-                .filter_map(|declaration| match &declaration.kind {
-                    DeclKind::PluginImport(plugin) => Some(plugin),
-                    _ => None,
-                })
+                .plugin_imports()
+                .into_iter()
                 .flat_map(move |plugin| {
                     plugin.functions.iter().map(move |function| ExternFnKey {
                         plugin: PluginIdentity::resolve(&plugin.path.value, file.dag_id.package()),

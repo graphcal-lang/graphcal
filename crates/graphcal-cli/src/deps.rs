@@ -353,18 +353,14 @@ fn resolve_plugin_pins(
     for file in &gcl_files {
         let source = budget.read_text(&fs, file, IngestionArtifact::Source)?;
         let display = file.display().to_string();
-        let raw = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display)
+        let ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display)
             .parse_file()
             .map_err(|err| DepsError::PluginScanParse {
                 path: file.clone(),
                 message: err.to_string(),
             })?;
-        let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
-        for decl in &ast.declarations {
-            if let graphcal_compiler::desugar::desugared_ast::DeclKind::PluginImport(plugin) =
-                &decl.kind
-                && plugin.path.value.source_kind() == PluginSourceKind::WasmModule
-            {
+        for plugin in ast.plugin_imports() {
+            if plugin.path.value.source_kind() == PluginSourceKind::WasmModule {
                 let path = PluginArtifactPath::new(plugin.path.value.as_str())
                     .map_err(DepsError::PluginPath)?;
                 plugin_paths.insert(path);
@@ -1566,6 +1562,41 @@ node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
         let pins = resolve_plugin_pins(&root, &source_dir, &mut budget).unwrap();
         assert_eq!(pins.len(), 1, "host-registry identities get no pins");
         assert_eq!(pins[0].path().to_string(), "plugins/demo.wasm");
+        assert_eq!(
+            pins[0].sha256().to_string(),
+            hex_string(&Sha256::digest(plugin_bytes))
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_plugin_pins_includes_imports_inside_dag_bodies() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src/mission")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(
+            root.join("src/mission/main.gcl"),
+            r#"
+dag outer {
+    dag inner {
+        import plugin "plugins/nested.wasm" as demo {
+            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+        }
+        pub node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
+    }
+}
+"#,
+        )
+        .unwrap();
+        let plugin_bytes = b"nested plugin bytes";
+        std::fs::write(root.join("plugins/nested.wasm"), plugin_bytes).unwrap();
+
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = PackageIngestionBudget::default();
+        let pins = resolve_plugin_pins(&root, &source_dir, &mut budget).unwrap();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].path().to_string(), "plugins/nested.wasm");
         assert_eq!(
             pins[0].sha256().to_string(),
             hex_string(&Sha256::digest(plugin_bytes))
