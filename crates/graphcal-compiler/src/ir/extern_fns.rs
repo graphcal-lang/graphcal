@@ -81,52 +81,72 @@ pub(super) fn resolve_plugin_imports(
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
-    use std::collections::hash_map::Entry;
-
     let mut map = HashMap::new();
     for decl in decls {
         for function in &decl.functions {
             let (key, entry) =
                 resolve_extern_function(decl, function, registry, owner, resolver, src)?;
-            match map.entry(key) {
-                Entry::Occupied(existing) => {
-                    // The same plugin function may be declared under several
-                    // aliases, but its signature is a single fact about the
-                    // plugin — conflicting declarations are rejected.
-                    // Comparison is structural: renaming dimension variables
-                    // or parameters does not make a different signature.
-                    let existing: &ExternFunctionEntry = existing.get();
-                    if !existing.signature.structurally_equivalent(&entry.signature) {
-                        return Err(GraphcalError::InvalidExternSignature {
-                            message: format!(
-                                "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
-                                entry.name, entry.plugin
-                            ),
-                            src: src.clone(),
-                            span: function.span.into(),
-                        });
-                    }
-                    // A struct return is nominal at the declaration site:
-                    // two aliases must also agree on WHICH record type the
-                    // shared shape produces.
-                    if existing.result_struct != entry.result_struct {
-                        return Err(GraphcalError::InvalidExternSignature {
-                            message: format!(
-                                "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
-                                entry.name, entry.plugin
-                            ),
-                            src: src.clone(),
-                            span: function.span.into(),
-                        });
-                    }
-                }
-                Entry::Vacant(slot) => {
-                    slot.insert(entry);
-                }
-            }
+            merge_extern_function(&mut map, key, entry, src)?;
         }
     }
     Ok(map)
+}
+
+/// Merge one declared extern signature into a map of already-declared ones.
+///
+/// The same plugin function may be declared under several aliases (or in
+/// several DAG bodies of one file), but its signature is a single fact about
+/// the plugin — conflicting declarations are rejected at the later
+/// declaration. Comparison is structural: renaming dimension variables or
+/// parameters does not make a different signature, and the first
+/// declaration is kept.
+///
+/// # Errors
+///
+/// Returns [`GraphcalError::InvalidExternSignature`] when `entry` disagrees
+/// with an existing declaration of the same key on its signature or on its
+/// nominal struct result type.
+pub fn merge_extern_function(
+    map: &mut HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
+    key: crate::plugin_identity::ExternFnKey,
+    entry: ExternFunctionEntry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    use std::collections::hash_map::Entry;
+
+    match map.entry(key) {
+        Entry::Occupied(existing) => {
+            let existing = existing.get();
+            if !existing.signature.structurally_equivalent(&entry.signature) {
+                return Err(GraphcalError::InvalidExternSignature {
+                    message: format!(
+                        "function `{}` of plugin \"{}\" is declared elsewhere with a different signature",
+                        entry.name, entry.plugin
+                    ),
+                    src: src.clone(),
+                    span: entry.decl_span.into(),
+                });
+            }
+            // A struct return is nominal at the declaration site: two
+            // declarations must also agree on WHICH record type the shared
+            // shape produces.
+            if existing.result_struct != entry.result_struct {
+                return Err(GraphcalError::InvalidExternSignature {
+                    message: format!(
+                        "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
+                        entry.name, entry.plugin
+                    ),
+                    src: src.clone(),
+                    span: entry.decl_span.into(),
+                });
+            }
+            Ok(())
+        }
+        Entry::Vacant(slot) => {
+            slot.insert(entry);
+            Ok(())
+        }
+    }
 }
 
 /// Resolve one extern-signature type annotation to a [`crate::function_signature::ValueKind`].

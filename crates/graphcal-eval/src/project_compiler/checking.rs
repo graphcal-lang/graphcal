@@ -219,6 +219,9 @@ pub(super) fn check_hir_file(
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
+        // A nested DAG's `import plugin` signatures join the file's extern
+        // map, exactly like the root body's, so calls inside it resolve.
+        tir.merge_declared_extern_functions(signed.hir(), file_src)?;
         let imported_bindings = resolve_imported_bindings(
             signed.hir(),
             &local_interfaces,
