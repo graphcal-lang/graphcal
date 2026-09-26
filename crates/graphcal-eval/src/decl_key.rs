@@ -1,6 +1,3 @@
-use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe};
-
 /// Runtime key for a value declaration during evaluation.
 ///
 /// Runtime maps use canonical `ResolvedName<Decl>` identities so same-leaf
@@ -25,10 +22,11 @@ impl RuntimeDeclKey {
     ///
     /// Returns a typed diagnostic probe when `name` has no canonical binding;
     /// evaluation must not fabricate an identity for that unknown name.
+    #[cfg(test)]
     pub(crate) fn for_local_decl(
-        dag: &DagTIR,
-        name: &ScopedName,
-    ) -> Result<Self, DiagnosticDeclProbe> {
+        dag: &graphcal_compiler::tir::typed::DagTIR,
+        name: &graphcal_compiler::syntax::module_name::ScopedName,
+    ) -> Result<Self, graphcal_compiler::tir::typed::DiagnosticDeclProbe> {
         dag.lookup_decl_identity(name)
             .into_bound()
             .map(Self::Resolved)
