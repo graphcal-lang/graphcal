@@ -28,7 +28,7 @@ use crate::decl_key::RuntimeDeclKey;
 use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
-use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeUnavailable, Value};
+use crate::eval::types::{AssertResult, CompileError, EvalResult, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
 
 use crate::host_fns::HostFunctionRegistry;
@@ -483,23 +483,6 @@ impl PreparedProject {
                 DiagnosticAnchor::Builtin,
             )))
         }
-    }
-
-    fn first_runtime_error<'errors>(
-        &self,
-        errors: &'errors HashMap<RuntimeDeclKey, NodeUnavailable>,
-    ) -> Result<Option<(ScopedName, &'errors NodeUnavailable)>, ModelExecutionError> {
-        for (name, _) in self.tir.root().source_order() {
-            let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name)
-                .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
-            if let Some(error) = errors.get(&key) {
-                return Ok(Some((
-                    remap_include_debug_name(name, &self.output_assembly.include_debug_names),
-                    error,
-                )));
-            }
-        }
-        Ok(None)
     }
 
     fn assemble_normal_result(

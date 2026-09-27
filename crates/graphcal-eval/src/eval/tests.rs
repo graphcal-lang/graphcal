@@ -4435,6 +4435,67 @@ fn tenax_v2_limits_do_not_restrict_the_generic_model_interface() {
     ));
 }
 
+/// Evaluate `pipeline.main`'s `ok` model output for one bound `x`.
+fn evaluate_included_model_row(leaf: &str, x: &str) -> ModelRowOutcome {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("leaf.gcl", leaf),
+            (
+                "main.gcl",
+                "param x: Dimensionless(min: -10.0, max: 10.0);\n\
+                 include pipeline.leaf(input: @x) as leaf;\n\
+                 pub node ok: Bool = @x < 100.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(&DeclName::expect_valid("x"), &parse_expr(x))
+        .unwrap();
+    let row = bindings.finish().unwrap();
+    prepared.evaluate_model_row(&row, &model).unwrap()
+}
+
+#[test]
+fn model_row_fails_when_an_included_assertion_fails() {
+    let leaf = "param input: Dimensionless;\n\
+                pub node output: Dimensionless = @input;\n\
+                assert positive = @output > 0.0;";
+    assert_eq!(
+        evaluate_included_model_row(leaf, "1.0"),
+        ModelRowOutcome::Success(vec![Value::Bool(true)])
+    );
+    match evaluate_included_model_row(leaf, "-1.0") {
+        ModelRowOutcome::Failure(failure) => assert!(
+            failure.message().contains("positive"),
+            "unexpected failure: {failure}"
+        ),
+        ModelRowOutcome::Success(values) => panic!("expected assertion failure, got {values:?}"),
+    }
+}
+
+#[test]
+fn model_row_reports_runtime_errors_inside_included_dags_as_row_failures() {
+    let leaf = "param input: Dimensionless;\n\
+                node reciprocal: Dimensionless = 1.0 / @input;\n\
+                pub node output: Dimensionless = @input;";
+    assert_eq!(
+        evaluate_included_model_row(leaf, "1.0"),
+        ModelRowOutcome::Success(vec![Value::Bool(true)])
+    );
+    match evaluate_included_model_row(leaf, "0.0") {
+        ModelRowOutcome::Failure(failure) => assert!(
+            failure.message().contains("division by zero"),
+            "unexpected failure: {failure}"
+        ),
+        ModelRowOutcome::Success(values) => panic!("expected runtime failure, got {values:?}"),
+    }
+}
+
 #[test]
 fn required_param_without_override_errors() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";
