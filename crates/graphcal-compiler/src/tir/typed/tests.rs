@@ -11,7 +11,7 @@ use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 fn make_registry() -> FormattingRegistry {
     let mut b = RegistryBuilder::new();
     load_prelude(&mut b).unwrap();
-    b.try_build().unwrap().into_semantic().into_formatting()
+    b.build().into_semantic().into_formatting()
 }
 
 fn make_src() -> NamedSource<Arc<String>> {

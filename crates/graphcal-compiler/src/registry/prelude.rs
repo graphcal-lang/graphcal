@@ -199,9 +199,8 @@ fn dimension_of(factors: BaseFactors) -> Result<Dimension, RatioError> {
 pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RatioError> {
     for base in PreludeBaseDimension::ALL {
         let id = builder.register_base_dimension_with_symbol(
-            DimName::expect_valid(base.as_str()),
             BaseDimId::Prelude(base),
-            base_symbol(base).to_string(),
+            UnitName::expect_valid(base_symbol(base)),
         );
         if is_affine_prone(base) {
             builder.mark_affine_prone(id);
@@ -251,7 +250,7 @@ mod tests {
     fn prelude_loads_all_base_dims() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         for name in [
             "Length",
             "Time",
@@ -273,7 +272,7 @@ mod tests {
     fn prelude_loads_all_derived_dims() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         for name in [
             "Velocity",
             "Acceleration",
@@ -298,7 +297,7 @@ mod tests {
 
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
 
         let listed_dims = prelude_dimension_names().collect::<BTreeSet<_>>();
         let loaded_dims = r
@@ -321,7 +320,7 @@ mod tests {
     fn prelude_force_dimension_is_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let force = r.dimensions.get_dimension("Force").unwrap();
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
@@ -333,7 +332,7 @@ mod tests {
     fn prelude_newton_matches_force_dim() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
         let newton = r
             .units
@@ -349,7 +348,7 @@ mod tests {
     fn prelude_km_scale_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let km = r
             .units
             .get_unit(&crate::syntax::dimension::UnitRef::local(
@@ -366,7 +365,7 @@ mod tests {
     fn prelude_deg_scale_correct() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let deg = r
             .units
             .get_unit(&crate::syntax::dimension::UnitRef::local(
@@ -380,14 +379,21 @@ mod tests {
     }
 
     #[test]
-    fn prelude_base_dim_names_registered() {
+    fn prelude_base_dimensions_registered() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
-        let names = r.dimensions.base_dim_names();
-        assert_eq!(names.len(), 8);
-        assert_eq!(names.get(&length_id()), Some(&"Length".to_string()));
-        assert_eq!(names.get(&time_id()), Some(&"Time".to_string()));
+        let r = b.build();
+        let bases: Vec<_> = r.dimensions.base_dimensions().map(|(id, _)| id).collect();
+        assert_eq!(bases.len(), 8);
+        assert!(bases.contains(&&length_id()));
+        assert!(bases.contains(&&time_id()));
+        let affine: Vec<_> = r
+            .dimensions
+            .base_dimensions()
+            .filter(|(_, info)| info.is_affine_prone())
+            .map(|(id, _)| id.name())
+            .collect();
+        assert_eq!(affine, ["Temperature"]);
     }
 
     #[test]
@@ -399,7 +405,7 @@ mod tests {
         );
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
+        let r = b.build();
         for name in PreludeBaseDimension::ALL_NAMES {
             let expected = prelude_base_dimension(name).unwrap();
             assert_eq!(r.dimensions.get_dimension(name), Some(&expected));
@@ -412,8 +418,8 @@ mod tests {
     fn prelude_base_dim_symbols_registered() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let r = b.try_build().unwrap();
-        let symbols = r.dimensions.base_dim_symbols();
+        let r = b.build();
+        let symbols = r.dimensions.base_unit_symbols();
         assert_eq!(symbols.len(), 8);
         assert_eq!(symbols.get(&length_id()), Some(&"m".to_string()));
         assert_eq!(symbols.get(&time_id()), Some(&"s".to_string()));
@@ -425,7 +431,7 @@ mod tests {
 
         let mut builder = RegistryBuilder::new();
         load_prelude(&mut builder).unwrap();
-        let registry = builder.try_build().unwrap();
+        let registry = builder.build();
         let unit = |name| UnitRef::local(UnitName::expect_valid(name));
 
         assert_eq!(
@@ -457,7 +463,7 @@ mod tests {
     fn declared_dimensions_match_their_defining_products() {
         let mut builder = RegistryBuilder::new();
         load_prelude(&mut builder).unwrap();
-        let registry = builder.try_build().unwrap();
+        let registry = builder.build();
         let base = |base| Dimension::base(BaseDimId::Prelude(base));
         let length = base(PreludeBaseDimension::Length);
         let time = base(PreludeBaseDimension::Time);

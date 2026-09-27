@@ -156,16 +156,11 @@ fn register_selected_resolved_dimensions_and_units(
         dimension: &graphcal_compiler::dimension::Dimension,
     ) {
         for (base_id, _) in dimension.iter() {
-            if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id) {
-                // Display metadata only: the base dimension may be private to
-                // the dependency, so it must not become source-visible here.
-                builder.register_base_dimension_display_name(
-                    &graphcal_compiler::syntax::dimension::DimName::expect_valid(base_name),
-                    base_id.clone(),
-                );
-            }
-            if let Some(symbol) = dep_registry.dimensions.base_dim_symbols().get(base_id) {
-                builder.set_base_dim_symbol(base_id.clone(), symbol.clone());
+            // Metadata only: the base dimension may be private to the
+            // dependency, so it must not become source-visible here.
+            match dep_registry.dimensions.base_dimension(base_id) {
+                Some(info) => builder.import_base_dimension(base_id.clone(), info),
+                None => builder.record_base_dimension(base_id.clone()),
             }
         }
     }
@@ -265,23 +260,21 @@ fn merge_registry_into_builder_filtered(
             static_import_rejection(declarations, name, namespace).is_some()
         })
     };
-    // Import base-dimension metadata for display formatting and registry
-    // invariants. This includes private transitive dependencies of exported
-    // dimensions and units. Module imports record display metadata only so
-    // those names never become source-visible in the importer; include merges
-    // inline the dependency's body and keep its bare base-dimension scope.
-    for (id, name) in dep_registry.dimensions.base_dim_names() {
-        let dimension_name = graphcal_compiler::syntax::dimension::DimName::expect_valid(name);
-        if dim_bindings.contains_key(name.as_str())
+    // Import base-dimension metadata (canonical units, affine policy). This
+    // includes private transitive dependencies of exported dimensions and
+    // units. Module imports record metadata only so those names never become
+    // source-visible in the importer; include merges inline the dependency's
+    // body and keep its bare base-dimension scope.
+    for (id, info) in dep_registry.dimensions.base_dimensions() {
+        builder.import_base_dimension(id.clone(), info);
+        let dimension_name = id.source_name();
+        if module_alias.is_some()
+            || dim_bindings.contains_key(dimension_name.as_str())
             || pure_import_rejects(dimension_name.atom(), ImportItemNamespace::Dimension)
         {
             continue;
         }
-        if module_alias.is_some() {
-            builder.register_base_dimension_display_name(&dimension_name, id.clone());
-        } else {
-            builder.register_base_dimension(dimension_name, id.clone());
-        }
+        builder.register_base_dimension(id.clone());
     }
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
@@ -314,11 +307,6 @@ fn merge_registry_into_builder_filtered(
             None => reference.clone(),
         };
         builder.register_dimension(target, dim.clone());
-    }
-
-    // Import base dimension symbols (for SI unit string display).
-    for (id, symbol) in dep_registry.dimensions.base_dim_symbols() {
-        builder.set_base_dim_symbol(id.clone(), symbol.clone());
     }
 
     // Import units.

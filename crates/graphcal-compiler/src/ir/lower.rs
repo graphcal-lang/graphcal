@@ -38,9 +38,7 @@ pub use super::include::{
     substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
 };
 pub use super::registry_build::{SelectedDeclarations, register_selected_declarations};
-use super::registry_build::{
-    extract_type_annotations, register_file_declarations, registry_build_error,
-};
+use super::registry_build::{extract_type_annotations, register_file_declarations};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
@@ -488,9 +486,7 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
         None,
     )?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
-    let registry = builder
-        .try_build()
-        .map_err(|error| registry_build_error(&error, src))?;
+    let registry = builder.build();
     unresolved.freeze(registry, &dag_id, &resolver, src)
 }
 
@@ -516,9 +512,7 @@ pub(crate) fn lower_with_frontend_registry_for_test(
         None,
     )?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
-    let registry = builder
-        .try_build()
-        .map_err(|error| registry_build_error(&error, src))?;
+    let registry = builder.build();
     let hir = unresolved.freeze(registry.clone(), &dag_id, &resolver, src)?;
     Ok((hir, registry))
 }
@@ -813,9 +807,7 @@ pub(crate) fn lower_dag_body_to_ir(
         &dag_dag_id,
         None,
     )?;
-    let registry = builder
-        .try_build()
-        .map_err(|err| registry_build_error(&err, src))?;
+    let registry = builder.build();
     unfrozen.freeze(registry, &dag_dag_id, resolver, src)
 }
 
@@ -1359,7 +1351,7 @@ mod tests {
             [NameAtom::parse("missing").unwrap()],
             NameAtom::parse("Dimension").unwrap(),
         );
-        let registry = RegistryBuilder::new().try_build().unwrap();
+        let registry = RegistryBuilder::new().build();
         let owner =
             crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
                 .unwrap();

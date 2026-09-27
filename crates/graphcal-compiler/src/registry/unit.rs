@@ -6,14 +6,14 @@ use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use crate::dimension::{Dimension, Rational};
 use crate::ratio::RatioError;
 use crate::syntax::ast::UnitConstness;
-use crate::syntax::dimension::UnitRef;
+use crate::syntax::dimension::{UnitName, UnitRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum BaseUnitRegistrationError {
     #[error("the declared dimension is not a base dimension")]
     NotBaseDimension,
     #[error("the dimension already has canonical base unit `{existing}`")]
-    AlreadyRegistered { existing: String },
+    AlreadyRegistered { existing: UnitName },
 }
 
 /// A raw value that is not a valid [`PositiveFiniteScale`].

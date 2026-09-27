@@ -1,9 +1,6 @@
 //! Core physical-dimension algebra.
 
-use std::collections::BTreeMap;
 use std::fmt;
-
-use thiserror::Error;
 
 use crate::ratio::{ExponentStyle, Ratio, RatioError};
 use crate::sparse_monomial::SparseMonomial;
@@ -118,6 +115,18 @@ impl BaseDimId {
             Self::UserDefined(name) => name.as_str(),
         }
     }
+
+    /// The unqualified source name that makes this base dimension visible in
+    /// its defining scope (`Length`, or the user-defined leaf).
+    #[must_use]
+    pub fn source_name(&self) -> crate::syntax::dimension::DimName {
+        match self {
+            Self::Prelude(dimension) => {
+                crate::syntax::dimension::DimName::expect_valid(dimension.as_str())
+            }
+            Self::UserDefined(name) => name.to_unowned_def_name(),
+        }
+    }
 }
 
 /// A physical dimension represented as a sparse vector of rational exponents
@@ -219,93 +228,77 @@ impl Dimension {
         })
     }
 
-    /// Format this dimension using named base dimensions for display.
+    /// Render user-defined base dimensions with their canonical owner
+    /// (`pkg.mod.Rate`) instead of the bare leaf.
     ///
-    /// The `names` map must provide a `BaseDimId → name` mapping for every
-    /// base dimension in `self`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingBaseDimensionName`] when `names` does not contain an
-    /// entry for a base dimension referenced by `self`.
-    pub(crate) fn try_format_with(
-        &self,
-        names: &BTreeMap<BaseDimId, String>,
-    ) -> Result<String, MissingBaseDimensionName> {
-        if self.is_dimensionless() {
-            return Ok("Dimensionless".to_string());
-        }
-        self.format_exponents(names, " * ", " / ")
+    /// Used only when two unequal dimensions would otherwise render with the
+    /// same leaf-only spelling.
+    #[must_use]
+    pub fn owner_qualified(&self) -> impl fmt::Display + '_ {
+        OwnerQualifiedDimension(self)
     }
 
-    /// Format the dimension's exponents.
-    ///
-    /// `mul_sep` is placed between positive-exponent terms (e.g., `"*"` or `" * "`).
-    /// `div_sep` is placed before each negative-exponent term when positive terms exist
-    /// (e.g., `"/"` or `" / "`).
-    fn format_exponents(
+    /// Write the exponents as `num * num / den / den`, naming each base
+    /// dimension with `name`.
+    fn fmt_exponents(
         &self,
-        names: &BTreeMap<BaseDimId, String>,
-        mul_sep: &str,
-        div_sep: &str,
-    ) -> Result<String, MissingBaseDimensionName> {
-        let mut out = String::new();
+        f: &mut fmt::Formatter<'_>,
+        name: impl Fn(&BaseDimId, &mut fmt::Formatter<'_>) -> fmt::Result,
+    ) -> fmt::Result {
+        if self.is_dimensionless() {
+            return f.write_str("Dimensionless");
+        }
+        let factor = |f: &mut fmt::Formatter<'_>, id: &BaseDimId, exp: Rational| {
+            name(id, f)?;
+            if exp == Rational::ONE {
+                Ok(())
+            } else {
+                write!(f, "{}", exp.fmt_exponent(ExponentStyle::Compact))
+            }
+        };
         let mut first = true;
 
         // Positive exponents (numerator)
-        for (id, &exp) in self.exponents.iter() {
-            if !exp.is_positive() {
-                continue;
-            }
+        for (id, &exp) in self.exponents.iter().filter(|(_, exp)| exp.is_positive()) {
             if !first {
-                out.push_str(mul_sep);
+                f.write_str(" * ")?;
             }
             first = false;
-            push_dim_factor(&mut out, registered_base_dim_name(names, id)?, exp);
+            factor(f, id, exp)?;
         }
 
         // Negative exponents (denominator)
-        for (id, &exp) in self.exponents.iter() {
-            if !exp.is_negative() {
-                continue;
-            }
-            let name = registered_base_dim_name(names, id)?;
+        for (id, &exp) in self.exponents.iter().filter(|(_, exp)| exp.is_negative()) {
             if first {
-                // Only negative exponents (e.g., Frequency = s^-1).
-                push_dim_factor(&mut out, name, exp);
+                // Only negative exponents (e.g., Frequency = Time^-1).
                 first = false;
+                factor(f, id, exp)?;
             } else {
-                out.push_str(div_sep);
-                push_dim_factor(&mut out, name, -exp);
+                f.write_str(" / ")?;
+                factor(f, id, -exp)?;
             }
         }
-
-        Ok(out)
+        Ok(())
     }
 }
 
-fn registered_base_dim_name<'a>(
-    names: &'a BTreeMap<BaseDimId, String>,
-    id: &BaseDimId,
-) -> Result<&'a str, MissingBaseDimensionName> {
-    names
-        .get(id)
-        .map(String::as_str)
-        .ok_or_else(|| MissingBaseDimensionName { id: id.clone() })
-}
-
-fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
-    out.push_str(name);
-    if exp != Rational::ONE {
-        out.push_str(&exp.fmt_exponent(ExponentStyle::Compact).to_string());
+/// Canonical rendering: every base dimension by its leaf spelling
+/// (`Length * Mass / Time^2`, `Dimensionless`).
+impl fmt::Display for Dimension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_exponents(f, |id, f| f.write_str(id.name()))
     }
 }
 
-/// A base dimension referenced by a [`Dimension`] had no registered display name.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("missing display name for base dimension {id:?}")]
-pub struct MissingBaseDimensionName {
-    id: BaseDimId,
+struct OwnerQualifiedDimension<'a>(&'a Dimension);
+
+impl fmt::Display for OwnerQualifiedDimension<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_exponents(f, |id, f| match id {
+            BaseDimId::Prelude(dimension) => f.write_str(dimension.as_str()),
+            BaseDimId::UserDefined(resolved) => write!(f, "{resolved}"),
+        })
+    }
 }
 
 impl Dimension {
@@ -367,19 +360,6 @@ mod tests {
     }
     fn mass() -> BaseDimId {
         BaseDimId::Prelude(PreludeBaseDimension::Mass)
-    }
-
-    /// Build a names map for display tests.
-    fn test_names() -> BTreeMap<BaseDimId, String> {
-        PreludeBaseDimension::ALL
-            .into_iter()
-            .map(|dimension| {
-                (
-                    BaseDimId::Prelude(dimension),
-                    dimension.as_str().to_string(),
-                )
-            })
-            .collect()
     }
 
     #[test]
@@ -500,44 +480,22 @@ mod tests {
 
     #[test]
     fn dimension_display_simple() {
-        let names = test_names();
-        assert_eq!(
-            Dimension::dimensionless().try_format_with(&names).unwrap(),
-            "Dimensionless"
-        );
-        assert_eq!(
-            Dimension::base(length()).try_format_with(&names).unwrap(),
-            "Length"
-        );
-    }
-
-    #[test]
-    fn dimension_display_reports_missing_base_name() {
-        let names = BTreeMap::new();
-
-        assert_eq!(
-            Dimension::base(length()).try_format_with(&names),
-            Err(MissingBaseDimensionName { id: length() })
-        );
+        assert_eq!(Dimension::dimensionless().to_string(), "Dimensionless");
+        assert_eq!(Dimension::base(length()).to_string(), "Length");
     }
 
     #[test]
     fn dimension_display_velocity() {
-        let names = test_names();
         let velocity = (Dimension::base(length()) / Dimension::base(time())).unwrap();
-        assert_eq!(velocity.try_format_with(&names).unwrap(), "Length / Time");
+        assert_eq!(velocity.to_string(), "Length / Time");
     }
 
     #[test]
     fn dimension_display_force() {
-        let names = test_names();
         let force = ((Dimension::base(mass()) * Dimension::base(length())).unwrap()
             / Dimension::base(time()).pow(2).unwrap())
         .unwrap();
-        assert_eq!(
-            force.try_format_with(&names).unwrap(),
-            "Length * Mass / Time^2"
-        );
+        assert_eq!(force.to_string(), "Length * Mass / Time^2");
     }
 
     #[test]
@@ -550,34 +508,30 @@ mod tests {
             .unwrap(),
         };
 
-        assert_eq!(
-            dimension.try_format_with(&test_names()).unwrap(),
-            "Mass / Length^2147483647"
-        );
+        assert_eq!(dimension.to_string(), "Mass / Length^2147483647");
     }
 
     #[test]
     fn dimension_display_area() {
-        let names = test_names();
         let area = Dimension::base(length()).pow(2).unwrap();
-        assert_eq!(area.try_format_with(&names).unwrap(), "Length^2");
+        assert_eq!(area.to_string(), "Length^2");
     }
 
     #[test]
     fn dimension_display_frequency() {
-        let names = test_names();
         // Frequency = Time^-1 (only negative exponent)
         let freq = (Dimension::dimensionless() / Dimension::base(time())).unwrap();
-        assert_eq!(freq.try_format_with(&names).unwrap(), "Time^-1");
+        assert_eq!(freq.to_string(), "Time^-1");
     }
 
     #[test]
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
-        let info_id = BaseDimId::UserDefined(crate::syntax::dimension::ResolvedDimName::from_def(
+        let resolved = crate::syntax::dimension::ResolvedDimName::from_def(
             crate::dag_id::DagId::root_in_package("test", "test"),
             crate::syntax::dimension::DimName::expect_valid("Information"),
-        ));
+        );
+        let info_id = BaseDimId::UserDefined(resolved.clone());
         let information = Dimension::base(info_id.clone());
         let t = Dimension::base(time());
         let bandwidth = (information / t).unwrap();
@@ -585,13 +539,17 @@ mod tests {
         assert_eq!(bandwidth.get_exponent(&info_id), Rational::ONE);
         assert_eq!(bandwidth.get_exponent(&time()), Rational::from(-1));
 
-        // Display with names
-        let mut names = test_names();
-        names.insert(info_id, "Information".to_string());
+        assert_eq!(bandwidth.to_string(), "Information / Time");
         assert_eq!(
-            bandwidth.try_format_with(&names).unwrap(),
-            "Information / Time"
+            bandwidth.owner_qualified().to_string(),
+            format!("{resolved} / Time")
         );
+        assert_eq!(
+            Dimension::base(length()).owner_qualified().to_string(),
+            "Length"
+        );
+        assert_eq!(info_id.source_name().as_str(), "Information");
+        assert_eq!(length().source_name().as_str(), "Length");
     }
 
     #[test]

@@ -84,12 +84,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
         ))
         .unwrap();
 
-    assert_eq!(
-        mixed
-            .try_format_with(tir.registry.dimensions.base_dim_names())
-            .unwrap(),
-        "Y / X^2147483647"
-    );
+    assert_eq!(mixed.to_string(), "Y / X^2147483647");
 }
 
 #[test]

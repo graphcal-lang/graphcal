@@ -445,7 +445,7 @@ impl PreparedProject {
                     Some(
                         crate::eval::types::default_unit_label(
                             dimension,
-                            self.tir.registry().dimensions.base_dim_symbols(),
+                            &self.tir.registry().dimensions.base_unit_symbols(),
                         )
                         .ok_or_else(|| {
                             ModelDefinitionError::MissingCanonicalUnit {

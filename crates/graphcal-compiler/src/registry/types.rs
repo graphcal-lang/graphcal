@@ -1,24 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ratio::RatioError;
-use crate::registry::dimension_registry::{
-    DimensionResolveError, DimensionScope, assert_base_dim_names_cover,
-    format_dimension_preferring_alias_after_validation,
-};
+use crate::registry::dimension_table::DimensionResolveError;
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
+use crate::syntax::dimension::{DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
 use super::time_zone::TimeZoneRegistry;
 
 pub use super::dag::DagRegistry;
-pub use super::dimension_registry::{
-    DimensionFormattingRegistry, DimensionRegistry, RegistryBuildError,
-};
+pub use super::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry, DimensionTable};
 pub use super::index::{
     CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory,
     IndexBindingContract, IndexBindingContractError, IndexBindingTarget, IndexCardinality,
@@ -40,11 +35,11 @@ pub use super::unit::{
 
 /// The frozen, read-only aggregate of all domain registries.
 ///
-/// Produced by [`RegistryBuilder::try_build`]. All fields are public so that
+/// Produced by [`RegistryBuilder::build`]. All fields are public so that
 /// consumers can access individual domain registries directly.
 #[derive(Debug, Clone)]
 pub struct Registry {
-    pub dimensions: DimensionRegistry,
+    pub dimensions: DimensionTable,
     pub units: UnitRegistry,
     pub types: TypeRegistry,
     pub indexes: IndexRegistry,
@@ -74,7 +69,7 @@ impl Registry {
 /// definitions as a competing authority.
 #[derive(Debug, Clone)]
 pub struct SemanticRegistry {
-    pub dimensions: DimensionRegistry,
+    pub dimensions: DimensionTable,
     pub units: UnitRegistry,
     pub indexes: IndexRegistry,
     /// Reproducible IANA timezone lookup backed by the bundled, pinned tzdb.
@@ -110,15 +105,11 @@ pub struct FormattingRegistry {
 
 /// Mutable builder for constructing a [`Registry`].
 ///
-/// Used during IR lowering and prelude loading. Call [`try_build()`](Self::try_build)
+/// Used during IR lowering and prelude loading. Call [`build()`](Self::build)
 /// to produce an immutable [`Registry`].
 #[derive(Debug, Default)]
 pub struct RegistryBuilder {
-    base_dim_names: BTreeMap<BaseDimId, String>,
-    base_dim_symbols: BTreeMap<BaseDimId, String>,
-
-    dimensions: HashMap<DimRef, Dimension>,
-    dimension_aliases: HashMap<DimRef, DimRef>,
+    dimensions: DimensionTable,
     units: HashMap<UnitRef, UnitInfo>,
     unit_aliases: HashMap<UnitRef, UnitRef>,
     types: HashMap<StructTypeName, TypeDef>,
@@ -128,11 +119,6 @@ pub struct RegistryBuilder {
     finite_indexes: HashMap<FiniteIndex, IndexDef>,
     index_aliases: HashMap<IndexName, IndexBindingTarget>,
     dags: HashMap<DeclName, DagDecl>,
-    /// Base dimensions whose real-world units are affine (offset) scales,
-    /// e.g. Temperature (°C, °F). User unit definitions on these dimensions
-    /// are rejected because a purely multiplicative definition would display
-    /// silently wrong values (#648 U4).
-    affine_prone_dims: BTreeSet<BaseDimId>,
 }
 
 impl RegistryBuilder {
@@ -142,20 +128,10 @@ impl RegistryBuilder {
     }
 
     /// Freeze the builder into an immutable [`Registry`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RegistryBuildError`] if a registered dimension or unit
-    /// references a base dimension that has no registered display name.
-    pub fn try_build(self) -> Result<Registry, RegistryBuildError> {
-        self.assert_base_dim_name_invariant()?;
-        Ok(Registry {
-            dimensions: DimensionRegistry {
-                base_dim_names: self.base_dim_names,
-                base_dim_symbols: self.base_dim_symbols,
-                dimensions: self.dimensions,
-                aliases: self.dimension_aliases,
-            },
+    #[must_use]
+    pub fn build(self) -> Registry {
+        Registry {
+            dimensions: self.dimensions,
             units: UnitRegistry {
                 units: self.units,
                 aliases: self.unit_aliases,
@@ -172,21 +148,7 @@ impl RegistryBuilder {
             },
             time_zones: TimeZoneRegistry::bundled(),
             dags: DagRegistry { dags: self.dags },
-        })
-    }
-
-    fn assert_base_dim_name_invariant(&self) -> Result<(), RegistryBuildError> {
-        for (name, dim) in &self.dimensions {
-            assert_base_dim_names_cover(&self.base_dim_names, dim, format!("dimension `{name}`"))?;
         }
-        for (name, info) in &self.units {
-            assert_base_dim_names_cover(
-                &self.base_dim_names,
-                &info.dimension,
-                format!("unit `{name}`"),
-            )?;
-        }
-        Ok(())
     }
 
     /// Register a `dag` declaration body keyed by the declaration's name.
@@ -205,23 +167,7 @@ impl RegistryBuilder {
     /// type checking behave as if the dag body were declared inline at the
     /// top level.
     pub(crate) fn merge_from_registry(&mut self, parent: &Registry) {
-        for (id, name) in &parent.dimensions.base_dim_names {
-            self.base_dim_names
-                .entry(id.clone())
-                .or_insert_with(|| name.clone());
-        }
-        for (id, symbol) in &parent.dimensions.base_dim_symbols {
-            self.base_dim_symbols
-                .entry(id.clone())
-                .or_insert_with(|| symbol.clone());
-        }
-        for (name, dim) in &parent.dimensions.dimensions {
-            self.dimensions
-                .entry(name.clone())
-                .or_insert_with(|| dim.clone());
-        }
-        self.dimension_aliases
-            .extend(parent.dimensions.aliases.clone());
+        self.dimensions.merge_missing_from(&parent.dimensions);
         for (name, info) in &parent.units.units {
             self.units
                 .entry(name.clone())
@@ -264,7 +210,7 @@ impl RegistryBuilder {
     /// definitions cannot express, so user unit definitions on the bare
     /// dimension are rejected (#648 U4).
     pub(crate) fn mark_affine_prone(&mut self, id: BaseDimId) {
-        self.affine_prone_dims.insert(id);
+        self.dimensions.mark_affine_prone(id);
     }
 
     /// Returns `true` when `dim` is exactly an affine-prone base dimension
@@ -272,50 +218,41 @@ impl RegistryBuilder {
     /// `Temperature / Time`) stay allowed: offsets cancel in differences.
     #[must_use]
     pub(crate) fn is_affine_prone(&self, dim: &Dimension) -> bool {
-        dim.base_dimension_id()
-            .is_some_and(|id| self.affine_prone_dims.contains(id))
+        self.dimensions.is_affine_prone(dim)
     }
 
-    /// Register a new base dimension (`base dim Foo;`).
-    ///
-    /// The caller provides the [`BaseDimId`] which encodes the dimension's
-    /// identity (prelude name or user-defined file+name).
-    pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
-        let dim = Dimension::base(id.clone());
-        self.register_base_dimension_display_name(&name, id.clone());
-        self.dimensions.insert(DimRef::local(name), dim);
-        id
+    /// Register a new base dimension (`base dim Foo;`), source-visible under
+    /// the leaf name carried by its [`BaseDimId`].
+    pub fn register_base_dimension(&mut self, id: BaseDimId) {
+        self.dimensions.register_base_dimension(id);
     }
 
-    /// Record the display name of a base dimension without making it
-    /// source-visible.
+    /// Record a base dimension without making it source-visible.
     ///
     /// Imported dimensions and units may be built from a dependency's private
-    /// base dimensions; the importer needs their display metadata (registry
-    /// invariant) but must not be able to name them.
-    pub fn register_base_dimension_display_name(&mut self, name: &DimName, id: BaseDimId) {
-        self.base_dim_names.insert(id, name.to_string());
+    /// base dimensions; the importer tracks them but must not be able to name
+    /// them.
+    pub fn record_base_dimension(&mut self, id: BaseDimId) {
+        self.dimensions.record_base_dimension(id);
     }
 
-    /// Register a new base dimension with an SI symbol.
-    ///
-    /// Same as `register_base_dimension` but also records the default unit symbol
-    /// used for runtime display (e.g., `"m"` for Length).
+    /// Copy a dependency's metadata for one base dimension without making it
+    /// source-visible, keeping metadata this builder already has.
+    pub fn import_base_dimension(&mut self, id: BaseDimId, info: &BaseDimensionInfo) {
+        self.dimensions.import_base_dimension(id, info);
+    }
+
+    /// Register a new base dimension together with its canonical unit symbol
+    /// used for runtime display (e.g., `m` for Length).
     pub(crate) fn register_base_dimension_with_symbol(
         &mut self,
-        name: DimName,
         id: BaseDimId,
-        symbol: String,
+        symbol: UnitName,
     ) -> BaseDimId {
-        let id = self.register_base_dimension(name, id);
-        self.base_dim_symbols.insert(id.clone(), symbol);
+        self.dimensions.register_base_dimension(id.clone());
+        self.dimensions
+            .import_base_dimension(id.clone(), &BaseDimensionInfo::with_canonical_unit(symbol));
         id
-    }
-
-    /// Record an SI symbol for an existing base dimension while importing
-    /// already-validated registry metadata.
-    pub fn set_base_dim_symbol(&mut self, id: BaseDimId, symbol: String) {
-        self.base_dim_symbols.entry(id).or_insert(symbol);
     }
 
     /// Register the one canonical unit of a base dimension.
@@ -332,26 +269,23 @@ impl RegistryBuilder {
             .base_dimension_id()
             .cloned()
             .ok_or(BaseUnitRegistrationError::NotBaseDimension)?;
-        if let Some(existing) = self.base_dim_symbols.get(&base_dimension) {
-            return Err(BaseUnitRegistrationError::AlreadyRegistered {
-                existing: existing.clone(),
-            });
-        }
-
-        self.base_dim_symbols
-            .insert(base_dimension, name.to_string());
+        self.dimensions
+            .register_canonical_unit(base_dimension, name.clone())
+            .map_err(|error| BaseUnitRegistrationError::AlreadyRegistered {
+                existing: error.existing,
+            })?;
         self.register_unit(name, dimension, PositiveFiniteScale::ONE);
         Ok(())
     }
 
     /// Register a named dimension under a local or module-qualified reference.
     pub fn register_dimension(&mut self, name: impl Into<DimRef>, dim: Dimension) {
-        self.dimensions.insert(name.into(), dim);
+        self.dimensions.register_dimension(name.into(), dim);
     }
 
     /// Register a source-visible dimension alias without changing identity.
     pub fn register_dimension_alias(&mut self, alias: DimRef, target: DimRef) {
-        self.dimension_aliases.insert(alias, target);
+        self.dimensions.register_dimension_alias(alias, target);
     }
 
     /// Register a named compile-time unit with its dimension and SI scale factor.
@@ -430,21 +364,17 @@ impl RegistryBuilder {
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
 
-    const fn dimension_scope(&self) -> DimensionScope<'_> {
-        DimensionScope::new(&self.dimensions, &self.dimension_aliases)
-    }
-
     /// Look up an unqualified (local, selectively imported, or prelude)
     /// dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        self.get_dimension_ref(&DimRef::local(DimName::try_new(name).ok()?))
+        self.dimensions.get_dimension(name)
     }
 
     /// Look up a possibly module-qualified dimension reference.
     #[must_use]
     pub fn get_dimension_ref(&self, reference: &DimRef) -> Option<&Dimension> {
-        self.dimension_scope().lookup(reference)
+        self.dimensions.get_dimension_ref(reference)
     }
 
     /// Look up a unit by name.
@@ -507,29 +437,13 @@ impl RegistryBuilder {
         self.finite_indexes.get(&index)
     }
 
-    /// Get the base dimension names map (for display purposes).
-    #[must_use]
-    pub const fn base_dim_names(&self) -> &BTreeMap<BaseDimId, String> {
-        &self.base_dim_names
-    }
-
-    /// Get the base dimension symbols map for runtime display.
-    #[must_use]
-    pub const fn base_dim_symbols(&self) -> &BTreeMap<BaseDimId, String> {
-        &self.base_dim_symbols
-    }
-
-    /// Format a dimension as a human-readable string using registered base dimension names.
+    /// Format a dimension as a human-readable string.
     ///
     /// Prefers a named dimension alias for compound dimensions, like
-    /// [`DimensionRegistry::format_dimension`].
+    /// [`DimensionTable::format_dimension`].
     #[must_use]
     pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format_dimension_preferring_alias_after_validation(
-            &self.dimensions,
-            &self.base_dim_names,
-            dim,
-        )
+        self.dimensions.format_dimension(dim)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
@@ -537,7 +451,7 @@ impl RegistryBuilder {
     /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
     /// dimension exponent arithmetic overflows `i32`.
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
-        self.dimension_scope().resolve_dim_expr(expr)
+        self.dimensions.resolve_dim_expr(expr)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
@@ -546,7 +460,7 @@ impl RegistryBuilder {
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {
-        self.dimension_scope().resolve_dim_expr_detailed(expr)
+        self.dimensions.resolve_dim_expr_detailed(expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -554,7 +468,7 @@ impl RegistryBuilder {
     /// Returns `Ok(None)` if the type references unknown dimensions, and
     /// `Err` if dimension exponent arithmetic overflows `i32`.
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
-        self.dimension_scope().resolve_type_expr(type_expr)
+        self.dimensions.resolve_type_expr(type_expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
@@ -590,7 +504,7 @@ mod tests {
     use crate::dimension::{BaseDimId, Rational};
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, MulDivOp, UnitExprItem};
-    use crate::syntax::dimension::UnitName;
+    use crate::syntax::dimension::{DimName, UnitName};
     use crate::syntax::index_name::IndexVariantName;
     use crate::syntax::names::NamePath;
     use crate::syntax::span::Span;
@@ -618,7 +532,7 @@ mod tests {
     fn make_registry() -> Registry {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        b.try_build().unwrap()
+        b.build()
     }
 
     fn make_dim_term_name(name: &str) -> Spanned<NamePath> {
@@ -735,7 +649,7 @@ mod tests {
 
     #[test]
     fn resolve_dim_expr_keys_qualified_and_aliased_references() {
-        use crate::registry::dimension_registry::DimensionResolveError;
+        use crate::registry::dimension_table::DimensionResolveError;
         use crate::syntax::dimension::DimRef;
         use crate::syntax::names::{NameAtom, NamespacePath};
 
@@ -891,7 +805,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         let def = r.types.get_type("TransferResult").unwrap();
         assert_eq!(def.name().as_str(), "TransferResult");
@@ -920,7 +834,7 @@ mod tests {
                 ],
             },
         });
-        let r = b.try_build().unwrap();
+        let r = b.build();
         let def = r.indexes.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
         let entry_keys = def.entry_keys();
@@ -937,20 +851,17 @@ mod tests {
     }
 
     #[test]
-    fn registry_try_build_reports_missing_dimension_base_name() {
+    fn registry_formats_dimensions_without_registered_base_metadata() {
         let mut b = RegistryBuilder::new();
         b.register_dimension(
             DimName::expect_valid("Broken"),
             Dimension::base(length_id()),
         );
 
-        let err = b.try_build().unwrap_err();
+        let r = b.build();
         assert_eq!(
-            err,
-            RegistryBuildError::MissingBaseDimensionName {
-                context: "dimension `Broken`".to_string(),
-                id: length_id(),
-            }
+            r.dimensions.format_dimension(&Dimension::base(length_id())),
+            "Length"
         );
     }
 
@@ -959,16 +870,14 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let info_id = user_dim_id("Information");
-        let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
-        assert_eq!(id, info_id);
-        let r = b.try_build().unwrap();
-        // Should be retrievable
+        b.register_base_dimension(info_id.clone());
+        let r = b.build();
+        // Should be retrievable under its leaf name
         let dim = r.dimensions.get_dimension("Information").unwrap();
-        assert_eq!(*dim, Dimension::base(id.clone()));
-        // Name should be recorded
+        assert_eq!(*dim, Dimension::base(info_id.clone()));
         assert_eq!(
-            r.dimensions.base_dim_names().get(&id),
-            Some(&"Information".to_string())
+            r.dimensions.base_dimension(&info_id),
+            Some(&BaseDimensionInfo::default())
         );
     }
 
@@ -976,13 +885,12 @@ mod tests {
     fn register_base_dimension_with_symbol() {
         let mut b = RegistryBuilder::new();
         let id = b.register_base_dimension_with_symbol(
-            DimName::expect_valid("Length"),
             BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length),
-            "m".to_string(),
+            UnitName::expect_valid("m"),
         );
-        let r = b.try_build().unwrap();
+        let r = b.build();
         assert_eq!(
-            r.dimensions.base_dim_symbols().get(&id),
+            r.dimensions.base_unit_symbols().get(&id),
             Some(&"m".to_string())
         );
     }
@@ -991,16 +899,16 @@ mod tests {
     fn register_base_unit_records_unit_and_canonical_symbol() {
         let mut b = RegistryBuilder::new();
         let info_id = user_dim_id("Information");
-        b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
+        b.register_base_dimension(info_id.clone());
         b.register_base_unit(
             UnitName::expect_valid("bit"),
             Dimension::base(info_id.clone()),
         )
         .unwrap();
 
-        let registry = b.try_build().unwrap();
+        let registry = b.build();
         assert_eq!(
-            registry.dimensions.base_dim_symbols().get(&info_id),
+            registry.dimensions.base_unit_symbols().get(&info_id),
             Some(&"bit".to_string())
         );
         let unit = registry
@@ -1016,7 +924,7 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let info_id = user_dim_id("Information");
-        b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
+        b.register_base_dimension(info_id.clone());
         b.register_base_unit(
             UnitName::expect_valid("bit"),
             Dimension::base(info_id.clone()),
@@ -1026,7 +934,7 @@ mod tests {
         assert_eq!(
             b.register_base_unit(UnitName::expect_valid("nat"), Dimension::base(info_id),),
             Err(BaseUnitRegistrationError::AlreadyRegistered {
-                existing: "bit".to_string(),
+                existing: UnitName::expect_valid("bit"),
             })
         );
         assert!(
@@ -1046,17 +954,25 @@ mod tests {
     }
 
     #[test]
-    fn set_base_dim_symbol_only_first() {
+    fn imported_base_dimension_metadata_keeps_first_canonical_unit() {
         let mut b = RegistryBuilder::new();
         let info_id = user_dim_id("Information");
-        let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id);
-        b.set_base_dim_symbol(id.clone(), "bit".to_string());
-        // Second call should not overwrite
-        b.set_base_dim_symbol(id.clone(), "byte".to_string());
-        let r = b.try_build().unwrap();
+        b.record_base_dimension(info_id.clone());
+        b.import_base_dimension(
+            info_id.clone(),
+            &BaseDimensionInfo::with_canonical_unit(UnitName::expect_valid("bit")),
+        );
+        // A second import does not overwrite the canonical unit.
+        b.import_base_dimension(
+            info_id.clone(),
+            &BaseDimensionInfo::with_canonical_unit(UnitName::expect_valid("byte")),
+        );
+        let r = b.build();
         assert_eq!(
-            r.dimensions.base_dim_symbols().get(&id),
+            r.dimensions.base_unit_symbols().get(&info_id),
             Some(&"bit".to_string())
         );
+        // Recorded and imported base dimensions are never source-visible.
+        assert_eq!(r.dimensions.get_dimension("Information"), None);
     }
 }
