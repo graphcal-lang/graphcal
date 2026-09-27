@@ -2151,8 +2151,9 @@ fn checked_tir_records_typed_template_instance_bindings() {
         ResolvedDeclName::from_def(template.clone(), DeclName::expect_valid("factor"));
     let instances = tir
         .root()
-        .instances()
+        .semantic_instances()
         .iter()
+        .map(|record| &record.instance)
         .filter(|record| record.id.template() == &template)
         .collect::<Vec<_>>();
     assert_eq!(instances.len(), 2);
@@ -2217,7 +2218,9 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
             tir.dag_registry()
                 .get(outer.instance.id.owner())
                 .expect("materialized outer instance")
-                .instances()
+                .semantic_instances()
+                .iter()
+                .map(|record| &record.instance)
         })
         .filter(|record| record.id.template() == &leaf_template)
         .collect::<Vec<_>>();

@@ -703,11 +703,6 @@ fn initialize_instance_identity(
             )
         })
         .collect();
-    instance.instances = instance
-        .semantic_instances
-        .iter()
-        .map(|nested| nested.instance.clone())
-        .collect();
 }
 
 fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
