@@ -1621,11 +1621,6 @@ role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "qualified_refs"]
-role = "checking"
-
-[[module]]
-package = "eval"
 path = ["project_compiler", "recursion"]
 role = "checking"
 

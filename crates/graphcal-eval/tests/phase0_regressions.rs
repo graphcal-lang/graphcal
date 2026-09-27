@@ -461,7 +461,7 @@ fn write_imported_binding_collision_project(
         .join("\n");
     let total = libraries
         .iter()
-        .map(|(name, _)| format!("@{name}.out"))
+        .map(|(name, _)| format!("@{name}::out"))
         .collect::<Vec<_>>()
         .join(" + ");
     let root = package_dir.join("main.gcl");

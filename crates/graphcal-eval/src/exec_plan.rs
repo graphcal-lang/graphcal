@@ -364,20 +364,7 @@ fn prepare_imports(
     };
     let mut result = PreparedImports::default();
     for dag in dags {
-        let own_names = dag
-            .consts()
-            .iter()
-            .map(|entry| entry.name.member())
-            .chain(dag.params().iter().map(|entry| entry.name.member()))
-            .chain(dag.nodes().iter().map(|entry| entry.name.member()))
-            .collect::<HashSet<_>>();
-        for (scoped, binding) in dag.imported_bindings() {
-            // Lexical shadows are decided once, never rediscovered during a call.
-            if !dag.semantic().decl_bindings.contains_key(scoped)
-                && own_names.contains(scoped.member())
-            {
-                continue;
-            }
+        for binding in dag.imported_bindings().values() {
             let source_key = RuntimeDeclKey::resolved(binding.target().clone());
             let owner = locations
                 .body_for(&source_key)
