@@ -924,12 +924,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                     actual_dim
                 } else {
                     // D^(p/q) bound against `actual` means D = actual^(q/p).
-                    let exponent = Rational::try_new(power.den(), power.num()).map_err(|_| {
-                        GraphcalError::InternalError {
-                            message: format!("generic dimension parameter `{gp}` has zero power"),
-                            src: src.clone(),
-                            span: span.into(),
-                        }
+                    let exponent = power.recip().map_err(|_| GraphcalError::InternalError {
+                        message: format!("generic dimension parameter `{gp}` has zero power"),
+                        src: src.clone(),
+                        span: span.into(),
                     })?;
                     actual_dim
                         .pow(exponent)

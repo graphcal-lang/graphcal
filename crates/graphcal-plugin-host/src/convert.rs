@@ -8,11 +8,12 @@
 //! [`FunctionSignature::try_new`], which enforces the binding-discipline
 //! invariants. Nothing downstream of this module handles manifest strings.
 
-use graphcal_compiler::dimension::{Dimension, Rational, RationalError};
+use graphcal_compiler::dimension::{Dimension, Rational};
 use graphcal_compiler::function_signature::{
     DimMonomial, DimVarPower, FunctionParam, FunctionSignature, ParamKind, ResultKind,
     ScalarValueKind, SignatureError, StructFieldKind, StructShape, StructShapeField,
 };
+use graphcal_compiler::ratio::RatioError;
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
 use graphcal_compiler::syntax::dimension::DimVarName;
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
@@ -272,7 +273,7 @@ pub enum ConvertErrorKind {
     },
     /// Exponent arithmetic overflowed while assembling a dimension.
     #[error(transparent)]
-    Rational(#[from] RationalError),
+    Rational(#[from] RatioError),
     /// The assembled signature violates the binding-discipline invariants.
     #[error(transparent)]
     Signature(#[from] SignatureError),

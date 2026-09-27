@@ -376,7 +376,7 @@ impl ResolvedGenericSubstitutions {
 
 enum GenericDefaultSubstitutionError {
     Nat(crate::nat::NatOverflowError),
-    Dimension(crate::dimension::RationalError),
+    Dimension(crate::ratio::RatioError),
     UnexpectedGenericDimensionTerm,
 }
 
@@ -386,8 +386,8 @@ impl From<crate::nat::NatOverflowError> for GenericDefaultSubstitutionError {
     }
 }
 
-impl From<crate::dimension::RationalError> for GenericDefaultSubstitutionError {
-    fn from(error: crate::dimension::RationalError) -> Self {
+impl From<crate::ratio::RatioError> for GenericDefaultSubstitutionError {
+    fn from(error: crate::ratio::RatioError) -> Self {
         Self::Dimension(error)
     }
 }

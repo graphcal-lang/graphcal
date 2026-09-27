@@ -16,7 +16,7 @@ use miette::NamedSource;
 
 use crate::builtin::{AggregationFn, BuiltinFnName, ValueAggregation};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::dimension::{BaseDimId, Dimension};
+use crate::dimension::{BaseDimId, Dimension, Rational};
 use crate::expression_id::ExprId;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
@@ -1618,15 +1618,12 @@ fn infer_hir_fn_call(
                         span: args[0].span.into(),
                     }
                 })?;
-            let exponent =
-                i32::try_from(cardinality).map_err(|_| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                })?;
-            dimension
-                .pow(exponent)
+            i32::try_from(cardinality)
+                .ok()
+                .and_then(|exponent| Rational::integer(exponent).ok())
+                .and_then(|exponent| dimension.pow(exponent).ok())
                 .map(InferredType::Quantity)
-                .map_err(|_| GraphcalError::DimensionOverflow {
+                .ok_or_else(|| GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: args[0].span.into(),
                 })

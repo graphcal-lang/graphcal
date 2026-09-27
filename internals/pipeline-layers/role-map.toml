@@ -192,6 +192,26 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["ratio"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ratio", "sealed"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ratio", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ratio", "tests", "prop"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["exact_rational"]
 role = "contracts"
 

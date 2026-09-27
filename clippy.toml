@@ -2,6 +2,8 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-print-in-tests = true
 allow-unwrap-in-tests = true
+# `Ratio` negation is total (symmetric range) and its other operators return `Result`.
+arithmetic-side-effects-allowed = ["graphcal_compiler::ratio::Ratio"]
 
 [[disallowed-methods]]
 path = "core::option::Option::unwrap_or_default"

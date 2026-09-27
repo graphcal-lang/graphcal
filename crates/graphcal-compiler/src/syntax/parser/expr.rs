@@ -1,4 +1,5 @@
-use crate::exact_rational::{ExactRational, ExactRationalError};
+use crate::exact_rational::ExactRational;
+use crate::ratio::RatioError;
 use crate::source_line::line_ending_at;
 use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, KeyFormKind, ModulePath, PowerExponent,
@@ -63,7 +64,7 @@ fn exact_decimal_literal(text: &str) -> Option<ExactRational> {
             .and_then(|n| u32::try_from(n).ok())?;
         (numerator.checked_mul(10_i128.checked_pow(scale)?)?, 1)
     };
-    ExactRational::try_new_i128(numerator, denominator).ok()
+    ExactRational::try_from_wide(numerator, denominator).ok()
 }
 
 fn signed_integer_expr(expr: &Expr) -> Option<i64> {
@@ -378,28 +379,25 @@ impl Parser<'_> {
 
     /// Preserve exact exponent syntax before HIR loses token spelling.
     fn classify_power_exponent(&self, exponent: &Expr) -> Result<PowerExponent, ParseError> {
-        if let Some(value) = signed_integer_expr(exponent) {
-            return Ok(PowerExponent::Exact(ExactRational::from_integer(value)));
-        }
-
-        if let ExprKind::BinOp {
-            op: BinOp::Div,
-            lhs,
-            rhs,
-        } = &exponent.kind
-            && let (Some(numerator), Some(denominator)) =
-                (signed_integer_expr(lhs), signed_integer_expr(rhs))
-        {
+        let exact_fraction = signed_integer_expr(exponent)
+            .map(|value| (value, 1))
+            .or_else(|| match &exponent.kind {
+                ExprKind::BinOp {
+                    op: BinOp::Div,
+                    lhs,
+                    rhs,
+                } => signed_integer_expr(lhs).zip(signed_integer_expr(rhs)),
+                _ => None,
+            });
+        if let Some((numerator, denominator)) = exact_fraction {
             return ExactRational::try_new(numerator, denominator)
                 .map(PowerExponent::Exact)
                 .map_err(|error| ParseError::InvalidNumber {
                     reason: match error {
-                        ExactRationalError::ZeroDenominator => {
+                        RatioError::ZeroDenominator => {
                             "power exponent denominator must be non-zero".to_string()
                         }
-                        ExactRationalError::Overflow => {
-                            "exact power exponent overflows `i64`".to_string()
-                        }
+                        RatioError::Overflow => "exact power exponent overflows `i64`".to_string(),
                     },
                     src: self.named_source(),
                     span: exponent.span.into(),
@@ -407,14 +405,8 @@ impl Parser<'_> {
         }
 
         if let Some((negative, literal_span)) = signed_float_literal_span(exponent) {
-            let exact =
-                exact_decimal_literal(self.lexer.slice_at(literal_span)).and_then(|value| {
-                    if negative {
-                        value.checked_neg().ok()
-                    } else {
-                        Some(value)
-                    }
-                });
+            let exact = exact_decimal_literal(self.lexer.slice_at(literal_span))
+                .map(|value| if negative { -value } else { value });
             return Ok(PowerExponent::FloatSyntax { exact });
         }
 

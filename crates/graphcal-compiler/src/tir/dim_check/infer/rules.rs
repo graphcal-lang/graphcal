@@ -49,11 +49,7 @@ fn comparison_operand_type<'a>(
 
 fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
     let rational = Rational::try_from(exact?).ok()?;
-    Some(if rational.is_integer() {
-        rational.num().to_string()
-    } else {
-        format!("({}/{})", rational.num(), rational.den())
-    })
+    Some(rational.source_syntax().to_string())
 }
 
 /// The exact additive fragment of Fin-key arithmetic:
@@ -465,7 +461,7 @@ pub(super) fn binop_rule(
             // existing checked constant folding.
             if matches!(lhs_type, InferredType::Int) {
                 let int_exp = match exponent {
-                    PowerExponent::Exact(exact) if exact.is_integer() => Some(exact.numerator()),
+                    PowerExponent::Exact(exact) if exact.is_integer() => Some(exact.num()),
                     PowerExponent::Runtime => rhs_const_int,
                     PowerExponent::Exact(_) | PowerExponent::FloatSyntax { .. } => None,
                 };

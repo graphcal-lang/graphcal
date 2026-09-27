@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
-use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, RationalError};
+use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName};
+use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, DimRef};
 
 /// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
@@ -15,7 +16,7 @@ pub enum DimensionResolveError {
     UnknownDimension { name: DimRef },
     /// Dimension exponent arithmetic overflowed.
     #[error(transparent)]
-    Overflow(#[from] RationalError),
+    Overflow(#[from] RatioError),
 }
 
 /// Resolve a `DimExpr` by looking up each term's typed (possibly
@@ -88,10 +89,7 @@ impl<'a> DimensionScope<'a> {
 
     /// Resolve a `DimExpr` to a concrete `Dimension`, returning `Ok(None)`
     /// when a referenced dimension is unknown.
-    pub(crate) fn resolve_dim_expr(
-        self,
-        expr: &DimExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    pub(crate) fn resolve_dim_expr(self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
         match self.resolve_dim_expr_detailed(expr) {
             Ok(dim) => Ok(Some(dim)),
             Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
@@ -111,7 +109,7 @@ impl<'a> DimensionScope<'a> {
     pub(crate) fn resolve_type_expr(
         self,
         type_expr: &TypeExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    ) -> Result<Option<Dimension>, RatioError> {
         match &type_expr.kind {
             TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
             TypeExprKind::IndexLabel { .. }
@@ -346,10 +344,7 @@ impl DimensionRegistry {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     #[cfg(test)]
-    pub(crate) fn resolve_dim_expr(
-        &self,
-        expr: &DimExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    pub(crate) fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
         self.scope().resolve_dim_expr(expr)
     }
 
@@ -366,10 +361,7 @@ impl DimensionRegistry {
     ///
     /// Returns `Ok(None)` if the type references unknown dimensions, and
     /// `Err` if dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_type_expr(
-        &self,
-        type_expr: &TypeExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
         self.scope().resolve_type_expr(type_expr)
     }
 }

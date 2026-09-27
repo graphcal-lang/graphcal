@@ -14,7 +14,7 @@ use graphcal_compiler::function_signature::{
     DimMonomial, FunctionSignature, ParamKind, ResultKind, ScalarValueKind, StructFieldKind,
     StructShape,
 };
-use graphcal_compiler::registry::format::format_exponent;
+use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::host_abi::{
@@ -712,7 +712,11 @@ fn render_monomial(monomial: &DimMonomial) -> String {
             if factor.power == Rational::ONE {
                 factor.var.to_string()
             } else {
-                format!("{}{}", factor.var, format_exponent(factor.power))
+                format!(
+                    "{}{}",
+                    factor.var,
+                    factor.power.fmt_exponent(ExponentStyle::Source)
+                )
             }
         })
         .collect::<Vec<_>>();
@@ -740,7 +744,7 @@ fn render_dimension(dim: &Dimension) -> String {
             if *power == graphcal_compiler::dimension::Rational::ONE {
                 name.to_string()
             } else {
-                format!("{name}{}", format_exponent(*power))
+                format!("{name}{}", power.fmt_exponent(ExponentStyle::Source))
             }
         })
         .collect();

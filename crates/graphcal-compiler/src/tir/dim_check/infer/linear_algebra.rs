@@ -6,7 +6,7 @@
 //! display names.
 
 use crate::builtin::LinearAlgebraFn;
-use crate::dimension::Dimension;
+use crate::dimension::{Dimension, Rational};
 
 use super::super::InferredType;
 use crate::registry::declared_type::IndexTypeRef;
@@ -218,12 +218,11 @@ pub(super) fn infer_linear_algebra_type(
             require_same_axis(matrix.axis(0), 0, matrix.axis(1))?;
             let cardinality = cardinality(matrix.axis(0))
                 .ok_or(LinearAlgebraTypeError::ConcreteCardinalityRequired { argument: 0 })?;
-            let exponent = i32::try_from(cardinality)
-                .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)?;
-            let dimension = matrix
-                .dimension
-                .pow(exponent)
-                .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)?;
+            let dimension = i32::try_from(cardinality)
+                .ok()
+                .and_then(|exponent| Rational::integer(exponent).ok())
+                .and_then(|exponent| matrix.dimension.pow(exponent).ok())
+                .ok_or(LinearAlgebraTypeError::DimensionOverflow)?;
             Ok(InferredType::Quantity(dimension))
         }
     }
