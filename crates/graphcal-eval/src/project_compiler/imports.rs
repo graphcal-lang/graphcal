@@ -1915,7 +1915,10 @@ fn import_selective_resolved_item(
     let scoped = ScopedName::local(local_name.clone());
     imported_names.const_names.push((scoped.clone(), span));
     if let Some(source_order) = imported_source_order {
-        source_order.push((scoped.clone(), DeclCategory::Const));
+        source_order.push((
+            scoped.clone(),
+            DeclCategory::Value(ValueDeclCategory::Const),
+        ));
     }
     insert_imported_binding(
         imported_bindings,
@@ -1951,7 +1954,10 @@ fn import_module_values_from_resolver(
             .const_names
             .push((scoped.clone(), import_span));
         if let Some(source_order) = imported_source_order.as_deref_mut() {
-            source_order.push((scoped.clone(), DeclCategory::Const));
+            source_order.push((
+                scoped.clone(),
+                DeclCategory::Value(ValueDeclCategory::Const),
+            ));
         }
         insert_imported_binding(
             imported_bindings,

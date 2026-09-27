@@ -79,8 +79,8 @@ pub fn evaluate_assert_with_expected_fail(
                     index_name,
                     entries,
                 } => {
-                    let inverted = invert_indexed_variants(&index_name, entries, keys);
-                    check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys)
+                    let inverted = invert_indexed_variants(&index_name, entries, keys.as_slice());
+                    check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys.as_slice())
                 }
                 RuntimeValue::Bool(_) => AssertResult::Error {
                     message:

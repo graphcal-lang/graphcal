@@ -135,64 +135,71 @@ fn check_nonzero(
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
-/// Evaluate equality for same-typed, unindexed values.
+/// A comparison operator: equality, inequality, or one of the four orderings.
 ///
-/// Mismatched operand types are evaluation errors. Indexed values reaching
-/// this function violate the dimension checker's no-broadcasting invariant.
-pub(super) fn eval_equality_values(
-    op: BinOp,
-    l: &RuntimeValue,
-    r: &RuntimeValue,
-    ctx: &EvalContext<'_>,
-    span: Span,
-) -> Result<RuntimeValue, GraphcalError> {
-    let is_eq = op == BinOp::Eq;
-    let eq = match (l, r) {
-        (RuntimeValue::Indexed { .. }, _) | (_, RuntimeValue::Indexed { .. }) => {
-            return Err(ctx.internal_error("indexed operand reached comparison evaluation", span));
-        }
-        (RuntimeValue::Bool(_), RuntimeValue::Bool(_))
-        | (RuntimeValue::Int(_), RuntimeValue::Int(_))
-        | (RuntimeValue::Complex(_), RuntimeValue::Complex(_))
-        | (RuntimeValue::Label { .. }, RuntimeValue::Label { .. })
-        | (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. })
-        | (RuntimeValue::CoordinateLabel { .. }, RuntimeValue::CoordinateLabel { .. })
-        | (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => semantic_value_equals(l, r),
-        _ => {
-            let lv = l
-                .expect_quantity("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let rv = r
-                .expect_quantity("comparison operand")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            return Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?));
-        }
-    };
-    Ok(RuntimeValue::Bool(eq == is_eq))
+/// The evaluator narrows [`BinOp`] to this type at its dispatch site, so the
+/// comparison helpers match exhaustively instead of rejecting "impossible"
+/// operators at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Comparison {
+    Eq,
+    Ne,
+    Ord(OrderingOp),
 }
 
-/// Evaluate ordering for unindexed Int, Datetime, or Quantity operands.
+/// The four ordering comparison operators (`<`, `>`, `<=`, `>=`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OrderingOp {
+    Lt,
+    Gt,
+    Le,
+    Ge,
+}
+
+/// Evaluate a comparison on same-typed, unindexed values.
 ///
-/// The typed [`OrderingOp`] subset avoids an "impossible operator" fallback.
-/// Indexed values reaching this function violate the dimension checker's
-/// no-broadcasting invariant.
-pub(super) fn eval_ordering_values(
-    op: BinOp,
+/// Equality accepts every unindexed value kind; ordering accepts Int,
+/// Datetime, and Quantity operands. Mismatched operand types are evaluation
+/// errors. Indexed values reaching this function violate the dimension
+/// checker's no-broadcasting invariant.
+pub(super) fn eval_comparison_values(
+    op: Comparison,
     l: &RuntimeValue,
     r: &RuntimeValue,
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let ord_op = OrderingOp::from_binop(op)
-        .ok_or_else(|| ctx.internal_error(format!("non-ordering op {op:?}"), span))?;
-    match (l, r) {
-        (RuntimeValue::Indexed { .. }, _) | (_, RuntimeValue::Indexed { .. }) => {
+    match (op, l, r) {
+        (_, RuntimeValue::Indexed { .. }, _) | (_, _, RuntimeValue::Indexed { .. }) => {
             Err(ctx.internal_error("indexed operand reached comparison evaluation", span))
         }
-        (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
+        (Comparison::Eq | Comparison::Ne, RuntimeValue::Bool(_), RuntimeValue::Bool(_))
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Int(_), RuntimeValue::Int(_))
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Complex(_), RuntimeValue::Complex(_))
+        | (
+            Comparison::Eq | Comparison::Ne,
+            RuntimeValue::Label { .. },
+            RuntimeValue::Label { .. },
+        )
+        | (
+            Comparison::Eq | Comparison::Ne,
+            RuntimeValue::Struct { .. },
+            RuntimeValue::Struct { .. },
+        )
+        | (
+            Comparison::Eq | Comparison::Ne,
+            RuntimeValue::CoordinateLabel { .. },
+            RuntimeValue::CoordinateLabel { .. },
+        )
+        | (Comparison::Eq | Comparison::Ne, RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
+            Ok(RuntimeValue::Bool(
+                semantic_value_equals(l, r) == (op == Comparison::Eq),
+            ))
+        }
+        (Comparison::Ord(ord_op), RuntimeValue::Int(li), RuntimeValue::Int(ri)) => {
             Ok(RuntimeValue::Bool(apply_ordering(ord_op, li, ri)))
         }
-        (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
+        (Comparison::Ord(ord_op), RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => {
             Ok(RuntimeValue::Bool(apply_ordering(ord_op, le, re)))
         }
         _ => {
@@ -202,33 +209,7 @@ pub(super) fn eval_ordering_values(
             let rv = r
                 .expect_quantity("comparison operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            Ok(RuntimeValue::Bool(eval_comparison(op, lv, rv, ctx, span)?))
-        }
-    }
-}
-
-/// Restriction of [`BinOp`] to the four ordering comparison operators.
-///
-/// Carrying this typed subset lets [`apply_ordering`] dispatch without an
-/// "impossible" arm — the type system forbids non-ordering ops at the call
-/// site rather than checking at runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OrderingOp {
-    Lt,
-    Gt,
-    Le,
-    Ge,
-}
-
-impl OrderingOp {
-    /// Narrow a [`BinOp`] to an ordering operator, or `None` for the other variants.
-    const fn from_binop(op: BinOp) -> Option<Self> {
-        match op {
-            BinOp::Lt => Some(Self::Lt),
-            BinOp::Gt => Some(Self::Gt),
-            BinOp::Le => Some(Self::Le),
-            BinOp::Ge => Some(Self::Ge),
-            _ => None,
+            Ok(RuntimeValue::Bool(eval_quantity_comparison(op, lv, rv)))
         }
     }
 }
@@ -246,21 +227,14 @@ fn apply_ordering<T: Ord + ?Sized>(op: OrderingOp, lhs: &T, rhs: &T) -> bool {
 
 /// Evaluate a comparison operator on two f64 values.
 #[expect(clippy::float_cmp, reason = "DSL equality uses exact comparison")]
-fn eval_comparison(
-    op: BinOp,
-    l: f64,
-    r: f64,
-    ctx: &EvalContext<'_>,
-    span: Span,
-) -> Result<bool, GraphcalError> {
+fn eval_quantity_comparison(op: Comparison, l: f64, r: f64) -> bool {
     match op {
-        BinOp::Eq => Ok(l == r),
-        BinOp::Ne => Ok(l != r),
-        BinOp::Lt => Ok(l < r),
-        BinOp::Gt => Ok(l > r),
-        BinOp::Le => Ok(l <= r),
-        BinOp::Ge => Ok(l >= r),
-        _ => Err(ctx.internal_error(format!("unexpected operator {op:?} in comparison"), span)),
+        Comparison::Eq => l == r,
+        Comparison::Ne => l != r,
+        Comparison::Ord(OrderingOp::Lt) => l < r,
+        Comparison::Ord(OrderingOp::Gt) => l > r,
+        Comparison::Ord(OrderingOp::Le) => l <= r,
+        Comparison::Ord(OrderingOp::Ge) => l >= r,
     }
 }
 

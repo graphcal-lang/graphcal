@@ -221,9 +221,9 @@ fn push_presentation_diagnostics(out: &mut String, diagnostics: &[String]) {
 fn push_value_card(out: &mut String, card: &ValueCard) {
     let name = html_escape(&card.name);
     let kind = match card.kind {
-        graphcal_eval::eval::DeclType::Const => "const",
-        graphcal_eval::eval::DeclType::Param => "param",
-        graphcal_eval::eval::DeclType::Node => "node",
+        graphcal_compiler::declaration_category::ValueDeclCategory::Const => "const",
+        graphcal_compiler::declaration_category::ValueDeclCategory::Param => "param",
+        graphcal_compiler::declaration_category::ValueDeclCategory::Node => "node",
     };
     let _ = write!(
         out,

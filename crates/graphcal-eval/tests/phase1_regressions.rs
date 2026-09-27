@@ -106,8 +106,7 @@ node total: Dimensionless = @a::result + @b::result;
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_or_else(|error| panic!("same-layout DAG calls must compile: {error:?}"));
     let total = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "total")
         .unwrap()
         .1
@@ -815,8 +814,7 @@ include index_rebase.composed(index Axis: Concrete)::{ flags };
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_or_else(|error| panic!("nested Static substitution must compose: {error:?}"));
     let value = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "flags")
         .expect("projected flags node")
         .1
@@ -883,13 +881,12 @@ pub dag calculation {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_or_else(|error| panic!("structured semantic projection must evaluate: {error:?}"));
     assert!(
-        result.all.iter().all(|(_, value, _)| value.is_ok()),
+        result.entries.iter().all(|(_, value, _)| value.is_ok()),
         "a presentation dependency used its template owner: {:?}",
-        result.all
+        result.entries
     );
     let value = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "result")
         .expect("projected result node")
         .1
@@ -943,15 +940,15 @@ fn semantic_include_outputs_preserve_presentation_and_unique_names() {
                 .unwrap_or_else(|error| panic!("semantic include must evaluate: {error:?}"));
 
         let unique_names = result
-            .all
+            .entries
             .iter()
             .map(|(name, _, _)| name.clone())
             .collect::<std::collections::HashSet<_>>();
         assert_eq!(
             unique_names.len(),
-            result.all.len(),
+            result.entries.len(),
             "semantic output names must be unique: {:?}",
-            result.all
+            result.entries
         );
         let surface = result
             .output_values(graphcal_eval::eval::EvalOutputView::Surface)

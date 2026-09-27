@@ -14,7 +14,7 @@ pub enum NodeUnavailable {
         message: String,
     },
     DependencyFailed {
-        failed_deps: Vec<ResolvedDeclName>,
+        failed_deps: NonEmpty<ResolvedDeclName>,
     },
     Todo {
         declaration: ResolvedDeclName,
@@ -74,8 +74,9 @@ impl NodeUnavailable {
                 unfinished,
                 failed_deps,
             }),
-            Err(_) if failed_deps.is_empty() => None,
-            Err(_) => Some(Self::DependencyFailed { failed_deps }),
+            Err(_) => NonEmpty::try_from_vec(failed_deps)
+                .ok()
+                .map(|failed_deps| Self::DependencyFailed { failed_deps }),
         }
     }
 }
@@ -93,7 +94,11 @@ impl std::fmt::Display for NodeUnavailable {
         match self {
             Self::EvalFailed { message } => formatter.write_str(message),
             Self::DependencyFailed { failed_deps } => {
-                write!(formatter, "dependency failed: {}", names(failed_deps))
+                write!(
+                    formatter,
+                    "dependency failed: {}",
+                    names(failed_deps.as_slice())
+                )
             }
             Self::Todo { .. } => formatter.write_str("TODO — formula unfinished"),
             Self::Blocked {

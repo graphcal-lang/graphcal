@@ -69,8 +69,7 @@ node total: Dimensionless = @left + @right;
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     let result = result.unwrap_or_else(|error| panic!("nested module import failed: {error:?}"));
     let total = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "total")
         .expect("total output")
         .1

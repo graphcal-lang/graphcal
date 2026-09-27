@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::dimension::BaseDimId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
-    AssertResult, DeclType, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult,
-    NodeUnavailable, Value, datetime_literal, format_epoch_with_tz, format_number,
-    quantity_display_value,
+    AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, NodeUnavailable,
+    Value, datetime_literal, format_epoch_with_tz, format_number, quantity_display_value,
 };
 use serde::Serialize;
 
@@ -145,12 +145,12 @@ pub enum DeclarationKindView {
     Node,
 }
 
-impl From<DeclType> for DeclarationKindView {
-    fn from(kind: DeclType) -> Self {
+impl From<ValueDeclCategory> for DeclarationKindView {
+    fn from(kind: ValueDeclCategory) -> Self {
         match kind {
-            DeclType::Const => Self::Const,
-            DeclType::Param => Self::Param,
-            DeclType::Node => Self::Node,
+            ValueDeclCategory::Const => Self::Const,
+            ValueDeclCategory::Param => Self::Param,
+            ValueDeclCategory::Node => Self::Node,
         }
     }
 }

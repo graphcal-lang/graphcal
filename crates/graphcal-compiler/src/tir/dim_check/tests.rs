@@ -2685,8 +2685,8 @@ param port: Phantom<1>;
     assert!(matches!(
         error,
         ConcreteModelTypeError::GenericSortMismatch {
-            expected: crate::registry::type_def::TypeGenericConstraint::Nat,
-            actual: crate::registry::type_def::TypeGenericConstraint::Type,
+            expected: crate::syntax::ast::GenericConstraint::Nat,
+            actual: crate::syntax::ast::GenericConstraint::Type,
             ..
         }
     ));

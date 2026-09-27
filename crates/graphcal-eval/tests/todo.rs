@@ -8,10 +8,10 @@ fn result<'a>(
     name: &str,
 ) -> &'a Result<graphcal_eval::eval::Value, NodeUnavailable> {
     &evaluation
-        .all
+        .entries
         .iter()
         .find(|(candidate, _, _)| candidate.to_string() == name)
-        .unwrap_or_else(|| panic!("missing {name}; results: {:?}", evaluation.all))
+        .unwrap_or_else(|| panic!("missing {name}; results: {:?}", evaluation.entries))
         .1
 }
 

@@ -78,7 +78,7 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
         let result = compile_and_eval(source)
             .expect("display formatting must not reject a checked constant or value");
         assert!(
-            result.all.iter().all(|(_, value, _)| value.is_ok()),
+            result.entries.iter().all(|(_, value, _)| value.is_ok()),
             "label formatting must not erase SI: {result:?}"
         );
         assert_eq!(
@@ -103,7 +103,7 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
         [Some("identity_scale^(1/2147483647)".into())]
     );
     let invalid_scale = compile_and_eval("param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node value: Length = 1.0 bad;").unwrap();
-    assert!(invalid_scale.nodes[0].1.is_err());
+    assert!(invalid_scale.nodes().next().unwrap().1.is_err());
     assert!(invalid_scale.presentation_diagnostics.is_empty());
 }
 
@@ -111,11 +111,14 @@ fn literal_constant_and_conversion_label_overflow_preserve_si() {
 fn conversion_only_failed_dependency_does_not_poison_si_values() {
     let result = compile_and_eval(include_str!("presentation_failed_dependency.gcl")).unwrap();
     assert!(matches!(
-        result.nodes[0].1,
+        result.nodes().next().unwrap().1,
         Err(NodeUnavailable::EvalFailed { .. })
     ));
     for (position, name) in [(1, "chosen"), (2, "unchosen")] {
-        let value = result.nodes[position]
+        let value = result
+            .nodes()
+            .nth(position)
+            .unwrap()
             .1
             .as_ref()
             .expect("conversion-only dependency must not erase SI");
@@ -267,18 +270,16 @@ unit own: Length = (@self_display / 1.0 m) m;
     assert_quantity_value(&result, "self_display", 2.0);
     assert!(
         result
-            .nodes
-            .iter()
-            .find(|(name, _)| name == &scoped_name("broken"))
+            .nodes()
+            .find(|(name, _)| *name == &scoped_name("broken"))
             .unwrap()
             .1
             .is_err()
     );
     assert!(matches!(
         result
-            .nodes
-            .iter()
-            .find(|(name, _)| name == &scoped_name("computational"))
+            .nodes()
+            .find(|(name, _)| *name == &scoped_name("computational"))
             .unwrap()
             .1,
         Err(NodeUnavailable::DependencyFailed { .. })
@@ -306,7 +307,7 @@ node leaves: Length[Fin(2)] = for i: Fin(2) { @readings[i].value };
 plot measurement =  { mark: line, encode: { x: table[Fin(2)] { 1.0; 2.0; }, y: @leaves } };
 ";
     let result = compile_and_eval(source).unwrap();
-    assert!(result.all.iter().all(|(_, value, _)| value.is_ok()));
+    assert!(result.entries.iter().all(|(_, value, _)| value.is_ok()));
     assert!(result.plot_errors.is_empty(), "{result:?}");
     assert_eq!(result.plots.len(), 1);
     assert_eq!(labels(&find_entry(&result, "readings")), [None, None]);
@@ -462,8 +463,7 @@ fn imported_constant_outputs_keep_selected_units_and_display_failures() {
     );
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let distance = result
-        .consts
-        .iter()
+        .consts()
         .find(|(name, _)| name.member() == &DeclName::expect_valid("distance"))
         .unwrap()
         .1
@@ -471,8 +471,7 @@ fn imported_constant_outputs_keep_selected_units_and_display_failures() {
         .unwrap();
     assert_eq!(labels(distance), [Some("km".into())]);
     let huge = result
-        .consts
-        .iter()
+        .consts()
         .find(|(name, _)| name.member() == &DeclName::expect_valid("huge"))
         .unwrap()
         .1
@@ -498,9 +497,8 @@ node independent: Length = 3.0 m;
 ").unwrap();
     assert!(
         result
-            .nodes
-            .iter()
-            .filter(|(name, _)| name != &scoped_name("independent"))
+            .nodes()
+            .filter(|(name, _)| *name != &scoped_name("independent"))
             .all(|(_, value)| value.is_err())
     );
     assert_quantity_value(&result, "independent", 3.0);

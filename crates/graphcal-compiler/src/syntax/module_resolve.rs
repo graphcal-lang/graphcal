@@ -28,8 +28,8 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::{
-    ExprKind, IdentPath, ImportItem, ImportKind, InputBindingCategory, ModulePath, UnitConstness,
-    UnresolvedRef,
+    BindableVisibility, ExprKind, IdentPath, ImportItem, ImportKind, InputBindingCategory,
+    ModulePath, UnitConstness, UnresolvedRef,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -41,50 +41,6 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
-
-/// Visibility of a symbol across module boundaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SymbolVisibility {
-    /// Visible only inside the owning module.
-    Private,
-    /// Publicly visible to importers.
-    Public,
-    /// Public and bindable by include-time type/index/dimension bindings.
-    PublicBind,
-}
-
-impl SymbolVisibility {
-    /// Returns whether the symbol is visible outside its owning module.
-    #[must_use]
-    pub(crate) const fn is_public(self) -> bool {
-        matches!(self, Self::Public | Self::PublicBind)
-    }
-
-    /// Returns whether the symbol can be rebound by include-time bindings.
-    #[must_use]
-    pub(crate) const fn is_bindable(self) -> bool {
-        matches!(self, Self::PublicBind)
-    }
-}
-
-impl From<ast::Visibility> for SymbolVisibility {
-    fn from(visibility: ast::Visibility) -> Self {
-        match visibility {
-            ast::Visibility::Private => Self::Private,
-            ast::Visibility::Public => Self::Public,
-        }
-    }
-}
-
-impl From<ast::BindableVisibility> for SymbolVisibility {
-    fn from(visibility: ast::BindableVisibility) -> Self {
-        match visibility {
-            ast::BindableVisibility::Private => Self::Private,
-            ast::BindableVisibility::Public => Self::Public,
-            ast::BindableVisibility::PublicBind => Self::PublicBind,
-        }
-    }
-}
 
 /// Semantic kind of a value/declaration namespace symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -160,16 +116,19 @@ impl std::fmt::Display for DeclSymbolKind {
     }
 }
 
-/// Visibility rule applied by a module alias or selective import edge.
+/// Visibility rule applied when a module path or symbol is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ModuleAccess {
+pub enum Access {
+    /// Reached from the owning module or its parent (for example, an implicit
+    /// local `dag` callable): private symbols and modules are accessible.
+    Local,
     /// Cross-module import/include boundary: only public target symbols are accessible.
-    PublicOnly,
+    CrossModule,
 }
 
-impl ModuleAccess {
+impl Access {
     const fn requires_public(self) -> bool {
-        matches!(self, Self::PublicOnly)
+        matches!(self, Self::CrossModule)
     }
 }
 
@@ -197,12 +156,12 @@ impl ModuleAliasRole {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSymbol<Ns: NameNamespace> {
     resolved: ResolvedName<Ns>,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
     span: Span,
 }
 
 impl<Ns: NameNamespace> ModuleSymbol<Ns> {
-    fn new(owner: &DagId, name: NameDef<Ns>, visibility: SymbolVisibility, span: Span) -> Self {
+    fn new(owner: &DagId, name: NameDef<Ns>, visibility: BindableVisibility, span: Span) -> Self {
         Self {
             resolved: ResolvedName::from_def(owner.clone(), name),
             visibility,
@@ -218,7 +177,7 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
 
     /// Visibility of this symbol across module boundaries.
     #[must_use]
-    const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> BindableVisibility {
         self.visibility
     }
 
@@ -231,7 +190,7 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
 
 trait ModuleSymbolLookup<Ns: NameNamespace> {
     fn resolved(&self) -> &ResolvedName<Ns>;
-    fn visibility(&self) -> SymbolVisibility;
+    fn visibility(&self) -> BindableVisibility;
     fn span(&self) -> Span;
 }
 
@@ -240,7 +199,7 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
         self.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.visibility()
     }
 
@@ -260,7 +219,7 @@ impl ModuleDeclSymbol {
     fn new(
         owner: &DagId,
         name: DeclName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         span: Span,
         kind: DeclSymbolKind,
     ) -> Self {
@@ -278,7 +237,7 @@ impl ModuleDeclSymbol {
 
     /// Visibility of this declaration across module boundaries.
     #[must_use]
-    const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -300,7 +259,7 @@ impl ModuleSymbolLookup<DeclNameNamespace> for ModuleDeclSymbol {
         self.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.visibility()
     }
 
@@ -344,7 +303,7 @@ impl ModuleTypeSymbol {
         self.symbol.resolved()
     }
 
-    pub(crate) const fn visibility(&self) -> SymbolVisibility {
+    pub(crate) const fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -358,7 +317,7 @@ impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {
         self.symbol.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -385,7 +344,7 @@ impl ModuleSymbolLookup<UnitNameNamespace> for ModuleUnitSymbol {
         self.symbol.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -417,7 +376,7 @@ impl ModuleSymbolLookup<ConstructorNameNamespace> for ModuleConstructorSymbol {
         self.symbol.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -442,7 +401,7 @@ impl ModuleIndexSymbol {
 
     /// Visibility of the index declaration.
     #[must_use]
-    pub(crate) const fn visibility(&self) -> SymbolVisibility {
+    pub(crate) const fn visibility(&self) -> BindableVisibility {
         self.symbol.visibility()
     }
 
@@ -464,7 +423,7 @@ impl ModuleSymbolLookup<IndexNameNamespace> for ModuleIndexSymbol {
         self.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.visibility()
     }
 
@@ -565,64 +524,62 @@ impl ModuleSymbols {
                 ast::DeclKind::Param(p) => self.insert_value_decl(
                     &mut exclusive_names,
                     &p.name,
-                    SymbolVisibility::PublicBind,
+                    BindableVisibility::PublicBind,
                     DeclSymbolKind::Param,
                 )?,
                 ast::DeclKind::Node(n) => self.insert_value_decl(
                     &mut exclusive_names,
                     &n.name,
-                    SymbolVisibility::from(n.visibility),
+                    BindableVisibility::from(n.visibility),
                     DeclSymbolKind::Node,
                 )?,
                 ast::DeclKind::ConstNode(c) => self.insert_value_decl(
                     &mut exclusive_names,
                     &c.name,
-                    SymbolVisibility::from(c.visibility),
+                    BindableVisibility::from(c.visibility),
                     DeclSymbolKind::Const,
                 )?,
                 ast::DeclKind::Assert(a) => self.insert_value_decl(
                     &mut exclusive_names,
                     &a.name,
-                    SymbolVisibility::from(a.visibility),
+                    BindableVisibility::from(a.visibility),
                     DeclSymbolKind::Assert,
                 )?,
                 ast::DeclKind::Plot(p) => self.insert_value_decl(
                     &mut exclusive_names,
                     &p.name,
-                    SymbolVisibility::from(p.visibility),
+                    BindableVisibility::from(p.visibility),
                     DeclSymbolKind::Plot,
                 )?,
                 ast::DeclKind::Figure(f) => self.insert_value_decl(
                     &mut exclusive_names,
                     &f.name,
-                    SymbolVisibility::from(f.visibility),
+                    BindableVisibility::from(f.visibility),
                     DeclSymbolKind::Figure,
                 )?,
                 ast::DeclKind::Layer(l) => self.insert_value_decl(
                     &mut exclusive_names,
                     &l.name,
-                    SymbolVisibility::from(l.visibility),
+                    BindableVisibility::from(l.visibility),
                     DeclSymbolKind::Layer,
                 )?,
                 ast::DeclKind::Dag(d) => self.insert_value_decl(
                     &mut exclusive_names,
                     &d.name,
-                    SymbolVisibility::from(d.visibility),
+                    BindableVisibility::from(d.visibility),
                     DeclSymbolKind::Dag,
                 )?,
                 ast::DeclKind::BaseDimension(d) => self.insert_dimension_decl(
                     &mut exclusive_names,
                     &d.name,
-                    SymbolVisibility::from(d.visibility),
+                    BindableVisibility::from(d.visibility),
                 )?,
-                ast::DeclKind::Dimension(d) => self.insert_dimension_decl(
-                    &mut exclusive_names,
-                    &d.name,
-                    SymbolVisibility::from(d.visibility),
-                )?,
+                ast::DeclKind::Dimension(d) => {
+                    self.insert_dimension_decl(&mut exclusive_names, &d.name, d.visibility)?;
+                }
                 ast::DeclKind::Unit(u) => self.insert_unit(
                     &u.name,
-                    SymbolVisibility::from(u.visibility),
+                    BindableVisibility::from(u.visibility),
                     u.constness,
                     UnitNameNamespace::DISPLAY_NAME,
                 )?,
@@ -647,7 +604,7 @@ impl ModuleSymbols {
         &mut self,
         exclusive_names: &mut ExclusiveNameOccupancy,
         name: &Spanned<DeclName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         kind: DeclSymbolKind,
     ) -> Result<(), ModuleResolveError> {
         self.insert_exclusive_name(
@@ -663,7 +620,7 @@ impl ModuleSymbols {
         &mut self,
         exclusive_names: &mut ExclusiveNameOccupancy,
         name: &Spanned<DimName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     ) -> Result<(), ModuleResolveError> {
         self.insert_exclusive_name(
             exclusive_names,
@@ -679,7 +636,7 @@ impl ModuleSymbols {
         exclusive_names: &mut ExclusiveNameOccupancy,
         type_decl: &ast::TypeDecl,
     ) -> Result<(), ModuleResolveError> {
-        let visibility = SymbolVisibility::from(type_decl.visibility);
+        let visibility = type_decl.visibility;
         self.insert_exclusive_name(
             exclusive_names,
             type_decl.name.value.atom(),
@@ -761,7 +718,7 @@ impl ModuleSymbols {
     fn insert_decl(
         &mut self,
         name: &Spanned<DeclName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         namespace_name: &'static str,
         kind: DeclSymbolKind,
     ) -> Result<(), ModuleResolveError> {
@@ -778,7 +735,7 @@ impl ModuleSymbols {
     fn insert_dimension(
         &mut self,
         name: &Spanned<DimName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         namespace_name: &'static str,
     ) -> Result<(), ModuleResolveError> {
         insert_symbol(
@@ -793,7 +750,7 @@ impl ModuleSymbols {
     fn insert_unit(
         &mut self,
         name: &Spanned<UnitName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         constness: UnitConstness,
         namespace_name: &'static str,
     ) -> Result<(), ModuleResolveError> {
@@ -819,7 +776,7 @@ impl ModuleSymbols {
     fn insert_struct_type(
         &mut self,
         name: &Spanned<StructTypeName>,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         namespace_name: &'static str,
         generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
@@ -846,7 +803,7 @@ impl ModuleSymbols {
         &mut self,
         name: &Spanned<ConstructorName>,
         owner_type: &StructTypeName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
         namespace_name: &'static str,
         generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
@@ -902,7 +859,7 @@ impl ModuleSymbols {
                 symbol: ModuleSymbol::new(
                     &self.owner,
                     index.name.value.clone(),
-                    SymbolVisibility::from(index.visibility),
+                    index.visibility,
                     index.name.span,
                 ),
                 variants,
@@ -916,7 +873,7 @@ fn insert_symbol<Ns: NameNamespace>(
     owner: &DagId,
     map: &mut HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
     name: &Spanned<NameDef<Ns>>,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(name.value.as_str()) {
@@ -939,7 +896,7 @@ fn insert_decl_symbol(
     owner: &DagId,
     map: &mut HashMap<DeclName, ModuleDeclSymbol>,
     name: &Spanned<DeclName>,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
     namespace_name: &'static str,
     kind: DeclSymbolKind,
 ) -> Result<(), ModuleResolveError> {
@@ -964,9 +921,9 @@ fn insert_decl_symbol(
 pub struct ModuleAliasTarget {
     target: DagId,
     span: Span,
-    access: ModuleAccess,
+    access: Access,
     role: ModuleAliasRole,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
 }
 
 impl ModuleAliasTarget {
@@ -984,7 +941,7 @@ impl ModuleAliasTarget {
 
     /// Visibility rule for names reached through this alias.
     #[must_use]
-    pub const fn access(&self) -> ModuleAccess {
+    pub const fn access(&self) -> Access {
         self.access
     }
 
@@ -996,7 +953,7 @@ impl ModuleAliasTarget {
 
     /// Whether this whole-DAG alias is reachable through an importing module.
     #[must_use]
-    pub const fn visibility(&self) -> SymbolVisibility {
+    pub const fn visibility(&self) -> BindableVisibility {
         self.visibility
     }
 }
@@ -1035,11 +992,11 @@ impl PluginAliasTarget {
 pub struct ImportedSymbol<Ns: NameNamespace> {
     resolved: ResolvedName<Ns>,
     span: Span,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
 }
 
 impl<Ns: NameNamespace> ImportedSymbol<Ns> {
-    const fn new(resolved: ResolvedName<Ns>, span: Span, visibility: SymbolVisibility) -> Self {
+    const fn new(resolved: ResolvedName<Ns>, span: Span, visibility: BindableVisibility) -> Self {
         Self {
             resolved,
             span,
@@ -1061,7 +1018,7 @@ impl<Ns: NameNamespace> ImportedSymbol<Ns> {
 
     /// Visibility of this selective import when the importing module is itself imported.
     #[must_use]
-    const fn visibility(&self) -> SymbolVisibility {
+    const fn visibility(&self) -> BindableVisibility {
         self.visibility
     }
 }
@@ -1071,7 +1028,7 @@ impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
         self.resolved()
     }
 
-    fn visibility(&self) -> SymbolVisibility {
+    fn visibility(&self) -> BindableVisibility {
         self.visibility()
     }
 
@@ -1320,39 +1277,39 @@ enum ImportAddition {
     ModuleAlias {
         alias: Spanned<ModuleAliasName>,
         target: DagId,
-        access: ModuleAccess,
+        access: Access,
         role: ModuleAliasRole,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     Decl {
         local: Spanned<DeclName>,
         target: ResolvedDeclName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     Dimension {
         local: Spanned<DimName>,
         target: ResolvedDimName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     Unit {
         local: Spanned<UnitName>,
         target: ResolvedUnitName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     StructType {
         local: Spanned<StructTypeName>,
         target: ResolvedStructTypeName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     Index {
         local: Spanned<IndexName>,
         target: ResolvedIndexName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
     Constructor {
         local: Spanned<ConstructorName>,
         target: ResolvedConstructorName,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     },
 }
 
@@ -1366,7 +1323,7 @@ pub struct ModuleResolver {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedModuleQualifier {
     owner: DagId,
-    access: ModuleAccess,
+    access: Access,
 }
 
 impl ModuleResolver {
@@ -1487,7 +1444,10 @@ impl ModuleResolver {
 
     /// Visibility of a canonical dimension declaration.
     #[must_use]
-    pub(crate) fn dimension_visibility(&self, name: &ResolvedDimName) -> Option<SymbolVisibility> {
+    pub(crate) fn dimension_visibility(
+        &self,
+        name: &ResolvedDimName,
+    ) -> Option<BindableVisibility> {
         self.modules
             .get(name.owner())?
             .dimensions
@@ -1497,7 +1457,7 @@ impl ModuleResolver {
 
     /// Visibility of a canonical index declaration.
     #[must_use]
-    pub(crate) fn index_visibility(&self, name: &ResolvedIndexName) -> Option<SymbolVisibility> {
+    pub(crate) fn index_visibility(&self, name: &ResolvedIndexName) -> Option<BindableVisibility> {
         self.modules
             .get(name.owner())?
             .indexes
@@ -1510,7 +1470,7 @@ impl ModuleResolver {
     pub(crate) fn struct_type_visibility(
         &self,
         name: &ResolvedStructTypeName,
-    ) -> Option<SymbolVisibility> {
+    ) -> Option<BindableVisibility> {
         self.modules
             .get(name.owner())?
             .struct_types
@@ -1749,9 +1709,9 @@ impl ModuleResolver {
             path,
             kind,
             target,
-            ModuleAccess::PublicOnly,
+            Access::CrossModule,
             ModuleAliasRole::ImportedDag,
-            SymbolVisibility::Private,
+            BindableVisibility::Private,
         )
     }
 
@@ -1767,9 +1727,9 @@ impl ModuleResolver {
             &import.path,
             &import.kind,
             target,
-            ModuleAccess::PublicOnly,
+            Access::CrossModule,
             ModuleAliasRole::ImportedDag,
-            SymbolVisibility::from(import.visibility),
+            BindableVisibility::from(import.visibility),
         )
     }
 
@@ -1790,9 +1750,9 @@ impl ModuleResolver {
             path,
             kind,
             target,
-            ModuleAccess::PublicOnly,
+            Access::CrossModule,
             ModuleAliasRole::IncludedInstance,
-            SymbolVisibility::Private,
+            BindableVisibility::Private,
         )
     }
 
@@ -1821,9 +1781,7 @@ impl ModuleResolver {
             .any(|binding| binding.category != InputBindingCategory::Unmarked);
         for item in items {
             if let Some(target) = source_target {
-                for addition in
-                    self.import_item_additions(target, item, ModuleAccess::PublicOnly)?
-                {
+                for addition in self.import_item_additions(target, item, Access::CrossModule)? {
                     let Some(kind) = self.import_addition_kind(&addition)? else {
                         continue;
                     };
@@ -1853,9 +1811,9 @@ impl ModuleResolver {
                 _ => None,
             });
             let visibility = if item.is_pub {
-                SymbolVisibility::Public
+                BindableVisibility::Public
             } else {
-                SymbolVisibility::Private
+                BindableVisibility::Private
             };
             let local = item.local_name_atom().clone();
             let source = item.name.name.clone();
@@ -2018,7 +1976,7 @@ impl ModuleResolver {
                     let resolved = match self.exported_symbol_for_import(
                         source_target,
                         source_constructor.atom(),
-                        ModuleAccess::PublicOnly,
+                        Access::CrossModule,
                         ModuleSymbols::constructors,
                         |scope| &scope.selected_constructors,
                     )? {
@@ -2110,9 +2068,9 @@ impl ModuleResolver {
         path: &ModulePath,
         kind: &ImportKind,
         target: &DagId,
-        access: ModuleAccess,
+        access: Access,
         role: ModuleAliasRole,
-        alias_visibility: SymbolVisibility,
+        alias_visibility: BindableVisibility,
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
@@ -2460,7 +2418,7 @@ impl ModuleResolver {
         let alias_binding = scope.module_aliases.get(alias.as_str());
         let imported_alias_target = alias_binding
             .filter(|binding| binding.role.is_callable())
-            .map(|binding| (binding.target.clone(), Some(binding.access)));
+            .map(|binding| (binding.target.clone(), binding.access));
         let selected_name = DeclName::from_atom(head.clone());
         let selected_target = match scope.selected_decls.get(selected_name.as_str()) {
             Some(imported)
@@ -2471,25 +2429,25 @@ impl ModuleResolver {
                         .resolved()
                         .owner()
                         .child(imported.resolved().as_str()),
-                    Some(ModuleAccess::PublicOnly),
+                    Access::CrossModule,
                 ))
             }
             Some(_) | None => None,
         };
         let candidates = local_target
-            .map(|target| (target, None))
+            .map(|target| (target, Access::Local))
             .into_iter()
             .chain(selected_target)
             .chain(imported_alias_target)
             .fold(
-                Vec::<(DagId, Option<ModuleAccess>)>::new(),
+                Vec::<(DagId, Access)>::new(),
                 |mut candidates, (target, access)| {
                     match candidates
                         .iter_mut()
                         .find(|(registered, _)| registered == &target)
                     {
-                        Some((_, registered_access)) if access.is_none() => {
-                            *registered_access = None;
+                        Some((_, registered_access)) if access == Access::Local => {
+                            *registered_access = Access::Local;
                         }
                         Some(_) => {}
                         None => candidates.push((target, access)),
@@ -2498,7 +2456,7 @@ impl ModuleResolver {
                 },
             );
 
-        let (mut target, imported_access) = match candidates.as_slice() {
+        let (mut target, access) = match candidates.as_slice() {
             [(target, access)] => (target.clone(), *access),
             [] => {
                 if alias_binding.is_some() {
@@ -2529,17 +2487,13 @@ impl ModuleResolver {
             }
         };
 
-        if let Some(access) = imported_access {
-            self.ensure_module_path_visible(&target, access)?;
-        }
+        self.ensure_module_path_visible(&target, access)?;
         for segment in path.segments().iter().skip(1) {
             target = target.child(segment.name.as_str());
             if !self.modules.contains_key(&target) {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
-            if let Some(access) = imported_access {
-                self.ensure_module_path_visible(&target, access)?;
-            }
+            self.ensure_module_path_visible(&target, access)?;
         }
         Ok(target)
     }
@@ -2549,9 +2503,9 @@ impl ModuleResolver {
         path: &ModulePath,
         kind: &ImportKind,
         target: &DagId,
-        access: ModuleAccess,
+        access: Access,
         role: ModuleAliasRole,
-        alias_visibility: SymbolVisibility,
+        alias_visibility: BindableVisibility,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         match kind {
             ImportKind::Module { alias } => {
@@ -2691,7 +2645,7 @@ impl ModuleResolver {
         &self,
         target: &DagId,
         item: &ImportItem,
-        access: ModuleAccess,
+        access: Access,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         let local_atom = item
             .alias
@@ -2699,9 +2653,9 @@ impl ModuleResolver {
             .map_or_else(|| item.name.name.clone(), |alias| alias.name.clone());
         let local_span = item.local_span();
         let visibility = if item.is_pub {
-            SymbolVisibility::Public
+            BindableVisibility::Public
         } else {
-            SymbolVisibility::Private
+            BindableVisibility::Private
         };
 
         let additions = match item.namespace {
@@ -2785,9 +2739,9 @@ impl ModuleResolver {
         &self,
         target: &DagId,
         item: &ImportItem,
-        access: ModuleAccess,
+        access: Access,
         local_atom: NameAtom,
-        visibility: SymbolVisibility,
+        visibility: BindableVisibility,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         let mut additions = Vec::new();
         let mut saw_private = false;
@@ -2865,7 +2819,7 @@ impl ModuleResolver {
         &self,
         target: &DagId,
         source_atom: &NameAtom,
-        access: ModuleAccess,
+        access: Access,
         local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
         namespace_name: &'static str,
@@ -2918,7 +2872,7 @@ impl ModuleResolver {
         &self,
         target: &DagId,
         atom: &NameAtom,
-        access: ModuleAccess,
+        access: Access,
         local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
         selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     ) -> Result<ExportLookup<Ns>, ModuleResolveError>
@@ -2944,7 +2898,7 @@ impl ModuleResolver {
         &self,
         target: &DagId,
         atom: &NameAtom,
-        access: ModuleAccess,
+        access: Access,
     ) -> Result<Option<NonEmpty<ImportItemNamespace>>, ModuleResolveError> {
         let mut categories = Vec::new();
         macro_rules! probe {
@@ -3283,7 +3237,7 @@ impl ModuleResolver {
     fn ensure_module_path_visible(
         &self,
         target: &DagId,
-        access: ModuleAccess,
+        access: Access,
     ) -> Result<(), ModuleResolveError> {
         if !access.requires_public() {
             return Ok(());
@@ -3444,9 +3398,9 @@ fn insert_module_alias(
     map: &mut HashMap<ModuleAliasName, ModuleAliasTarget>,
     alias: Spanned<ModuleAliasName>,
     target: DagId,
-    access: ModuleAccess,
+    access: Access,
     role: ModuleAliasRole,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(alias.value.as_str()) {
@@ -3765,7 +3719,7 @@ fn insert_imported_symbol<Ns: NameNamespace>(
     map: &mut HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
     local: Spanned<NameDef<Ns>>,
     target: ResolvedName<Ns>,
-    visibility: SymbolVisibility,
+    visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(local.value.as_str()) {
@@ -3794,7 +3748,7 @@ enum ExportLookup<Ns: NameNamespace> {
 fn exported_symbol<Ns, S>(
     map: &HashMap<NameDef<Ns>, S>,
     atom: &NameAtom,
-    access: ModuleAccess,
+    access: Access,
 ) -> ExportLookup<Ns>
 where
     Ns: NameNamespace,

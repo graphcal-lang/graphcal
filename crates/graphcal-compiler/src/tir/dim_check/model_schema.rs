@@ -12,7 +12,7 @@ use crate::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::type_def::TypeGenericConstraint;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 /// Failure to validate a nominal application for model-schema expansion.
@@ -34,8 +34,8 @@ pub enum ConcreteModelTypeError {
     GenericSortMismatch {
         identity: StructTypeRef,
         parameter: GenericParamName,
-        expected: TypeGenericConstraint,
-        actual: TypeGenericConstraint,
+        expected: GenericConstraint,
+        actual: GenericConstraint,
     },
     #[error("generic argument for `{parameter}` on `{identity}` is not concrete")]
     NonConcreteGenericArgument {
@@ -309,12 +309,12 @@ fn validate_nominal_signature<'tir>(
     Ok(type_def)
 }
 
-const fn generic_argument_sort(argument: &DeclaredGenericArg) -> TypeGenericConstraint {
+const fn generic_argument_sort(argument: &DeclaredGenericArg) -> GenericConstraint {
     match argument {
-        DeclaredGenericArg::Dim(_) => TypeGenericConstraint::Dim,
-        DeclaredGenericArg::Index(_) => TypeGenericConstraint::Index,
-        DeclaredGenericArg::Nat(_) => TypeGenericConstraint::Nat,
-        DeclaredGenericArg::Type(_) => TypeGenericConstraint::Type,
+        DeclaredGenericArg::Dim(_) => GenericConstraint::Dim,
+        DeclaredGenericArg::Index(_) => GenericConstraint::Index,
+        DeclaredGenericArg::Nat(_) => GenericConstraint::Nat,
+        DeclaredGenericArg::Type(_) => GenericConstraint::Type,
     }
 }
 

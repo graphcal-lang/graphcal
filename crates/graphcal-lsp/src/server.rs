@@ -1960,7 +1960,7 @@ fn format_eval_values(
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<ScopedName, String>, Cancelled> {
     let mut map = HashMap::new();
-    for (name, value_result, _decl_type) in &result.all {
+    for (name, value_result, _decl_type) in &result.entries {
         cancellation.checkpoint()?;
         let formatted = match value_result {
             Ok(value) => format_value_inline(value, &result.base_dim_symbols),

@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
@@ -16,14 +17,6 @@ use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVaria
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
-
-/// The kind of a declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeclType {
-    Const,
-    Param,
-    Node,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PositiveFiniteDisplayScale(f64);
@@ -806,19 +799,21 @@ pub struct EvalResult {
     /// Unfinished origins reached inside invoked DAGs, including private
     /// siblings of otherwise available projected outputs.
     pub unfinished_calls: Vec<graphcal_compiler::syntax::decl_name::ResolvedDeclName>,
-    /// Const values in source order. Const *values* are compile-time, but a
-    /// const's display unit (e.g. a dynamic conversion target) resolves at
-    /// runtime and can fail per-node.
-    pub consts: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    /// Param values in source order (may contain per-node errors).
-    pub params: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    /// Node values in source order (may contain per-node errors).
-    pub nodes: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    /// All values in source order with their declaration type.
-    pub all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
+    /// All const, param, and node values in source order with their
+    /// declaration type (may contain per-node errors). Const *values* are
+    /// compile-time, but a const's display unit (e.g. a dynamic conversion
+    /// target) resolves at runtime and can fail per-node.
+    ///
+    /// Per-category views are derived by [`Self::consts`], [`Self::params`],
+    /// and [`Self::nodes`].
+    pub entries: Vec<(
+        ScopedName,
+        Result<Value, NodeUnavailable>,
+        ValueDeclCategory,
+    )>,
     /// Values belonging to the entry DAG's consumer-facing output surface.
     ///
-    /// Internal include-instance values remain in [`Self::all`] for the
+    /// Internal include-instance values remain in [`Self::entries`] for the
     /// [`EvalOutputView::All`] debug view and for complete error accounting.
     pub(crate) output_surface: std::collections::HashSet<ScopedName>,
     /// Assertion results in source order: (name, result, span).
@@ -863,8 +858,14 @@ impl EvalResult {
     pub fn output_values(
         &self,
         view: EvalOutputView,
-    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeUnavailable>, DeclType)> {
-        self.all
+    ) -> impl Iterator<
+        Item = &(
+            ScopedName,
+            Result<Value, NodeUnavailable>,
+            ValueDeclCategory,
+        ),
+    > {
+        self.entries
             .iter()
             .filter(move |(name, result, _)| self.should_output(name, result, view))
     }
@@ -872,9 +873,9 @@ impl EvalResult {
     fn output_category(
         &self,
         view: EvalOutputView,
-        decl_type: DeclType,
+        decl_type: ValueDeclCategory,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
-        self.all.iter().filter_map(move |(name, result, kind)| {
+        self.entries.iter().filter_map(move |(name, result, kind)| {
             (*kind == decl_type && self.should_output(name, result, view)).then_some((name, result))
         })
     }
@@ -884,7 +885,7 @@ impl EvalResult {
         &self,
         view: EvalOutputView,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
-        self.output_category(view, DeclType::Const)
+        self.output_category(view, ValueDeclCategory::Const)
     }
 
     /// Iterate over param values selected by `view` in source order.
@@ -892,7 +893,7 @@ impl EvalResult {
         &self,
         view: EvalOutputView,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
-        self.output_category(view, DeclType::Param)
+        self.output_category(view, ValueDeclCategory::Param)
     }
 
     /// Iterate over node values selected by `view` in source order.
@@ -900,7 +901,31 @@ impl EvalResult {
         &self,
         view: EvalOutputView,
     ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
-        self.output_category(view, DeclType::Node)
+        self.output_category(view, ValueDeclCategory::Node)
+    }
+
+    fn category(
+        &self,
+        decl_type: ValueDeclCategory,
+    ) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+        self.entries
+            .iter()
+            .filter_map(move |(name, result, kind)| (*kind == decl_type).then_some((name, result)))
+    }
+
+    /// Iterate over every const value in source order.
+    pub fn consts(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+        self.category(ValueDeclCategory::Const)
+    }
+
+    /// Iterate over every param value in source order.
+    pub fn params(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+        self.category(ValueDeclCategory::Param)
+    }
+
+    /// Iterate over every node value in source order.
+    pub fn nodes(&self) -> impl Iterator<Item = (&ScopedName, &Result<Value, NodeUnavailable>)> {
+        self.category(ValueDeclCategory::Node)
     }
 
     /// Whether a node, assertion, plot, or invoked DAG remains incomplete.
@@ -912,7 +937,7 @@ impl EvalResult {
                 .iter()
                 .any(|plot| plot.reason.is_incomplete())
             || self
-                .all
+                .entries
                 .iter()
                 .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::is_incomplete))
             || self
@@ -924,7 +949,7 @@ impl EvalResult {
     /// Whether a genuine failure occurred, independently of incompleteness.
     #[must_use]
     pub fn has_errors(&self) -> bool {
-        self.all
+        self.entries
             .iter()
             .any(|(_, result, _)| result.as_ref().is_err_and(NodeUnavailable::has_failure))
             || self
@@ -1120,10 +1145,7 @@ mod tests {
     fn empty_eval_result() -> EvalResult {
         EvalResult {
             unfinished_calls: Vec::new(),
-            consts: Vec::new(),
-            params: Vec::new(),
-            nodes: Vec::new(),
-            all: Vec::new(),
+            entries: Vec::new(),
             output_surface: std::collections::HashSet::new(),
             assertions: Vec::new(),
             plots: Vec::new(),

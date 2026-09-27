@@ -892,7 +892,7 @@ impl PublicSignatureDependency {
             Self::Index(name) => resolver.index_visibility(&name.value),
             Self::Type(name) => resolver.struct_type_visibility(&name.value),
         };
-        visibility.map(crate::syntax::module_resolve::SymbolVisibility::is_public)
+        visibility.map(crate::syntax::ast::BindableVisibility::is_public)
     }
 
     const fn owner(&self) -> &crate::dag_id::DagId {

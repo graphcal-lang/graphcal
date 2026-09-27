@@ -21,7 +21,7 @@ fn render_error(source: &str, name: &str) -> String {
 fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
     let result = compile_and_eval_named(source, name).unwrap();
     let (_, node_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
@@ -35,8 +35,7 @@ fn render_node_error(source: &str, name: &str, node_name: &str) -> String {
 fn render_presentation_error(source: &str, name: &str, expected_si: f64) -> String {
     let result = compile_and_eval_named(source, name).unwrap();
     let value = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "bad")
         .unwrap()
         .1
@@ -1432,13 +1431,13 @@ fn error_extern_fn_failure_dependents_report_dependency_failed() {
     let source = include_str!("../../../tests/fixtures/runtime_error/extern_fn_failure.gcl");
     let result = compile_and_eval_named(source, "extern_fn_failure.gcl").unwrap();
     let (_, ok_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "ok")
         .unwrap();
     assert!(ok_result.is_ok(), "sibling `ok` must still evaluate");
     let (_, downstream, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "downstream")
         .unwrap();

@@ -26,8 +26,7 @@ pub use super::index::{
     MAX_INDEX_CARDINALITY,
 };
 pub use super::type_def::{
-    StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericConstraint, TypeGenericParam,
-    TypeRegistry, UnionMemberDef,
+    StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericParam, TypeRegistry, UnionMemberDef,
 };
 pub(crate) use super::unit::{BaseUnitRegistrationError, UnitResolveError};
 pub use super::unit::{

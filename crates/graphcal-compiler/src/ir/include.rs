@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::declaration_category::DeclCategory;
+use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::desugar::desugared_ast::{DimExpr, Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::{
@@ -667,7 +667,8 @@ impl UnfrozenIR {
             body_resolution_owner,
             span,
         });
-        self.source_order.push((name, DeclCategory::Const));
+        self.source_order
+            .push((name, DeclCategory::Value(ValueDeclCategory::Const)));
     }
 
     /// Add a node alias: a synthetic node declaration that references another node/param.
@@ -691,7 +692,8 @@ impl UnfrozenIR {
             body_resolution_owner,
             span,
         });
-        self.source_order.push((name, DeclCategory::Node));
+        self.source_order
+            .push((name, DeclCategory::Value(ValueDeclCategory::Node)));
     }
 
     /// Record include-site nominal override obligations before substitution.

@@ -103,8 +103,7 @@ fn generated_node<'a>(
     name: &graphcal_compiler::syntax::decl_name::DeclName,
 ) -> Result<&'a Value, TestCaseError> {
     result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(candidate, _)| !candidate.is_qualified() && candidate.member() == name)
         .ok_or_else(|| TestCaseError::fail(format!("missing generated node `{name}`")))?
         .1

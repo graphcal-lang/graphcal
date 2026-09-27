@@ -22,7 +22,8 @@ use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{FormattingRegistry, TypeGenericConstraint};
+use crate::registry::types::FormattingRegistry;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
@@ -3425,13 +3426,13 @@ fn generic_substitution_prefix(
     let mut subs = GenericSubstitutions::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint() {
-            TypeGenericConstraint::Dim => match arg {
+            GenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
                     subs.dims.insert(param.name().clone(), dim.clone());
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Index => match arg {
+            GenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
                     subs.indexes.insert(param.name().clone(), index.clone());
                 }
@@ -3445,7 +3446,7 @@ fn generic_substitution_prefix(
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Nat => match arg {
+            GenericConstraint::Nat => match arg {
                 InferredGenericArg::Nat(form) if form.is_constant() => {
                     subs.nats.insert(param.name().clone(), form.constant());
                 }
@@ -3459,7 +3460,7 @@ fn generic_substitution_prefix(
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Type => match arg {
+            GenericConstraint::Type => match arg {
                 InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
                     subs.types.insert(param.name().clone(), type_expr.clone());
                 }
@@ -4156,10 +4157,10 @@ fn resolve_applied_generic_args(
         let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src)?;
         let matches_sort = matches!(
             (param.constraint(), &inferred),
-            (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))
-                | (TypeGenericConstraint::Index, InferredGenericArg::Index(_))
-                | (TypeGenericConstraint::Nat, InferredGenericArg::Nat(_))
-                | (TypeGenericConstraint::Type, InferredGenericArg::Type(_))
+            (GenericConstraint::Dim, InferredGenericArg::Dim(_))
+                | (GenericConstraint::Index, InferredGenericArg::Index(_))
+                | (GenericConstraint::Nat, InferredGenericArg::Nat(_))
+                | (GenericConstraint::Type, InferredGenericArg::Type(_))
         );
         if !matches_sort {
             return Err(generic_arg_internal_sort_error(param, src, arg.span()));

@@ -19,6 +19,7 @@ use crate::presentation_evidence::{PresentationInstance, PresentationInstanceMap
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
+use super::arithmetic::{Comparison, OrderingOp};
 use super::builtin_call::{
     DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
     TypeConversionFn, eval_rule_for_builtin,
@@ -474,6 +475,11 @@ fn eval_hir_binop(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::BinOp;
+    let compare = |comparison| {
+        let l = eval_hir_expr(lhs, values, local_values, ctx)?;
+        let r = eval_hir_expr(rhs, values, local_values, ctx)?;
+        super::arithmetic::eval_comparison_values(comparison, &l, &r, ctx, span)
+    };
     match op {
         BinOp::And => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?
@@ -493,16 +499,12 @@ fn eval_hir_binop(
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(l || r))
         }
-        BinOp::Eq | BinOp::Ne => {
-            let l = eval_hir_expr(lhs, values, local_values, ctx)?;
-            let r = eval_hir_expr(rhs, values, local_values, ctx)?;
-            super::arithmetic::eval_equality_values(op, &l, &r, ctx, span)
-        }
-        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-            let l = eval_hir_expr(lhs, values, local_values, ctx)?;
-            let r = eval_hir_expr(rhs, values, local_values, ctx)?;
-            super::arithmetic::eval_ordering_values(op, &l, &r, ctx, span)
-        }
+        BinOp::Eq => compare(Comparison::Eq),
+        BinOp::Ne => compare(Comparison::Ne),
+        BinOp::Lt => compare(Comparison::Ord(OrderingOp::Lt)),
+        BinOp::Gt => compare(Comparison::Ord(OrderingOp::Gt)),
+        BinOp::Le => compare(Comparison::Ord(OrderingOp::Le)),
+        BinOp::Ge => compare(Comparison::Ord(OrderingOp::Ge)),
         BinOp::Pow(exponent) => eval_hir_power(span, exponent, lhs, rhs, values, local_values, ctx),
         _ => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?;

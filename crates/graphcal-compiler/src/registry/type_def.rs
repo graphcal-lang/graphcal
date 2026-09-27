@@ -104,46 +104,11 @@ pub enum TypeDefKind {
     Union { members: Vec<UnionMemberDef> },
 }
 
-/// The constraint on a generic parameter of a type definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TypeGenericConstraint {
-    /// `D: Dim` — the generic stands for a dimension.
-    Dim,
-    /// `I: Index` — the generic stands for an index.
-    Index,
-    /// `N: Nat` — the generic stands for a natural number (type-level).
-    Nat,
-    /// `F: Type` — the generic stands for a value type.
-    Type,
-}
-
-impl From<GenericConstraint> for TypeGenericConstraint {
-    fn from(c: GenericConstraint) -> Self {
-        match c {
-            GenericConstraint::Dim => Self::Dim,
-            GenericConstraint::Index => Self::Index,
-            GenericConstraint::Nat => Self::Nat,
-            GenericConstraint::Type => Self::Type,
-        }
-    }
-}
-
-impl std::fmt::Display for TypeGenericConstraint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Dim => "Dim",
-            Self::Index => "Index",
-            Self::Nat => "Nat",
-            Self::Type => "Type",
-        })
-    }
-}
-
 /// A generic parameter on a type definition.
 #[derive(Debug, Clone)]
 pub struct TypeGenericParam {
     pub name: GenericParamName,
-    pub(crate) constraint: TypeGenericConstraint,
+    pub(crate) constraint: GenericConstraint,
     /// Optional unresolved generic argument, e.g. `F: Type = Unframed` or
     /// `N: Nat = 3`. It is sorted against `constraint` at the HIR boundary.
     pub(crate) default: Option<crate::desugar::desugared_ast::GenericArg>,

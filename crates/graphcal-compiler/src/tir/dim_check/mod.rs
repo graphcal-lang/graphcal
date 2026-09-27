@@ -741,10 +741,7 @@ fn validate_expected_fail(
         }),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
-            let span = match keys.first() {
-                Some(key) => expected_fail_key_span(key, src)?,
-                None => attribute_span,
-            };
+            let span = expected_fail_key_span(keys.first(), src)?;
             Err(GraphcalError::ExpectedFailNotIndexed {
                 src: src.clone(),
                 span: span.into(),

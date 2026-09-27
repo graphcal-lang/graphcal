@@ -43,14 +43,14 @@ fn write_test_project(
 
 fn has_decl_error(result: &EvalResult, name: &str) -> bool {
     result
-        .all
+        .entries
         .iter()
         .any(|(decl_name, value, _)| decl_name.to_string() == name && value.is_err())
 }
 
 fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
     result
-        .all
+        .entries
         .iter()
         .find(|(decl_name, _, _)| decl_name.to_string() == name)
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))

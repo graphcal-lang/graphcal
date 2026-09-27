@@ -1,24 +1,9 @@
 //! Presentation-only assembly for evaluated project outputs.
 
-use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
-use crate::eval::types::{DeclType, EvalResult, NodeUnavailable, Value};
+use crate::eval::types::EvalResult;
 use crate::project_compiler::IncludeDebugNameMap;
-
-/// One typed value in normal result assembly.
-pub(super) type OutputValue = (ScopedName, Result<Value, NodeUnavailable>, DeclType);
-
-pub(super) const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
-    match category {
-        DeclCategory::Const => Some(DeclType::Const),
-        DeclCategory::Param => Some(DeclType::Param),
-        DeclCategory::Node => Some(DeclType::Node),
-        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure | DeclCategory::Layer => {
-            None
-        }
-    }
-}
 
 pub(super) fn remap_include_debug_name(
     name: &ScopedName,
@@ -44,13 +29,7 @@ pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &Inclu
     }
 
     result
-        .consts
-        .iter_mut()
-        .chain(result.params.iter_mut())
-        .chain(result.nodes.iter_mut())
-        .for_each(|(name, _)| *name = remap_include_debug_name(name, aliases));
-    result
-        .all
+        .entries
         .iter_mut()
         .for_each(|(name, _, _)| *name = remap_include_debug_name(name, aliases));
     result.output_surface = std::mem::take(&mut result.output_surface)
@@ -99,19 +78,4 @@ pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &Inclu
         .into_iter()
         .map(|(name, constraint)| (remap_include_debug_name(&name, aliases), constraint))
         .collect();
-}
-
-pub(super) fn push_output_value(
-    (name, result, decl_type): OutputValue,
-    consts: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    params: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    nodes: &mut Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    all: &mut Vec<OutputValue>,
-) {
-    match decl_type {
-        DeclType::Const => consts.push((name.clone(), result.clone())),
-        DeclType::Param => params.push((name.clone(), result.clone())),
-        DeclType::Node => nodes.push((name.clone(), result.clone())),
-    }
-    all.push((name, result, decl_type));
 }
