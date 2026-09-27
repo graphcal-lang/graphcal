@@ -266,9 +266,10 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
             auto_import_data(name.name().as_str(), AutoImportCategory::Unit)
         }
-        GraphcalError::UnknownIndex { name, .. } => {
-            auto_import_data(name.as_str(), AutoImportCategory::Index)
-        }
+        // Structural `Fin(N)` axes are never importable.
+        GraphcalError::UnknownIndex { name, .. } => name
+            .declared_name()
+            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
         GraphcalError::UnknownStructType { name, .. } => {
             auto_import_data(name, AutoImportCategory::Type)
         }

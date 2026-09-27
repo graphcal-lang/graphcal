@@ -79,7 +79,7 @@ pub fn type_lower_error_to_graphcal(
             && let Ok(name) = IndexName::try_new(path.clone())
         {
             return GraphcalError::UnknownIndex {
-                name,
+                name: name.into(),
                 src: src.clone(),
                 span: (*span).into(),
             };
@@ -381,7 +381,7 @@ pub fn expr_lower_error_to_graphcal(
             span,
         } => {
             return GraphcalError::ExtraVariants {
-                index_name: index_name.clone(),
+                index_name: index_name.clone().into(),
                 extra: vec![crate::syntax::index_name::IndexEntryKey::named(
                     variant_name.clone(),
                 )],
@@ -430,7 +430,7 @@ pub fn expr_lower_error_to_graphcal(
             span,
         } => {
             return GraphcalError::UnknownVariant {
-                index_name: index.to_unowned_def_name(),
+                index_name: index.to_unowned_def_name().into(),
                 variant_name: variant.clone(),
                 src: src.clone(),
                 span: (*span).into(),
@@ -445,7 +445,7 @@ pub fn expr_lower_error_to_graphcal(
         } if *namespace == IndexNameNamespace::DISPLAY_NAME => {
             if let Ok(index_name) = IndexName::try_new(name.clone()) {
                 return GraphcalError::UnknownIndex {
-                    name: index_name,
+                    name: index_name.into(),
                     src: src.clone(),
                     span: (*span).into(),
                 };

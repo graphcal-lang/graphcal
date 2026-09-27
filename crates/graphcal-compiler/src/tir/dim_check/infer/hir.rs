@@ -2564,12 +2564,12 @@ fn nat_overflow_error(
 }
 
 fn finite_index_error(
-    err: crate::registry::types::FiniteIndexError,
+    err: crate::registry::types::IndexCardinalityError,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
     GraphcalError::EvalError {
-        message: err.to_string(),
+        message: err.describe_finite_index(),
         src: src.clone(),
         span: span.into(),
     }
@@ -4688,7 +4688,7 @@ fn infer_hir_match(
                 if index_identity.declared_resolved() != Some(variant.variant.index()) {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_identity.display_name(),
-                        found: variant.variant.index().to_unowned_def_name(),
+                        found: variant.variant.index().to_unowned_def_name().into(),
                         src: src.clone(),
                         span: (*span).into(),
                     });
@@ -4724,8 +4724,7 @@ fn infer_hir_match(
                 if !covered.contains(&variant) {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "non-exhaustive match: variant `{}` not covered",
-                            variant.qualified_by(&index_identity.display_name())
+                            "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
                         ),
                         src: src.clone(),
                         span: expr.span.into(),

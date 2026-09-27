@@ -105,7 +105,7 @@ fn fin_key_additive_rule(
     crate::registry::declared_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(InferredType::Key)
         .map_err(|err| GraphcalError::EvalError {
-            message: err.to_string(),
+            message: err.describe_finite_index(),
             src: src.clone(),
             span: rhs.span.into(),
         })

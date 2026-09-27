@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::registry::declared_type::IndexDisplayName;
 use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::IanaTimeZoneId;
@@ -1180,7 +1181,7 @@ pub enum GraphcalError {
         )
     )]
     UnknownIndex {
-        name: IndexName,
+        name: IndexDisplayName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown index")]
@@ -1190,7 +1191,7 @@ pub enum GraphcalError {
     #[error("unknown variant `{variant_name}` in index `{index_name}`")]
     #[diagnostic(code(graphcal::I002))]
     UnknownVariant {
-        index_name: IndexName,
+        index_name: IndexDisplayName,
         variant_name: IndexVariantName,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -1207,7 +1208,7 @@ pub enum GraphcalError {
         help("map literals must cover all variants of the index")
     )]
     MissingVariants {
-        index_name: IndexName,
+        index_name: IndexDisplayName,
         missing: Vec<IndexEntryKey>,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -1224,7 +1225,7 @@ pub enum GraphcalError {
         help("only variants declared in the index are allowed")
     )]
     ExtraVariants {
-        index_name: IndexName,
+        index_name: IndexDisplayName,
         extra: Vec<IndexEntryKey>,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -1235,8 +1236,8 @@ pub enum GraphcalError {
     #[error("index mismatch: expected `{expected}`, found `{found}`")]
     #[diagnostic(code(graphcal::I005))]
     IndexMismatch {
-        expected: IndexName,
-        found: IndexName,
+        expected: IndexDisplayName,
+        found: IndexDisplayName,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("wrong index")]

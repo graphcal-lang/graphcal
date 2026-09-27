@@ -386,19 +386,19 @@ fn merge_registry_into_builder_filtered(
     // dependency's frontend module scope only; pulling an unbound `pub(bind)` index
     // into the importer would incorrectly make the importer a library even if
     // it only needs a qualified type from the dependency.
-    for idx_def in dep_registry.indexes.declared_indexes() {
-        if pure_import_rejects(idx_def.name.atom(), ImportItemNamespace::Index)
+    for (name, idx_def) in dep_registry.indexes.declared_indexes() {
+        if pure_import_rejects(name.atom(), ImportItemNamespace::Index)
             || (external_surface.is_some() && idx_def.is_required())
         {
             continue;
         }
-        if !index_bindings.contains_key(idx_def.name.as_str()) {
+        if !index_bindings.contains_key(name.as_str()) {
             if external_surface
-                .is_some_and(|surface| !surface.is_static_explicit_export(idx_def.name.atom()))
+                .is_some_and(|surface| !surface.is_static_explicit_export(name.atom()))
             {
                 continue;
             }
-            builder.register_index(idx_def.clone());
+            builder.register_index(name.clone(), idx_def.kind.clone());
         }
     }
     // Structural indexes have no module visibility or alias. Preserve their

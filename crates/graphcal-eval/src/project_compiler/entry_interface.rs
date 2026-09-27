@@ -213,7 +213,7 @@ pub(super) fn build_checked_entry_interface(
             SourceDeclaration::Index { name, span } => {
                 let definition = tir
                     .root_declared_indexes()
-                    .find(|definition| definition.name == *name)
+                    .find(|definition| definition.name.declared_name() == Some(name))
                     .ok_or_else(|| {
                         missing_interface_fact(
                             format!("HIR entry index `{name}` is absent from checked TIR"),

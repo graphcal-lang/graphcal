@@ -6128,7 +6128,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     else {
         panic!("expected indexed declared type for `series`");
     };
-    assert_eq!(index.display_name().as_str(), "Phase");
+    assert_eq!(index.display_name().to_string(), "Phase");
     assert_eq!(
         index
             .declared_resolved()
@@ -8849,7 +8849,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         else {
             panic!("expected indexed value for `{name}`, got {value:?}");
         };
-        assert_eq!(index_name.display_name().as_str(), "Phase");
+        assert_eq!(index_name.display_name().to_string(), "Phase");
         assert_eq!(entries.len(), 2);
         index_name
             .declared_resolved()

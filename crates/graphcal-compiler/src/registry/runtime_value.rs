@@ -45,10 +45,7 @@ impl std::fmt::Display for RuntimeValueKind {
             Self::Label {
                 index_name,
                 variant,
-            } => {
-                let display_index = index_name.display_name();
-                write!(f, "label `{}`", variant.qualified_by(&display_index))
-            }
+            } => write!(f, "label `{index_name}#{variant}`"),
             Self::Struct { constructor, .. } => write!(f, "struct `{constructor}`"),
             Self::Indexed { index_name } => write!(f, "indexed value `{index_name}[...]`"),
             Self::CoordinateLabel { index_name } => write!(f, "coordinate label `{index_name}`"),

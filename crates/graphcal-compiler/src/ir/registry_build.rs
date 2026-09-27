@@ -821,7 +821,7 @@ fn ensure_concrete_finite_index(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let index = types::FiniteIndex::try_from_u64(cardinality)
-        .map_err(|error| eval_error(error.to_string(), src, span))?;
+        .map_err(|error| eval_error(error.describe_finite_index(), src, span))?;
     registry.ensure_finite_index(index.cardinality());
     Ok(())
 }
@@ -1003,10 +1003,7 @@ fn register_index_decl(
             types::IndexKind::Required(types::RequiredIndexKind::Coordinate { dimension: dim })
         }
     };
-    registry.register_index(types::IndexDef {
-        name: idx.name.value.clone(),
-        kind,
-    });
+    registry.register_index(idx.name.value.clone(), kind);
     Ok(())
 }
 
