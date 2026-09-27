@@ -5,12 +5,12 @@ use std::collections::{HashMap, hash_map::Entry};
 use graphcal_compiler::dag_id::DagId;
 use thiserror::Error;
 
-use crate::decl_key::RuntimeDeclKey;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// An authoritative location index, not a semantic-owner fallback.
 #[derive(Debug)]
 pub struct DeclarationLocations {
-    bodies: HashMap<RuntimeDeclKey, DagId>,
+    bodies: HashMap<ResolvedDeclName, DagId>,
 }
 
 #[derive(Debug, Error)]
@@ -19,17 +19,17 @@ pub enum DeclarationLocationError {
         "declaration `{declaration}` has duplicate physical locations in `{first}` and `{second}`"
     )]
     Duplicate {
-        declaration: RuntimeDeclKey,
+        declaration: ResolvedDeclName,
         first: DagId,
         second: DagId,
     },
     #[error("declaration `{0}` has no prepared physical location")]
-    Missing(RuntimeDeclKey),
+    Missing(ResolvedDeclName),
 }
 
 impl DeclarationLocations {
     pub(crate) fn try_new(
-        entries: impl IntoIterator<Item = (RuntimeDeclKey, DagId)>,
+        entries: impl IntoIterator<Item = (ResolvedDeclName, DagId)>,
     ) -> Result<Self, DeclarationLocationError> {
         entries
             .into_iter()
@@ -52,7 +52,7 @@ impl DeclarationLocations {
 
     pub(crate) fn body_for(
         &self,
-        declaration: &RuntimeDeclKey,
+        declaration: &ResolvedDeclName,
     ) -> Result<&DagId, DeclarationLocationError> {
         self.bodies
             .get(declaration)
@@ -69,11 +69,8 @@ mod tests {
         DagId::from_virtual_relative_path(std::path::Path::new(file)).unwrap()
     }
 
-    fn declaration() -> RuntimeDeclKey {
-        RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-            owner("instance.gcl"),
-            DeclName::expect_valid("answer"),
-        ))
+    fn declaration() -> ResolvedDeclName {
+        ResolvedDeclName::from_def(owner("instance.gcl"), DeclName::expect_valid("answer"))
     }
 
     #[test]
@@ -85,7 +82,7 @@ mod tests {
         assert_eq!(locations.body_for(&declaration).unwrap(), &physical);
         assert_ne!(
             locations.body_for(&declaration).unwrap(),
-            declaration.as_resolved().owner()
+            declaration.owner()
         );
     }
 

@@ -1846,10 +1846,10 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 }
 
 fn insert_imported_binding(
-    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     imported_names: &ImportedValueNames,
     lexical_name: ScopedName,
-    binding: HirImportedBinding,
+    binding: ResolvedDeclName,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
@@ -1885,7 +1885,7 @@ pub(in crate::project_compiler) fn import_selective_item(
     span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
     import_selective_resolved_item(
@@ -1908,7 +1908,7 @@ fn import_selective_resolved_item(
     span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
     let scoped = ScopedName::local(local_name.clone());
@@ -1920,7 +1920,7 @@ fn import_selective_resolved_item(
         imported_bindings,
         imported_names,
         scoped,
-        HirImportedBinding::new(canonical),
+        canonical,
         src,
         span,
     )
@@ -1933,7 +1933,7 @@ fn import_module_values_from_resolver(
     import_span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
     for binding in exported_bindings {
@@ -1956,7 +1956,7 @@ fn import_module_values_from_resolver(
             imported_bindings,
             imported_names,
             scoped,
-            HirImportedBinding::new(canonical.clone()),
+            canonical.clone(),
             src,
             import_span,
         )?;
@@ -2006,7 +2006,7 @@ mod tests {
 
         let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
         assert_eq!(
-            imported_bindings[&lexical].target(),
+            &imported_bindings[&lexical],
             &graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
                 owner,
                 DeclName::expect_valid("g0"),

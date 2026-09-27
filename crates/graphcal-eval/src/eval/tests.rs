@@ -884,7 +884,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
         for fatal in [false, true] {
             let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
             let outcome = frame.run(&tir, &src, &token, |entry, _| {
-                if entry.key.member() == "a" {
+                if entry.key.as_str() == "a" {
                     return Err(if fatal {
                         GraphcalError::internal_error(
                             "fatal sentinel",
@@ -900,7 +900,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                     });
                 }
                 assert_ne!(
-                    entry.key.member(),
+                    entry.key.as_str(),
                     "dependent",
                     "failed dependencies must never be interpreted"
                 );
@@ -914,12 +914,12 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                 assert!(outcome.is_err());
             } else {
                 outcome.unwrap();
-                assert!(frame.values.keys().any(|key| key.member() == "independent"));
+                assert!(frame.values.keys().any(|key| key.as_str() == "independent"));
                 assert!(
                     frame
                         .errors
                         .iter()
-                        .any(|(key, error)| key.member() == "dependent"
+                        .any(|(key, error)| key.as_str() == "dependent"
                             && matches!(error, NodeUnavailable::DependencyFailed { .. }))
                 );
             }
@@ -5976,7 +5976,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         crate::eval_expr::RuntimeValue::quantity(9.0).unwrap(),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action"))
+        tir.root()
+            .lookup_decl_identity(&scoped_name("action"))
+            .into_bound()
             .unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: b_owner,
@@ -6037,7 +6039,10 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         crate::eval_expr::RuntimeValue::quantity(99.0).unwrap(),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")).unwrap(),
+        tir.root()
+            .lookup_decl_identity(&scoped_name("item"))
+            .into_bound()
+            .unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: b_owner,
             constructor: graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(
@@ -6916,7 +6921,9 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         crate::eval_expr::RuntimeValue::quantity(100.0).unwrap(),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("series"))
+        tir.root()
+            .lookup_decl_identity(&scoped_name("series"))
+            .into_bound()
             .unwrap(),
         crate::eval_expr::RuntimeValue::Indexed {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(

@@ -274,14 +274,14 @@ fn plot_leaf_kind(
 ) -> Option<PlotLeafKind> {
     match inferred {
         InferredType::Indexed { element, index } => {
-            axes.push(index.type_ref().clone());
+            axes.push(index.clone());
             crate::stack::with_stack_growth(|| plot_leaf_kind(element, axes))
         }
         InferredType::Quantity(dimension) => Some(PlotLeafKind::Quantity(dimension.clone())),
         InferredType::Bool => Some(PlotLeafKind::Bool),
         InferredType::Int => Some(PlotLeafKind::Int),
         InferredType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
-        InferredType::Key(index) => Some(PlotLeafKind::Key(index.type_ref().clone())),
+        InferredType::Key(index) => Some(PlotLeafKind::Key(index.clone())),
         InferredType::Complex(_) | InferredType::IndexArg(_) | InferredType::Struct(_, _) => None,
     }
 }

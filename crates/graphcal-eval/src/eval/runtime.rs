@@ -12,7 +12,6 @@ use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
-use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
     eval_hir_expr_with_presentation,
@@ -39,7 +38,7 @@ pub(super) struct EvalLoopResult {
     pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
     pub presentation_instances: PresentationInstanceMap,
-    pub errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -71,7 +70,7 @@ enum OutputExposure {
 
 #[derive(Default)]
 struct RuntimeResultValueAssembly {
-    identities: HashMap<ScopedName, RuntimeDeclKey>,
+    identities: HashMap<ScopedName, ResolvedDeclName>,
     all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
     output_surface: std::collections::HashSet<ScopedName>,
 }
@@ -87,7 +86,7 @@ struct AssembledRuntimeResultValues {
 impl RuntimeResultValueAssembly {
     fn insert(
         &mut self,
-        key: RuntimeDeclKey,
+        key: ResolvedDeclName,
         name: ScopedName,
         result: Result<Value, NodeUnavailable>,
         decl_type: DeclType,
@@ -163,7 +162,7 @@ pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
     pub(super) presentation_instances: PresentationInstanceMap,
     pub(super) values: RuntimeValueMap,
-    pub(super) errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
+    pub(super) errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
 impl std::fmt::Debug for RuntimeEvaluation {
@@ -233,7 +232,7 @@ pub(super) fn run_eval_loop_with_bindings(
         .with_roots(&frame.values, Some(&frame.presentations))
         .with_unavailable(&frame.errors)
         .with_unfinished_calls(&unfinished_calls)
-        .for_decl(entry.key.as_resolved());
+        .for_decl(entry.key);
         eval_hir_expr_with_presentation(
             entry.expression,
             &frame.values,
@@ -312,14 +311,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let local_key = |name: &ScopedName| {
         tir.root()
             .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-            .map(RuntimeDeclKey::resolved)
     };
 
     let make_value = |name: &ScopedName,
                       runtime: &RuntimeValue|
      -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
         let runtime_key = local_key(name)?;
-        let declaration = runtime_key.as_resolved();
+        let declaration = &runtime_key;
         let declared_type = declared_types.get(name).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked declared type is missing for public declaration `{declaration}`"),
@@ -432,7 +430,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 continue;
             }
             let declaration = instance_dag.runtime_decl_identity(&projection.target);
-            let key = RuntimeDeclKey::resolved(declaration.clone());
+            let key = declaration.clone();
             let decl_type = instance_dag
                 .source_order()
                 .iter()
@@ -497,7 +495,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             };
             let declaration =
                 instance_dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)?;
-            let key = RuntimeDeclKey::resolved(declaration.clone());
+            let key = declaration.clone();
             let value = if let Some(error) = errors.get(&key) {
                 Err(error.clone())
             } else {
@@ -839,7 +837,7 @@ pub(super) fn evaluate_assertions(
     src: &NamedSource<Arc<String>>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
 ) -> Result<Vec<(ScopedName, AssertResult, Span)>, GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
@@ -855,10 +853,7 @@ pub(super) fn evaluate_assertions(
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, errors, &entry_ctx)
                 .unwrap_or_else(|| {
-                    let ef = plan
-                        .root
-                        .expected_fail
-                        .get(&RuntimeDeclKey::resolved(owner.clone()));
+                    let ef = plan.root.expected_fail.get(&owner);
                     evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
                         eval_hir_expr(expr, values, &empty_hir_locals, &entry_ctx)
                     })
@@ -890,11 +885,10 @@ pub(super) fn evaluate_assertions(
                             DiagnosticAnchor::WholeFile,
                         )
                     })?;
-                let expected = projection.expected_fail.as_ref().or_else(|| {
-                    plan.root
-                        .expected_fail
-                        .get(&RuntimeDeclKey::resolved(owner.clone()))
-                });
+                let expected = projection
+                    .expected_fail
+                    .as_ref()
+                    .or_else(|| plan.root.expected_fail.get(&owner));
                 let assertion_ctx = ctx.for_checked_decl(instance_dag, src, &owner)?;
                 let result =
                     evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {
@@ -924,7 +918,7 @@ pub(super) fn evaluate_assertions(
 pub(super) fn root_source_names(
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<(RuntimeDeclKey, ScopedName)>, GraphcalError> {
+) -> Result<Vec<(ResolvedDeclName, ScopedName)>, GraphcalError> {
     let mut names = tir
         .root()
         .source_order()
@@ -932,7 +926,7 @@ pub(super) fn root_source_names(
         .map(|(name, _)| {
             tir.root()
                 .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                .map(|identity| (RuntimeDeclKey::resolved(identity), name.clone()))
+                .map(|identity| (identity, name.clone()))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     for record in tir.root().semantic_instances() {
@@ -949,7 +943,7 @@ pub(super) fn root_source_names(
             );
         names.extend(projections.map(|(target, exposed_name)| {
             (
-                RuntimeDeclKey::resolved(instance_dag.runtime_decl_identity(target)),
+                instance_dag.runtime_decl_identity(target),
                 exposed_name.clone(),
             )
         }));
@@ -967,7 +961,7 @@ pub(super) fn root_source_names(
 /// declaration).
 fn assert_dependency_failure(
     body: &graphcal_compiler::hir::AssertBody,
-    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalContext<'_>,
 ) -> Option<AssertResult> {
     let body_exprs: Vec<&graphcal_compiler::hir::Expr> = match body {
@@ -998,7 +992,7 @@ fn assert_dependency_failure(
 /// point at the root cause.
 fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
-    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
 ) -> Option<String> {
     if errors.is_empty() {
         return None;
@@ -1011,12 +1005,10 @@ fn dependency_failure_message<'a>(
                 .into_iter()
         })
         .collect();
-    let failed: Vec<String> = deps
-        .iter()
-        .filter_map(|dep| {
-            errors
-                .get(&RuntimeDeclKey::resolved(dep.clone()))
-                .map(|err| {
+    let failed: Vec<String> =
+        deps.iter()
+            .filter_map(|dep| {
+                errors.get(dep).map(|err| {
                     let leaf = DeclName::from_atom(dep.atom().clone());
                     match err {
                         NodeUnavailable::EvalFailed { message } => format!("{leaf} ({message})"),
@@ -1025,8 +1017,8 @@ fn dependency_failure_message<'a>(
                         | NodeUnavailable::Blocked { .. }) => format!("{leaf} ({reason})"),
                     }
                 })
-        })
-        .collect();
+            })
+            .collect();
     (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
 }
 
@@ -1109,7 +1101,7 @@ fn evaluate_plot(
     entry: &graphcal_compiler::ir::lower::PlotEntry,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
-    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalContext<'_>,
 ) -> Result<PlotSpec, PlotEvaluationError> {
     // A reference to a failed declaration must report the root cause, not a
@@ -1357,7 +1349,7 @@ mod tests;
 
 fn check_plot_expression_dependencies(
     expressions: &[&graphcal_compiler::hir::Expr],
-    errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+    errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ctx: &EvalContext<'_>,
 ) -> Result<(), PlotEvaluationError> {
     if let Some(reason) = ctx.unavailable_dependencies(expressions.iter().copied())?

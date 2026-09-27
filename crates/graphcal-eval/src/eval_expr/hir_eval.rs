@@ -15,9 +15,9 @@ use graphcal_compiler::tir::typed::model::DagTIR;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::presentation_evidence::{PresentationInstance, PresentationInstanceMap};
 use crate::runtime_presentation::EvaluatedRuntimeValue;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 use super::builtin_call::{
     DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
@@ -30,11 +30,9 @@ use super::{
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
 
-type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-
 fn presentation_instance_for(
     presentation_values: Option<&PresentationInstanceMap>,
-    key: &RuntimeDeclKey,
+    key: &ResolvedDeclName,
 ) -> PresentationInstance {
     presentation_values
         .and_then(|presentations| presentations.get(key))
@@ -47,7 +45,7 @@ fn presentation_instance_for(
 )]
 fn take_presentation_instance(
     presentation_values: &mut PresentationInstanceMap,
-    key: &RuntimeDeclKey,
+    key: &ResolvedDeclName,
 ) -> PresentationInstance {
     match presentation_values.remove(key) {
         Some(presentation) => presentation,
@@ -144,8 +142,7 @@ fn eval_hir_expr_inner(
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
         hir::ExprKind::GraphRef(target) => {
-            let runtime_target = ctx.current_dag.runtime_decl_identity(&target.value);
-            let key = RuntimeDeclKey::resolved(runtime_target);
+            let key = ctx.current_dag.runtime_decl_identity(&target.value);
             let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
             let presentation = presentation_instance_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
@@ -158,7 +155,7 @@ fn eval_hir_expr_inner(
             let presentation = match &target.value {
                 ConstRef::Decl(target) => presentation_instance_for(
                     presentation_values,
-                    &RuntimeDeclKey::resolved(ctx.current_dag.runtime_decl_identity(target)),
+                    &ctx.current_dag.runtime_decl_identity(target),
                 ),
                 ConstRef::Builtin(_) | ConstRef::Constructor(_) | ConstRef::GenericNatParam(_) => {
                     PresentationInstance::None
@@ -317,20 +314,18 @@ fn eval_hir_expr_inner(
 }
 
 fn resolve_hir_graph_ref<'a>(
-    target: &ResolvedDeclKey,
+    target: &ResolvedDeclName,
     target_span: Span,
     values: &'a RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<&'a RuntimeValue, GraphcalError> {
     let runtime_target = ctx.current_dag.runtime_decl_identity(target);
-    values
-        .get(&RuntimeDeclKey::resolved(runtime_target))
-        .ok_or_else(|| {
-            ctx.eval_error(
-                format!("undefined graph reference `@{target}`"),
-                target_span,
-            )
-        })
+    values.get(&runtime_target).ok_or_else(|| {
+        ctx.eval_error(
+            format!("undefined graph reference `@{target}`"),
+            target_span,
+        )
+    })
 }
 
 fn clone_hir_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
@@ -397,9 +392,7 @@ fn eval_hir_const_ref(
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
         ConstRef::Decl(resolved) => values
-            .get(&RuntimeDeclKey::resolved(
-                ctx.current_dag.runtime_decl_identity(resolved),
-            ))
+            .get(&ctx.current_dag.runtime_decl_identity(resolved))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
         ConstRef::Constructor(_) => eval_hir_nullary_constructor(expr, ctx),
@@ -2194,7 +2187,7 @@ fn eval_hir_index_access(
             )?);
             let presentation = presentation_instance_for(
                 presentation_values,
-                &RuntimeDeclKey::resolved(ctx.current_dag.runtime_decl_identity(&target.value)),
+                &ctx.current_dag.runtime_decl_identity(&target.value),
             );
             (value, presentation)
         }
@@ -2625,7 +2618,7 @@ fn eval_hir_dag_call(
     call: &hir::Expr,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
-    output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,
+    output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclName>,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PresentationInstanceMap>,
     caller_locals: &HirLocalValueMap,
@@ -2648,7 +2641,7 @@ fn eval_hir_dag_call(
     )
     .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for binding in args {
-        let key = super::dag_decl_runtime_key(&binding.target.value);
+        let key = &binding.target.value;
         let (value, evidence) = eval_hir_expr_evaluated(
             &binding.value,
             caller_values,
@@ -2657,9 +2650,9 @@ fn eval_hir_dag_call(
             ctx,
         )?
         .into_parts();
-        frame.bind(&key, value, ctx.src, binding.value.span)?;
+        frame.bind(key, value, ctx.src, binding.value.span)?;
         if !evidence.is_none() {
-            frame.presentations.insert(key, evidence);
+            frame.presentations.insert(key.clone(), evidence);
         }
     }
     seed_inline_dag_imported_values(
@@ -2680,7 +2673,7 @@ fn eval_hir_dag_call(
             let context = ctx
                 .for_dag(entry.scope.dag(), entry.scope.facts().source())?
                 .with_unavailable(&frame.errors)
-                .for_decl(entry.key.as_resolved());
+                .for_decl(entry.key);
             eval_hir_expr_with_presentation(
                 entry.expression,
                 &frame.values,
@@ -2707,9 +2700,9 @@ fn eval_hir_dag_call(
         &ctx.clone().with_unavailable(&frame.errors),
     )?;
 
-    let output_key = super::dag_decl_runtime_key(&output.value);
-    let output_value = dag_values.get(&output_key).cloned().ok_or_else(|| {
-        if let Some(reason) = frame.errors.get(&output_key) {
+    let output_key = &output.value;
+    let output_value = dag_values.get(output_key).cloned().ok_or_else(|| {
+        if let Some(reason) = frame.errors.get(output_key) {
             return GraphcalError::EvaluationUnavailable {
                 reason: reason.clone(), src: ctx.src.clone(), span: output.span.into(),
             };
@@ -2723,7 +2716,7 @@ fn eval_hir_dag_call(
             output.span,
         )
     })?;
-    let output_presentation = take_presentation_instance(&mut dag_presentations, &output_key);
+    let output_presentation = take_presentation_instance(&mut dag_presentations, output_key);
     let presentation = super::presentation::resolve_frame(
         output_presentation,
         &dag_values,
@@ -2757,7 +2750,7 @@ fn record_call_retention(values: &RuntimeValueMap, presentation: &PresentationIn
 /// Only explicit prepared runtime imports may consult the caller or root frame.
 /// Supplied/current values and retained checked constants always win.
 fn seed_inline_dag_imported_values(
-    imports: &[RuntimeDeclKey],
+    imports: &[ResolvedDeclName],
     dag_values: &mut RuntimeValueMap,
     dag_presentations: &mut PresentationInstanceMap,
     caller_values: &RuntimeValueMap,
@@ -2768,11 +2761,11 @@ fn seed_inline_dag_imported_values(
         if dag_values.contains_key(key) {
             continue;
         }
-        if let Some(value) = imported_binding_value(key.as_resolved(), caller_values, ctx) {
+        if let Some(value) = imported_binding_value(key, caller_values, ctx) {
             dag_values.insert(key.clone(), value.clone());
-            let presentation = if key.as_resolved().owner() == ctx.current_dag.dag_id() {
+            let presentation = if key.owner() == ctx.current_dag.dag_id() {
                 caller_presentations.and_then(|instances| instances.get(key))
-            } else if key.as_resolved().owner() == ctx.tir.root_dag_id() {
+            } else if key.owner() == ctx.tir.root_dag_id() {
                 ctx.root_presentation_instances
                     .and_then(|instances| instances.get(key))
             } else {
@@ -2838,9 +2831,7 @@ fn check_inline_dag_asserts(
                 call_span,
             )
         })?;
-        let ef = callable
-            .expected_fail
-            .get(&RuntimeDeclKey::resolved(key.clone()));
+        let ef = callable.expected_fail.get(&key);
         let result =
             crate::assertion_eval::evaluate_assert_with_expected_fail(body, ef, &mut |expr| {
                 eval_hir_expr(expr, dag_values, &empty_hir_locals, &dag_ctx.for_decl(&key))

@@ -17,7 +17,6 @@ use crate::desugar::desugared_ast::{
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
-use crate::ir::imported_binding::HirImportedBinding;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::registry::error::GraphcalError;
@@ -398,7 +397,7 @@ pub struct HirDag {
     ///
     /// HIR retains only canonical targets. Checked types and optional values
     /// are attached atomically when this IR becomes TIR.
-    pub(crate) imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    pub(crate) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
     pub(crate) extern_functions: HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
@@ -424,7 +423,7 @@ impl HirDag {
 
     /// Borrow canonical lexical import targets resolved during HIR lowering.
     #[must_use]
-    pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
+    pub const fn imported_bindings(&self) -> &HashMap<ScopedName, ResolvedDeclName> {
         &self.imported_bindings
     }
 
@@ -649,7 +648,7 @@ pub fn lower_to_builder_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
@@ -677,7 +676,7 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -712,8 +711,8 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
 /// enclosing file's frozen registry. Cross-scope values must be passed through
-/// params or explicit imports; every imported lexical name carries one
-/// [`HirImportedBinding`] with its canonical target.
+/// params or explicit imports; every imported lexical name maps to its
+/// canonical [`ResolvedDeclName`] target.
 ///
 /// # Errors
 ///
@@ -727,7 +726,7 @@ pub fn lower_dag_module_to_builder_with_imported_bindings(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -761,7 +760,7 @@ pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -795,7 +794,7 @@ pub(crate) fn lower_dag_body_to_ir(
     parent_registry: &Registry,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<HirDag, GraphcalError> {
@@ -822,7 +821,7 @@ pub(crate) fn lower_dag_body_to_ir(
 /// bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub bindings: HashMap<ScopedName, HirImportedBinding>,
+    pub bindings: HashMap<ScopedName, ResolvedDeclName>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
@@ -862,7 +861,7 @@ fn build_ir_from_resolved(
     src: &NamedSource<Arc<String>>,
     resolved: CollectedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
-    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -1090,7 +1089,7 @@ pub struct UnfrozenIR {
     // Source-visible projected units mapped to concrete instance identities.
     pub(super) unit_bindings: HashMap<UnitRef, ResolvedUnitName>,
     // Lexical binding lookup only; each value carries one canonical target.
-    pub(super) imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    pub(super) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     // Explicit exports and named `param` input ports used by downstream
     // import/include boundary checks.
     pub(super) external_surface: ExternalDeclSurface,

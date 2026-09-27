@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::decl_key::RuntimeDeclKey;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// A display-only computation, to be performed in the selected value's owner frame.
 #[derive(Debug, Clone)]
@@ -239,4 +239,4 @@ pub enum PresentationInstanceProjectionError {
     ExpectedIndexed,
 }
 
-pub type PresentationInstanceMap = HashMap<RuntimeDeclKey, PresentationInstance>;
+pub type PresentationInstanceMap = HashMap<ResolvedDeclName, PresentationInstance>;

@@ -38,8 +38,7 @@ fn resolve_imported_bindings(
 ) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
     hir.imported_bindings()
         .iter()
-        .map(|(lexical, hir_binding)| {
-            let target = hir_binding.target();
+        .map(|(lexical, target)| {
             let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
                 .ok_or_else(|| {
                     CompileError::Eval(GraphcalError::internal_error(

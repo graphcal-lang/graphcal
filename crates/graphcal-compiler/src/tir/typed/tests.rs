@@ -1037,7 +1037,8 @@ use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
 
 #[test]
 fn generic_index_substitution_preserves_resolved_owner() {
-    use crate::tir::dim_check::{InferredIndex, InferredType};
+    use crate::registry::declared_type::IndexTypeRef;
+    use crate::tir::dim_check::InferredType;
 
     let src = make_src();
     let registry = make_registry();
@@ -1053,7 +1054,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
     };
     let actual = InferredType::Indexed {
         element: Box::new(InferredType::Quantity(Dimension::dimensionless())),
-        index: InferredIndex::from_resolved(resolved_index.clone()),
+        index: IndexTypeRef::from_resolved(resolved_index.clone()),
     };
     let mut dim_sub = HashMap::new();
     let mut index_sub = HashMap::new();
@@ -1302,14 +1303,14 @@ fn nat_leq_zero_leq_anything() {
 }
 
 // -----------------------------------------------------------------------
-// FiniteIndexIdentity typed-reference tests
+// Finite structural index typed-reference tests
 // -----------------------------------------------------------------------
 
 #[test]
-fn finite_index_identity_concrete_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
-    let reference = NatPolyForm::from_constant(3)
-        .to_finite_index_identity()?
-        .to_index_type_ref()?;
+fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
+    let reference = crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
+        NatPolyForm::from_constant(3),
+    )?;
     assert_eq!(
         reference
             .finite_index()
@@ -1321,13 +1322,13 @@ fn finite_index_identity_concrete_to_index_type_ref() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn finite_index_identity_symbolic_to_display_only_index_type_ref()
+fn finite_index_symbolic_form_to_display_only_index_type_ref()
 -> Result<(), Box<dyn std::error::Error>> {
-    let reference = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
-        .add(&NatPolyForm::from_constant(1))
-        .unwrap()
-        .to_finite_index_identity()?
-        .to_index_type_ref()?;
+    let reference = crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
+        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap(),
+    )?;
     assert_eq!(reference.finite_index(), None);
     assert_eq!(reference.display_name().as_str(), "Fin(N + 1)");
     Ok(())

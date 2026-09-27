@@ -10,6 +10,7 @@ use petgraph::graph::DiGraph;
 use crate::desugar::desugared_ast::{DeclKind, Expr, ExprKind, File, IndexDeclKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
+use crate::ir::resolve::contains_graph_ref;
 use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
@@ -784,11 +785,6 @@ fn unit_resolve_to_graphcal(
             span: span.into(),
         },
     }
-}
-
-/// Check if an expression contains any `@`-references (graph refs).
-fn contains_graph_ref(expr: &Expr) -> bool {
-    crate::ir::resolve::contains_graph_ref(expr)
 }
 
 fn concrete_nat_value(

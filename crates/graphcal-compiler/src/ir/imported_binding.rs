@@ -7,26 +7,6 @@
 use crate::registry::declared_type::DeclaredType;
 use crate::syntax::decl_name::ResolvedDeclName;
 
-/// Canonical target of one source-visible import at the HIR boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HirImportedBinding {
-    target: ResolvedDeclName,
-}
-
-impl HirImportedBinding {
-    /// Record the canonical declaration selected by a lexical import.
-    #[must_use]
-    pub const fn new(target: ResolvedDeclName) -> Self {
-        Self { target }
-    }
-
-    /// Canonical declaration selected by this lexical binding.
-    #[must_use]
-    pub const fn target(&self) -> &ResolvedDeclName {
-        &self.target
-    }
-}
-
 /// Whether an imported value comes from checked constants or a runtime frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportedValueKind {

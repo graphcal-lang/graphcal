@@ -20,7 +20,7 @@ use crate::dimension::{BaseDimId, Dimension};
 use crate::expression_id::ExprId;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{FormattingRegistry, TypeGenericConstraint};
 use crate::syntax::ast::UnaryOp;
@@ -43,9 +43,7 @@ use super::super::helpers::{
     expect_quantity, format_distinct_inferred_types, format_inferred_type,
     resolved_type_matches_inferred, struct_type_def_for_inferred,
 };
-use super::super::{
-    DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType,
-};
+use super::super::{DeclaredType, InferredGenericArg, InferredType};
 use super::builtin_call::{
     BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
 };
@@ -461,8 +459,6 @@ impl HirLocalTypes<'_> {
         }
     }
 }
-
-type ResolvedDeclKey = ResolvedDeclName;
 
 #[derive(Debug, Clone, Copy)]
 enum TypeNominalUse<'a> {
@@ -900,9 +896,7 @@ fn infer_hir_type_inner(
             )?;
             // A qualified label is self-typed: `Maneuver#Departure` is a
             // constant of type `Key<Maneuver>` — the axis is in the spelling.
-            InferredType::Key(InferredIndex::from_resolved(
-                variant.variant.index().clone(),
-            ))
+            InferredType::Key(IndexTypeRef::from_resolved(variant.variant.index().clone()))
         }
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, tir, src)?
@@ -1212,7 +1206,7 @@ fn infer_hir_quantity_literal(
 }
 
 fn infer_resolved_decl_ref_type(
-    target: &ResolvedDeclKey,
+    target: &ResolvedDeclName,
     span: Span,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
@@ -1343,7 +1337,7 @@ fn infer_hir_const_ref(
                 target.span,
             )?;
             Ok(InferredType::Struct(
-                InferredStructType::from_resolved(target_def.owning_type.clone()),
+                StructTypeRef::from_resolved(target_def.owning_type.clone()),
                 type_args,
             ))
         }
@@ -1906,7 +1900,7 @@ fn infer_extern_fn_call(
     // Boundary rendering for diagnostics only.
     let display_name = ext.to_string();
     let mut bindings: HashMap<crate::syntax::dimension::DimVarName, Dimension> = HashMap::new();
-    let mut index_bindings: HashMap<crate::syntax::index_name::IndexVarName, InferredIndex> =
+    let mut index_bindings: HashMap<crate::syntax::index_name::IndexVarName, IndexTypeRef> =
         HashMap::new();
     for (param, arg) in sig.params().iter().zip(args) {
         let arg_type = infer_arg(
@@ -2121,7 +2115,7 @@ fn infer_extern_fn_call(
                 });
             };
             Ok(InferredType::Struct(
-                InferredStructType::from_resolved(result_struct.resolved.clone()),
+                StructTypeRef::from_resolved(result_struct.resolved.clone()),
                 Vec::new(),
             ))
         }
@@ -2285,7 +2279,7 @@ fn infer_hir_type_conversion(
             }
             let index_def = super::index_def_for_inferred(index, tir).ok_or_else(|| {
                 GraphcalError::UnknownIndex {
-                    name: index.name(),
+                    name: index.display_name(),
                     src: src.clone(),
                     span: args[0].span.into(),
                 }
@@ -2792,10 +2786,10 @@ fn infer_hir_key_form(
     // Resolve the axis identity and, for Fin axes, its cardinality form.
     let (index_identity, finite_form) = match axis {
         hir::expr::ForBindingIndex::Named(index) => {
-            let identity = InferredIndex::from_resolved(index.value.clone());
+            let identity = IndexTypeRef::from_resolved(index.value.clone());
             let idx_def = super::index_def_for_inferred(&identity, tir).ok_or_else(|| {
                 GraphcalError::UnknownIndex {
-                    name: identity.name(),
+                    name: identity.display_name(),
                     src: src.clone(),
                     span: index.span.into(),
                 }
@@ -2805,7 +2799,7 @@ fn infer_hir_key_form(
         }
         hir::expr::ForBindingIndex::Finite { cardinality, span } => {
             let form = resolve_hir_nat_form(cardinality, src)?;
-            let identity = InferredIndex::from_finite_index_form(form.clone())
+            let identity = IndexTypeRef::from_finite_index_form(form.clone())
                 .map_err(|err| finite_index_error(err, src, *span))?;
             (identity, Some(form))
         }
@@ -2863,7 +2857,7 @@ fn infer_hir_key_form(
             local_types.retain_static_index(
                 expr,
                 arg,
-                index_identity.type_ref(),
+                &index_identity,
                 u64::try_from(position).map_err(|_| {
                     GraphcalError::internal_error(
                         "checked position is negative",
@@ -2881,7 +2875,7 @@ fn infer_hir_key_form(
                 return Err(GraphcalError::EvalError {
                     message: format!(
                         "fin_key() requires a Fin(...) axis, got `{}`",
-                        index_identity.name()
+                        index_identity.display_name()
                     ),
                     src: src.clone(),
                     span: axis_span.into(),
@@ -2912,7 +2906,7 @@ fn infer_hir_key_form(
                         message: format!(
                             "{}() requires a coordinate axis, got `{}`",
                             kind.as_str(),
-                            index_identity.name()
+                            index_identity.display_name()
                         ),
                         src: src.clone(),
                         span: axis_span.into(),
@@ -2953,10 +2947,10 @@ fn infer_hir_for_comp(
         // goes through coord(), integer use of a Fin key through to_int().
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
-                let index_identity = InferredIndex::from_resolved(index.value.clone());
+                let index_identity = IndexTypeRef::from_resolved(index.value.clone());
                 super::index_def_for_inferred(&index_identity, tir).ok_or_else(|| {
                     GraphcalError::UnknownIndex {
-                        name: index_identity.name(),
+                        name: index_identity.display_name(),
                         src: src.clone(),
                         span: index.span.into(),
                     }
@@ -2966,7 +2960,7 @@ fn infer_hir_for_comp(
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
                 let form = resolve_hir_nat_form(cardinality, src)?;
                 InferredType::Key(
-                    InferredIndex::from_finite_index_form(form)
+                    IndexTypeRef::from_finite_index_form(form)
                         .map_err(|err| finite_index_error(err, src, *span))?,
                 )
             }
@@ -2987,11 +2981,11 @@ fn infer_hir_for_comp(
     for binding in bindings.iter().rev() {
         let index = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
-                InferredIndex::from_resolved(index.value.clone())
+                IndexTypeRef::from_resolved(index.value.clone())
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
                 let form = resolve_hir_nat_form(cardinality, src)?;
-                InferredIndex::from_finite_index_form(form)
+                IndexTypeRef::from_finite_index_form(form)
                     .map_err(|err| finite_index_error(err, src, *span))?
             }
         };
@@ -3004,12 +2998,12 @@ fn infer_hir_for_comp(
 }
 
 fn finite_axis_form(
-    index: &InferredIndex,
+    index: &IndexTypeRef,
     declared_definition: Option<&crate::registry::types::IndexDef>,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Option<NatPolyForm>, GraphcalError> {
-    match index.type_ref() {
+    match index {
         IndexTypeRef::Finite(reference) => Ok(Some(reference.form())),
         IndexTypeRef::Declared(reference) => {
             let definition = declared_definition.ok_or_else(|| {
@@ -3040,7 +3034,7 @@ mod finite_axis_form_tests {
     fn structural_finite_axis_does_not_require_a_registry_definition() {
         let source = NamedSource::new("test.gcl", Arc::new(String::new()));
         let form = NatPolyForm::from_constant(5);
-        let index = InferredIndex::from_finite_index_form(form.clone()).unwrap();
+        let index = IndexTypeRef::from_finite_index_form(form.clone()).unwrap();
 
         assert_eq!(
             finite_axis_form(&index, None, &source, Span::new(0, 0)).unwrap(),
@@ -3053,7 +3047,7 @@ mod finite_axis_form_tests {
         let source = NamedSource::new("test.gcl", Arc::new("values[key]".to_string()));
         let owner = DagId::from_virtual_relative_path(Path::new("test.gcl")).unwrap();
         let resolved = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Missing"));
-        let index = InferredIndex::from_resolved(resolved);
+        let index = IndexTypeRef::from_resolved(resolved);
 
         let error = finite_axis_form(&index, None, &source, Span::new(7, 3)).unwrap_err();
         match error {
@@ -3110,11 +3104,11 @@ fn infer_hir_index_access(
                     &IndexTypeRef::from_resolved(variant.variant.index().clone()),
                     IndexNominalUse::Label(variant.variant.variant()),
                 )?;
-                let arg_index = InferredIndex::from_resolved(variant.variant.index().clone());
+                let arg_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
                 if arg_index != index {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: index.name(),
-                        found: arg_index.name(),
+                        expected: index.display_name(),
+                        found: arg_index.display_name(),
                         src: src.clone(),
                         span: variant.path_span().into(),
                     });
@@ -3144,8 +3138,8 @@ fn infer_hir_index_access(
                         };
                         if !accepted {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: index.name(),
-                                found: key_index.name(),
+                                expected: index.display_name(),
+                                found: key_index.display_name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             });
@@ -3155,7 +3149,7 @@ fn infer_hir_index_access(
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "quantity local cannot index into coordinate index `{}`; use that coordinate index's loop variable",
-                                index.name()
+                                index.display_name()
                             ),
                             src: src.clone(),
                             span: local.span.into(),
@@ -3200,8 +3194,8 @@ fn infer_hir_index_access(
                     };
                     if !accepted {
                         return Err(GraphcalError::IndexMismatch {
-                            expected: index.name(),
-                            found: key_index.name(),
+                            expected: index.display_name(),
+                            found: key_index.display_name(),
                             src: src.clone(),
                             span: index_expr.span.into(),
                         });
@@ -3213,7 +3207,7 @@ fn infer_hir_index_access(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "integer expression cannot index into non-finite-index index `{}`",
-                            index.name()
+                            index.display_name()
                         ),
                         src: src.clone(),
                         span: index_expr.span.into(),
@@ -3229,8 +3223,8 @@ fn infer_hir_index_access(
                                 message: format!(
                                     "a runtime Int cannot index `{}` implicitly; write \
                                      `fin_key({}, ...)` to make the range check explicit",
-                                    index.name(),
-                                    index.name(),
+                                    index.display_name(),
+                                    index.display_name(),
                                 ),
                                 src: src.clone(),
                                 span: index_expr.span.into(),
@@ -3241,7 +3235,7 @@ fn infer_hir_index_access(
                         local_types.retain_static_index(
                             expr,
                             index_expr,
-                            index.type_ref(),
+                            &index,
                             position,
                             crate::tir::expression_facts::StaticIndexUse::Selection,
                             src,
@@ -3459,8 +3453,7 @@ fn generic_substitution_prefix(
             },
             TypeGenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
-                    subs.indexes
-                        .insert(param.name().clone(), index.type_ref().clone());
+                    subs.indexes.insert(param.name().clone(), index.clone());
                 }
                 InferredGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
@@ -3536,7 +3529,7 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
     Ok(ConcreteGenericSubstitutions { values, nats })
 }
 
-fn inferred_index_is_concrete(index: &InferredIndex) -> bool {
+fn inferred_index_is_concrete(index: &IndexTypeRef) -> bool {
     index
         .finite_index_form()
         .is_none_or(|form| form.is_constant())
@@ -3818,7 +3811,7 @@ fn infer_hir_generic_type_arg(
             Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
         }
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.value.clone()),
+            StructTypeRef::from_resolved(name.value.clone()),
             vec![],
         )),
         hir::TypeExprKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
@@ -3844,7 +3837,7 @@ fn infer_hir_generic_type_arg(
                     span: name.span.into(),
                 })?;
             Ok(InferredType::Struct(
-                InferredStructType::from_resolved(name.value.clone()),
+                StructTypeRef::from_resolved(name.value.clone()),
                 resolve_applied_generic_args(
                     &name.value,
                     type_def,
@@ -3899,9 +3892,9 @@ fn infer_hir_sorted_generic_arg(
 fn inferred_index_from_type_arg(
     index: &hir::IndexRef,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredIndex, GraphcalError> {
+) -> Result<IndexTypeRef, GraphcalError> {
     match index {
-        hir::IndexRef::Concrete(name) => Ok(InferredIndex::from_resolved(name.value.clone())),
+        hir::IndexRef::Concrete(name) => Ok(IndexTypeRef::from_resolved(name.value.clone())),
         hir::IndexRef::GenericParam(param) => Err(GraphcalError::EvalError {
             message: format!(
                 "generic index parameter `{}` is not concretely bound",
@@ -3912,7 +3905,7 @@ fn inferred_index_from_type_arg(
         }),
         hir::IndexRef::Finite(nat_expr) => {
             let form = resolve_hir_nat_form(nat_expr, src)?;
-            InferredIndex::from_finite_index_form(form)
+            IndexTypeRef::from_finite_index_form(form)
                 .map_err(|err| finite_index_error(err, src, nat_expr.span()))
         }
     }
@@ -4020,7 +4013,7 @@ fn infer_hir_constructor_call(
     })?;
     let type_def = &target.type_def;
     let variant = &target.variant;
-    let owning_type_identity = InferredStructType::from_resolved(target.owning_type.clone());
+    let owning_type_identity = StructTypeRef::from_resolved(target.owning_type.clone());
     let owning_type_name = type_def.name();
 
     let resolved_type_args = resolve_applied_generic_args(
@@ -4246,7 +4239,7 @@ impl MapLiteralVariantKey {
 
 #[derive(Debug, Clone)]
 struct MapLiteralAxis {
-    index: InferredIndex,
+    index: IndexTypeRef,
     entry_keys: Vec<IndexEntryKey>,
 }
 
@@ -4320,7 +4313,7 @@ fn first_missing_map_tuple(
 
 impl MapLiteralAxis {
     fn variant_key(&self, key: IndexEntryKey) -> Result<MapLiteralVariantKey, IndexEntryKey> {
-        match (self.index.type_ref(), key) {
+        match (&self.index, key) {
             (IndexTypeRef::Declared(reference), IndexEntryKey::Named(variant)) => {
                 Ok(MapLiteralVariantKey::Declared(ResolvedIndexVariant::new(
                     reference.resolved().clone(),
@@ -4341,13 +4334,13 @@ impl MapLiteralAxis {
 fn inferred_index_for_hir_map_key(
     key: &hir::expr::MapEntryKey,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredIndex, GraphcalError> {
+) -> Result<IndexTypeRef, GraphcalError> {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => Ok(InferredIndex::from_resolved(
-            variant.variant.index().clone(),
-        )),
+        hir::expr::MapEntryKey::IndexVariant(variant) => {
+            Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
+        }
         hir::expr::MapEntryKey::FinitePosition { size, position } => {
-            InferredIndex::from_finite_index_form(NatPolyForm::from_constant(*size))
+            IndexTypeRef::from_finite_index_form(NatPolyForm::from_constant(*size))
                 .map_err(|err| finite_index_error(err, src, position.span))
         }
     }
@@ -4420,7 +4413,7 @@ fn infer_hir_map_literal(
         let index = inferred_index_for_hir_map_key(key, src)?;
         let idx_def = super::index_def_for_inferred(&index, tir).ok_or_else(|| {
             GraphcalError::UnknownIndex {
-                name: index.name(),
+                name: index.display_name(),
                 src: src.clone(),
                 span: expr.span.into(),
             }
@@ -4429,7 +4422,7 @@ fn infer_hir_map_literal(
             return Err(GraphcalError::EvalError {
                 message: format!(
                     "coordinate index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
-                    index.name()
+                    index.display_name()
                 ),
                 src: src.clone(),
                 span: expr.span.into(),
@@ -4445,8 +4438,8 @@ fn infer_hir_map_literal(
             let key_index = inferred_index_for_hir_map_key(key, src)?;
             if key_index != axes[i].index {
                 return Err(GraphcalError::IndexMismatch {
-                    expected: axes[i].index.name(),
-                    found: key_index.name(),
+                    expected: axes[i].index.display_name(),
+                    found: key_index.display_name(),
                     src: src.clone(),
                     span: expr.span.into(),
                 });
@@ -4483,14 +4476,14 @@ fn infer_hir_map_literal(
                 if !axes[i].entry_keys.contains(&entry_key) {
                     return match (arity, entry_key) {
                         (1, extra) => Err(GraphcalError::ExtraVariants {
-                            index_name: axes[0].index.name(),
+                            index_name: axes[0].index.display_name(),
                             extra: vec![extra],
                             src: src.clone(),
                             span: expr.span.into(),
                         }),
                         (_, IndexEntryKey::Named(variant_name)) => {
                             Err(GraphcalError::UnknownVariant {
-                                index_name: axes[i].index.name(),
+                                index_name: axes[i].index.display_name(),
                                 variant_name,
                                 src: src.clone(),
                                 span: expr.span.into(),
@@ -4499,7 +4492,7 @@ fn infer_hir_map_literal(
                         (_, IndexEntryKey::Position(position)) => Err(GraphcalError::EvalError {
                             message: format!(
                                 "position #{position} is outside index `{}`",
-                                axes[i].index.name()
+                                axes[i].index.display_name()
                             ),
                             src: src.clone(),
                             span: expr.span.into(),
@@ -4528,7 +4521,7 @@ fn infer_hir_map_literal(
                 .map(MapLiteralVariantKey::entry_key)
                 .collect();
             return Err(GraphcalError::MissingVariants {
-                index_name: axes[0].index.name(),
+                index_name: axes[0].index.display_name(),
                 missing,
                 src: src.clone(),
                 span: expr.span.into(),
@@ -4724,7 +4717,7 @@ fn infer_hir_unfold(
         builtin_fns,
         src,
     )?;
-    let index = InferredIndex::from_resolved(axis.value.clone());
+    let index = IndexTypeRef::from_resolved(axis.value.clone());
     let idx_def =
         tir.declared_index_def(&axis.value)
             .ok_or_else(|| GraphcalError::InternalError {
@@ -4737,7 +4730,10 @@ fn infer_hir_unfold(
         | crate::registry::types::IndexKind::RequiredCoordinate { .. } => {}
         _ => {
             return Err(GraphcalError::EvalError {
-                message: format!("unfold requires a coordinate index, got `{}`", index.name()),
+                message: format!(
+                    "unfold requires a coordinate index, got `{}`",
+                    index.display_name()
+                ),
                 src: src.clone(),
                 span: axis.span.into(),
             });
@@ -4844,7 +4840,7 @@ fn infer_hir_match(
                 return Err(GraphcalError::EvalError {
                     message: format!(
                         "cannot match on `Key<{}>`; only named-axis keys support label matching",
-                        index_identity.name()
+                        index_identity.display_name()
                     ),
                     src: src.clone(),
                     span: scrutinee.span.into(),
@@ -4853,7 +4849,7 @@ fn infer_hir_match(
             let index_def =
                 super::index_def_for_inferred(index_identity, tir).ok_or_else(|| {
                     GraphcalError::UnknownIndex {
-                        name: index_identity.name(),
+                        name: index_identity.display_name(),
                         src: src.clone(),
                         span: scrutinee.span.into(),
                     }
@@ -4865,7 +4861,7 @@ fn infer_hir_match(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "cannot match on coordinate index `{}`; only named indexes can be matched",
-                            index_identity.name()
+                            index_identity.display_name()
                         ),
                         src: src.clone(),
                         span: scrutinee.span.into(),
@@ -4889,9 +4885,9 @@ fn infer_hir_match(
                     &IndexTypeRef::from_resolved(variant.variant.index().clone()),
                     IndexNominalUse::Label(variant.variant.variant()),
                 )?;
-                if !index_identity.matches_resolved(variant.variant.index()) {
+                if index_identity.declared_resolved() != Some(variant.variant.index()) {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: index_identity.name(),
+                        expected: index_identity.display_name(),
                         found: variant.variant.index().to_unowned_def_name(),
                         src: src.clone(),
                         span: (*span).into(),
@@ -4900,7 +4896,7 @@ fn infer_hir_match(
                 let variant_name = variant.variant.variant();
                 if !variants.iter().any(|v| v == variant_name) {
                     return Err(GraphcalError::UnknownVariant {
-                        index_name: index_identity.name(),
+                        index_name: index_identity.display_name(),
                         variant_name: variant_name.clone(),
                         src: src.clone(),
                         span: variant.path_span().into(),
@@ -4930,7 +4926,7 @@ fn infer_hir_match(
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "non-exhaustive match: variant `{}` not covered",
-                            variant.qualified_by(&index_identity.name())
+                            variant.qualified_by(&index_identity.display_name())
                         ),
                         src: src.clone(),
                         span: expr.span.into(),
@@ -4991,7 +4987,7 @@ fn infer_hir_match(
                         span: (*span).into(),
                     });
                 }
-                if !type_name.matches_resolved(&target.owning_type) {
+                if type_name.resolved() != &target.owning_type {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
                         field_name: FieldName::expect_valid(target.variant.name().as_str()),
@@ -5336,7 +5332,7 @@ fn infer_hir_dag_call(
         })?;
 
     let mut required_param_keys = std::collections::HashSet::new();
-    let param_decl_types_by_key: HashMap<ResolvedDeclKey, &crate::tir::typed::ResolvedTypeExpr> =
+    let param_decl_types_by_key: HashMap<ResolvedDeclName, &crate::tir::typed::ResolvedTypeExpr> =
         dag_tir
             .params
             .iter()
@@ -5363,7 +5359,7 @@ fn infer_hir_dag_call(
                 Ok((key, resolved))
             })
             .collect::<Result<_, GraphcalError>>()?;
-    let node_decl_types_by_key: HashMap<ResolvedDeclKey, &crate::tir::typed::ResolvedTypeExpr> =
+    let node_decl_types_by_key: HashMap<ResolvedDeclName, &crate::tir::typed::ResolvedTypeExpr> =
         dag_tir
             .nodes
             .iter()
@@ -5384,7 +5380,7 @@ fn infer_hir_dag_call(
             })
             .collect::<Result<_, GraphcalError>>()?;
 
-    let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclKey> =
+    let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclName> =
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
         let target_key = &binding.target.value;

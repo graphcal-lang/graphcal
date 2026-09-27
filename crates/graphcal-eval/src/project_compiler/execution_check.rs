@@ -21,8 +21,6 @@ use domain_resolve::{
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
-type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-
 /// Check every DAG not already present in `inherited`, preserving dependency
 /// facts and their defining sources while compiling an importing file.
 pub(super) fn check_execution_facts_with_inherited(

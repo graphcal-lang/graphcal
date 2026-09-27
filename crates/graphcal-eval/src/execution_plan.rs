@@ -8,10 +8,10 @@ use graphcal_compiler::dag_id::DagId;
 use thiserror::Error;
 
 use crate::constant_pools::{ConstantPools, ConstantReference};
-use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::CheckedExecutionFacts;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
@@ -54,14 +54,14 @@ impl ExecPlan {
 
 #[derive(Debug)]
 pub struct PreparedConstantImport {
-    pub(crate) destination: RuntimeDeclKey,
+    pub(crate) destination: ResolvedDeclName,
     pub(crate) value: ConstantReference,
 }
 
 #[derive(Debug, Default)]
 pub struct PreparedImports {
     pub(crate) constants: Vec<PreparedConstantImport>,
-    pub(crate) runtime: Vec<RuntimeDeclKey>,
+    pub(crate) runtime: Vec<ResolvedDeclName>,
 }
 
 /// One body and its included-instance closure, prepared before evaluation.
@@ -76,15 +76,15 @@ pub struct CallablePlan {
     /// from lexical bindings during preparation.
     pub(crate) imports: PreparedImports,
     /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub(crate) topo_order: Vec<RuntimeDeclKey>,
-    pub(crate) dependencies: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
+    pub(crate) topo_order: Vec<ResolvedDeclName>,
+    pub(crate) dependencies: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
-    pub(crate) assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
+    pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>,
+    pub(crate) expected_fail: HashMap<ResolvedDeclName, ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
+    pub(crate) domain_constraints: Arc<HashMap<ResolvedDeclName, ResolvedDomainConstraint>>,
 }

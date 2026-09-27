@@ -52,7 +52,7 @@ pub struct EvalEnvironment<'a> {
     pub root_values: Option<&'a RuntimeValueMap>,
     pub unavailable: Option<
         &'a HashMap<
-            crate::decl_key::RuntimeDeclKey,
+            graphcal_compiler::syntax::decl_name::ResolvedDeclName,
             graphcal_compiler::node_unavailable::NodeUnavailable,
         >,
     >,
@@ -250,7 +250,7 @@ impl<'a> EvalContext<'a> {
     pub const fn with_unavailable(
         mut self,
         unavailable: &'a HashMap<
-            crate::decl_key::RuntimeDeclKey,
+            graphcal_compiler::syntax::decl_name::ResolvedDeclName,
             graphcal_compiler::node_unavailable::NodeUnavailable,
         >,
     ) -> Self {
@@ -287,15 +287,11 @@ impl<'a> EvalContext<'a> {
             .flat_map(|expression| {
                 graphcal_compiler::hir::expr::collect_expr_dependencies(expression).graph_refs
             })
-            .map(|identity| {
-                crate::decl_key::RuntimeDeclKey::resolved(
-                    self.current_dag.runtime_decl_identity(&identity),
-                )
-            })
+            .map(|identity| self.current_dag.runtime_decl_identity(&identity))
             .filter_map(|key| {
                 self.unavailable
                     .and_then(|unavailable| unavailable.get(&key))
-                    .map(|reason| (key.as_resolved().clone(), reason.clone()))
+                    .map(|reason| (key, reason.clone()))
             })
             .collect::<Vec<_>>();
         if let Some(plan) = plan {

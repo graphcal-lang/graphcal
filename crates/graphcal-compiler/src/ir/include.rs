@@ -294,12 +294,9 @@ impl UnfrozenIR {
                 }
             }
         }
-        for (name, binding) in &self.imported_bindings {
+        for (name, target) in &self.imported_bindings {
             cancellation.checkpoint()?;
-            if decl_bindings
-                .insert(name.clone(), binding.target().clone())
-                .is_some()
-            {
+            if decl_bindings.insert(name.clone(), target.clone()).is_some() {
                 return Err(GraphcalError::internal_error(
                     format!("imported lexical binding `{name}` collides with a local declaration"),
                     src,

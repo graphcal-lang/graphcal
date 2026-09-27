@@ -655,8 +655,8 @@ fn extend_imported_value_names(target: &mut ImportedValueNames, source: Imported
 }
 
 fn extend_imported_bindings(
-    target: &mut HashMap<ScopedName, HirImportedBinding>,
-    source: HashMap<ScopedName, HirImportedBinding>,
+    target: &mut HashMap<ScopedName, ResolvedDeclName>,
+    source: HashMap<ScopedName, ResolvedDeclName>,
     imported_names: &ImportedValueNames,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {

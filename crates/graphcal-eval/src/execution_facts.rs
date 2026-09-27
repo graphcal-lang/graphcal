@@ -9,10 +9,10 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::domain_constraint::ResolvedDomainConstraint;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
-pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
+pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 
 /// Checked execution facts for one canonical DAG.
 ///
@@ -28,8 +28,8 @@ pub struct CheckedDagExecutionFacts {
     pub const_values: Arc<RuntimeValueMap>,
     /// Compile-time selections only; dynamic display requests have no invocation state.
     pub const_presentations: Arc<crate::presentation_evidence::PresentationInstanceMap>,
-    pub topo_order: Arc<Vec<RuntimeDeclKey>>,
-    pub domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
+    pub topo_order: Arc<Vec<ResolvedDeclName>>,
+    pub domain_constraints: Arc<HashMap<ResolvedDeclName, ResolvedDomainConstraint>>,
 }
 
 impl CheckedDagExecutionFacts {

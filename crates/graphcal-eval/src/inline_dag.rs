@@ -12,7 +12,6 @@ use miette::NamedSource;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::ir::imported_binding::HirImportedBinding;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::error::GraphcalError;
@@ -85,7 +84,8 @@ pub fn preprocess_dag_body_self_imports(
             )
         })?;
     let mut names = ImportedValueNames::default();
-    let mut bindings: HashMap<ScopedName, HirImportedBinding> = HashMap::new();
+    let mut bindings: HashMap<ScopedName, graphcal_compiler::syntax::decl_name::ResolvedDeclName> =
+        HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
 
     for decl in body {
@@ -172,11 +172,9 @@ pub fn preprocess_dag_body_self_imports(
                                     names.const_names.push((scoped.clone(), span));
                                     bindings.insert(
                                         scoped,
-                                        HirImportedBinding::new(
-                                            graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
-                                                parent_dag_id.clone(),
-                                                DeclName::from_atom(orig_name.clone()),
-                                            ),
+                                        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                                            parent_dag_id.clone(),
+                                            DeclName::from_atom(orig_name.clone()),
                                         ),
                                     );
                                 }

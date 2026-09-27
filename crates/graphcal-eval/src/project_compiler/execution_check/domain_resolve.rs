@@ -14,13 +14,13 @@ use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use super::visible_values_with_imports;
-use crate::decl_key::RuntimeDeclKey;
 use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
 use crate::execution_facts::RuntimeValueMap;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
@@ -37,7 +37,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
@@ -91,9 +91,8 @@ pub(super) fn resolve_domain_constraints_for_dag(
             },
             constraint_src,
         )?;
-        let runtime_key = RuntimeDeclKey::resolved(resolved_key);
         if is_const
-            && let Some(value) = const_values.get(&runtime_key)
+            && let Some(value) = const_values.get(&resolved_key)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
@@ -105,7 +104,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 span: decl_span.into(),
             });
         }
-        constraints.insert(runtime_key, resolved_constraint);
+        constraints.insert(resolved_key, resolved_constraint);
     }
     Ok(constraints)
 }
@@ -651,11 +650,11 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for entry in dag.consts() {
-        let key = RuntimeDeclKey::resolved(dag.require_bound_decl_identity(
+        let key = dag.require_bound_decl_identity(
             &entry.name,
             src,
             DiagnosticAnchor::Source(entry.span),
-        )?);
+        )?;
         let value = const_values.get(&key).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked constant `{key}` has no evaluated value"),

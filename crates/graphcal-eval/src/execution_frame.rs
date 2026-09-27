@@ -1,6 +1,5 @@
 //! Shared frame mechanics. Expression interpretation and result reporting are adapters.
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::check_domain_constraint;
 use crate::eval::types::NodeUnavailable;
 use crate::execution_facts::RuntimeValueMap;
@@ -11,6 +10,7 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::model::TIR;
 use miette::NamedSource;
@@ -37,11 +37,11 @@ pub struct ExecutionFrame<'a> {
     policy: FailurePolicy,
     pub values: RuntimeValueMap,
     pub presentations: PresentationInstanceMap,
-    pub errors: HashMap<RuntimeDeclKey, NodeUnavailable>,
+    pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
 pub struct ScheduledDeclaration<'a> {
-    pub key: &'a RuntimeDeclKey,
+    pub key: &'a ResolvedDeclName,
     pub scope: CheckedExecutionScope<'a>,
     pub expression: &'a graphcal_compiler::hir::expr::Expr,
 }
@@ -108,7 +108,11 @@ impl<'a> ExecutionFrame<'a> {
         self.errors.values().flat_map(NodeUnavailable::unfinished)
     }
 
-    fn failure(&mut self, key: &RuntimeDeclKey, error: GraphcalError) -> Result<(), GraphcalError> {
+    fn failure(
+        &mut self,
+        key: &ResolvedDeclName,
+        error: GraphcalError,
+    ) -> Result<(), GraphcalError> {
         let only_incomplete = matches!(&error, GraphcalError::EvaluationUnavailable { reason, .. } if !reason.has_failure());
         match (&error, self.policy) {
             (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_), _) => Err(error),
@@ -123,7 +127,7 @@ impl<'a> ExecutionFrame<'a> {
 
     pub fn bind(
         &mut self,
-        key: &RuntimeDeclKey,
+        key: &ResolvedDeclName,
         value: RuntimeValue,
         source: &NamedSource<Arc<String>>,
         span: Span,
@@ -176,11 +180,11 @@ impl<'a> ExecutionFrame<'a> {
                     "scheduled declaration `{key}` has no prepared dependencies"
                 ))
             })?;
-            if scope.dag().todo(key.as_resolved()).is_some() {
+            if scope.dag().todo(key).is_some() {
                 self.errors.insert(
                     key.clone(),
                     NodeUnavailable::Todo {
-                        declaration: key.as_resolved().clone(),
+                        declaration: key.clone(),
                     },
                 );
                 continue;
@@ -189,7 +193,7 @@ impl<'a> ExecutionFrame<'a> {
                 NodeUnavailable::blocked_by(dependencies.iter().filter_map(|dependency| {
                     self.errors
                         .get(dependency)
-                        .map(|reason| (dependency.as_resolved(), reason))
+                        .map(|reason| (dependency, reason))
                 }))
             {
                 self.errors.insert(key.clone(), reason);
@@ -197,7 +201,7 @@ impl<'a> ExecutionFrame<'a> {
             }
             let expression = scope
                 .dag()
-                .runtime_expr(key.as_resolved())
+                .runtime_expr(key)
                 .ok_or_else(|| internal(format!("TIR runtime declaration missing for `{key}`")))?;
             let result = evaluate(
                 ScheduledDeclaration {

@@ -1113,11 +1113,6 @@ role = "facade"
 
 [[module]]
 package = "eval"
-path = ["decl_key"]
-role = "contracts"
-
-[[module]]
-package = "eval"
 path = ["domain_check"]
 role = "interpreter"
 

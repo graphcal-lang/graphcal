@@ -14,12 +14,10 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, TIR};
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr_with_presentation};
 use crate::execution_facts::RuntimeValueMap;
 use crate::presentation_evidence::PresentationInstanceMap;
-
-use super::ResolvedDeclKey;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 pub(super) fn eval_const_pools_for_dags(
     tir: &TIR,
@@ -36,7 +34,7 @@ pub(super) fn eval_const_pools_for_dags(
     GraphcalError,
 > {
     cancellation.checkpoint()?;
-    let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+    let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
     let mut index_map = HashMap::new();
     let mut declaration_by_key = HashMap::new();
     let mut sorted_dag_ids = dag_ids.iter().collect::<Vec<_>>();
@@ -116,7 +114,7 @@ pub(super) fn eval_const_pools_for_dags(
             &ctx,
         )?
         .into_parts();
-        let runtime_key = RuntimeDeclKey::resolved(key.clone());
+        let runtime_key = key.clone();
         if !presentation.is_none() {
             presentations.insert(runtime_key.clone(), presentation);
         }
@@ -152,7 +150,7 @@ pub(super) fn build_runtime_dag(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
+) -> Result<Vec<ResolvedDeclName>, GraphcalError> {
     // Stable graph insertion is an implementation detail, not an invocation-
     // order contract for independent plugin calls.
     enum DeclRef<'a> {
@@ -193,31 +191,19 @@ pub(super) fn build_runtime_dag(
         decl_spans.push((decl.name().clone(), decl.span()));
     }
 
-    runtime_eval_order(dag, &decl_spans, src, cancellation)?
-        .into_iter()
-        .map(|name| {
-            dag.require_bound_decl_identity(&name, src, DiagnosticAnchor::WholeFile)
-                .map(RuntimeDeclKey::resolved)
-        })
-        .collect()
-}
-
-fn runtime_eval_order(
-    dag: &DagTIR,
-    decl_spans: &[(ScopedName, Span)],
-    src: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<ScopedName>, GraphcalError> {
-    runtime_eval_order_resolved(
+    runtime_eval_order(
         dag,
-        decl_spans,
+        &decl_spans,
         &dag.semantic().dependencies,
         src,
         cancellation,
-    )
+    )?
+    .into_iter()
+    .map(|name| dag.require_bound_decl_identity(&name, src, DiagnosticAnchor::WholeFile))
+    .collect()
 }
 
-fn runtime_eval_order_resolved(
+fn runtime_eval_order(
     dag: &DagTIR,
     decl_spans: &[(ScopedName, Span)],
     deps: &ResolvedDagDependencies,
@@ -225,10 +211,10 @@ fn runtime_eval_order_resolved(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
     cancellation.checkpoint()?;
-    let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
-    let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
-    let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
-    let mut span_by_key: HashMap<ResolvedDeclKey, Span> = HashMap::new();
+    let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
+    let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
+    let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
+    let mut span_by_key: HashMap<ResolvedDeclName, Span> = HashMap::new();
 
     for (name, span) in decl_spans {
         cancellation.checkpoint()?;

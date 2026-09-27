@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::presentation_evidence::PresentationInstance;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 
-use crate::decl_key::RuntimeDeclKey;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// One value injected for a compiled parameter.
 #[derive(Debug, Clone)]
@@ -20,4 +20,4 @@ pub(super) struct RuntimeParameterBinding {
 }
 
 /// Plan-keyed parameter bindings for one evaluation row.
-pub(super) type RuntimeParameterBindings = HashMap<RuntimeDeclKey, RuntimeParameterBinding>;
+pub(super) type RuntimeParameterBindings = HashMap<ResolvedDeclName, RuntimeParameterBinding>;
