@@ -1,6 +1,7 @@
 //! `textDocument/formatting` handler.
 
 use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::outcome::Outcome;
 use tower_lsp::lsp_types::{Position, Range, TextEdit};
 
 use crate::convert::LineIndex;
@@ -21,16 +22,17 @@ fn format_document(source: &str) -> Result<Option<Vec<TextEdit>>, Box<graphcal_f
 pub fn format_document_with_cancellation(
     source: &str,
     cancellation: &CancellationToken,
-) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
+) -> Result<Option<Vec<TextEdit>>, Outcome<Box<graphcal_fmt::FormatError>>> {
     format_document_with(source, |input| {
-        graphcal_fmt::format_source_with_cancellation(input, cancellation).map_err(Box::new)
+        graphcal_fmt::format_source_with_cancellation(input, cancellation)
+            .map_err(|outcome| outcome.map_failed(Box::new))
     })
 }
 
-fn format_document_with(
+fn format_document_with<E>(
     source: &str,
-    render: impl FnOnce(&str) -> Result<String, Box<graphcal_fmt::FormatError>>,
-) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
+    render: impl FnOnce(&str) -> Result<String, E>,
+) -> Result<Option<Vec<TextEdit>>, E> {
     let output = render(source)?;
 
     if output == source {

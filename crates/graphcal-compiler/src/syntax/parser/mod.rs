@@ -3,6 +3,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::outcome::Outcome;
 use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::names::NameAtom;
@@ -352,18 +353,6 @@ pub enum ParseError {
 /// and are not limited by this bound.
 const MAX_NESTING_DEPTH: usize = 256;
 
-/// Failure of a cancellation-aware file parse.
-///
-/// Parse diagnostics remain distinct from embedding-shell cancellation, so a
-/// cancelled analysis cannot accidentally be rendered as invalid source.
-#[derive(Debug, Error)]
-pub enum ParseOperationError {
-    #[error(transparent)]
-    Cancelled(#[from] crate::cancellation::Cancelled),
-    #[error(transparent)]
-    Parse(#[from] ParseError),
-}
-
 impl ParseError {
     /// Return the `NamedSource` embedded in this error.
     ///
@@ -639,12 +628,13 @@ impl<'src> Parser<'src> {
     ///
     /// # Errors
     ///
-    /// Returns [`ParseOperationError::Parse`] for invalid source and
-    /// [`ParseOperationError::Cancelled`] after cancellation is requested.
+    /// Returns [`Outcome::Failed`] with the [`ParseError`] for invalid source
+    /// and [`Outcome::Cancelled`] after cancellation is requested, so a
+    /// cancelled analysis cannot be rendered as invalid source.
     pub fn parse_file_with_cancellation(
         &mut self,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<crate::syntax::ast::File, ParseOperationError> {
+    ) -> Result<crate::syntax::ast::File, Outcome<ParseError>> {
         self.lexer.enable_cancellation(cancellation);
         let result = self.parse_file_with_active_cancellation();
         self.lexer.disable_cancellation();
@@ -653,7 +643,7 @@ impl<'src> Parser<'src> {
 
     fn parse_file_with_active_cancellation(
         &mut self,
-    ) -> Result<crate::syntax::ast::File, ParseOperationError> {
+    ) -> Result<crate::syntax::ast::File, Outcome<ParseError>> {
         self.lexer.checkpoint()?;
         let result = self.parse_file_inner();
         while self.lexer.peek().is_some() {
@@ -663,13 +653,12 @@ impl<'src> Parser<'src> {
         }
         self.lexer.checkpoint()?;
         if let Some(span) = self.lexer.first_error_span() {
-            return Err(ParseError::UnknownToken {
+            return Err(Outcome::Failed(ParseError::UnknownToken {
                 src: self.named_source(),
                 span: span.into(),
-            }
-            .into());
+            }));
         }
-        result.map_err(ParseOperationError::from)
+        result.map_err(Outcome::Failed)
     }
 
     fn parse_file_inner(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
@@ -797,8 +786,9 @@ impl<'src> Parser<'src> {
 
 #[cfg(test)]
 mod tests {
+    use crate::outcome::Outcome;
     use crate::syntax::parser::{
-        ParseError, ParseOperationError, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
+        ParseError, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
     };
 
     #[test]
@@ -864,7 +854,7 @@ mod tests {
             let error = parser
                 .parse_file_with_active_cancellation()
                 .expect_err("large declaration should reach an internal checkpoint");
-            assert!(matches!(error, ParseOperationError::Cancelled(_)));
+            assert!(matches!(error, Outcome::Cancelled));
         }
     }
 }

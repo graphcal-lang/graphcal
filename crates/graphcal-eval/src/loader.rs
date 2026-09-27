@@ -10,6 +10,7 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
@@ -360,14 +361,16 @@ fn loader_manifest_error(error: impl std::fmt::Display) -> CompileError {
     })
 }
 
-fn parse_operation_error(
-    error: graphcal_compiler::syntax::parser::ParseOperationError,
+/// Fold a parse outcome into the loader's error type.
+///
+/// Transitional boundary: until the loader returns `Outcome<_>` itself,
+/// cancellation still travels inside `CompileError` (as `GraphcalError::Cancelled`).
+fn parse_outcome_error(
+    outcome: Outcome<graphcal_compiler::syntax::parser::ParseError>,
 ) -> CompileError {
-    match error {
-        graphcal_compiler::syntax::parser::ParseOperationError::Cancelled(cancelled) => {
-            cancelled.into()
-        }
-        graphcal_compiler::syntax::parser::ParseOperationError::Parse(error) => error.into(),
+    match outcome {
+        Outcome::Cancelled => graphcal_compiler::cancellation::Cancelled.into(),
+        Outcome::Failed(error) => error.into(),
     }
 }
 
@@ -1195,7 +1198,7 @@ impl LoadedProject {
         let named_source = NamedSource::new(name, Arc::clone(&source));
         let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
             .parse_file_with_cancellation(cancellation)
-            .map_err(parse_operation_error)?;
+            .map_err(parse_outcome_error)?;
         cancellation.checkpoint()?;
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         cancellation.checkpoint()?;
@@ -2266,7 +2269,7 @@ fn load_package_file_dfs(
     let named_source = NamedSource::new(display_name.as_str(), Arc::clone(&source));
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display_name)
         .parse_file_with_cancellation(cancellation)
-        .map_err(parse_operation_error)?;
+        .map_err(parse_outcome_error)?;
     cancellation.checkpoint()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
     cancellation.checkpoint()?;
@@ -2831,7 +2834,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let named_source = NamedSource::new(name, Arc::clone(&source));
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
         .parse_file_with_cancellation(cancellation)
-        .map_err(parse_operation_error)?;
+        .map_err(parse_outcome_error)?;
     cancellation.checkpoint()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
     cancellation.checkpoint()?;

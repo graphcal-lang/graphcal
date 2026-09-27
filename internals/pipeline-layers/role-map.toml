@@ -62,6 +62,46 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["outcome"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["outcome", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["source_id"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["diagnostic"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["source_registry"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["source_registry", "tests"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["diagnostic_render"]
+role = "facade"
+
+[[module]]
+package = "compiler"
+path = ["diagnostic_render", "tests"]
+role = "facade"
+
+[[module]]
+package = "compiler"
 path = ["complex_value"]
 role = "contracts"
 
