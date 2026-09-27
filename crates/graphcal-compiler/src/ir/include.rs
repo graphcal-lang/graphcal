@@ -25,7 +25,7 @@ use crate::syntax::visitor::ExprVisitor;
 use super::{
     extern_fns::resolve_plugin_imports,
     lower::{
-        AssertEntry, BodySource, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag,
+        AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag,
         IncludeAliasDeclaration, LayerEntry, LoweredPlotBody, LoweredPlotField,
         LoweredPlotProperty, NodeEntry, ParamDefault, ParamEntry, PlotEntry, UnfrozenConstEntry,
         UnfrozenIR, UnfrozenNodeEntry, UnfrozenSemanticInstance,
@@ -311,12 +311,7 @@ impl UnfrozenIR {
 
         let generic_scope = crate::hir::GenericScope::new();
         let prelude = crate::hir::PreludeTypeScope::graphcal();
-        // A merged dependency body keeps the dependency file's byte offsets, so
-        // a lowering error must render against that body's own source rather
-        // than the importer's `src` (#868); `BodySource::resolve` selects it.
-        let lower_in = |expr: &Expr,
-                        resolution_owner: &crate::dag_id::DagId,
-                        body_src: &NamedSource<Arc<String>>| {
+        let lower_in = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
             let expr_ctx = crate::hir::ExprLoweringContext::new(
                 resolution_owner,
                 resolver,
@@ -328,16 +323,14 @@ impl UnfrozenIR {
             .with_unit_bindings(&self.unit_bindings)
             .with_decl_bindings(&decl_bindings)
             .with_instance_templates(&instance_templates);
-            crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
-                crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
-            })
+            crate::hir::lower_expr(expr, expr_ctx)
+                .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
         };
         let lower_type_annotation_in =
             |type_ann: &TypeExpr,
-             resolution_owner: &crate::dag_id::DagId,
-             annotation_src: &NamedSource<Arc<String>>|
+             resolution_owner: &crate::dag_id::DagId|
              -> Result<crate::hir::TypeAnnotation, GraphcalError> {
-                crate::hir::diagnostics::validate_type_annotation(type_ann, annotation_src)?;
+                crate::hir::diagnostics::validate_type_annotation(type_ann, src)?;
                 let type_ctx = crate::hir::TypeLoweringContext::new(
                     resolution_owner,
                     resolver,
@@ -346,11 +339,7 @@ impl UnfrozenIR {
                 .with_prelude(&prelude);
                 let type_expr =
                     crate::hir::lower_type_expr(type_ann, type_ctx).map_err(|error| {
-                        crate::hir::diagnostics::type_lower_error_to_graphcal(
-                            &error,
-                            type_ann,
-                            annotation_src,
-                        )
+                        crate::hir::diagnostics::type_lower_error_to_graphcal(&error, type_ann, src)
                     })?;
                 let domain_bounds = type_ann
                     .domain_bounds()
@@ -358,7 +347,7 @@ impl UnfrozenIR {
                     .map(|bound| {
                         Ok(crate::hir::DomainBound {
                             kind: bound.kind,
-                            value: lower_in(&bound.value, resolution_owner, annotation_src)?,
+                            value: lower_in(&bound.value, resolution_owner)?,
                             span: bound.span,
                         })
                     })
@@ -383,7 +372,6 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let entry_src = entry.src.resolve(src);
                 let unit = resolver
                     .resolve_unit_path(&entry.unit_owner, &entry.spelling.to_name_path())
                     .map_err(|err| GraphcalError::InternalError {
@@ -391,17 +379,17 @@ impl UnfrozenIR {
                             "registered dynamic unit `{}` did not resolve canonically: {err}",
                             entry.spelling
                         ),
-                        src: entry_src.clone(),
+                        src: src.clone(),
                         span: entry.span.into(),
                     })?;
                 Ok(DynamicUnitScaleEntry {
                     unit,
                     spelling: entry.spelling.clone(),
-                    expr: lower_in(&entry.expr, &entry.body_resolution_owner, entry_src)?,
+                    expr: lower_in(&entry.expr, &entry.body_resolution_owner)?,
                     declared_dimension: entry.declared_dimension.clone(),
                     base_unit_dimension: entry.base_unit_dimension.clone(),
                     span: entry.span,
-                    src: entry_src.clone(),
+                    src: src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -417,16 +405,9 @@ impl UnfrozenIR {
                     type_ann: lower_type_annotation_in(
                         &entry.type_ann,
                         &entry.type_resolution_owner,
-                        entry.type_src.resolve(src),
                     )?,
-                    expr: lower_in(
-                        &entry.expr,
-                        &entry.body_resolution_owner,
-                        entry.body_src.resolve(src),
-                    )?,
+                    expr: lower_in(&entry.expr, &entry.body_resolution_owner)?,
                     span: entry.span,
-                    type_src: entry.type_src.clone(),
-                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -440,15 +421,8 @@ impl UnfrozenIR {
                     .default
                     .as_ref()
                     .map(|default| {
-                        lower_in(
-                            &default.expr,
-                            &default.resolution_owner,
-                            default.src.resolve(src),
-                        )
-                        .map(|expr| ParamDefault {
-                            expr,
-                            src: default.src.clone(),
-                        })
+                        lower_in(&default.expr, &default.resolution_owner)
+                            .map(|expr| ParamDefault { expr })
                     })
                     .transpose()?;
                 Ok(ParamEntry {
@@ -457,11 +431,9 @@ impl UnfrozenIR {
                     type_ann: lower_type_annotation_in(
                         &entry.type_ann,
                         &entry.type_resolution_owner,
-                        entry.type_src.resolve(src),
                     )?,
                     default,
                     span: entry.span,
-                    type_src: entry.type_src.clone(),
                     override_reconciliations: entry.override_reconciliations.clone(),
                 })
             })
@@ -478,7 +450,6 @@ impl UnfrozenIR {
                     type_ann: lower_type_annotation_in(
                         &entry.type_ann,
                         &entry.type_resolution_owner,
-                        entry.type_src.resolve(src),
                     )?,
                     definition: {
                         let context = crate::hir::ExprLoweringContext::new(
@@ -493,17 +464,10 @@ impl UnfrozenIR {
                         .with_decl_bindings(&decl_bindings)
                         .with_instance_templates(&instance_templates);
                         super::node_definition::lower(&entry.definition, context).map_err(
-                            |error| {
-                                crate::hir::expr_lower_error_to_graphcal(
-                                    &error,
-                                    entry.body_src.resolve(src),
-                                )
-                            },
+                            |error| crate::hir::expr_lower_error_to_graphcal(&error, src),
                         )?
                     },
                     span: entry.span,
-                    type_src: entry.type_src.clone(),
-                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -513,7 +477,6 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let body_src = entry.body_src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
@@ -530,11 +493,10 @@ impl UnfrozenIR {
                         .with_decl_bindings(&decl_bindings)
                         .with_instance_templates(&instance_templates);
                         crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
-                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
+                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
                         })?
                     },
                     span: entry.span,
-                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -548,13 +510,12 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let body_src = entry.body_src.resolve(src);
                 let encodings = entry
                     .decl
                     .encodings
                     .iter()
                     .map(|encoding| {
-                        lower_in(&encoding.value, &entry.body_resolution_owner, body_src)
+                        lower_in(&encoding.value, &entry.body_resolution_owner)
                             .map(|lowered| (encoding.channel, lowered))
                     })
                     .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -568,11 +529,7 @@ impl UnfrozenIR {
                             Ok(LoweredPlotField {
                                 property: classify(field.name.value.clone()),
                                 name_span: field.name.span,
-                                value: lower_in(
-                                    &field.value,
-                                    &entry.body_resolution_owner,
-                                    body_src,
-                                )?,
+                                value: lower_in(&field.value, &entry.body_resolution_owner)?,
                             })
                         })
                         .collect::<Result<Vec<_>, GraphcalError>>()
@@ -591,21 +548,19 @@ impl UnfrozenIR {
                             LoweredPlotProperty::plot,
                         )?,
                     },
-                    body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId,
-                            body_src: &NamedSource<Arc<String>>| {
+                            resolution_owner: &crate::dag_id::DagId| {
             fields
                 .iter()
                 .map(|field| {
                     Ok(LoweredPlotField {
                         property: LoweredPlotProperty::composition(field.name.value.clone()),
                         name_span: field.name.span,
-                        value: lower_in(&field.value, resolution_owner, body_src)?,
+                        value: lower_in(&field.value, resolution_owner)?,
                     })
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()
@@ -619,12 +574,7 @@ impl UnfrozenIR {
                 Ok(FigureEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(
-                        &entry.decl.fields,
-                        &entry.body_resolution_owner,
-                        entry.body_src.resolve(src),
-                    )?,
-                    body_src: entry.body_src.clone(),
+                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner)?,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -637,12 +587,7 @@ impl UnfrozenIR {
                 Ok(LayerEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(
-                        &entry.decl.fields,
-                        &entry.body_resolution_owner,
-                        entry.body_src.resolve(src),
-                    )?,
-                    body_src: entry.body_src.clone(),
+                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner)?,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -656,7 +601,7 @@ impl UnfrozenIR {
                 let value_bindings = record
                     .value_bindings
                     .iter()
-                    .map(|(port, expr)| lower_in(expr, owner, src).map(|expr| (port.clone(), expr)))
+                    .map(|(port, expr)| lower_in(expr, owner).map(|expr| (port.clone(), expr)))
                     .collect::<Result<HashMap<_, _>, _>>()?;
                 Ok(crate::ir::instance::HirInstanceRecord {
                     instance: record.instance.clone(),
@@ -726,10 +671,6 @@ impl UnfrozenIR {
             expr,
             body_resolution_owner,
             span,
-            // Alias declarations and bodies are synthesized from the
-            // importer's include statement.
-            type_src: BodySource::own(),
-            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Const));
     }
@@ -754,10 +695,6 @@ impl UnfrozenIR {
             definition: crate::node_definition::NodeDefinition::Formula(expr),
             body_resolution_owner,
             span,
-            // Alias declarations and bodies are synthesized from the
-            // importer's include statement.
-            type_src: BodySource::own(),
-            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Node));
     }

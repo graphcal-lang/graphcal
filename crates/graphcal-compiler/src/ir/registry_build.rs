@@ -25,7 +25,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, GenericParamName};
 use crate::syntax::visitor::ExprVisitor;
 
-use super::lower::{BodySource, UnfrozenDynamicUnitScaleEntry};
+use super::lower::UnfrozenDynamicUnitScaleEntry;
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
 /// into the registry.
@@ -660,7 +660,6 @@ fn register_unit_decl(
             declared_dimension: dim.clone(),
             base_unit_dimension: resolved_definition.dimension.clone(),
             span: def.scale_expr.span,
-            src: BodySource::own(),
         });
         UnitScale::Dynamic {
             base_unit_scale: resolved_definition.base_scale,

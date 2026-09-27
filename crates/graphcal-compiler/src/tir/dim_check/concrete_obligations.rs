@@ -58,19 +58,19 @@ pub(super) fn validate_project(
 ) -> Result<(), GraphcalError> {
     for (_, dag) in tir.local_dags() {
         let types = dag.build_declared_types(src)?;
-        for (name, span, provenance) in dag
+        for (name, span) in dag
             .consts
             .iter()
-            .map(|entry| (&entry.name, entry.type_ann.span, &entry.type_src))
+            .map(|entry| (&entry.name, entry.type_ann.span))
             .chain(
                 dag.params
                     .iter()
-                    .map(|entry| (&entry.name, entry.type_ann.span, &entry.type_src)),
+                    .map(|entry| (&entry.name, entry.type_ann.span)),
             )
             .chain(
                 dag.nodes
                     .iter()
-                    .map(|entry| (&entry.name, entry.type_ann.span, &entry.type_src)),
+                    .map(|entry| (&entry.name, entry.type_ann.span)),
             )
         {
             let declared = types.get(name).ok_or_else(|| {
@@ -80,14 +80,7 @@ pub(super) fn validate_project(
                     DiagnosticAnchor::Source(span),
                 )
             })?;
-            validate_concrete_type_obligations(
-                declared,
-                dag,
-                tir,
-                provenance.resolve(src),
-                span,
-                cancellation,
-            )?;
+            validate_concrete_type_obligations(declared, dag, tir, src, span, cancellation)?;
         }
         let facts = dag.expression_facts().map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)

@@ -310,14 +310,9 @@ fn check_instance_defaults(
             })?
             == Some(id);
         if !inherited {
-            check_decl_expr_type(
-                &ctx.for_body(default.src.resolve(ctx.src)),
-                &entry.name,
-                &entry.type_ann.span,
-                entry.type_src.resolve(ctx.src),
-            )?;
+            check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
             ctx.expression_facts
-                .record_contextual(&default.expr, default.src.resolve(ctx.src))?;
+                .record_contextual(&default.expr, ctx.src)?;
             continue;
         }
         let record = facts.get(id).map_err(|error| {
@@ -352,7 +347,7 @@ fn check_instance_defaults(
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: expected.format(&ctx.registry.dimensions),
                 inferred: specialized.format(&ctx.registry.dimensions),
-                src: default.src.resolve(ctx.src).clone(),
+                src: ctx.src.clone(),
                 span: default.expr.span.into(),
             });
         }
