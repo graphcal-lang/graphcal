@@ -1465,7 +1465,7 @@ fn eval_hir_extern_fn(
     }
 
     let mut bound_indexes: std::collections::HashMap<
-        graphcal_compiler::syntax::index_name::IndexVarName,
+        graphcal_compiler::function_signature::IndexBinder,
         BoundExternIndex,
     > = std::collections::HashMap::new();
     let mut arg_values: Vec<HostFnValue> = Vec::with_capacity(args.len());

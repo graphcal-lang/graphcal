@@ -442,9 +442,10 @@ fn solve_nat_poly_form(
     let form_mismatch = || site.mismatch(form, src, span);
 
     for (mono, coeff) in &form.terms {
-        let (remaining_mono, factor) = mono.substitute(nat_sub).ok_or_else(form_mismatch)?;
+        let (remaining_mono, factor) =
+            crate::nat::substitute_monomial(mono, nat_sub).ok_or_else(form_mismatch)?;
         let term_value = coeff.checked_mul(factor).ok_or_else(form_mismatch)?;
-        if remaining_mono.is_constant() {
+        if remaining_mono.is_empty() {
             reduced_constant = reduced_constant
                 .checked_add(term_value)
                 .ok_or_else(form_mismatch)?;
@@ -467,7 +468,7 @@ fn solve_nat_poly_form(
     // Check if exactly one unbound variable appears, only at degree 1
     let mut unbound_vars = std::collections::BTreeSet::new();
     for mono in reduced_terms.keys() {
-        for var in mono.0.keys() {
+        for var in mono.keys() {
             unbound_vars.insert(var.clone());
         }
     }
@@ -477,7 +478,7 @@ fn solve_nat_poly_form(
         // Check all remaining monomials are linear in this variable
         let all_linear = reduced_terms
             .keys()
-            .all(|m| m.0.len() == 1 && m.0.get(&var) == Some(&1));
+            .all(|m| m.len() == 1 && m.get(&var) == Some(1));
 
         if all_linear {
             // Solve: coeff * var + reduced_constant = target

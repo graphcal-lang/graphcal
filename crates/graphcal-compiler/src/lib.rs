@@ -37,6 +37,7 @@ pub mod registry;
 pub mod source_id;
 pub(crate) mod source_line;
 pub mod source_registry;
+pub mod sparse_monomial;
 pub mod stack;
 pub mod static_interface;
 pub mod syntax;

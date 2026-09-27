@@ -176,7 +176,7 @@ fn resolve_extern_value_kind(
     index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ParamKind, GraphcalError> {
+) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::ParamKind;
 
@@ -333,7 +333,7 @@ fn resolve_extern_result_kind(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ResultKind<ExternStructResult>, GraphcalError> {
+) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
 
     if type_ann.constraints.is_empty()
@@ -375,7 +375,7 @@ pub(super) fn resolve_extern_struct_return(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ResultKind<ExternStructResult>, GraphcalError> {
+) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
     let invalid = |message: String| GraphcalError::InvalidExternSignature {
@@ -461,7 +461,7 @@ fn resolve_extern_struct_field(
             // No dimension variables are in scope inside a record's fields;
             // the monomial is therefore concrete by construction.
             let monomial = resolve_extern_dim_monomial(dim_expr, &[], registry, src)?;
-            Ok(StructFieldKind::Quantity(monomial.fixed))
+            Ok(StructFieldKind::Quantity(monomial.fixed_factor().clone()))
         }
         TypeExprKind::IndexLabel { .. }
         | TypeExprKind::Datetime
@@ -487,7 +487,7 @@ fn resolve_extern_array_kind(
     index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ParamKind, GraphcalError> {
+) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
     use crate::syntax::ast::IndexExpr;
@@ -566,8 +566,7 @@ fn resolve_extern_dim_monomial(
     dim_vars: &[crate::syntax::dimension::DimVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::DimMonomial, GraphcalError> {
-    use crate::function_signature::DimVarPower;
+) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
     use crate::syntax::ast::MulDivOp;
 
     let overflow = |span: Span| GraphcalError::DimensionOverflow {
@@ -575,7 +574,7 @@ fn resolve_extern_dim_monomial(
         span: span.into(),
     };
 
-    let mut vars: Vec<DimVarPower> = Vec::new();
+    let mut vars = Vec::new();
     let mut fixed = crate::dimension::Dimension::dimensionless();
     for item in &dim_expr.terms {
         let term = &item.term;
@@ -588,10 +587,7 @@ fn resolve_extern_dim_monomial(
                 MulDivOp::Mul => power,
                 MulDivOp::Div => -power,
             };
-            vars.push(DimVarPower {
-                var: var.clone(),
-                power,
-            });
+            vars.push((var.clone(), power));
             continue;
         }
         let Some(leaf) = path.as_bare() else {
@@ -618,5 +614,11 @@ fn resolve_extern_dim_monomial(
         }
         .map_err(|_| overflow(term.span))?;
     }
-    Ok(crate::function_signature::DimMonomial { vars, fixed })
+    crate::function_signature::DimMonomial::try_new(vars, fixed).map_err(|error| {
+        GraphcalError::InvalidExternSignature {
+            message: crate::function_signature::SignatureError::from(error).to_string(),
+            src: src.clone(),
+            span: dim_expr.span.into(),
+        }
+    })
 }

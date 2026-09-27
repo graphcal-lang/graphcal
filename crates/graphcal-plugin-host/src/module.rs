@@ -12,10 +12,9 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use graphcal_compiler::function_signature::{
-    FunctionSignature, ParamKind, ResultKind, ScalarValueKind,
+    FunctionSignature, IndexBinder, ParamKind, ResultKind, ScalarValueKind,
 };
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
-use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_eval::host_abi::{decode_bool, decode_int, validate_quantity};
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
@@ -423,7 +422,7 @@ impl PluginModule {
         };
 
         let mut params: Vec<wasmi::Val> = Vec::new();
-        let mut bound_extents: std::collections::HashMap<IndexVarName, usize> =
+        let mut bound_extents: std::collections::HashMap<IndexBinder, usize> =
             std::collections::HashMap::new();
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
@@ -513,7 +512,7 @@ impl PluginModule {
         live: &mut CallInstance<'_>,
         function: &FnName,
         result: &ResultKind,
-        bound_extents: &std::collections::HashMap<IndexVarName, usize>,
+        bound_extents: &std::collections::HashMap<IndexBinder, usize>,
         buffers: &mut Option<BufferProtocol>,
         fuel_per_call: u64,
     ) -> Result<Option<OutBuffer>, PluginCallError> {

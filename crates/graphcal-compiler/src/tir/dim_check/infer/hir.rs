@@ -1899,8 +1899,8 @@ fn infer_extern_fn_call(
 
     // Boundary rendering for diagnostics only.
     let display_name = ext.to_string();
-    let mut bindings: HashMap<crate::syntax::dimension::DimVarName, Dimension> = HashMap::new();
-    let mut index_bindings: HashMap<crate::syntax::index_name::IndexVarName, IndexTypeRef> =
+    let mut bindings: HashMap<crate::function_signature::DimBinder, Dimension> = HashMap::new();
+    let mut index_bindings: HashMap<crate::function_signature::IndexBinder, IndexTypeRef> =
         HashMap::new();
     for (param, arg) in sig.params().iter().zip(args) {
         let arg_type = infer_arg(
