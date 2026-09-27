@@ -64,25 +64,41 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
         span,
         doc,
     } = d;
-    match kind {
+    let kind = match kind {
         DeclKind::Sugar(RawDeclSugar::Multi(multi)) => {
             // `expand_multi_decl` produces one `ExpandedSlotDecl` per slot
             // (Param/Node/ConstNode only — never `Sugar`). Lift each to
             // `Declaration<Desugared>` so the rest of the pass sees a uniform
             // post-desugar type. A doc block above the multi-decl documents
             // every expanded slot.
-            crate::syntax::desugar::expand_multi_decl(&multi)
+            return crate::syntax::desugar::expand_multi_decl(&multi)
                 .into_iter()
                 .map(|slot| lift_slot_decl(slot, doc.clone()))
-                .collect()
+                .collect();
         }
-        other => vec![Declaration {
-            attributes,
-            kind: convert_decl_kind_non_sugar(other),
-            span,
-            doc,
-        }],
-    }
+        DeclKind::Param(p) => DeclKind::Param(p.into()),
+        DeclKind::Node(n) => DeclKind::Node(n.into()),
+        DeclKind::ConstNode(c) => DeclKind::ConstNode(c.into()),
+        DeclKind::BaseDimension(d) => DeclKind::BaseDimension(d),
+        DeclKind::Dimension(d) => DeclKind::Dimension(d),
+        DeclKind::Unit(u) => DeclKind::Unit(u.into()),
+        DeclKind::Type(t) => DeclKind::Type(t.into()),
+        DeclKind::Index(i) => DeclKind::Index(i.into()),
+        DeclKind::Import(i) => DeclKind::Import(i),
+        DeclKind::PluginImport(p) => DeclKind::PluginImport(p.into()),
+        DeclKind::Include(i) => DeclKind::Include(i.into()),
+        DeclKind::Dag(d) => DeclKind::Dag(d.into()),
+        DeclKind::Assert(a) => DeclKind::Assert(a.into()),
+        DeclKind::Plot(p) => DeclKind::Plot(p.into()),
+        DeclKind::Figure(f) => DeclKind::Figure(f.into()),
+        DeclKind::Layer(l) => DeclKind::Layer(l.into()),
+    };
+    vec![Declaration {
+        attributes,
+        kind,
+        span,
+        doc,
+    }]
 }
 
 /// Lift one multi-decl expansion slot to a `Declaration<Desugared>`.
@@ -104,40 +120,6 @@ fn lift_slot_decl(
         kind,
         span,
         doc,
-    }
-}
-
-/// Convert a non-sugar `DeclKind<Raw>` variant to `DeclKind<Desugared>`.
-///
-/// Panics if called with `DeclKind::Sugar(_)` — `convert_decl` handles that
-/// case directly so it never reaches here.
-#[expect(
-    clippy::panic,
-    reason = "invariant: convert_decl handles Sugar separately and never calls this with Sugar"
-)]
-fn convert_decl_kind_non_sugar(k: DeclKind<Raw>) -> DeclKind<Desugared> {
-    match k {
-        DeclKind::Param(p) => DeclKind::Param(p.into()),
-        DeclKind::Node(n) => DeclKind::Node(n.into()),
-        DeclKind::ConstNode(c) => DeclKind::ConstNode(c.into()),
-        DeclKind::BaseDimension(d) => DeclKind::BaseDimension(d),
-        DeclKind::Dimension(d) => DeclKind::Dimension(d),
-        DeclKind::Unit(u) => DeclKind::Unit(u.into()),
-        DeclKind::Type(t) => DeclKind::Type(t.into()),
-        DeclKind::Index(i) => DeclKind::Index(i.into()),
-        DeclKind::Import(i) => DeclKind::Import(i),
-        DeclKind::PluginImport(p) => DeclKind::PluginImport(p.into()),
-        DeclKind::Include(i) => DeclKind::Include(i.into()),
-        DeclKind::Dag(d) => DeclKind::Dag(d.into()),
-        DeclKind::Assert(a) => DeclKind::Assert(a.into()),
-        DeclKind::Plot(p) => DeclKind::Plot(p.into()),
-        DeclKind::Figure(f) => DeclKind::Figure(f.into()),
-        DeclKind::Layer(l) => DeclKind::Layer(l.into()),
-        // The only caller is the `other` arm of `convert_decl`'s match,
-        // which handles `Sugar` two lines above — visibly unreachable.
-        DeclKind::Sugar(_) => {
-            panic!("convert_decl dispatches Sugar before calling convert_decl_kind_non_sugar")
-        }
     }
 }
 

@@ -639,7 +639,7 @@ impl ModuleSymbols {
                 | ast::DeclKind::Include(_) => {}
                 #[expect(
                     clippy::uninhabited_references,
-                    reason = "post-desugar Sugar payload is uninhabited by phase invariant"
+                    reason = "Sugar(Infallible) proves this arm unreachable"
                 )]
                 ast::DeclKind::Sugar(s) => never(*s),
             }

@@ -30,6 +30,7 @@ use crate::registry::resolve_types::{
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
+use crate::syntax::phase::never;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
@@ -166,10 +167,12 @@ fn check_builtin_name_shadowing(
                 d.name.value.atom(),
                 d.name.span,
             )),
-            DeclKind::Import(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Include(_)
-            | DeclKind::Sugar(_) => None,
+            DeclKind::Import(_) | DeclKind::PluginImport(_) | DeclKind::Include(_) => None,
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         };
 
         if let Some((namespace, kind, name, span)) = introduced
@@ -244,7 +247,7 @@ fn check_static_namespace_collisions(
     Ok(())
 }
 
-fn static_namespace_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
+const fn static_namespace_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
     match decl {
         DeclKind::BaseDimension(d) => Some((d.name.value.atom(), d.name.span)),
         DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
@@ -262,7 +265,11 @@ fn static_namespace_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
         | DeclKind::Import(_)
         | DeclKind::PluginImport(_)
         | DeclKind::Include(_) => None,
-        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     }
 }
 
@@ -342,7 +349,11 @@ fn check_value_namespace_collisions(
             | DeclKind::Import(_)
             | DeclKind::PluginImport(_)
             | DeclKind::Include(_) => {}
-            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         }
     }
 
@@ -529,8 +540,12 @@ fn collect_local_declarations(
             | DeclKind::Plot(_)
             | DeclKind::Figure(_)
             | DeclKind::Layer(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Sugar(_) => {}
+            | DeclKind::PluginImport(_) => {}
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         }
     }
 
@@ -558,7 +573,11 @@ fn collect_local_declarations(
             | DeclKind::Dag(_) => {
                 continue;
             }
-            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         };
 
         names.insert(ScopedName::local(name.clone()), name_span);
@@ -587,7 +606,11 @@ fn collect_local_declarations(
                 // These declarations are handled earlier (continue'd before reaching here).
                 continue;
             }
-            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         };
         source_order.push((name, category));
     }
@@ -606,7 +629,11 @@ fn collect_local_declarations(
             | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
             | DeclKind::Dag(_) => {}
-            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
             DeclKind::Assert(a) => {
                 asserts.push(CollectedAssertEntry {
                     name: a.name.value.clone(),
@@ -916,11 +943,13 @@ fn validate_private_in_public(
             DeclKind::Figure(d) => d.visibility.is_public(),
             DeclKind::Layer(d) => d.visibility.is_public(),
             // Use-sites carry no blanket visibility; plugin functions are only
-            // callable through their own alias; sugar is desugared away.
-            DeclKind::Import(_)
-            | DeclKind::Include(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Sugar(_) => false,
+            // callable through their own alias.
+            DeclKind::Import(_) | DeclKind::Include(_) | DeclKind::PluginImport(_) => false,
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         };
         if !has_external_signature {
             continue;
