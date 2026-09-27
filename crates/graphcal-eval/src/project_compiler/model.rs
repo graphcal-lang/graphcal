@@ -7,13 +7,13 @@ use miette::NamedSource;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
-use graphcal_compiler::ir::imported_binding::HirImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexBindingTarget, Registry};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
@@ -254,7 +254,7 @@ pub(super) enum ProjectedStaticAlias {
 /// Mutable state accumulated while processing one body's imports.
 pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
-    pub(super) imported_bindings: HashMap<ScopedName, HirImportedBinding>,
+    pub(super) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) imported_type_system_names: HashMap<
         graphcal_compiler::dag_id::DagId,

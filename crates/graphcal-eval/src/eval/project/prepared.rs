@@ -24,12 +24,12 @@ use graphcal_compiler::syntax::span::Span;
 use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
 use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 use crate::host_fns::HostFunctionRegistry;
 use crate::project_compiler::{
@@ -247,7 +247,7 @@ impl ParameterBindingBuilder<'_> {
     }
 }
 struct ImportedConstantOutput {
-    declaration: RuntimeDeclKey,
+    declaration: ResolvedDeclName,
     value: RuntimeValue,
     declared_type: DeclaredType,
 }
@@ -332,7 +332,7 @@ impl PreparedProject {
                 Ok((
                     name,
                     ImportedConstantOutput {
-                        declaration: RuntimeDeclKey::resolved(binding.target().clone()),
+                        declaration: binding.target().clone(),
                         value,
                         declared_type,
                     },
@@ -530,7 +530,7 @@ impl PreparedProject {
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {
                         crate::presentation_evidence::PresentationDiagnostic {
-                            declaration: imported.declaration.as_resolved().clone(),
+                            declaration: imported.declaration.clone(),
                             channel: None,
                             detail,
                         }

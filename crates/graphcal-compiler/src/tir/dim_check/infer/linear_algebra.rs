@@ -2,13 +2,14 @@
 //!
 //! HIR walking and diagnostic rendering stay in `hir`; this module receives
 //! already-inferred argument types and returns either a result type or a typed
-//! shape error. Axis matching uses [`InferredIndex`] identity rather than
+//! shape error. Axis matching uses [`IndexTypeRef`] identity rather than
 //! display names.
 
 use crate::builtin::LinearAlgebraFn;
 use crate::dimension::Dimension;
 
-use super::super::{InferredIndex, InferredType};
+use super::super::InferredType;
+use crate::registry::declared_type::IndexTypeRef;
 
 /// A linear-algebra call cannot be typed from the supplied argument shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +22,8 @@ pub(super) enum LinearAlgebraTypeError {
     /// same typed identity.
     AxisMismatch {
         argument: usize,
-        expected: InferredIndex,
-        found: InferredIndex,
+        expected: IndexTypeRef,
+        found: IndexTypeRef,
     },
     /// An operation requires a fixed axis cardinality.
     CardinalityMismatch {
@@ -40,11 +41,11 @@ pub(super) enum LinearAlgebraTypeError {
 #[derive(Debug)]
 struct IndexedQuantity<'a> {
     dimension: &'a Dimension,
-    axes: Vec<&'a InferredIndex>,
+    axes: Vec<&'a IndexTypeRef>,
 }
 
 impl IndexedQuantity<'_> {
-    fn axis(&self, position: usize) -> &InferredIndex {
+    fn axis(&self, position: usize) -> &IndexTypeRef {
         self.axes[position]
     }
 }
@@ -70,9 +71,9 @@ fn indexed_quantity(
 }
 
 fn require_same_axis(
-    expected: &InferredIndex,
+    expected: &IndexTypeRef,
     argument: usize,
-    found: &InferredIndex,
+    found: &IndexTypeRef,
 ) -> Result<(), LinearAlgebraTypeError> {
     if expected == found {
         Ok(())
@@ -85,7 +86,7 @@ fn require_same_axis(
     }
 }
 
-fn quantity_over(dimension: Dimension, axes: &[&InferredIndex]) -> InferredType {
+fn quantity_over(dimension: Dimension, axes: &[&IndexTypeRef]) -> InferredType {
     axes.iter()
         .rev()
         .fold(InferredType::Quantity(dimension), |element, index| {
@@ -126,7 +127,7 @@ fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebr
 pub(super) fn infer_linear_algebra_type(
     function: LinearAlgebraFn,
     arguments: &[InferredType],
-    mut cardinality: impl FnMut(&InferredIndex) -> Option<usize>,
+    mut cardinality: impl FnMut(&IndexTypeRef) -> Option<usize>,
 ) -> Result<InferredType, LinearAlgebraTypeError> {
     if arguments.len() != function.arity() {
         return Err(LinearAlgebraTypeError::WrongArity {

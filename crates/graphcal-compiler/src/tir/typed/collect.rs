@@ -298,15 +298,6 @@ pub(super) fn collect_hir_decl_bindings(
     bindings
 }
 
-pub(super) fn collect_resolved_decl_bindings(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
-    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-) -> HashMap<ScopedName, ResolvedDeclName> {
-    collect_hir_decl_bindings(consts, params, nodes, imported_bindings)
-}
-
 pub(super) fn resolve_expected_fail_keys(
     expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     ctx: ModuleTypeContext<'_>,

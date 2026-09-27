@@ -381,7 +381,7 @@ where
             DiagnosticAnchor::WholeFile,
         ));
     }
-    for (lexical, hir_binding) in ir.imported_bindings() {
+    for (lexical, hir_target) in ir.imported_bindings() {
         let Some(checked_binding) = checked.get(lexical) else {
             return Err(GraphcalError::internal_error(
                 format!("checked interface for imported binding `{lexical}` is missing"),
@@ -389,12 +389,12 @@ where
                 DiagnosticAnchor::WholeFile,
             ));
         };
-        if checked_binding.target() != hir_binding.target() {
+        if checked_binding.target() != hir_target {
             return Err(GraphcalError::internal_error(
                 format!(
                     "checked interface for `{lexical}` targets `{}` instead of HIR target `{}`",
                     checked_binding.target(),
-                    hir_binding.target()
+                    hir_target
                 ),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -1697,8 +1697,9 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs_from_expr,
-    collect_resolved_dag_dependencies, collect_resolved_decl_bindings, resolve_expected_fail_keys,
+    augment_runtime_deps_for_dynamic_units, collect_hir_decl_bindings,
+    collect_resolved_constructor_refs_from_expr, collect_resolved_dag_dependencies,
+    resolve_expected_fail_keys,
 };
 
 fn install_non_value_decl_bindings<'a>(
@@ -1787,12 +1788,8 @@ impl DagTIRSeed {
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
-        let mut decl_bindings = collect_resolved_decl_bindings(
-            &self.consts,
-            &self.params,
-            &self.nodes,
-            &imported_bindings,
-        );
+        let mut decl_bindings =
+            collect_hir_decl_bindings(&self.consts, &self.params, &self.nodes, &imported_bindings);
         let dag_owned_sinks = plots
             .iter()
             .map(|entry| &entry.name)

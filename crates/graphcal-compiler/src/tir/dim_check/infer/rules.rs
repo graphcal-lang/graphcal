@@ -60,7 +60,7 @@ fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
 /// `k : Key<Fin(N)>` plus a static Nat constant `c` yields `Key<Fin(N + c)>`.
 fn fin_key_additive_rule(
     op: BinOp,
-    key_index: &super::super::InferredIndex,
+    key_index: &crate::registry::declared_type::IndexTypeRef,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
@@ -106,7 +106,7 @@ fn fin_key_additive_rule(
             src: src.clone(),
             span: rhs.span.into(),
         })?;
-    crate::tir::dim_check::InferredIndex::from_finite_index_form(shifted)
+    crate::registry::declared_type::IndexTypeRef::from_finite_index_form(shifted)
         .map(InferredType::Key)
         .map_err(|err| GraphcalError::EvalError {
             message: err.to_string(),

@@ -19,7 +19,9 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
     let expr = tir.root().value_expr(projected).unwrap();
     for (constructor, valid) in [("Token", true), ("NotToken", false)] {
         let values = HashMap::from([(
-            crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("stored"))
+            tir.root()
+                .lookup_decl_identity(&scoped_name("stored"))
+                .into_bound()
                 .unwrap(),
             crate::eval_expr::RuntimeValue::Struct {
                 type_name: ResolvedStructTypeName::from_def(

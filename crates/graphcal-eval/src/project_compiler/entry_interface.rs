@@ -16,8 +16,8 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::TIR;
 use miette::NamedSource;
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::eval::types::CompileError;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// One checked entry-DAG parameter in direct source order.
 #[derive(Debug)]
@@ -25,7 +25,7 @@ pub struct CheckedEntryParameter {
     name: DeclName,
     declared_type: DeclaredType,
     has_default: bool,
-    runtime_key: RuntimeDeclKey,
+    runtime_key: ResolvedDeclName,
     span: Span,
 }
 
@@ -42,7 +42,7 @@ impl CheckedEntryParameter {
         self.has_default
     }
 
-    pub const fn runtime_key(&self) -> &RuntimeDeclKey {
+    pub const fn runtime_key(&self) -> &ResolvedDeclName {
         &self.runtime_key
     }
 
@@ -57,7 +57,7 @@ pub struct CheckedEntryOutput {
     name: DeclName,
     declared_type: DeclaredType,
     visibility: Visibility,
-    runtime_key: RuntimeDeclKey,
+    runtime_key: ResolvedDeclName,
 }
 
 impl CheckedEntryOutput {
@@ -73,7 +73,7 @@ impl CheckedEntryOutput {
         self.visibility
     }
 
-    pub const fn runtime_key(&self) -> &RuntimeDeclKey {
+    pub const fn runtime_key(&self) -> &ResolvedDeclName {
         &self.runtime_key
     }
 }
@@ -134,10 +134,9 @@ fn checked_runtime_key(
     name: &ScopedName,
     source: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<RuntimeDeclKey, CompileError> {
+) -> Result<ResolvedDeclName, CompileError> {
     tir.root()
         .require_bound_decl_identity(name, source, DiagnosticAnchor::Source(span))
-        .map(RuntimeDeclKey::resolved)
         .map_err(CompileError::from)
 }
 

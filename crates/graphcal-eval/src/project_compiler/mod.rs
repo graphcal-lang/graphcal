@@ -11,7 +11,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
-use graphcal_compiler::ir::imported_binding::{HirImportedBinding, ImportedBinding};
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -19,6 +19,7 @@ use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexBindingTarget, Registry, RegistryBuilder};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::DimName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};

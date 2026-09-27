@@ -16,7 +16,6 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::model::TIR;
 use miette::NamedSource;
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::execution_plan::ExecPlan;
 
 type BoundParameters = BTreeSet<ResolvedDeclName>;
@@ -111,11 +110,10 @@ impl Analysis<'_> {
         if !self.active.insert(query.clone()) {
             return Err(self.invalid(format!("cyclic checked call dependency at `{name}`")));
         }
-        let key = RuntimeDeclKey::resolved(name.clone());
         let owner = self
             .plan
             .declaration_locations
-            .body_for(&key)
+            .body_for(name)
             .map_err(|error| self.invalid(error.to_string()))?;
         let dag = self
             .tir
@@ -132,11 +130,11 @@ impl Analysis<'_> {
                     .plan
                     .callable(owner)
                     .map_err(|error| self.invalid(error.to_string()))?;
-                let dependencies = callable.dependencies.get(&key).ok_or_else(|| {
+                let dependencies = callable.dependencies.get(name).ok_or_else(|| {
                     self.invalid(format!("checked declaration `{name}` has no dependencies"))
                 })?;
                 for dependency in dependencies {
-                    origins.extend(self.declaration(dependency.as_resolved(), bound)?);
+                    origins.extend(self.declaration(dependency, bound)?);
                 }
                 for (output, parameters) in calls(expression, bound) {
                     origins.extend(self.declaration(&output, &parameters)?);

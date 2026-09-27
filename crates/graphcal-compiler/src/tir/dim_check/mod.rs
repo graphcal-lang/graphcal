@@ -10,16 +10,14 @@ use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKe
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use crate::syntax::index_name::{IndexEntryKey, IndexName};
+use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::StructTypeName;
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::FormattingRegistry;
-use crate::tir::typed::{FiniteIndexIdentity, NatPolyForm};
 
 pub(crate) use helpers::{expect_quantity, format_inferred_type};
 
@@ -52,169 +50,11 @@ mod tests;
 
 pub use crate::registry::declared_type::DeclaredType;
 
-/// Index identity carried by inferred collection/label types.
-///
-/// Declared indexes compare by owner-qualified [`IndexTypeRef`]. Structural
-/// finite indexes additionally carry their normalized Nat form so generic axes
-/// such as `Fin(N + 1)` are not encoded in or compared through synthetic strings.
-#[derive(Debug, Clone, Eq)]
-pub(crate) struct InferredIndex {
-    reference: IndexTypeRef,
-}
-
-impl InferredIndex {
-    #[must_use]
-    pub(crate) fn from_resolved(resolved: ResolvedIndexName) -> Self {
-        Self {
-            reference: IndexTypeRef::from_resolved(resolved),
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn from_ref(reference: IndexTypeRef) -> Self {
-        Self { reference }
-    }
-
-    /// Create an inferred finite structural index from a validated finite-index identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the identity cannot be converted to an index type reference.
-    fn from_finite_index_identity(
-        identity: &FiniteIndexIdentity,
-    ) -> Result<Self, crate::registry::types::FiniteIndexError> {
-        Ok(Self {
-            reference: identity.to_index_type_ref()?,
-        })
-    }
-
-    /// Create an inferred finite structural index from a normalized Nat form.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the form is a concrete invalid finite structural size.
-    pub(crate) fn from_finite_index_form(
-        form: NatPolyForm,
-    ) -> Result<Self, crate::registry::types::FiniteIndexError> {
-        Self::from_finite_index_identity(&FiniteIndexIdentity::try_from_form(form)?)
-    }
-
-    #[must_use]
-    pub(crate) const fn type_ref(&self) -> &IndexTypeRef {
-        &self.reference
-    }
-
-    #[must_use]
-    pub(crate) fn name(&self) -> IndexName {
-        self.reference.display_name()
-    }
-
-    #[must_use]
-    pub(crate) const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
-        self.reference.declared_resolved()
-    }
-
-    #[must_use]
-    pub(crate) fn finite_index_form(&self) -> Option<NatPolyForm> {
-        self.reference.finite_index_form()
-    }
-
-    #[must_use]
-    pub(crate) fn matches_resolved(&self, expected: &ResolvedIndexName) -> bool {
-        self.declared_resolved() == Some(expected)
-    }
-
-    #[must_use]
-    fn matches_ref(&self, expected: &IndexTypeRef) -> bool {
-        self.reference.matches_ref(expected)
-    }
-}
-
-impl PartialEq for InferredIndex {
-    fn eq(&self, other: &Self) -> bool {
-        self.reference.matches_ref(&other.reference)
-    }
-}
-
-impl std::fmt::Display for InferredIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.reference.fmt(f)
-    }
-}
-
-/// Struct/type identity carried by inferred constructor, match, and field types.
-///
-/// Equality is owner-sensitive; leaf-only names must be resolved before they
-/// become inferred semantic types.
-#[derive(Debug, Clone, Eq)]
-pub(crate) struct InferredStructType {
-    reference: StructTypeRef,
-}
-
-impl InferredStructType {
-    #[must_use]
-    pub(crate) fn from_resolved(resolved: ResolvedStructTypeName) -> Self {
-        Self {
-            reference: StructTypeRef::from_resolved(resolved),
-        }
-    }
-
-    #[must_use]
-    const fn from_ref(reference: StructTypeRef) -> Self {
-        Self { reference }
-    }
-
-    #[must_use]
-    const fn type_ref(&self) -> &StructTypeRef {
-        &self.reference
-    }
-
-    #[must_use]
-    const fn name(&self) -> &StructTypeName {
-        self.reference.name()
-    }
-
-    #[must_use]
-    pub(crate) const fn resolved(&self) -> &ResolvedStructTypeName {
-        self.reference.resolved()
-    }
-
-    #[must_use]
-    fn matches_resolved(&self, expected: &ResolvedStructTypeName) -> bool {
-        self.resolved() == expected
-    }
-
-    #[must_use]
-    fn matches_ref(&self, expected: &StructTypeRef) -> bool {
-        self.reference.matches_ref(expected)
-    }
-}
-
-impl PartialEq for InferredStructType {
-    fn eq(&self, other: &Self) -> bool {
-        self.reference.matches_ref(&other.reference)
-    }
-}
-
-impl std::fmt::Display for InferredStructType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.reference.fmt(f)
-    }
-}
-
-impl std::ops::Deref for InferredStructType {
-    type Target = StructTypeName;
-
-    fn deref(&self) -> &Self::Target {
-        self.name()
-    }
-}
-
 /// A generic argument inferred at a constructor or type-application site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InferredGenericArg {
     Dim(Dimension),
-    Index(InferredIndex),
+    Index(IndexTypeRef),
     Nat(crate::nat::NatPolyForm),
     Type(InferredType),
 }
@@ -231,16 +71,16 @@ pub(crate) enum InferredType {
     Datetime(TimeScale),
     /// An index-key value of type `Key<I>`: a first-class element key of
     /// axis `I`.
-    Key(InferredIndex),
+    Key(IndexTypeRef),
     /// An index identity carried only while checking an `Index`-sorted generic
     /// argument. This may be a declared or structural finite index and is not a
     /// Graphcal value type.
-    IndexArg(InferredIndex),
+    IndexArg(IndexTypeRef),
     /// A struct type with sort-aware generic arguments.
-    Struct(InferredStructType, Vec<InferredGenericArg>),
+    Struct(StructTypeRef, Vec<InferredGenericArg>),
     Indexed {
         element: Box<Self>,
-        index: InferredIndex,
+        index: IndexTypeRef,
     },
 }
 
@@ -636,7 +476,7 @@ fn check_ineffective_conversions_inner(
 
 #[derive(Debug)]
 struct AssertionIndexShape {
-    axes: Vec<InferredIndex>,
+    axes: Vec<IndexTypeRef>,
 }
 
 impl AssertionIndexShape {
@@ -754,7 +594,7 @@ fn check_hir_assert_body(
 }
 
 /// Peel the index axes off an inferred type, outermost first.
-fn peel_index_axes(ty: &InferredType) -> (Vec<InferredIndex>, &InferredType) {
+fn peel_index_axes(ty: &InferredType) -> (Vec<IndexTypeRef>, &InferredType) {
     let mut axes = Vec::new();
     let mut current = ty;
     while let InferredType::Indexed { element, index } = current {
@@ -769,7 +609,7 @@ fn peel_index_axes(ty: &InferredType) -> (Vec<InferredIndex>, &InferredType) {
 /// exactly the same axes in the same order. Returns the operand's element
 /// type.
 fn broadcast_operand_element<'a>(
-    actual_axes: &[InferredIndex],
+    actual_axes: &[IndexTypeRef],
     actual_type: &InferredType,
     operand_type: &'a InferredType,
     operand_span: crate::syntax::span::Span,
@@ -851,9 +691,9 @@ fn validate_expected_fail_key(
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
         match part {
             ExpectedFailKeyPart::Named { index, .. } => {
-                if !index.matches_ref(expected_axis.type_ref()) {
+                if !index.matches_ref(expected_axis) {
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                        expected: expected_axis.name().to_string(),
+                        expected: expected_axis.display_name().to_string(),
                         found: part.display(),
                         src: src.clone(),
                         span: part.span().into(),
@@ -861,9 +701,9 @@ fn validate_expected_fail_key(
                 }
             }
             ExpectedFailKeyPart::FinitePosition { position, span } => {
-                let Some(finite) = expected_axis.type_ref().finite_index_ref() else {
+                let Some(finite) = expected_axis.finite_index_ref() else {
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
-                        expected: expected_axis.name().to_string(),
+                        expected: expected_axis.display_name().to_string(),
                         found: part.display(),
                         src: src.clone(),
                         span: (*span).into(),
@@ -1940,18 +1780,16 @@ fn detect_decl_cycles(
 
     use crate::syntax::module_name::ScopedName;
 
-    type ResolvedDeclKey = ResolvedDeclName;
-
     fn check_resolved<'a>(
         dag: &crate::tir::typed::DagTIR,
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
-        deps: &HashMap<ResolvedDeclKey, BTreeSet<ResolvedDeclKey>>,
+        deps: &HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
-        let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
-        let mut span_by_key: HashMap<ResolvedDeclKey, crate::syntax::span::Span> = HashMap::new();
+        let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
+        let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
+        let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
+        let mut span_by_key: HashMap<ResolvedDeclName, crate::syntax::span::Span> = HashMap::new();
         for (name, span) in names_with_spans {
             let key = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(span))?;
             let idx = graph.add_node(key.clone());

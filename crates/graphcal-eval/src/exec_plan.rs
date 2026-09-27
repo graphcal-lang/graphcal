@@ -11,11 +11,11 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
 
 use crate::constant_pools::{ConstantPools, ConstantReference};
-use crate::decl_key::RuntimeDeclKey;
 use crate::declaration_locations::DeclarationLocations;
 use crate::execution_facts::CheckedExecutionFacts;
 use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
 use crate::execution_scope::CheckedExecutionScope;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 /// Check a TIR and select its root execution plan.
 ///
@@ -87,7 +87,7 @@ pub fn combined_runtime_order_for(
     tir: &TIR,
     root: &graphcal_compiler::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
+) -> Result<Vec<ResolvedDeclName>, GraphcalError> {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
     let dags = semantic_runtime_dags_from(tir, root, src)?;
     let candidates = dags
@@ -104,7 +104,6 @@ pub fn combined_runtime_order_for(
                 })
                 .map(|(name, _)| {
                     dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                        .map(RuntimeDeclKey::resolved)
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -114,15 +113,15 @@ pub fn combined_runtime_order_for(
         .cloned()
         .map(|candidate| (candidate, 0_usize))
         .collect::<HashMap<_, _>>();
-    let mut dependents: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>> = HashMap::new();
+    let mut dependents: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> = HashMap::new();
     for dag in dags {
         for (declaration, dependencies) in &dag.semantic().dependencies.runtime_deps {
-            let declaration = RuntimeDeclKey::resolved(dag.runtime_decl_identity(declaration));
+            let declaration = dag.runtime_decl_identity(declaration);
             if !candidate_set.contains(&declaration) {
                 continue;
             }
             for dependency in dependencies {
-                let dependency = RuntimeDeclKey::resolved(dag.runtime_decl_identity(dependency));
+                let dependency = dag.runtime_decl_identity(dependency);
                 if candidate_set.contains(&dependency) {
                     let count = indegree.entry(declaration.clone()).or_default();
                     *count = count.checked_add(1).ok_or_else(|| {
@@ -283,10 +282,9 @@ fn prepare_callable_plan(
                     .iter()
                     .map(|assumer| {
                         dag.require_bound_decl_identity(assumer, src, DiagnosticAnchor::WholeFile)
-                            .map(RuntimeDeclKey::resolved)
                     })
                     .collect::<Result<Vec<_>, GraphcalError>>()?;
-                Ok((RuntimeDeclKey::resolved(key), assumers))
+                Ok((key, assumers))
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         expected_fail: semantic_dags
@@ -294,7 +292,7 @@ fn prepare_callable_plan(
             .flat_map(|dag| dag.expected_fail_entries().map(move |entry| (*dag, entry)))
             .map(|(dag, (name, expected))| {
                 dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                    .map(|key| (RuntimeDeclKey::resolved(key), expected.clone()))
+                    .map(|key| (key, expected.clone()))
             })
             .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints,
@@ -303,10 +301,10 @@ fn prepare_callable_plan(
 
 fn prepare_dependencies(
     tir: &TIR,
-    order: &[RuntimeDeclKey],
+    order: &[ResolvedDeclName],
     locations: &DeclarationLocations,
     source: &NamedSource<Arc<String>>,
-) -> Result<HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>, GraphcalError> {
     let invalid = |message: String| {
         GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
     };
@@ -329,10 +327,10 @@ fn prepare_dependencies(
                 .semantic()
                 .dependencies
                 .runtime_deps
-                .get(key.as_resolved())
+                .get(key)
                 .into_iter()
                 .flatten()
-                .map(|dependency| RuntimeDeclKey::resolved(dag.runtime_decl_identity(dependency)))
+                .map(|dependency| dag.runtime_decl_identity(dependency))
                 .collect::<Vec<_>>();
             for dependency in &dependencies {
                 locations
@@ -365,16 +363,14 @@ fn prepare_imports(
     let mut result = PreparedImports::default();
     for dag in dags {
         for binding in dag.imported_bindings().values() {
-            let source_key = RuntimeDeclKey::resolved(binding.target().clone());
+            let source_key = binding.target().clone();
             let owner = locations
                 .body_for(&source_key)
                 .map_err(|error| invalid(error.to_string()))?;
             let scope = checked_scope(tir, facts, owner, source)?;
             match binding.kind() {
                 ImportedValueKind::Constant => result.constants.push(PreparedConstantImport {
-                    destination: RuntimeDeclKey::resolved(
-                        dag.runtime_decl_identity(binding.target()),
-                    ),
+                    destination: dag.runtime_decl_identity(binding.target()),
                     value: ConstantReference::try_new(
                         Arc::clone(&scope.facts().const_values),
                         source_key,
@@ -393,12 +389,8 @@ fn prepare_declaration_locations(
     src: &NamedSource<Arc<String>>,
 ) -> Result<DeclarationLocations, GraphcalError> {
     DeclarationLocations::try_new(tir.dag_registry().values().flat_map(|dag| {
-        dag.value_declaration_identities().map(|identity| {
-            (
-                RuntimeDeclKey::resolved(identity.clone()),
-                dag.dag_id().clone(),
-            )
-        })
+        dag.value_declaration_identities()
+            .map(|identity| (identity.clone(), dag.dag_id().clone()))
     }))
     .map_err(|error| {
         GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
@@ -406,7 +398,7 @@ fn prepare_declaration_locations(
 }
 
 fn validate_schedule_locations(
-    order: &[RuntimeDeclKey],
+    order: &[ResolvedDeclName],
     locations: &DeclarationLocations,
     allowed_bodies: &HashSet<&DagId>,
     src: &NamedSource<Arc<String>>,
@@ -486,7 +478,6 @@ fn validate_execution_facts(
             .filter(|(_, category)| matches!(category, DeclCategory::Param | DeclCategory::Node))
             .map(|(name, _)| {
                 dag.require_bound_decl_identity(name, facts.source(), DiagnosticAnchor::WholeFile)
-                    .map(RuntimeDeclKey::resolved)
             })
             .collect::<Result<HashSet<_>, _>>()?;
         let scheduled = facts.topo_order.iter().cloned().collect::<HashSet<_>>();
@@ -497,11 +488,11 @@ fn validate_execution_facts(
             )));
         }
         for entry in dag.consts() {
-            let key = RuntimeDeclKey::resolved(dag.require_bound_decl_identity(
+            let key = dag.require_bound_decl_identity(
                 &entry.name,
                 facts.source(),
                 DiagnosticAnchor::Source(entry.span),
-            )?);
+            )?;
             if !facts.const_values.contains_key(&key) {
                 return Err(invalid(format!(
                     "checked constant `{key}` has no evaluated value"
@@ -509,10 +500,9 @@ fn validate_execution_facts(
             }
         }
         for declaration in dag.semantic().domain_bounds.keys() {
-            let key = RuntimeDeclKey::resolved(declaration.clone());
-            if !facts.domain_constraints.contains_key(&key) {
+            if !facts.domain_constraints.contains_key(declaration) {
                 return Err(invalid(format!(
-                    "declaration `{key}` has no resolved domain constraint"
+                    "declaration `{declaration}` has no resolved domain constraint"
                 )));
             }
         }
@@ -578,7 +568,7 @@ mod tests {
         );
         let plan = compile(&tir, &src).unwrap();
         let input = resolved_key("input");
-        assert!(tir.root().runtime_expr(input.as_resolved()).is_none());
+        assert!(tir.root().runtime_expr(&input).is_none());
         assert_eq!(
             plan.declaration_locations.body_for(&input).unwrap(),
             tir.root_dag_id()
@@ -621,11 +611,8 @@ mod tests {
         .unwrap()
     }
 
-    fn resolved_key(name: &str) -> RuntimeDeclKey {
-        RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-            test_dag_id(),
-            DeclName::expect_valid(name),
-        ))
+    fn resolved_key(name: &str) -> ResolvedDeclName {
+        ResolvedDeclName::from_def(test_dag_id(), DeclName::expect_valid(name))
     }
 
     #[test]
@@ -810,7 +797,7 @@ mod tests {
         )
         .unwrap();
         let binding = |name, kind| {
-            let target = resolved_key(name).as_resolved().clone();
+            let target = resolved_key(name);
             ImportedBinding::new(
                 target.clone(),
                 tir.runtime_declared_type(&target, &src).unwrap(),
@@ -943,19 +930,19 @@ mod tests {
             .root
             .topo_order
             .iter()
-            .position(|n| n.member() == "x")
+            .position(|n| n.as_str() == "x")
             .unwrap();
         let y_pos = plan
             .root
             .topo_order
             .iter()
-            .position(|n| n.member() == "y")
+            .position(|n| n.as_str() == "y")
             .unwrap();
         let z_pos = plan
             .root
             .topo_order
             .iter()
-            .position(|n| n.member() == "z")
+            .position(|n| n.as_str() == "z")
             .unwrap();
         assert!(x_pos < y_pos);
         assert!(y_pos < z_pos);
@@ -989,10 +976,10 @@ mod tests {
             (quantity(
                 plan.root
                     .const_values
-                    .get(&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                    .get(&ResolvedDeclName::from_def(
                         tir.root_dag_id().clone(),
                         DeclName::expect_valid("b")
-                    )))
+                    ))
                     .unwrap()
             ) - 2.0)
                 .abs()
@@ -1012,10 +999,10 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                name == &ResolvedDeclName::from_def(
                     tir.root_dag_id().clone(),
                     DeclName::expect_valid("a"),
-                ))
+                )
             })
             .unwrap();
         let b_pos = plan
@@ -1023,10 +1010,10 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
+                name == &ResolvedDeclName::from_def(
                     tir.root_dag_id().clone(),
                     DeclName::expect_valid("b"),
-                ))
+                )
             })
             .unwrap();
         assert!(a_pos < b_pos);

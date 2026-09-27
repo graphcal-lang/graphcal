@@ -132,12 +132,8 @@ impl ExclusiveNameKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ExclusiveNameBinding {
-    span: Span,
-}
-
-type ExclusiveNameOccupancy = HashMap<(FlatNamespace, NameAtom), ExclusiveNameBinding>;
+/// Span of the first binding that occupies each exclusive name slot.
+type ExclusiveNameOccupancy = HashMap<(FlatNamespace, NameAtom), Span>;
 
 impl DeclSymbolKind {
     /// Returns whether this declaration can be referenced from const-like
@@ -752,11 +748,11 @@ impl ModuleSymbols {
                     FlatNamespace::Term => "Term",
                 },
                 name: atom.to_string(),
-                first: entry.get().span,
+                first: *entry.get(),
                 duplicate: span,
             }),
             Entry::Vacant(entry) => {
-                entry.insert(ExclusiveNameBinding { span });
+                entry.insert(span);
                 Ok(())
             }
         }
@@ -2682,20 +2678,10 @@ impl ModuleResolver {
             ExclusiveNameKind::Constructor,
         );
         for (alias, target) in &scope.module_aliases {
-            occupied.insert(
-                (FlatNamespace::Term, alias.atom().clone()),
-                ExclusiveNameBinding {
-                    span: target.span(),
-                },
-            );
+            occupied.insert((FlatNamespace::Term, alias.atom().clone()), target.span());
         }
         for (alias, target) in &scope.plugin_aliases {
-            occupied.insert(
-                (FlatNamespace::Term, alias.atom().clone()),
-                ExclusiveNameBinding {
-                    span: target.span(),
-                },
-            );
+            occupied.insert((FlatNamespace::Term, alias.atom().clone()), target.span());
         }
 
         Ok(occupied)
@@ -3626,9 +3612,7 @@ fn seed_exclusive_names<Ns, S>(
     for (name, symbol) in symbols {
         occupied
             .entry((kind.namespace(), name.atom().clone()))
-            .or_insert_with(|| ExclusiveNameBinding {
-                span: symbol.span(),
-            });
+            .or_insert_with(|| symbol.span());
     }
 }
 
@@ -3768,11 +3752,11 @@ fn register_import_exclusive_name(
                 FlatNamespace::Term => "Term",
             },
             name: atom.to_string(),
-            first: first.span,
+            first: *first,
             duplicate: span,
         });
     }
-    occupied.insert(slot, ExclusiveNameBinding { span });
+    occupied.insert(slot, span);
     Ok(())
 }
 

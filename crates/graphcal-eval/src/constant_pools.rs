@@ -1,8 +1,8 @@
 //! Immutable constant-pool views. Preparing closures never copies constant payloads.
 
-use crate::decl_key::RuntimeDeclKey;
 use crate::execution_facts::RuntimeValueMap;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -10,15 +10,15 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ConstantPoolError {
     #[error("constant `{0}` occurs in multiple prepared pools")]
-    Duplicate(RuntimeDeclKey),
+    Duplicate(ResolvedDeclName),
     #[error("constant `{0}` is absent from its retained pool")]
-    Missing(RuntimeDeclKey),
+    Missing(ResolvedDeclName),
 }
 
 #[derive(Debug)]
 pub struct ConstantPools {
     pools: Vec<Arc<RuntimeValueMap>>,
-    locations: HashMap<RuntimeDeclKey, Arc<RuntimeValueMap>>,
+    locations: HashMap<ResolvedDeclName, Arc<RuntimeValueMap>>,
 }
 
 impl ConstantPools {
@@ -46,11 +46,11 @@ impl ConstantPools {
         )
     }
 
-    pub fn get(&self, key: &RuntimeDeclKey) -> Option<&RuntimeValue> {
+    pub fn get(&self, key: &ResolvedDeclName) -> Option<&RuntimeValue> {
         self.locations.get(key).and_then(|pool| pool.get(key))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&RuntimeDeclKey, &RuntimeValue)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&ResolvedDeclName, &RuntimeValue)> {
         self.pools.iter().flat_map(|pool| pool.iter())
     }
 }
@@ -59,13 +59,13 @@ impl ConstantPools {
 #[derive(Debug)]
 pub struct ConstantReference {
     pool: Arc<RuntimeValueMap>,
-    key: RuntimeDeclKey,
+    key: ResolvedDeclName,
 }
 
 impl ConstantReference {
     pub fn try_new(
         pool: Arc<RuntimeValueMap>,
-        key: RuntimeDeclKey,
+        key: ResolvedDeclName,
     ) -> Result<Self, ConstantPoolError> {
         if !pool.contains_key(&key) {
             return Err(ConstantPoolError::Missing(key));

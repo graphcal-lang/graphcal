@@ -7,8 +7,6 @@ use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
 use thiserror::Error;
 
-use crate::decl_key::RuntimeDeclKey;
-
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts};
 
 /// Failure to select an execution scope from retained project artifacts.
@@ -64,7 +62,7 @@ pub fn checked_imported_constant<'a>(
         (ImportedValueKind::Constant, true) => scope
             .facts()
             .const_values
-            .get(&RuntimeDeclKey::resolved(target.clone()))
+            .get(target)
             .map(Some)
             .ok_or_else(|| ExecutionScopeError::MissingConstant(target.clone())),
         (kind, _) => Err(ExecutionScopeError::WrongImportedKind {

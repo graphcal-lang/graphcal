@@ -176,11 +176,6 @@ impl HostFnValue {
 /// A host-native extern function implementation.
 pub type HostFn = Arc<dyn Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
 
-/// One registered callable extern implementation.
-struct HostFnEntry {
-    function: HostFn,
-}
-
 /// Why a plugin failed to register its functions.
 ///
 /// Recorded by the embedder while building the registry (the WASM plugin
@@ -245,7 +240,7 @@ impl HostFunctionMetadata {
 /// only [`HostFunctionMetadata`] through [`Self::metadata`].
 #[derive(Clone, Default)]
 pub struct HostFunctionRegistry {
-    fns: HashMap<ExternFnKey, Arc<HostFnEntry>>,
+    fns: HashMap<ExternFnKey, HostFn>,
     metadata: HostFunctionMetadata,
 }
 
@@ -284,12 +279,7 @@ impl HostFunctionRegistry {
             name,
         };
         self.metadata.signatures.insert(key.clone(), None);
-        self.fns.insert(
-            key,
-            Arc::new(HostFnEntry {
-                function: Arc::new(function),
-            }),
-        );
+        self.fns.insert(key, Arc::new(function));
     }
 
     /// Register a plugin-backed closure together with the signature its
@@ -305,12 +295,7 @@ impl HostFunctionRegistry {
         self.metadata
             .signatures
             .insert(key.clone(), Some(signature));
-        self.fns.insert(
-            key,
-            Arc::new(HostFnEntry {
-                function: Arc::new(function),
-            }),
-        );
+        self.fns.insert(key, Arc::new(function));
     }
 
     /// Record that a plugin's functions could not be registered at all.
@@ -335,7 +320,7 @@ impl HostFunctionRegistry {
     /// Look up the host closure for an extern function.
     #[must_use]
     pub(crate) fn get(&self, key: &ExternFnKey) -> Option<&HostFn> {
-        self.fns.get(key).map(|entry| &entry.function)
+        self.fns.get(key)
     }
 }
 

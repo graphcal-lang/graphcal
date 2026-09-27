@@ -8,7 +8,7 @@ use crate::eval::types::NodeUnavailable;
 use super::{
     Arc, AssertResult, CompileError, DeclName, DeclaredType, Error, EvalContext, EvalLoopResult,
     GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema,
-    ParameterBindingRow, ParameterPosition, PreparedProject, RuntimeDeclKey, Span, TimeScale,
+    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
     Value, builtin_functions, index_def_for_ref, remap_include_debug_name,
     run_eval_loop_with_bindings,
 };
@@ -59,7 +59,7 @@ pub struct ParameterPort {
     pub(super) value_schema: ModelValueSchema,
     pub(super) domain: Option<ParameterDomain>,
     pub(super) has_default: bool,
-    pub(super) runtime_key: RuntimeDeclKey,
+    pub(super) runtime_key: ResolvedDeclName,
     pub(super) span: Span,
 }
 
@@ -108,7 +108,7 @@ pub struct ModelOutputPort {
     pub(super) declared_type: DeclaredType,
     pub(super) value_schema: ModelValueSchema,
     pub(super) is_public: bool,
-    pub(super) runtime_key: RuntimeDeclKey,
+    pub(super) runtime_key: ResolvedDeclName,
 }
 
 impl ModelOutputPort {
@@ -370,7 +370,7 @@ impl PreparedProject {
     /// included DAG falls back to the smallest failed runtime identity.
     fn runtime_error_failure(
         &self,
-        errors: &HashMap<RuntimeDeclKey, NodeUnavailable>,
+        errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ) -> Result<Option<ModelRowFailure>, ModelExecutionError> {
         let exposed = root_source_names(&self.tir, &self.source)?
             .into_iter()

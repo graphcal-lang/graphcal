@@ -7,8 +7,8 @@ use crate::hir::NominalTypeDef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 
-use super::{DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType};
-use crate::registry::declared_type::DeclaredGenericArg;
+use super::{DeclaredType, InferredGenericArg, InferredType};
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use crate::tir::typed::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
 
 pub(super) fn is_bool_type(ty: &InferredType) -> bool {
@@ -112,7 +112,7 @@ pub(super) fn resolved_type_matches_inferred(
             resolved_index_matches_inferred(index, actual)
         }
         (ResolvedTypeExpr::Struct(expected, _), InferredType::Struct(actual, args)) => {
-            actual.matches_resolved(expected) && args.is_empty()
+            actual.resolved() == expected && args.is_empty()
         }
         (
             ResolvedTypeExpr::GenericStruct {
@@ -120,7 +120,7 @@ pub(super) fn resolved_type_matches_inferred(
             },
             InferredType::Struct(actual, actual_args),
         ) => {
-            actual.matches_resolved(name)
+            actual.resolved() == name
                 && generic_args.len() == actual_args.len()
                 && generic_args
                     .iter()
@@ -179,16 +179,16 @@ fn resolved_indexed_type_matches_inferred(
     resolved_type_matches_inferred(base, current)
 }
 
-fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &InferredIndex) -> bool {
+fn resolved_index_matches_inferred(index: &ResolvedIndex, actual: &IndexTypeRef) -> bool {
     match index {
-        ResolvedIndex::Concrete(expected, _) => actual.matches_resolved(expected),
+        ResolvedIndex::Concrete(expected, _) => actual.declared_resolved() == Some(expected),
         ResolvedIndex::Finite(form, _) => actual
             .finite_index_form()
             .is_some_and(|actual_form| actual_form == *form),
         // An unbound generic index parameter never reaches this comparison:
         // DAG declaration types and inline-DAG param types resolve with no
         // generic params in scope, and HIR inference only constructs
-        // `InferredIndex` from concrete (resolved or finite-index) identities —
+        // `IndexTypeRef` from concrete (resolved or finite-index) identities —
         // the syntax engine's leaf-name fallback that could fabricate a
         // generic-named index is gone (#765). No display-name comparison can
         // therefore be meaningful here.
@@ -207,7 +207,7 @@ pub(super) fn format_declared_type(dt: &DeclaredType, registry: &FormattingRegis
 /// identity to a bare leaf would make diamond imports with same-named types
 /// nondeterministic.
 pub(super) fn struct_type_def_for_inferred<'a>(
-    ty: &InferredStructType,
+    ty: &StructTypeRef,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     _registry: &'a FormattingRegistry,
 ) -> Option<&'a NominalTypeDef> {
@@ -250,15 +250,15 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::IndexArg(index) => Self::IndexArg(index.type_ref().clone()),
-            InferredType::Key(index) => Self::Key(index.type_ref().clone()),
+            InferredType::IndexArg(index) => Self::IndexArg(index.clone()),
+            InferredType::Key(index) => Self::Key(index.clone()),
             InferredType::Struct(n, args) => Self::Struct(
-                n.type_ref().clone(),
+                n.clone(),
                 args.iter().map(DeclaredGenericArg::from).collect(),
             ),
             InferredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: index.type_ref().clone(),
+                index: index.clone(),
             },
         }
     }
@@ -268,7 +268,7 @@ impl From<&InferredGenericArg> for DeclaredGenericArg {
     fn from(arg: &InferredGenericArg) -> Self {
         match arg {
             InferredGenericArg::Dim(dimension) => Self::Dim(dimension.clone()),
-            InferredGenericArg::Index(index) => Self::Index(index.type_ref().clone()),
+            InferredGenericArg::Index(index) => Self::Index(index.clone()),
             InferredGenericArg::Nat(form) => Self::Nat(form.clone()),
             InferredGenericArg::Type(type_expr) => Self::Type(DeclaredType::from(type_expr)),
         }
@@ -279,7 +279,7 @@ impl From<&DeclaredGenericArg> for InferredGenericArg {
     fn from(arg: &DeclaredGenericArg) -> Self {
         match arg {
             DeclaredGenericArg::Dim(dimension) => Self::Dim(dimension.clone()),
-            DeclaredGenericArg::Index(index) => Self::Index(InferredIndex::from_ref(index.clone())),
+            DeclaredGenericArg::Index(index) => Self::Index(index.clone()),
             DeclaredGenericArg::Nat(form) => Self::Nat(form.clone()),
             DeclaredGenericArg::Type(type_expr) => Self::Type(InferredType::from(type_expr)),
         }
@@ -294,15 +294,15 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::IndexArg(index) => Self::IndexArg(InferredIndex::from_ref(index.clone())),
-            DeclaredType::Key(index) => Self::Key(InferredIndex::from_ref(index.clone())),
+            DeclaredType::IndexArg(index) => Self::IndexArg(index.clone()),
+            DeclaredType::Key(index) => Self::Key(index.clone()),
             DeclaredType::Struct(n, args) => Self::Struct(
-                InferredStructType::from_ref(n.clone()),
+                n.clone(),
                 args.iter().map(InferredGenericArg::from).collect(),
             ),
             DeclaredType::Indexed { element, index } => Self::Indexed {
                 element: Box::new(Self::from(element.as_ref())),
-                index: InferredIndex::from_ref(index.clone()),
+                index: index.clone(),
             },
         }
     }
