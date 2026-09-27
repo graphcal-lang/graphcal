@@ -353,12 +353,13 @@ impl KeyFormKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Static => "key",
-            Self::Fin => "fin_key",
-            Self::Floor => "floor_key",
-            Self::Ceil => "ceil_key",
-            Self::Nearest => "nearest_key",
+            Self::Static => ContextualKeyword::Key,
+            Self::Fin => ContextualKeyword::FinKey,
+            Self::Floor => ContextualKeyword::FloorKey,
+            Self::Ceil => ContextualKeyword::CeilKey,
+            Self::Nearest => ContextualKeyword::NearestKey,
         }
+        .as_str()
     }
 }
 

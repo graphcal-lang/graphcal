@@ -7,7 +7,7 @@ use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 mod compound;
 mod decl;
@@ -740,6 +740,14 @@ impl<'src> Parser<'src> {
             rest.push(parse_item(self)?);
         }
         Ok(crate::syntax::non_empty::NonEmpty::new(first, rest))
+    }
+
+    /// The contextual keyword spelled by the next token, if any.
+    fn peek_contextual_keyword(&mut self) -> Option<ContextualKeyword> {
+        match self.lexer.peek() {
+            Some(&Token::ContextualKeyword(keyword)) => Some(keyword),
+            _ => None,
+        }
     }
 
     /// Parse any identifier regardless of casing.

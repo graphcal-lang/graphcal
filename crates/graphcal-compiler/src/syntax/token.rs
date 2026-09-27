@@ -15,6 +15,12 @@
 //! - [`Token`] is the parser-facing syntax token enum. It deliberately cannot
 //!   represent whitespace or comments, making trivia unrepresentable in parser
 //!   code.
+//!
+//! Keyword vocabularies have one table each: hard keywords are the
+//! `hard_keywords` section of [`Token`] (listed by [`Token::HARD_KEYWORDS`]) and
+//! contextual keywords are [`ContextualKeyword`] (listed by
+//! [`ContextualKeyword::ALL`]). Tests lex every table entry, so a spelling
+//! missing from the Logos attributes cannot go unnoticed.
 
 use logos::Logos;
 
@@ -27,81 +33,56 @@ pub(crate) enum LexicalToken {
     #[regex(r"//[^\n\r]*", allow_greedy = true)]
     Comment,
 
-    // Keywords
-    #[token("param")]
-    Param,
-    #[token("node")]
-    Node,
-    #[token("const")]
-    Const,
-    #[token("if")]
-    If,
-    #[token("else")]
-    Else,
-    #[token("true")]
-    True,
-    #[token("false")]
-    False,
-    #[token("base")]
-    Base,
-    #[token("dim")]
-    Dimension,
-    #[token("unit")]
-    Unit,
-    #[token("type")]
-    Type,
-    #[token("index")]
-    Index,
-    #[token("for")]
-    For,
-    #[token("import")]
-    Import,
-    #[token("include")]
-    Include,
-    #[token("dag")]
-    Dag,
-    #[token("match")]
-    Match,
-    #[token("as")]
-    As,
-    #[token("assert")]
-    Assert,
-    #[token("table")]
-    Table,
-    #[token("plot")]
-    Plot,
-    #[token("figure")]
-    Figure,
-    #[token("layer")]
-    Layer,
-    #[token("todo")]
-    Todo,
-    #[token("scan")]
-    Scan,
-    #[token("unfold")]
-    Unfold,
-    #[token("range")]
-    Range,
-    #[token("linspace")]
-    Linspace,
-    #[token("step")]
-    Step,
-    #[token("points")]
-    Points,
-    #[token("Fin")]
-    Fin,
-    #[token("key")]
-    Key,
-    #[token("fin_key")]
-    FinKey,
-    #[token("floor_key")]
-    FloorKey,
-    #[token("ceil_key")]
-    CeilKey,
-    #[token("nearest_key")]
-    NearestKey,
-    #[token("pub")]
-    Pub,
+    // Hard keywords: reserved spellings that never lex as identifiers. Each
+    // spelling yields an entry of `Token::HARD_KEYWORDS`.
+    #[token("param", |_| Token::Param)]
+    #[token("node", |_| Token::Node)]
+    #[token("const", |_| Token::Const)]
+    #[token("if", |_| Token::If)]
+    #[token("else", |_| Token::Else)]
+    #[token("true", |_| Token::True)]
+    #[token("false", |_| Token::False)]
+    #[token("base", |_| Token::Base)]
+    #[token("dim", |_| Token::Dimension)]
+    #[token("unit", |_| Token::Unit)]
+    #[token("type", |_| Token::Type)]
+    #[token("index", |_| Token::Index)]
+    #[token("for", |_| Token::For)]
+    #[token("import", |_| Token::Import)]
+    #[token("include", |_| Token::Include)]
+    #[token("dag", |_| Token::Dag)]
+    #[token("match", |_| Token::Match)]
+    #[token("as", |_| Token::As)]
+    #[token("assert", |_| Token::Assert)]
+    #[token("table", |_| Token::Table)]
+    #[token("plot", |_| Token::Plot)]
+    #[token("figure", |_| Token::Figure)]
+    #[token("layer", |_| Token::Layer)]
+    #[token("pub", |_| Token::Pub)]
+    HardKeyword(Token),
+
+    // Contextual keywords: identifier spellings with a special meaning only in
+    // selected productions.
+    #[token("todo", |_| ContextualKeyword::Todo)]
+    #[token("scan", |_| ContextualKeyword::Scan)]
+    #[token("unfold", |_| ContextualKeyword::Unfold)]
+    #[token("range", |_| ContextualKeyword::Range)]
+    #[token("linspace", |_| ContextualKeyword::Linspace)]
+    #[token("step", |_| ContextualKeyword::Step)]
+    #[token("points", |_| ContextualKeyword::Points)]
+    #[token("Fin", |_| ContextualKeyword::Fin)]
+    #[token("key", |_| ContextualKeyword::Key)]
+    #[token("fin_key", |_| ContextualKeyword::FinKey)]
+    #[token("floor_key", |_| ContextualKeyword::FloorKey)]
+    #[token("ceil_key", |_| ContextualKeyword::CeilKey)]
+    #[token("nearest_key", |_| ContextualKeyword::NearestKey)]
+    #[token("plugin", |_| ContextualKeyword::Plugin)]
+    #[token("fn", |_| ContextualKeyword::Fn)]
+    #[token("bind", |_| ContextualKeyword::Bind)]
+    #[token("mark", |_| ContextualKeyword::Mark)]
+    #[token("encode", |_| ContextualKeyword::Encode)]
+    #[token("plots", |_| ContextualKeyword::Plots)]
+    ContextualKeyword(ContextualKeyword),
 
     // Literals
     #[regex(r#""[^"\r\n]*""#)]
@@ -212,57 +193,10 @@ impl LexicalToken {
         match self {
             Self::Whitespace => LexicalItem::Trivia(TriviaToken::Whitespace),
             Self::Comment => LexicalItem::Trivia(TriviaToken::Comment),
-            Self::Param => LexicalItem::Syntax(Token::Param),
-            Self::Node => LexicalItem::Syntax(Token::Node),
-            Self::Const => LexicalItem::Syntax(Token::Const),
-            Self::If => LexicalItem::Syntax(Token::If),
-            Self::Else => LexicalItem::Syntax(Token::Else),
-            Self::True => LexicalItem::Syntax(Token::True),
-            Self::False => LexicalItem::Syntax(Token::False),
-            Self::Base => LexicalItem::Syntax(Token::Base),
-            Self::Dimension => LexicalItem::Syntax(Token::Dimension),
-            Self::Unit => LexicalItem::Syntax(Token::Unit),
-            Self::Type => LexicalItem::Syntax(Token::Type),
-            Self::Index => LexicalItem::Syntax(Token::Index),
-            Self::For => LexicalItem::Syntax(Token::For),
-            Self::Import => LexicalItem::Syntax(Token::Import),
-            Self::Include => LexicalItem::Syntax(Token::Include),
-            Self::Dag => LexicalItem::Syntax(Token::Dag),
-            Self::Match => LexicalItem::Syntax(Token::Match),
-            Self::As => LexicalItem::Syntax(Token::As),
-            Self::Assert => LexicalItem::Syntax(Token::Assert),
-            Self::Table => LexicalItem::Syntax(Token::Table),
-            Self::Plot => LexicalItem::Syntax(Token::Plot),
-            Self::Figure => LexicalItem::Syntax(Token::Figure),
-            Self::Layer => LexicalItem::Syntax(Token::Layer),
-            Self::Todo => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Todo)),
-            Self::Scan => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Scan)),
-            Self::Unfold => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Unfold))
+            Self::HardKeyword(token) => LexicalItem::Syntax(token),
+            Self::ContextualKeyword(keyword) => {
+                LexicalItem::Syntax(Token::ContextualKeyword(keyword))
             }
-            Self::Range => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Range)),
-            Self::Linspace => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Linspace))
-            }
-            Self::Step => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Step)),
-            Self::Points => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Points))
-            }
-            Self::Fin => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Fin)),
-            Self::Key => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Key)),
-            Self::FinKey => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::FinKey))
-            }
-            Self::FloorKey => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::FloorKey))
-            }
-            Self::CeilKey => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::CeilKey))
-            }
-            Self::NearestKey => {
-                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::NearestKey))
-            }
-            Self::Pub => LexicalItem::Syntax(Token::Pub),
             Self::StringLiteral => LexicalItem::Syntax(Token::StringLiteral),
             Self::Plus => LexicalItem::Syntax(Token::Plus),
             Self::Minus => LexicalItem::Syntax(Token::Minus),
@@ -305,50 +239,59 @@ impl LexicalToken {
     }
 }
 
-/// An identifier spelling that has keyword meaning only in a precise parser context.
-///
-/// These spellings remain ordinary identifiers everywhere else. Keeping their
-/// lexical classification typed lets parser code select a special production
-/// without recovering semantics from source strings or repeating unions of
-/// otherwise unrelated token variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextualKeyword {
-    Todo,
-    Scan,
-    Unfold,
-    Range,
-    Linspace,
-    Step,
-    Points,
-    Fin,
-    Key,
-    FinKey,
-    FloorKey,
-    CeilKey,
-    NearestKey,
+/// Define [`ContextualKeyword`], its canonical spellings, and its `ALL` listing
+/// from a single table so tests can iterate every entry.
+macro_rules! define_contextual_keywords {
+    ($($variant:ident => $spelling:literal),+ $(,)?) => {
+        /// An identifier spelling that has keyword meaning only in a precise parser context.
+        ///
+        /// These spellings remain ordinary identifiers everywhere else. Keeping their
+        /// lexical classification typed lets parser code select a special production
+        /// without recovering semantics from source strings or repeating unions of
+        /// otherwise unrelated token variants.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum ContextualKeyword {
+            $($variant),+
+        }
+
+        impl ContextualKeyword {
+            /// Every contextual keyword, in table order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Canonical source spelling recognized by the lexer.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $spelling),+
+                }
+            }
+        }
+    };
+}
+
+define_contextual_keywords! {
+    Todo => "todo",
+    Scan => "scan",
+    Unfold => "unfold",
+    Range => "range",
+    Linspace => "linspace",
+    Step => "step",
+    Points => "points",
+    Fin => "Fin",
+    Key => "key",
+    FinKey => "fin_key",
+    FloorKey => "floor_key",
+    CeilKey => "ceil_key",
+    NearestKey => "nearest_key",
+    Plugin => "plugin",
+    Fn => "fn",
+    Bind => "bind",
+    Mark => "mark",
+    Encode => "encode",
+    Plots => "plots",
 }
 
 impl ContextualKeyword {
-    /// Canonical source spelling recognized by the lexer.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Todo => "todo",
-            Self::Scan => "scan",
-            Self::Unfold => "unfold",
-            Self::Range => "range",
-            Self::Linspace => "linspace",
-            Self::Step => "step",
-            Self::Points => "points",
-            Self::Fin => "Fin",
-            Self::Key => "key",
-            Self::FinKey => "fin_key",
-            Self::FloorKey => "floor_key",
-            Self::CeilKey => "ceil_key",
-            Self::NearestKey => "nearest_key",
-        }
-    }
-
     /// Classify an AST identifier spelling at a syntax boundary.
     #[must_use]
     pub fn matches(self, spelling: &str) -> bool {
@@ -385,24 +328,31 @@ pub struct SourceIdentifier(String);
 impl SourceIdentifier {
     /// Validate one source identifier spelling.
     ///
+    /// Asks the lexer instead of a hand-kept rule, so the accepted set is
+    /// exactly the spellings that lex as one identifier token: hard keywords
+    /// are rejected while contextual keywords remain valid identifiers.
+    ///
     /// # Errors
     ///
     /// Returns [`SourceIdentifierError`] for non-`IDENT` text or a hard keyword.
     pub fn parse(spelling: impl Into<String>) -> Result<Self, SourceIdentifierError> {
         let spelling = spelling.into();
-        let mut chars = spelling.chars();
-        let Some(first) = chars.next() else {
-            return Err(SourceIdentifierError::InvalidCharacters);
+        let whole_token = {
+            let mut lexer = LexicalToken::lexer(&spelling);
+            match lexer.next() {
+                Some(Ok(token)) if lexer.span() == (0..spelling.len()) => Some(token.classify()),
+                _ => None,
+            }
         };
-        if !first.is_ascii_alphabetic()
-            || !chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
-        {
-            return Err(SourceIdentifierError::InvalidCharacters);
+        match whole_token {
+            Some(LexicalItem::Syntax(token)) if token.is_identifier() => Ok(Self(spelling)),
+            Some(LexicalItem::Syntax(token)) if Token::HARD_KEYWORDS.contains(&token) => {
+                Err(SourceIdentifierError::ReservedKeyword)
+            }
+            Some(LexicalItem::Syntax(_) | LexicalItem::Trivia(_)) | None => {
+                Err(SourceIdentifierError::InvalidCharacters)
+            }
         }
-        if is_hard_keyword(&spelling) {
-            return Err(SourceIdentifierError::ReservedKeyword);
-        }
-        Ok(Self(spelling))
     }
 
     /// Return the validated source spelling.
@@ -418,195 +368,151 @@ impl std::fmt::Display for SourceIdentifier {
     }
 }
 
-fn is_hard_keyword(spelling: &str) -> bool {
-    matches!(
-        spelling,
-        "param"
-            | "node"
-            | "const"
-            | "if"
-            | "else"
-            | "true"
-            | "false"
-            | "base"
-            | "dim"
-            | "unit"
-            | "type"
-            | "index"
-            | "for"
-            | "import"
-            | "include"
-            | "dag"
-            | "match"
-            | "as"
-            | "assert"
-            | "table"
-            | "plot"
-            | "figure"
-            | "layer"
-            | "pub"
-    )
+/// Define [`Token`], its `Display` rendering, and the [`Token::HARD_KEYWORDS`]
+/// listing from a single table. Every variant in the `hard_keywords` section
+/// is a reserved spelling; tests lex each one to prove the lexer agrees.
+macro_rules! define_tokens {
+    (
+        hard_keywords { $($keyword:ident => $keyword_text:literal),+ $(,)? }
+        others { $($variant:ident => $text:literal),+ $(,)? }
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Token {
+            $($keyword,)+
+
+            /// Identifier spellings with a special meaning in selected productions.
+            ContextualKeyword(ContextualKeyword),
+
+            $($variant,)+
+        }
+
+        impl Token {
+            /// Every hard keyword, in table order.
+            pub const HARD_KEYWORDS: &'static [Self] = &[$(Self::$keyword),+];
+        }
+
+        impl std::fmt::Display for Token {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$keyword => f.write_str($keyword_text),)+
+                    Self::ContextualKeyword(keyword) => keyword.fmt(f),
+                    $(Self::$variant => f.write_str($text),)+
+                }
+            }
+        }
+    };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Token {
-    // Hard keywords
-    Param,
-    Node,
-    Const,
-    If,
-    Else,
-    True,
-    False,
-    Base,
-    Dimension,
-    Unit,
-    Type,
-    Index,
-    For,
-    Import,
-    Include,
-    Dag,
-    Match,
-    As,
-    Assert,
-    Table,
-    Plot,
-    Figure,
-    Layer,
-    Pub,
+define_tokens! {
+    hard_keywords {
+        Param => "param",
+        Node => "node",
+        Const => "const",
+        If => "if",
+        Else => "else",
+        True => "true",
+        False => "false",
+        Base => "base",
+        Dimension => "dim",
+        Unit => "unit",
+        Type => "type",
+        Index => "index",
+        For => "for",
+        Import => "import",
+        Include => "include",
+        Dag => "dag",
+        Match => "match",
+        As => "as",
+        Assert => "assert",
+        Table => "table",
+        Plot => "plot",
+        Figure => "figure",
+        Layer => "layer",
+        Pub => "pub",
+    }
+    others {
+        // Literals
+        StringLiteral => "string",
 
-    /// Identifier spellings with a special meaning in selected productions.
-    ContextualKeyword(ContextualKeyword),
+        // Operators
+        Plus => "+",
+        Minus => "-",
+        Star => "*",
+        Slash => "/",
+        Caret => "^",
+        Percent => "%",
+        Eq => "=",
+        EqEq => "==",
+        BangEq => "!=",
+        Lt => "<",
+        Gt => ">",
+        LtEq => "<=",
+        GtEq => ">=",
+        AmpAmp => "&&",
+        PipePipe => "||",
+        Bang => "!",
+        Arrow => "->",
+        Pipe => "|",
+        FatArrow => "=>",
+        TildeEq => "~=",
+        PlusMinus => "+/-",
 
-    // Literals
-    StringLiteral,
+        // Attribute prefix
+        Hash => "#",
 
-    // Operators
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Caret,
-    Percent,
-    Eq,
-    EqEq,
-    BangEq,
-    Lt,
-    Gt,
-    LtEq,
-    GtEq,
-    AmpAmp,
-    PipePipe,
-    Bang,
-    Arrow,
-    Pipe,
-    FatArrow,
-    TildeEq,
-    PlusMinus,
+        // Delimiters
+        LParen => "(",
+        RParen => ")",
+        LBrace => "{",
+        RBrace => "}",
+        LBracket => "[",
+        RBracket => "]",
+        Semicolon => ";",
+        Comma => ",",
+        At => "@",
+        DoubleColon => "::",
+        Colon => ":",
+        Dot => ".",
 
-    // Attribute prefix
-    Hash,
+        // Wildcard pattern
+        Underscore => "_",
 
-    // Delimiters
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    LBracket,
-    RBracket,
-    Semicolon,
-    Comma,
-    At,
-    DoubleColon,
-    Colon,
-    Dot,
+        // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
+        Ident => "identifier",
 
-    // Wildcard pattern
-    Underscore,
-
-    // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
-    Ident,
-
-    // Numeric literal (with _ separators and scientific notation)
-    Number,
+        // Numeric literal (with _ separators and scientific notation)
+        Number => "number",
+    }
 }
 
 impl Token {
+    /// Keywords that introduce a top-level declaration (optionally after a
+    /// `pub` / `pub(bind)` prefix), in editor-completion order.
+    ///
+    /// The parser test `declaration_keywords_match_parser_dispatch` ties this
+    /// list to the declaration dispatch in `parser/decl/mod.rs`.
+    pub const DECLARATION_KEYWORDS: &'static [Self] = &[
+        Self::Param,
+        Self::Node,
+        Self::Const,
+        Self::Base,
+        Self::Type,
+        Self::Dimension,
+        Self::Unit,
+        Self::Index,
+        Self::Assert,
+        Self::Dag,
+        Self::Plot,
+        Self::Figure,
+        Self::Layer,
+        Self::Import,
+        Self::Include,
+    ];
+
     /// Whether this token is accepted anywhere the grammar expects an identifier.
     #[must_use]
     pub const fn is_identifier(self) -> bool {
         matches!(self, Self::Ident | Self::ContextualKeyword(_))
-    }
-}
-
-impl std::fmt::Display for Token {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Param => write!(f, "param"),
-            Self::Node => write!(f, "node"),
-            Self::Const => write!(f, "const"),
-            Self::If => write!(f, "if"),
-            Self::Else => write!(f, "else"),
-            Self::True => write!(f, "true"),
-            Self::False => write!(f, "false"),
-            Self::Base => write!(f, "base"),
-            Self::Dimension => write!(f, "dim"),
-            Self::Unit => write!(f, "unit"),
-            Self::Type => write!(f, "type"),
-            Self::Index => write!(f, "index"),
-            Self::For => write!(f, "for"),
-            Self::Import => write!(f, "import"),
-            Self::Include => write!(f, "include"),
-            Self::Dag => write!(f, "dag"),
-            Self::Match => write!(f, "match"),
-            Self::As => write!(f, "as"),
-            Self::Assert => write!(f, "assert"),
-            Self::Table => write!(f, "table"),
-            Self::Plot => write!(f, "plot"),
-            Self::Figure => write!(f, "figure"),
-            Self::Layer => write!(f, "layer"),
-            Self::Pub => write!(f, "pub"),
-            Self::ContextualKeyword(keyword) => keyword.fmt(f),
-            Self::StringLiteral => write!(f, "string"),
-            Self::Plus => write!(f, "+"),
-            Self::Minus => write!(f, "-"),
-            Self::Star => write!(f, "*"),
-            Self::Slash => write!(f, "/"),
-            Self::Caret => write!(f, "^"),
-            Self::Percent => write!(f, "%"),
-            Self::Eq => write!(f, "="),
-            Self::EqEq => write!(f, "=="),
-            Self::BangEq => write!(f, "!="),
-            Self::Lt => write!(f, "<"),
-            Self::Gt => write!(f, ">"),
-            Self::LtEq => write!(f, "<="),
-            Self::GtEq => write!(f, ">="),
-            Self::AmpAmp => write!(f, "&&"),
-            Self::PipePipe => write!(f, "||"),
-            Self::Bang => write!(f, "!"),
-            Self::Arrow => write!(f, "->"),
-            Self::Pipe => write!(f, "|"),
-            Self::FatArrow => write!(f, "=>"),
-            Self::TildeEq => write!(f, "~="),
-            Self::PlusMinus => write!(f, "+/-"),
-            Self::Hash => write!(f, "#"),
-            Self::LParen => write!(f, "("),
-            Self::RParen => write!(f, ")"),
-            Self::LBrace => write!(f, "{{"),
-            Self::RBrace => write!(f, "}}"),
-            Self::LBracket => write!(f, "["),
-            Self::RBracket => write!(f, "]"),
-            Self::Semicolon => write!(f, ";"),
-            Self::Comma => write!(f, ","),
-            Self::At => write!(f, "@"),
-            Self::DoubleColon => write!(f, "::"),
-            Self::Colon => write!(f, ":"),
-            Self::Dot => write!(f, "."),
-            Self::Underscore => write!(f, "_"),
-            Self::Ident => write!(f, "identifier"),
-            Self::Number => write!(f, "number"),
-        }
     }
 }
 
@@ -635,24 +541,38 @@ mod tests {
 
     #[test]
     fn source_identifier_matches_identifier_token_policy() {
-        for valid in ["x", "SolveOrbitResult2", "scan", "fn", "plugin"] {
+        let contextual = ContextualKeyword::ALL
+            .iter()
+            .map(|keyword| keyword.as_str());
+        for valid in ["x", "SolveOrbitResult2", "nodes", "x_1"]
+            .into_iter()
+            .chain(contextual)
+        {
             let identifier = SourceIdentifier::parse(valid).unwrap();
             assert_eq!(identifier.as_str(), valid);
             assert!(lex_tokens(valid)[0].is_identifier(), "{valid}");
         }
-        for keyword in [
-            "param", "node", "const", "if", "else", "true", "false", "base", "dim", "unit", "type",
-            "index", "for", "import", "include", "dag", "match", "as", "assert", "table", "plot",
-            "figure", "layer", "pub",
-        ] {
+        for keyword in Token::HARD_KEYWORDS {
+            let spelling = keyword.to_string();
             assert_eq!(
-                SourceIdentifier::parse(keyword).unwrap_err(),
+                SourceIdentifier::parse(spelling.as_str()).unwrap_err(),
                 SourceIdentifierError::ReservedKeyword,
-                "{keyword}"
+                "{spelling}"
             );
-            assert!(!lex_tokens(keyword)[0].is_identifier(), "{keyword}");
         }
-        for invalid in ["", "_", "3d", "a-b", "a.b", "x;\nnode injected"] {
+        for invalid in [
+            "",
+            "_",
+            "3d",
+            "a-b",
+            "a.b",
+            "x;\nnode injected",
+            " x",
+            "x ",
+            "x//c",
+            "é",
+            "node x",
+        ] {
             assert_eq!(
                 SourceIdentifier::parse(invalid).unwrap_err(),
                 SourceIdentifierError::InvalidCharacters,
@@ -853,51 +773,23 @@ mod tests {
 
     #[test]
     fn hard_keywords_are_not_identifiers() {
-        let tokens = lex_tokens(
-            "param node const if else base dim unit type index for import include dag match as assert table plot figure pub",
-        );
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Param,
-                Token::Node,
-                Token::Const,
-                Token::If,
-                Token::Else,
-                Token::Base,
-                Token::Dimension,
-                Token::Unit,
-                Token::Type,
-                Token::Index,
-                Token::For,
-                Token::Import,
-                Token::Include,
-                Token::Dag,
-                Token::Match,
-                Token::As,
-                Token::Assert,
-                Token::Table,
-                Token::Plot,
-                Token::Figure,
-                Token::Pub,
-            ]
-        );
+        for &keyword in Token::HARD_KEYWORDS {
+            let spelling = keyword.to_string();
+            assert_single_token(&spelling, keyword);
+            assert!(!keyword.is_identifier(), "{spelling}");
+            // Keyword spellings are whole-word matches.
+            assert_single_token(&format!("{spelling}_x"), Token::Ident);
+        }
     }
 
     #[test]
     fn contextual_keywords_are_identifiers() {
-        for (spelling, keyword) in [
-            ("scan", ContextualKeyword::Scan),
-            ("unfold", ContextualKeyword::Unfold),
-            ("range", ContextualKeyword::Range),
-            ("linspace", ContextualKeyword::Linspace),
-            ("step", ContextualKeyword::Step),
-            ("points", ContextualKeyword::Points),
-            ("Fin", ContextualKeyword::Fin),
-        ] {
+        for &keyword in ContextualKeyword::ALL {
             let token = Token::ContextualKeyword(keyword);
-            assert_single_token(spelling, token);
-            assert!(token.is_identifier());
+            assert_single_token(keyword.as_str(), token);
+            assert!(token.is_identifier(), "{keyword}");
+            // Contextual spellings are whole-word matches.
+            assert_single_token(&format!("{keyword}_x"), Token::Ident);
         }
     }
 

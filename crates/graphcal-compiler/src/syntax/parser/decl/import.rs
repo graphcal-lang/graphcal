@@ -3,7 +3,7 @@ use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
 
@@ -19,9 +19,7 @@ impl Parser<'_> {
         // `plugin` followed by a string literal selects the extern-plugin
         // form; `import plugin.foo;` (a module path whose first segment is
         // spelled `plugin`) stays an ordinary import.
-        if let Some((Token::Ident, ident_span)) =
-            self.lexer.peek_with_span().map(|(tok, span)| (*tok, span))
-            && self.lexer.slice_at(ident_span) == "plugin"
+        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Plugin))
             && self.lexer.peek_second() == Some(&Token::StringLiteral)
         {
             return self.parse_plugin_import_decl(start_span);
@@ -102,7 +100,7 @@ impl Parser<'_> {
     fn parse_extern_fn_decl(&mut self) -> Result<crate::syntax::ast::ExternFnDecl, ParseError> {
         // `fn` is a contextual keyword valid only inside plugin blocks.
         let fn_ident = match self.lexer.peek_with_span().map(|(tok, span)| (*tok, span)) {
-            Some((Token::Ident, span)) if self.lexer.slice_at(span) == "fn" => {
+            Some((Token::ContextualKeyword(ContextualKeyword::Fn), span)) => {
                 self.advance()?;
                 span
             }

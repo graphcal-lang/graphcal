@@ -58,8 +58,8 @@ KEYWORD
    followed by "(" select recurrence forms; qualified path segments do not.
    "range", "linspace", "step", and "points" are special only in
    coordinate-index declarations; "Fin" is special only in Index positions.
-   The full contextual set includes: "scan", "unfold", "range", "linspace",
-   "step", "points", "Fin",
+   The full contextual set includes: "todo", "scan", "unfold", "range",
+   "linspace", "step", "points", "Fin", "plugin", "fn", "bind",
    "key", "fin_key", "floor_key", "ceil_key", "nearest_key",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",

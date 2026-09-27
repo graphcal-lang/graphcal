@@ -13,6 +13,7 @@ use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexName};
+use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_compiler::syntax::type_name::{
     ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
     StructTypeName,
@@ -20,17 +21,11 @@ use graphcal_compiler::syntax::type_name::{
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
-/// Asks the lexer instead of a hand-kept rule so hard keywords (`node`,
-/// `param`, `true`, …) are rejected while contextual keyword tokens remain
-/// valid identifiers.
+/// Delegates to [`SourceIdentifier::parse`], which asks the lexer, so hard
+/// keywords (`node`, `param`, `true`, …) are rejected while contextual keyword
+/// tokens remain valid identifiers.
 fn is_valid_identifier(name: &str) -> bool {
-    use graphcal_compiler::syntax::lexer::Lexer;
-    let mut lexer = Lexer::new(name);
-    let is_single_ident = matches!(
-        lexer.next_token(),
-        Some((token, span)) if token.is_identifier() && span.len() == name.len()
-    );
-    is_single_ident && lexer.next_token().is_none()
+    SourceIdentifier::parse(name).is_ok()
 }
 
 const fn resolved_definition<'a>(

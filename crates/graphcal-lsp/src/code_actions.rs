@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use graphcal_compiler::syntax::token::Token;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
     Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
@@ -17,14 +18,6 @@ use tower_lsp::lsp_types::{
 use crate::convert::LineIndex;
 use crate::diagnostics::AutoImportDiagnosticData;
 use crate::server::AnalysisResult;
-
-/// All declaration keywords that can be preceded by `pub`.
-///
-/// Used by `find_keyword_position` to locate the insertion point for `pub `.
-const ALL_DECL_KEYWORDS: &[&str] = &[
-    "param", "node", "const", "index", "dim", "unit", "type", "base", "dag", "plot", "assert",
-    "import", "include",
-];
 
 /// Produce code actions for the given diagnostics.
 pub fn code_actions(
@@ -285,18 +278,18 @@ fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> 
 
 /// Find the position of the declaration keyword on a given line.
 ///
-/// Skips leading whitespace and returns the position at which a keyword
-/// (`param`, `node`, `const`, `index`, `dim`, `unit`, `type`, `base`, `dag`,
-/// `plot`, `assert`, `import`, `include`) starts.
+/// Skips leading whitespace and returns the position at which a declaration
+/// keyword ([`Token::DECLARATION_KEYWORDS`], each of which may be preceded by
+/// `pub`) starts.
 fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
     let line_start = line_start_offset(source, line)?;
     let line_str = source.get(line_start..)?.lines().next().unwrap_or("");
 
     let trimmed = line_str.trim_start();
     let indent = line_str.len() - trimmed.len();
-    let _keyword = ALL_DECL_KEYWORDS
+    let _keyword = Token::DECLARATION_KEYWORDS
         .iter()
-        .find(|keyword| keyword_matches(trimmed, keyword))?;
+        .find(|keyword| keyword_matches(trimmed, &keyword.to_string()))?;
 
     Some(LineIndex::new(source).position(line_start + indent))
 }
