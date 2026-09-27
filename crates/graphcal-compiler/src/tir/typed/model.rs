@@ -1812,11 +1812,10 @@ pub(super) enum DeclarationIndexError {
     DuplicateRecord { name: ScopedName, span: Span },
 }
 
-/// Resolved expected-fail configuration with its authored diagnostic source.
+/// Resolved expected-fail configuration; `attribute_span` indexes the DAG's source.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedExpectedFailMetadata {
     pub(crate) expected: ExpectedFail,
-    pub(crate) src: NamedSource<Arc<String>>,
     pub(crate) attribute_span: Span,
 }
 

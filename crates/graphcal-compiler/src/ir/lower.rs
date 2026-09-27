@@ -273,7 +273,8 @@ pub struct DynamicUnitScaleEntry {
     pub base_unit_dimension: Dimension,
     /// Span of the scalar expression.
     pub span: Span,
-    /// Source whose bytes are indexed by `expr` and `span`.
+    /// Source of the owning DAG, whose bytes `expr` and `span` index. The
+    /// evaluator needs it when it evaluates a unit scale owned by another DAG.
     pub src: NamedSource<Arc<String>>,
 }
 

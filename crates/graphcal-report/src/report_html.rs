@@ -220,11 +220,7 @@ fn push_presentation_diagnostics(out: &mut String, diagnostics: &[String]) {
 
 fn push_value_card(out: &mut String, card: &ValueCard) {
     let name = html_escape(&card.name);
-    let kind = match card.kind {
-        graphcal_compiler::declaration_category::ValueDeclCategory::Const => "const",
-        graphcal_compiler::declaration_category::ValueDeclCategory::Param => "param",
-        graphcal_compiler::declaration_category::ValueDeclCategory::Node => "node",
-    };
+    let kind = card.kind;
     let _ = write!(
         out,
         "<article class=\"card card--{kind}\" data-decl=\"{name}\">\n<h3 class=\"card-name\"><code>{name}</code> <span class=\"card-kind\">{kind}</span></h3>\n"
