@@ -1,0 +1,43 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "roundtrip": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "back": {
+          "si_value": 4.0,
+          "unit": "m"
+        },
+        "disp": {
+          "display_value": 2.0,
+          "si_value": 2.0,
+          "unit": "m^(1/2)"
+        },
+        "disp2": {
+          "display_value": 20.0,
+          "si_value": 2.0,
+          "unit": "rootcm"
+        },
+        "r": {
+          "si_value": 2.0,
+          "unit": "m^1/2"
+        }
+      },
+      "param": {
+        "a": {
+          "display_value": 4.0,
+          "si_value": 4.0,
+          "unit": "m"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

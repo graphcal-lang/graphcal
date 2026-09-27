@@ -1,0 +1,53 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {
+        "acosh1_eq0": {
+          "si_value": 0.0
+        },
+        "acosh_id": {
+          "si_value": 1.0
+        },
+        "asinh0": {
+          "si_value": 0.0
+        },
+        "asinh_id": {
+          "si_value": 1.0
+        },
+        "atanh0": {
+          "si_value": 0.0
+        },
+        "atanh_id": {
+          "si_value": 0.5
+        },
+        "cosh0": {
+          "si_value": 1.0
+        },
+        "cosh1": {
+          "si_value": 1.5430806348152435
+        },
+        "identity": {
+          "si_value": 1.0000000000000018
+        },
+        "sinh0": {
+          "si_value": 0.0
+        },
+        "sinh1": {
+          "si_value": 1.1752011936438014
+        },
+        "tanh0": {
+          "si_value": 0.0
+        },
+        "tanh1": {
+          "si_value": 0.7615941559557649
+        }
+      },
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

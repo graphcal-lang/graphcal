@@ -1,0 +1,50 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "close": {
+          "message": "failed at Case#B (actual 2, expected 2.5 +/- 0.1, off by 0.5)",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "actual": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        },
+        "expected": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.5,
+              "si_value": 2.5,
+              "unit": "m"
+            }
+          },
+          "index": "Case"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "total": {
+          "si_value": 300.0
+        }
+      },
+      "param": {
+        "cost": {
+          "entries": {
+            "Build": {
+              "si_value": 200.0
+            },
+            "Design": {
+              "si_value": 100.0
+            }
+          },
+          "index": "Phase"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

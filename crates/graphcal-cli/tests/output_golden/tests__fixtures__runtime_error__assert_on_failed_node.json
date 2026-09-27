@@ -1,0 +1,36 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "uses_e": {
+          "message": "dependency failed: e (division by zero)",
+          "status": "error"
+        },
+        "uses_fine": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "e": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "division by zero"
+          }
+        },
+        "fine": {
+          "si_value": 2.0
+        }
+      },
+      "param": {
+        "zero": {
+          "si_value": 0.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

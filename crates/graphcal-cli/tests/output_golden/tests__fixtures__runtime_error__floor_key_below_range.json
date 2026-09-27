@@ -1,0 +1,25 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "k": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "floor_key: no coordinate of `TimeStep` is at or below the target"
+          }
+        }
+      },
+      "param": {
+        "early": {
+          "si_value": -1.0,
+          "unit": "s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

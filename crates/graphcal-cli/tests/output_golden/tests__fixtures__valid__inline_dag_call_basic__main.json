@@ -1,0 +1,24 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "doubled_result": {
+          "si_value": 20.0,
+          "unit": "m/s"
+        }
+      },
+      "param": {
+        "speed": {
+          "display_value": 10.0,
+          "si_value": 10.0,
+          "unit": "m/s"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

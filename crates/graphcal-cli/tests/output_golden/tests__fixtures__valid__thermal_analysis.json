@@ -1,0 +1,1899 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "has_radiative_capacity": {
+          "status": "pass"
+        },
+        "heater_budget_reasonable": {
+          "status": "pass"
+        }
+      },
+      "const": {
+        "flux_at_300k": {
+          "display_value": 459.3,
+          "si_value": 459.3,
+          "unit": "kg/s^3"
+        }
+      },
+      "incomplete": false,
+      "node": {
+        "radiative_power_capacity": {
+          "entries": {
+            "AntennaHga": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "AntennaLga": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "BatteryPack": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Magnetometer": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "MainComputer": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "PayloadDetector": {
+              "si_value": 7.8081,
+              "unit": "m^2*kg/s^3"
+            },
+            "PayloadOptics": {
+              "si_value": 3.90405,
+              "unit": "m^2*kg/s^3"
+            },
+            "PropellantTank": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "RadiatorNegY": {
+              "si_value": 97.60125,
+              "unit": "m^2*kg/s^3"
+            },
+            "RadiatorPosY": {
+              "si_value": 97.60125,
+              "unit": "m^2*kg/s^3"
+            },
+            "ReactionWheel1": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "ReactionWheel2": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "ReactionWheel3": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "SolarPanelNegX": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "SolarPanelPosX": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "StarTracker": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "StructureBottom": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "StructureNorth": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "StructureSouth": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "StructureTop": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Thruster1": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            },
+            "Thruster2": {
+              "si_value": 0.0,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "temp_range": {
+          "entries": {
+            "AntennaHga": {
+              "si_value": 170.0,
+              "unit": "K"
+            },
+            "AntennaLga": {
+              "si_value": 170.0,
+              "unit": "K"
+            },
+            "BatteryPack": {
+              "si_value": 45.0,
+              "unit": "K"
+            },
+            "Magnetometer": {
+              "si_value": 110.0,
+              "unit": "K"
+            },
+            "MainComputer": {
+              "si_value": 65.0,
+              "unit": "K"
+            },
+            "PayloadDetector": {
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "PayloadOptics": {
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "PropellantTank": {
+              "si_value": 45.0,
+              "unit": "K"
+            },
+            "RadiatorNegY": {
+              "si_value": 160.0,
+              "unit": "K"
+            },
+            "RadiatorPosY": {
+              "si_value": 160.0,
+              "unit": "K"
+            },
+            "ReactionWheel1": {
+              "si_value": 80.0,
+              "unit": "K"
+            },
+            "ReactionWheel2": {
+              "si_value": 80.0,
+              "unit": "K"
+            },
+            "ReactionWheel3": {
+              "si_value": 80.0,
+              "unit": "K"
+            },
+            "SolarPanelNegX": {
+              "si_value": 270.0,
+              "unit": "K"
+            },
+            "SolarPanelPosX": {
+              "si_value": 270.0,
+              "unit": "K"
+            },
+            "StarTracker": {
+              "si_value": 80.0,
+              "unit": "K"
+            },
+            "StructureBottom": {
+              "si_value": 110.0,
+              "unit": "K"
+            },
+            "StructureNorth": {
+              "si_value": 110.0,
+              "unit": "K"
+            },
+            "StructureSouth": {
+              "si_value": 110.0,
+              "unit": "K"
+            },
+            "StructureTop": {
+              "si_value": 110.0,
+              "unit": "K"
+            },
+            "Thruster1": {
+              "si_value": 90.0,
+              "unit": "K"
+            },
+            "Thruster2": {
+              "si_value": 90.0,
+              "unit": "K"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "total_dissipation": {
+          "entries": {
+            "ColdCase": {
+              "si_value": 20.200000000000003,
+              "unit": "m^2*kg/s^3"
+            },
+            "HotCase": {
+              "si_value": 77.5,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalEclipse": {
+              "si_value": 26.8,
+              "unit": "m^2*kg/s^3"
+            },
+            "NominalSunlit": {
+              "si_value": 48.3,
+              "unit": "m^2*kg/s^3"
+            },
+            "SafeMode": {
+              "si_value": 10.4,
+              "unit": "m^2*kg/s^3"
+            },
+            "TransientEntry": {
+              "si_value": 49.3,
+              "unit": "m^2*kg/s^3"
+            },
+            "TransientExit": {
+              "si_value": 49.3,
+              "unit": "m^2*kg/s^3"
+            }
+          },
+          "index": "OrbitCondition"
+        },
+        "total_heater_power": {
+          "si_value": 46.5,
+          "unit": "m^2*kg/s^3"
+        },
+        "total_radiative_capacity": {
+          "si_value": 206.91465,
+          "unit": "m^2*kg/s^3"
+        }
+      },
+      "param": {
+        "emissivity": {
+          "si_value": 0.85
+        },
+        "heat_dissipation": {
+          "entries": {
+            "AntennaHga": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "AntennaLga": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.8,
+                  "si_value": 0.8,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.8,
+                  "si_value": 0.8,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.8,
+                  "si_value": 0.8,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.8,
+                  "si_value": 0.8,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "BatteryPack": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 2.5,
+                  "si_value": 2.5,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "Magnetometer": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.4,
+                  "si_value": 0.4,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.4,
+                  "si_value": 0.4,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.2,
+                  "si_value": 0.2,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.4,
+                  "si_value": 0.4,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.4,
+                  "si_value": 0.4,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "MainComputer": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 8.0,
+                  "si_value": 8.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "PayloadDetector": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 35.0,
+                  "si_value": 35.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 20.0,
+                  "si_value": 20.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 20.0,
+                  "si_value": 20.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 20.0,
+                  "si_value": 20.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "PayloadOptics": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "PropellantTank": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "RadiatorNegY": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "RadiatorPosY": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "ReactionWheel1": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "ReactionWheel2": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "ReactionWheel3": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "SolarPanelNegX": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "SolarPanelPosX": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "StarTracker": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 1.5,
+                  "si_value": 1.5,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 1.5,
+                  "si_value": 1.5,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 1.5,
+                  "si_value": 1.5,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 1.5,
+                  "si_value": 1.5,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "StructureBottom": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.2,
+                  "si_value": 0.2,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.1,
+                  "si_value": 0.1,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "StructureNorth": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "StructureSouth": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "StructureTop": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.2,
+                  "si_value": 0.2,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.5,
+                  "si_value": 0.5,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.1,
+                  "si_value": 0.1,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.3,
+                  "si_value": 0.3,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "Thruster1": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            },
+            "Thruster2": {
+              "entries": {
+                "ColdCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "HotCase": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalEclipse": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "NominalSunlit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "SafeMode": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientEntry": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                },
+                "TransientExit": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "W"
+                }
+              },
+              "index": "OrbitCondition"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "heater_power_budget": {
+          "entries": {
+            "AntennaHga": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "AntennaLga": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "BatteryPack": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "W"
+            },
+            "Magnetometer": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "MainComputer": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "PayloadDetector": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "W"
+            },
+            "PayloadOptics": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "W"
+            },
+            "PropellantTank": {
+              "display_value": 15.0,
+              "si_value": 15.0,
+              "unit": "W"
+            },
+            "RadiatorNegY": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "RadiatorPosY": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "ReactionWheel1": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "W"
+            },
+            "ReactionWheel2": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "W"
+            },
+            "ReactionWheel3": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "W"
+            },
+            "SolarPanelNegX": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "SolarPanelPosX": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "StarTracker": {
+              "display_value": 1.5,
+              "si_value": 1.5,
+              "unit": "W"
+            },
+            "StructureBottom": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "StructureNorth": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "StructureSouth": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "StructureTop": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "W"
+            },
+            "Thruster1": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "W"
+            },
+            "Thruster2": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "W"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "radiator_area": {
+          "entries": {
+            "AntennaHga": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "AntennaLga": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "BatteryPack": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "Magnetometer": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "MainComputer": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "PayloadDetector": {
+              "display_value": 0.02,
+              "si_value": 0.02,
+              "unit": "m^2"
+            },
+            "PayloadOptics": {
+              "display_value": 0.01,
+              "si_value": 0.01,
+              "unit": "m^2"
+            },
+            "PropellantTank": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "RadiatorNegY": {
+              "display_value": 0.25,
+              "si_value": 0.25,
+              "unit": "m^2"
+            },
+            "RadiatorPosY": {
+              "display_value": 0.25,
+              "si_value": 0.25,
+              "unit": "m^2"
+            },
+            "ReactionWheel1": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "ReactionWheel2": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "ReactionWheel3": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "SolarPanelNegX": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "SolarPanelPosX": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "StarTracker": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "StructureBottom": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "StructureNorth": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "StructureSouth": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "StructureTop": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "Thruster1": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            },
+            "Thruster2": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m^2"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "temp_limits": {
+          "entries": {
+            "AntennaHga": {
+              "entries": {
+                "Max": {
+                  "display_value": 90.0,
+                  "si_value": 90.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -80.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "AntennaLga": {
+              "entries": {
+                "Max": {
+                  "display_value": 90.0,
+                  "si_value": 90.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -80.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "BatteryPack": {
+              "entries": {
+                "Max": {
+                  "display_value": 45.0,
+                  "si_value": 45.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "display_value": 0.0,
+                  "si_value": 0.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "Magnetometer": {
+              "entries": {
+                "Max": {
+                  "display_value": 70.0,
+                  "si_value": 70.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -40.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "MainComputer": {
+              "entries": {
+                "Max": {
+                  "display_value": 55.0,
+                  "si_value": 55.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -10.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "PayloadDetector": {
+              "entries": {
+                "Max": {
+                  "display_value": 40.0,
+                  "si_value": 40.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -20.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "PayloadOptics": {
+              "entries": {
+                "Max": {
+                  "display_value": 45.0,
+                  "si_value": 45.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -15.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "PropellantTank": {
+              "entries": {
+                "Max": {
+                  "display_value": 50.0,
+                  "si_value": 50.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "RadiatorNegY": {
+              "entries": {
+                "Max": {
+                  "display_value": 60.0,
+                  "si_value": 60.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -100.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "RadiatorPosY": {
+              "entries": {
+                "Max": {
+                  "display_value": 60.0,
+                  "si_value": 60.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -100.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "ReactionWheel1": {
+              "entries": {
+                "Max": {
+                  "display_value": 60.0,
+                  "si_value": 60.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -20.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "ReactionWheel2": {
+              "entries": {
+                "Max": {
+                  "display_value": 60.0,
+                  "si_value": 60.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -20.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "ReactionWheel3": {
+              "entries": {
+                "Max": {
+                  "display_value": 60.0,
+                  "si_value": 60.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -20.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "SolarPanelNegX": {
+              "entries": {
+                "Max": {
+                  "display_value": 120.0,
+                  "si_value": 120.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -150.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "SolarPanelPosX": {
+              "entries": {
+                "Max": {
+                  "display_value": 120.0,
+                  "si_value": 120.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -150.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "StarTracker": {
+              "entries": {
+                "Max": {
+                  "display_value": 50.0,
+                  "si_value": 50.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -30.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "StructureBottom": {
+              "entries": {
+                "Max": {
+                  "display_value": 70.0,
+                  "si_value": 70.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -40.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "StructureNorth": {
+              "entries": {
+                "Max": {
+                  "display_value": 70.0,
+                  "si_value": 70.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -40.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "StructureSouth": {
+              "entries": {
+                "Max": {
+                  "display_value": 70.0,
+                  "si_value": 70.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -40.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "StructureTop": {
+              "entries": {
+                "Max": {
+                  "display_value": 70.0,
+                  "si_value": 70.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -40.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "Thruster1": {
+              "entries": {
+                "Max": {
+                  "display_value": 80.0,
+                  "si_value": 80.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -10.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            },
+            "Thruster2": {
+              "entries": {
+                "Max": {
+                  "display_value": 80.0,
+                  "si_value": 80.0,
+                  "unit": "K"
+                },
+                "Min": {
+                  "si_value": -10.0,
+                  "unit": "K"
+                }
+              },
+              "index": "Limit"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "temp_max": {
+          "entries": {
+            "AntennaHga": {
+              "display_value": 90.0,
+              "si_value": 90.0,
+              "unit": "K"
+            },
+            "AntennaLga": {
+              "display_value": 90.0,
+              "si_value": 90.0,
+              "unit": "K"
+            },
+            "BatteryPack": {
+              "display_value": 45.0,
+              "si_value": 45.0,
+              "unit": "K"
+            },
+            "Magnetometer": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "K"
+            },
+            "MainComputer": {
+              "display_value": 55.0,
+              "si_value": 55.0,
+              "unit": "K"
+            },
+            "PayloadDetector": {
+              "display_value": 40.0,
+              "si_value": 40.0,
+              "unit": "K"
+            },
+            "PayloadOptics": {
+              "display_value": 45.0,
+              "si_value": 45.0,
+              "unit": "K"
+            },
+            "PropellantTank": {
+              "display_value": 50.0,
+              "si_value": 50.0,
+              "unit": "K"
+            },
+            "RadiatorNegY": {
+              "display_value": 60.0,
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "RadiatorPosY": {
+              "display_value": 60.0,
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "ReactionWheel1": {
+              "display_value": 60.0,
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "ReactionWheel2": {
+              "display_value": 60.0,
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "ReactionWheel3": {
+              "display_value": 60.0,
+              "si_value": 60.0,
+              "unit": "K"
+            },
+            "SolarPanelNegX": {
+              "display_value": 120.0,
+              "si_value": 120.0,
+              "unit": "K"
+            },
+            "SolarPanelPosX": {
+              "display_value": 120.0,
+              "si_value": 120.0,
+              "unit": "K"
+            },
+            "StarTracker": {
+              "display_value": 50.0,
+              "si_value": 50.0,
+              "unit": "K"
+            },
+            "StructureBottom": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "K"
+            },
+            "StructureNorth": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "K"
+            },
+            "StructureSouth": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "K"
+            },
+            "StructureTop": {
+              "display_value": 70.0,
+              "si_value": 70.0,
+              "unit": "K"
+            },
+            "Thruster1": {
+              "display_value": 80.0,
+              "si_value": 80.0,
+              "unit": "K"
+            },
+            "Thruster2": {
+              "display_value": 80.0,
+              "si_value": 80.0,
+              "unit": "K"
+            }
+          },
+          "index": "ThermalNode"
+        },
+        "temp_min": {
+          "entries": {
+            "AntennaHga": {
+              "si_value": -80.0,
+              "unit": "K"
+            },
+            "AntennaLga": {
+              "si_value": -80.0,
+              "unit": "K"
+            },
+            "BatteryPack": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "K"
+            },
+            "Magnetometer": {
+              "si_value": -40.0,
+              "unit": "K"
+            },
+            "MainComputer": {
+              "si_value": -10.0,
+              "unit": "K"
+            },
+            "PayloadDetector": {
+              "si_value": -20.0,
+              "unit": "K"
+            },
+            "PayloadOptics": {
+              "si_value": -15.0,
+              "unit": "K"
+            },
+            "PropellantTank": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "K"
+            },
+            "RadiatorNegY": {
+              "si_value": -100.0,
+              "unit": "K"
+            },
+            "RadiatorPosY": {
+              "si_value": -100.0,
+              "unit": "K"
+            },
+            "ReactionWheel1": {
+              "si_value": -20.0,
+              "unit": "K"
+            },
+            "ReactionWheel2": {
+              "si_value": -20.0,
+              "unit": "K"
+            },
+            "ReactionWheel3": {
+              "si_value": -20.0,
+              "unit": "K"
+            },
+            "SolarPanelNegX": {
+              "si_value": -150.0,
+              "unit": "K"
+            },
+            "SolarPanelPosX": {
+              "si_value": -150.0,
+              "unit": "K"
+            },
+            "StarTracker": {
+              "si_value": -30.0,
+              "unit": "K"
+            },
+            "StructureBottom": {
+              "si_value": -40.0,
+              "unit": "K"
+            },
+            "StructureNorth": {
+              "si_value": -40.0,
+              "unit": "K"
+            },
+            "StructureSouth": {
+              "si_value": -40.0,
+              "unit": "K"
+            },
+            "StructureTop": {
+              "si_value": -40.0,
+              "unit": "K"
+            },
+            "Thruster1": {
+              "si_value": -10.0,
+              "unit": "K"
+            },
+            "Thruster2": {
+              "si_value": -10.0,
+              "unit": "K"
+            }
+          },
+          "index": "ThermalNode"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

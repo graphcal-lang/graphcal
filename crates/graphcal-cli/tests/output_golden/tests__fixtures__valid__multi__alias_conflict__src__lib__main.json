@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "combined": {
+          "si_value": 3.0
+        },
+        "x_a": {
+          "si_value": 1.0
+        },
+        "x_b": {
+          "si_value": 2.0
+        }
+      },
+      "param": {
+        "a::x": {
+          "si_value": 1.0
+        },
+        "b::x": {
+          "si_value": 2.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

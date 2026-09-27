@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::N015",
+    "labels": [
+      {
+        "length": 34,
+        "location": {
+          "column": 29,
+          "line": 5,
+          "source": "<root>/tests/fixtures/invalid/named_arguments_on_extern.gcl"
+        },
+        "offset": 172,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

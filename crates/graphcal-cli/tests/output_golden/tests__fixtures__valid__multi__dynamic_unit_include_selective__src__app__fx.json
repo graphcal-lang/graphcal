@@ -1,0 +1,28 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "p": {
+          "display_value": 92.59259259259258,
+          "si_value": 100.0,
+          "unit": "EUR"
+        }
+      },
+      "param": {
+        "mine": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "USD"
+        },
+        "rate": {
+          "si_value": 1.08
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

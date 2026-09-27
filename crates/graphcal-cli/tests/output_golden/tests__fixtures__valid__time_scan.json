@@ -1,0 +1,43 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "y": {
+          "entries": {
+            "0 s": {
+              "si_value": 10.0
+            },
+            "0.25 s": {
+              "si_value": 5.0
+            },
+            "0.5 s": {
+              "si_value": 2.5
+            },
+            "0.75 s": {
+              "si_value": 1.25
+            },
+            "1 s": {
+              "si_value": 0.625
+            }
+          },
+          "index": "Step"
+        }
+      },
+      "param": {
+        "k": {
+          "display_value": 2.0,
+          "si_value": 2.0,
+          "unit": "Hz"
+        },
+        "y0": {
+          "si_value": 10.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

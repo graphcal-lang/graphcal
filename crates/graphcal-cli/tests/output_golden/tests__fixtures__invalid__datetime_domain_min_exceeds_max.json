@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::C003",
+    "labels": [
+      {
+        "length": 80,
+        "location": {
+          "column": 5,
+          "line": 3,
+          "source": "<root>/tests/fixtures/invalid/datetime_domain_min_exceeds_max.gcl"
+        },
+        "offset": 75,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

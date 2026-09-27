@@ -22,7 +22,8 @@ repos:
         args: [--enforce-all]
         # Vendored Vega bundles are intentional pinned assets. The generated
         # report engine belongs only in build outputs and release archives.
-        exclude: '^crates/graphcal-report/assets/.*\.min\.js$'
+        # Output goldens pin every value of large sampled examples in full.
+        exclude: '^(crates/graphcal-report/assets/.*\.min\.js|crates/graphcal-cli/tests/output_golden/.*\.json)$'
       - id: check-merge-conflict
       - id: check-symlinks
       - id: mixed-line-ending

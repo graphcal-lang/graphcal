@@ -1,0 +1,7 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D017",
+    "labels": [
+      {
+        "length": 5,
+        "location": {
+          "column": 26,
+          "line": 4,
+          "source": "<root>/tests/fixtures/invalid/const_unit_graph_ref.gcl"
+        },
+        "offset": 97,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

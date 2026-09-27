@@ -1,0 +1,47 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "within_limit": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "lib::actual": {
+          "entries": {
+            "Active": {
+              "si_value": 150.0
+            },
+            "Idle": {
+              "si_value": 10.0
+            },
+            "Overdrive": {
+              "si_value": 100.0
+            }
+          },
+          "index": "MyModes"
+        },
+        "lib::limit": {
+          "entries": {
+            "Active": {
+              "si_value": 200.0
+            },
+            "Idle": {
+              "si_value": 100.0
+            },
+            "Overdrive": {
+              "si_value": 50.0
+            }
+          },
+          "index": "MyModes"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

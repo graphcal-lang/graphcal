@@ -1,0 +1,26 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "exact": {
+          "message": "tolerance must be non-negative, got -0.1",
+          "status": "error"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {},
+      "param": {
+        "tol": {
+          "si_value": -0.1
+        },
+        "x": {
+          "si_value": 1.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "y": {
+          "error": {
+            "kind": "eval_failed",
+            "message": "invalid argument for sqrt (result is NaN)"
+          }
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::P001",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 26,
+          "line": 6,
+          "source": "<root>/tests/fixtures/invalid/cmp_chain.gcl"
+        },
+        "offset": 232,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

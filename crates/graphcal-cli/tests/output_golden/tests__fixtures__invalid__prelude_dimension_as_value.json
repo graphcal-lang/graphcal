@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::E001",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 25,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/prelude_dimension_as_value.gcl"
+        },
+        "offset": 88,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "fuel_proxy": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "N"
+        }
+      },
+      "param": {
+        "maneuver": {
+          "fields": {
+            "duration": {
+              "display_value": 3600.0,
+              "si_value": 3600.0,
+              "unit": "s"
+            },
+            "thrust": {
+              "display_value": 0.5,
+              "si_value": 0.5,
+              "unit": "N"
+            }
+          },
+          "type": "LowThrust"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

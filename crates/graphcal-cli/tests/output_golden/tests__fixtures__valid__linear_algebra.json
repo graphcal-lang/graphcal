@@ -1,0 +1,483 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "cross_z": {
+          "status": "pass"
+        },
+        "determinant_result": {
+          "status": "pass"
+        },
+        "dot_result": {
+          "status": "pass"
+        },
+        "inverse_result": {
+          "status": "pass"
+        },
+        "matmul_00": {
+          "status": "pass"
+        },
+        "matmul_11": {
+          "status": "pass"
+        },
+        "norm_result": {
+          "status": "pass"
+        },
+        "outer_12": {
+          "status": "pass"
+        },
+        "solve_0": {
+          "status": "pass"
+        },
+        "solve_1": {
+          "status": "pass"
+        },
+        "trace_result": {
+          "status": "pass"
+        },
+        "transpose_20": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "A_t": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 1.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "si_value": 4.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 2.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "si_value": 5.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#2": {
+              "entries": {
+                "#0": {
+                  "si_value": 3.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "si_value": 6.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "a_norm": {
+          "si_value": 3.741657386773941,
+          "unit": "m"
+        },
+        "dot_ab": {
+          "si_value": 32.0,
+          "unit": "m"
+        },
+        "inverse_identity_00": {
+          "si_value": 1.0000000000000002
+        },
+        "matrix_product": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 58.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "si_value": 64.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 139.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "si_value": 154.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "solution": {
+          "entries": {
+            "#0": {
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#1": {
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "square_det": {
+          "si_value": -2.0,
+          "unit": "m^2"
+        },
+        "square_inverse": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": -2.0,
+                  "unit": "m^-1"
+                },
+                "#1": {
+                  "si_value": 1.0,
+                  "unit": "m^-1"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 1.4999999999999998,
+                  "unit": "m^-1"
+                },
+                "#1": {
+                  "si_value": -0.49999999999999994,
+                  "unit": "m^-1"
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "square_trace": {
+          "si_value": 5.0,
+          "unit": "m"
+        },
+        "uv": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 3.0,
+                  "unit": "m*s"
+                },
+                "#1": {
+                  "si_value": 4.0,
+                  "unit": "m*s"
+                },
+                "#2": {
+                  "si_value": 5.0,
+                  "unit": "m*s"
+                }
+              },
+              "index": "Fin(3)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 6.0,
+                  "unit": "m*s"
+                },
+                "#1": {
+                  "si_value": 8.0,
+                  "unit": "m*s"
+                },
+                "#2": {
+                  "si_value": 10.0,
+                  "unit": "m*s"
+                }
+              },
+              "index": "Fin(3)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "z_axis": {
+          "entries": {
+            "#0": {
+              "si_value": 0.0,
+              "unit": "m"
+            },
+            "#1": {
+              "si_value": 0.0,
+              "unit": "m"
+            },
+            "#2": {
+              "si_value": 1.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(3)"
+        }
+      },
+      "param": {
+        "A": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "m"
+                },
+                "#2": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(3)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "display_value": 5.0,
+                  "si_value": 5.0,
+                  "unit": "m"
+                },
+                "#2": {
+                  "display_value": 6.0,
+                  "si_value": 6.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(3)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "B": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "si_value": 7.0
+                },
+                "#1": {
+                  "si_value": 8.0
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "si_value": 9.0
+                },
+                "#1": {
+                  "si_value": 10.0
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#2": {
+              "entries": {
+                "#0": {
+                  "si_value": 11.0
+                },
+                "#1": {
+                  "si_value": 12.0
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "a": {
+          "entries": {
+            "#0": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#1": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            },
+            "#2": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "b": {
+          "entries": {
+            "#0": {
+              "si_value": 4.0
+            },
+            "#1": {
+              "si_value": 5.0
+            },
+            "#2": {
+              "si_value": 6.0
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "rhs": {
+          "entries": {
+            "#0": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "m^2"
+            },
+            "#1": {
+              "display_value": 11.0,
+              "si_value": 11.0,
+              "unit": "m^2"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "square": {
+          "entries": {
+            "#0": {
+              "entries": {
+                "#0": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            },
+            "#1": {
+              "entries": {
+                "#0": {
+                  "display_value": 3.0,
+                  "si_value": 3.0,
+                  "unit": "m"
+                },
+                "#1": {
+                  "display_value": 4.0,
+                  "si_value": 4.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Fin(2)"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "u": {
+          "entries": {
+            "#0": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#1": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(2)"
+        },
+        "v": {
+          "entries": {
+            "#0": {
+              "display_value": 3.0,
+              "si_value": 3.0,
+              "unit": "s"
+            },
+            "#1": {
+              "display_value": 4.0,
+              "si_value": 4.0,
+              "unit": "s"
+            },
+            "#2": {
+              "display_value": 5.0,
+              "si_value": 5.0,
+              "unit": "s"
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "x_axis": {
+          "entries": {
+            "#0": {
+              "si_value": 1.0
+            },
+            "#1": {
+              "si_value": 0.0
+            },
+            "#2": {
+              "si_value": 0.0
+            }
+          },
+          "index": "Fin(3)"
+        },
+        "y_axis": {
+          "entries": {
+            "#0": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m"
+            },
+            "#1": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "#2": {
+              "display_value": 0.0,
+              "si_value": 0.0,
+              "unit": "m"
+            }
+          },
+          "index": "Fin(3)"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::S007",
+    "labels": [
+      {
+        "length": 2,
+        "location": {
+          "column": 20,
+          "line": 9,
+          "source": "<root>/tests/fixtures/invalid/field_access_multi_variant.gcl"
+        },
+        "offset": 201,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

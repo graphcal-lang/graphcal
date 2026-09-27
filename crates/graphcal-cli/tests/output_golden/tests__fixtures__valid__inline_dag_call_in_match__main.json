@@ -1,0 +1,80 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "effective": {
+          "entries": {
+            "Primary": {
+              "entries": {
+                "A": {
+                  "display_value": 1.0,
+                  "si_value": 1.0,
+                  "unit": "m"
+                },
+                "B": {
+                  "display_value": 2.0,
+                  "si_value": 2.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Region"
+            },
+            "Secondary": {
+              "entries": {
+                "A": {
+                  "display_value": 10.0,
+                  "si_value": 10.0,
+                  "unit": "m"
+                },
+                "B": {
+                  "display_value": 20.0,
+                  "si_value": 20.0,
+                  "unit": "m"
+                }
+              },
+              "index": "Region"
+            }
+          },
+          "index": "Source"
+        }
+      },
+      "param": {
+        "dist_primary": {
+          "entries": {
+            "A": {
+              "display_value": 1.0,
+              "si_value": 1.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 2.0,
+              "si_value": 2.0,
+              "unit": "m"
+            }
+          },
+          "index": "Region"
+        },
+        "dist_secondary": {
+          "entries": {
+            "A": {
+              "display_value": 10.0,
+              "si_value": 10.0,
+              "unit": "m"
+            },
+            "B": {
+              "display_value": 20.0,
+              "si_value": 20.0,
+              "unit": "m"
+            }
+          },
+          "index": "Region"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

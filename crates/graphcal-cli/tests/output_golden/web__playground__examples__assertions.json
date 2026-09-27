@@ -1,0 +1,34 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "within_capacity": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "remaining_capacity": {
+          "si_value": 60.0,
+          "unit": "kg"
+        }
+      },
+      "param": {
+        "capacity": {
+          "display_value": 100.0,
+          "si_value": 100.0,
+          "unit": "kg"
+        },
+        "payload": {
+          "display_value": 40.0,
+          "si_value": 40.0,
+          "unit": "kg"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

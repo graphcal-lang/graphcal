@@ -1,0 +1,30 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 1,
+    "stdout": {
+      "assert": {
+        "always_fails": {
+          "message": "assertion evaluated to false",
+          "status": "fail"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "result": {
+          "si_value": 43.0
+        },
+        "value": {
+          "si_value": 42.0
+        }
+      },
+      "param": {
+        "lib::value": {
+          "si_value": 42.0
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

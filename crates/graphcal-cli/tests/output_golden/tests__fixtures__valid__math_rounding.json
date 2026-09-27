@@ -1,0 +1,87 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "whole_cm_granularity": {
+          "status": "pass"
+        }
+      },
+      "const": {
+        "abs_neg_len": {
+          "si_value": 5.0,
+          "unit": "m"
+        },
+        "cbrt_volume": {
+          "si_value": 3.0,
+          "unit": "m"
+        },
+        "ceil_neg": {
+          "si_value": -2.0
+        },
+        "ceil_pos": {
+          "si_value": 3.0
+        },
+        "expm1_zero": {
+          "si_value": 0.0
+        },
+        "floor_neg": {
+          "si_value": -3.0
+        },
+        "floor_pos": {
+          "si_value": 2.0
+        },
+        "hyp_3_4": {
+          "si_value": 5.0,
+          "unit": "m"
+        },
+        "ln_e": {
+          "si_value": 1.0
+        },
+        "log10_1000": {
+          "si_value": 3.0
+        },
+        "log1p_zero": {
+          "si_value": 0.0
+        },
+        "log2_8": {
+          "si_value": 3.0
+        },
+        "log_8_2": {
+          "si_value": 3.0
+        },
+        "round_half_neg": {
+          "si_value": -3.0
+        },
+        "round_half_pos": {
+          "si_value": 3.0
+        },
+        "round_under": {
+          "si_value": 2.0
+        },
+        "sqrt_area": {
+          "si_value": 4.0,
+          "unit": "m"
+        },
+        "to_int_exact": 3,
+        "to_int_trunc_neg": -3,
+        "to_int_trunc_pos": 3,
+        "trunc_neg": {
+          "si_value": -2.0
+        },
+        "trunc_pos": {
+          "si_value": 2.0
+        },
+        "whole_cm_down": {
+          "si_value": 0.75,
+          "unit": "m"
+        }
+      },
+      "incomplete": false,
+      "node": {},
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

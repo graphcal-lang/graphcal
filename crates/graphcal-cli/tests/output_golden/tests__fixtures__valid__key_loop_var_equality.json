@@ -1,0 +1,28 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "x": {
+          "entries": {
+            "A": true,
+            "B": true
+          },
+          "index": "Maneuver"
+        },
+        "y": {
+          "entries": {
+            "A": true,
+            "B": false
+          },
+          "index": "Maneuver"
+        }
+      },
+      "param": {},
+      "unfinished_calls": []
+    }
+  }
+}

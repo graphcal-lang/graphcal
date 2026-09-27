@@ -1,0 +1,34 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "div_neg": -2,
+        "ge": true,
+        "gt": true,
+        "le": true,
+        "lt": true,
+        "mod_neg_dividend": -1,
+        "mod_neg_divisor": -1,
+        "mod_pos_neg_divisor": 1,
+        "ne": true,
+        "neg_base_even": 9,
+        "neg_base_odd": -27,
+        "neg_neg": -7,
+        "pow_int": 27,
+        "pow_one": 3,
+        "pow_zero": 1,
+        "sub_neg": 11
+      },
+      "param": {
+        "a": -7,
+        "b": 3,
+        "c": 4
+      },
+      "unfinished_calls": []
+    }
+  }
+}

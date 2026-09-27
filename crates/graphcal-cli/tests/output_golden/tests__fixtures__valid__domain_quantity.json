@@ -1,0 +1,33 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "double_thrust": {
+          "si_value": 1.0,
+          "unit": "m*kg/s^2"
+        }
+      },
+      "param": {
+        "bus_mass": {
+          "display_value": 500.0,
+          "si_value": 500.0,
+          "unit": "kg"
+        },
+        "efficiency": {
+          "si_value": 0.85
+        },
+        "sample_count": 10,
+        "thrust": {
+          "display_value": 0.5,
+          "si_value": 0.5,
+          "unit": "N"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}
