@@ -3,14 +3,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension, RationalError};
 use crate::registry::dimension_registry::{
-    DimensionResolveError, assert_base_dim_names_cover,
-    format_dimension_preferring_alias_after_validation, resolve_dim_expr_detailed_impl,
-    resolve_dim_expr_impl, resolve_type_expr_impl,
+    DimensionResolveError, DimensionScope, assert_base_dim_names_cover,
+    format_dimension_preferring_alias_after_validation,
 };
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, UnitName, UnitRef};
+use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
@@ -118,8 +117,8 @@ pub struct RegistryBuilder {
     base_dim_names: BTreeMap<BaseDimId, String>,
     base_dim_symbols: BTreeMap<BaseDimId, String>,
 
-    dimensions: HashMap<DimName, Dimension>,
-    dimension_aliases: HashMap<DimName, DimName>,
+    dimensions: HashMap<DimRef, Dimension>,
+    dimension_aliases: HashMap<DimRef, DimRef>,
     units: HashMap<UnitRef, UnitInfo>,
     unit_aliases: HashMap<UnitRef, UnitRef>,
     types: HashMap<StructTypeName, TypeDef>,
@@ -283,9 +282,19 @@ impl RegistryBuilder {
     /// identity (prelude name or user-defined file+name).
     pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
         let dim = Dimension::base(id.clone());
-        self.base_dim_names.insert(id.clone(), name.to_string());
-        self.dimensions.insert(name, dim);
+        self.register_base_dimension_display_name(&name, id.clone());
+        self.dimensions.insert(DimRef::local(name), dim);
         id
+    }
+
+    /// Record the display name of a base dimension without making it
+    /// source-visible.
+    ///
+    /// Imported dimensions and units may be built from a dependency's private
+    /// base dimensions; the importer needs their display metadata (registry
+    /// invariant) but must not be able to name them.
+    pub fn register_base_dimension_display_name(&mut self, name: &DimName, id: BaseDimId) {
+        self.base_dim_names.insert(id, name.to_string());
     }
 
     /// Register a new base dimension with an SI symbol.
@@ -335,13 +344,13 @@ impl RegistryBuilder {
         Ok(())
     }
 
-    /// Register a named dimension.
-    pub fn register_dimension(&mut self, name: DimName, dim: Dimension) {
-        self.dimensions.insert(name, dim);
+    /// Register a named dimension under a local or module-qualified reference.
+    pub fn register_dimension(&mut self, name: impl Into<DimRef>, dim: Dimension) {
+        self.dimensions.insert(name.into(), dim);
     }
 
     /// Register a source-visible dimension alias without changing identity.
-    pub fn register_dimension_alias(&mut self, alias: DimName, target: DimName) {
+    pub fn register_dimension_alias(&mut self, alias: DimRef, target: DimRef) {
         self.dimension_aliases.insert(alias, target);
     }
 
@@ -444,18 +453,21 @@ impl RegistryBuilder {
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
 
-    /// Look up a dimension by name.
+    const fn dimension_scope(&self) -> DimensionScope<'_> {
+        DimensionScope::new(&self.dimensions, &self.dimension_aliases)
+    }
+
+    /// Look up an unqualified (local, selectively imported, or prelude)
+    /// dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        let mut current = DimName::try_new(name).ok()?;
-        let mut remaining = self.dimension_aliases.len() + 1;
-        loop {
-            if let Some(dimension) = self.dimensions.get(&current) {
-                return Some(dimension);
-            }
-            current = self.dimension_aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+        self.get_dimension_ref(&DimRef::local(DimName::try_new(name).ok()?))
+    }
+
+    /// Look up a possibly module-qualified dimension reference.
+    #[must_use]
+    pub fn get_dimension_ref(&self, reference: &DimRef) -> Option<&Dimension> {
+        self.dimension_scope().lookup(reference)
     }
 
     /// Look up a unit by name.
@@ -548,7 +560,7 @@ impl RegistryBuilder {
     /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
     /// dimension exponent arithmetic overflows `i32`.
     pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
-        resolve_dim_expr_impl(&self.dimensions, expr)
+        self.dimension_scope().resolve_dim_expr(expr)
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
@@ -557,7 +569,7 @@ impl RegistryBuilder {
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {
-        resolve_dim_expr_detailed_impl(&self.dimensions, expr)
+        self.dimension_scope().resolve_dim_expr_detailed(expr)
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -568,7 +580,7 @@ impl RegistryBuilder {
         &self,
         type_expr: &TypeExpr,
     ) -> Result<Option<Dimension>, RationalError> {
-        resolve_type_expr_impl(&self.dimensions, type_expr)
+        self.dimension_scope().resolve_type_expr(type_expr)
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
@@ -741,6 +753,62 @@ mod tests {
         let dim = r.dimensions.resolve_dim_expr(&expr).unwrap().unwrap();
         let expected = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected);
+    }
+
+    #[test]
+    fn resolve_dim_expr_keys_qualified_and_aliased_references() {
+        use crate::registry::dimension_registry::DimensionResolveError;
+        use crate::syntax::dimension::DimRef;
+        use crate::syntax::names::{NameAtom, NamespacePath};
+
+        let atom = |s: &str| NameAtom::parse(s).unwrap();
+        let rate = DimName::expect_valid("Rate");
+        let qualified =
+            |owner: &str| DimRef::qualified(NamespacePath::root(atom(owner)), rate.clone());
+        let single = |path: NamePath| DimExpr {
+            terms: vec![DimExprItem {
+                op: MulDivOp::Mul,
+                term: DimTerm {
+                    name: Spanned::new(path, Span::new(0, 0)),
+                    power: None,
+                    span: Span::new(0, 0),
+                },
+            }],
+            span: Span::new(0, 0),
+        };
+        let velocity = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
+        let mass_rate = (Dimension::base(mass_id()) / Dimension::base(time_id())).unwrap();
+
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        b.register_dimension(qualified("a"), velocity.clone());
+        b.register_dimension(qualified("b"), mass_rate.clone());
+        b.register_dimension(rate.clone(), Dimension::base(mass_id()));
+        b.register_dimension_alias(DimRef::local(DimName::expect_valid("R")), qualified("a"));
+
+        let member = |owner: &str| NamePath::member(NamespacePath::root(atom(owner)), atom("Rate"));
+        assert_eq!(
+            b.resolve_dim_expr_detailed(&single(member("a"))),
+            Ok(velocity.clone())
+        );
+        assert_eq!(
+            b.resolve_dim_expr_detailed(&single(member("b"))),
+            Ok(mass_rate)
+        );
+        assert_eq!(
+            b.resolve_dim_expr_detailed(&single(NamePath::expect_local("Rate"))),
+            Ok(Dimension::base(mass_id()))
+        );
+        assert_eq!(
+            b.resolve_dim_expr_detailed(&single(NamePath::expect_local("R"))),
+            Ok(velocity)
+        );
+        assert_eq!(
+            b.resolve_dim_expr_detailed(&single(member("zzz"))),
+            Err(DimensionResolveError::UnknownDimension {
+                name: qualified("zzz")
+            })
+        );
     }
 
     #[test]
