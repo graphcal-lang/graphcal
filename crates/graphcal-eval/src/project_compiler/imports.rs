@@ -1134,7 +1134,12 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                             alias: alias.clone(),
                         });
                     }
-                    ctx.projected_static_aliases.push(projection);
+                    ctx.projected_static_aliases.push(
+                        graphcal_compiler::syntax::span::Spanned::new(
+                            projection,
+                            import_item.local_span(),
+                        ),
+                    );
                 }
                 let is_plot = is_term_namespace
                     && (dep_index.is_plot(orig_name)
@@ -1415,7 +1420,12 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                             alias: alias.clone(),
                         });
                     }
-                    ctx.projected_static_aliases.push(projection);
+                    ctx.projected_static_aliases.push(
+                        graphcal_compiler::syntax::span::Spanned::new(
+                            projection,
+                            import_item.local_span(),
+                        ),
+                    );
                 }
                 let is_plot = is_term_namespace
                     && dag_body.declarations.iter().any(|d| {
@@ -1683,15 +1693,23 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         .imported_type_system_names
                         .entry(module_target.clone())
                         .or_default();
-                    if import_item.namespace == ImportItemNamespace::Dimension {
-                        // Bind the dimension under its importer-local name
-                        // only (`dim Rate as R` makes `R`, not `Rate`, visible).
-                        selected.insert_dimension_as(
+                    // Bind dimensions and units under their importer-local
+                    // name only (`dim Rate as R` makes `R`, not `Rate`,
+                    // visible; likewise `unit spd as s`).
+                    match import_item.namespace {
+                        ImportItemNamespace::Dimension => selected.insert_dimension_as(
                             DimName::from_atom(orig_name.clone()),
                             DimName::from_atom(import_item.local_name_atom().clone()),
-                        );
-                    } else {
-                        selected.insert(import_item.namespace, orig_name.clone());
+                        ),
+                        ImportItemNamespace::Unit => selected.insert_unit_as(
+                            UnitName::from_atom(orig_name.clone()),
+                            UnitName::from_atom(import_item.local_name_atom().clone()),
+                        ),
+                        ImportItemNamespace::Term
+                        | ImportItemNamespace::Type
+                        | ImportItemNamespace::Index => {
+                            selected.insert(import_item.namespace, orig_name.clone());
+                        }
                     }
                     continue;
                 }

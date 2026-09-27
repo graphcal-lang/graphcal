@@ -262,7 +262,11 @@ mod tests {
             "Angle",
         ] {
             assert!(
-                r.dimensions.get_dimension(name).is_some(),
+                r.dimensions
+                    .get_dimension(&crate::syntax::dimension::DimRef::local(
+                        DimName::expect_valid(name)
+                    ))
+                    .is_some(),
                 "missing dimension: {name}"
             );
         }
@@ -285,7 +289,11 @@ mod tests {
             "Volume",
         ] {
             assert!(
-                r.dimensions.get_dimension(name).is_some(),
+                r.dimensions
+                    .get_dimension(&crate::syntax::dimension::DimRef::local(
+                        DimName::expect_valid(name)
+                    ))
+                    .is_some(),
                 "missing dimension: {name}"
             );
         }
@@ -321,7 +329,12 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let r = b.build();
-        let force = r.dimensions.get_dimension("Force").unwrap();
+        let force = r
+            .dimensions
+            .get_dimension(&crate::syntax::dimension::DimRef::local(
+                DimName::expect_valid("Force"),
+            ))
+            .unwrap();
         // Force = Mass * Length / Time^2
         assert_eq!(force.get_exponent(&mass_id()), Rational::ONE);
         assert_eq!(force.get_exponent(&length_id()), Rational::ONE);
@@ -333,7 +346,13 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let r = b.build();
-        let force_dim = r.dimensions.get_dimension("Force").unwrap().clone();
+        let force_dim = r
+            .dimensions
+            .get_dimension(&crate::syntax::dimension::DimRef::local(
+                DimName::expect_valid("Force"),
+            ))
+            .unwrap()
+            .clone();
         let newton = r
             .units
             .get_unit(&crate::syntax::dimension::UnitRef::local(
@@ -408,7 +427,13 @@ mod tests {
         let r = b.build();
         for name in PreludeBaseDimension::ALL_NAMES {
             let expected = prelude_base_dimension(name).unwrap();
-            assert_eq!(r.dimensions.get_dimension(name), Some(&expected));
+            assert_eq!(
+                r.dimensions
+                    .get_dimension(&crate::syntax::dimension::DimRef::local(
+                        DimName::expect_valid(name)
+                    )),
+                Some(&expected)
+            );
         }
         assert_eq!(prelude_base_dimension("Velocity"), None);
         assert_eq!(prelude_base_dimension("NotADimension"), None);
@@ -487,7 +512,11 @@ mod tests {
         ];
         for (name, dimension) in &expected {
             assert_eq!(
-                registry.dimensions.get_dimension(name),
+                registry
+                    .dimensions
+                    .get_dimension(&crate::syntax::dimension::DimRef::local(
+                        DimName::expect_valid(*name)
+                    )),
                 Some(dimension),
                 "{name}"
             );

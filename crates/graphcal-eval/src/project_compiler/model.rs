@@ -260,7 +260,8 @@ pub(super) struct ImportContext<'a> {
         graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
-    pub(super) projected_static_aliases: Vec<ProjectedStaticAlias>,
+    pub(super) projected_static_aliases:
+        Vec<graphcal_compiler::syntax::span::Spanned<ProjectedStaticAlias>>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
     pub(super) include_instances: Vec<IncludeInstanceRequest>,

@@ -398,7 +398,7 @@ pub(crate) fn lower_nominal_type_registry(
         NominalTypeRegistry::default(),
         |mut lowered, (source_name, symbol)| {
             ctx.cancellation.checkpoint()?;
-            let frontend = registry.types.get_type(source_name.as_str()).ok_or_else(|| {
+            let frontend = registry.types.get_type(source_name).ok_or_else(|| {
                 invariant_error(
                     format!(
                         "frontend registry is missing local type `{source_name}` owned by `{owner}`"

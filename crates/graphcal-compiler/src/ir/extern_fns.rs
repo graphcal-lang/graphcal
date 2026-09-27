@@ -342,7 +342,12 @@ fn resolve_extern_result_kind(
         && item.term.power.is_none()
         && let Some(atom) = item.term.name.value.as_bare()
         && !dim_vars.iter().any(|var| var.as_str() == atom.as_str())
-        && registry.dimensions.get_dimension(atom.as_str()).is_none()
+        && registry
+            .dimensions
+            .get_dimension(&crate::syntax::dimension::DimRef::local(
+                crate::syntax::dimension::DimName::from_atom(atom.clone()),
+            ))
+            .is_none()
     {
         // Not a dimension: the only remaining reading is a record type.
         return resolve_extern_struct_return(
@@ -393,7 +398,7 @@ pub(super) fn resolve_extern_struct_return(
         });
     };
     let leaf = resolved_type.to_unowned_def_name();
-    let Some(type_def) = registry.types.get_type(leaf.as_str()) else {
+    let Some(type_def) = registry.types.get_type(&leaf) else {
         return Err(invalid(format!(
             "record type `{leaf}` is not available in this file's registry; extern struct \
              returns must use a type declared in (or imported into) the declaring file"
@@ -600,7 +605,10 @@ fn resolve_extern_dim_monomial(
                 span: term.span.into(),
             });
         };
-        let Some(dim) = registry.dimensions.get_dimension(leaf.as_str()) else {
+        let Some(dim) = registry
+            .dimensions
+            .get_dimension(&crate::syntax::dimension::DimRef::local(leaf.clone()))
+        else {
             return Err(GraphcalError::UnknownDimension {
                 name: NamePath::from(leaf.clone()),
                 src: src.clone(),

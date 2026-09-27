@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use crate::dimension::{Dimension, Rational};
 use crate::ratio::RatioError;
+use crate::registry::aliased_table::AliasedTable;
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::{UnitName, UnitRef};
 
@@ -270,7 +269,7 @@ impl From<RatioError> for UnitResolveError {
 
 /// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
 pub(crate) fn resolve_unit_expr_impl(
-    units: &HashMap<UnitRef, UnitInfo>,
+    units: &AliasedTable<UnitRef, UnitInfo>,
     expr: &UnitExpr,
 ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
     let mut dim = Dimension::dimensionless();
@@ -306,7 +305,7 @@ pub(crate) fn resolve_unit_expr_impl(
 ///
 /// Works for both static and dynamic units.
 pub(crate) fn resolve_unit_dimension_impl(
-    units: &HashMap<UnitRef, UnitInfo>,
+    units: &AliasedTable<UnitRef, UnitInfo>,
     expr: &UnitExpr,
 ) -> Result<Dimension, UnitResolveError> {
     let mut dim = Dimension::dimensionless();
@@ -327,23 +326,15 @@ pub(crate) fn resolve_unit_dimension_impl(
 /// Unit registry: maps unit names to `UnitInfo` (dimension + scale).
 #[derive(Debug, Clone)]
 pub struct UnitRegistry {
-    pub(crate) units: HashMap<UnitRef, UnitInfo>,
-    pub(crate) aliases: HashMap<UnitRef, UnitRef>,
+    pub(crate) units: AliasedTable<UnitRef, UnitInfo>,
 }
 
 impl UnitRegistry {
-    /// Look up a unit by reference (bare or module-alias-qualified).
+    /// Look up a unit by reference (bare or module-alias-qualified),
+    /// following source-visible aliases.
     #[must_use]
     pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
-        let mut current = name.clone();
-        let mut remaining = self.aliases.len() + 1;
-        loop {
-            if let Some(info) = self.units.get(&current) {
-                return Some(info);
-            }
-            current = self.aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+        self.units.get(name)
     }
 
     /// Iterate over every unit reference and its complete semantic definition.

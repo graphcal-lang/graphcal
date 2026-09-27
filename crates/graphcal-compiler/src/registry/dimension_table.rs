@@ -1,13 +1,14 @@
 //! Dimension table: base-dimension metadata keyed by [`BaseDimId`] and the
 //! source-visible named dimensions of one registry scope.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ratio::RatioError;
+use crate::registry::aliased_table::{AliasCycle, AliasedTable};
 use crate::syntax::dimension::{DimName, DimRef, UnitName};
 
 /// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
@@ -55,74 +56,6 @@ pub fn resolve_dim_expr_with<'a>(
         })
 }
 
-/// Borrowed view of a flat source-visible dimension scope.
-///
-/// Every dimension-name lookup of a registry — direct `get_dimension` calls
-/// and `DimExpr` resolution alike — goes through [`Self::lookup`], so module
-/// qualifiers and source-visible aliases are honoured uniformly.
-#[derive(Clone, Copy)]
-struct DimensionScope<'a> {
-    dimensions: &'a HashMap<DimRef, Dimension>,
-    aliases: &'a HashMap<DimRef, DimRef>,
-}
-
-impl<'a> DimensionScope<'a> {
-    const fn new(
-        dimensions: &'a HashMap<DimRef, Dimension>,
-        aliases: &'a HashMap<DimRef, DimRef>,
-    ) -> Self {
-        Self {
-            dimensions,
-            aliases,
-        }
-    }
-
-    /// Look up a dimension reference, following alias edges. The alias walk
-    /// is bounded by the number of aliases so a cyclic chain cannot loop.
-    fn lookup(self, reference: &DimRef) -> Option<&'a Dimension> {
-        let mut current = reference;
-        for _ in 0..=self.aliases.len() {
-            if let Some(dimension) = self.dimensions.get(current) {
-                return Some(dimension);
-            }
-            current = self.aliases.get(current)?;
-        }
-        None
-    }
-
-    /// Resolve a `DimExpr` to a concrete `Dimension`, returning `Ok(None)`
-    /// when a referenced dimension is unknown.
-    fn resolve_dim_expr(self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
-        match self.resolve_dim_expr_detailed(expr) {
-            Ok(dim) => Ok(Some(dim)),
-            Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
-            Err(DimensionResolveError::Overflow(err)) => Err(err),
-        }
-    }
-
-    /// Resolve a `DimExpr` while preserving the failing (qualified) reference.
-    fn resolve_dim_expr_detailed(self, expr: &DimExpr) -> Result<Dimension, DimensionResolveError> {
-        resolve_dim_expr_with(expr, |reference| self.lookup(reference))
-    }
-
-    /// Resolve a `TypeExpr` to a concrete `Dimension`.
-    fn resolve_type_expr(self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
-        match &type_expr.kind {
-            TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
-            TypeExprKind::IndexLabel { .. }
-            | TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime
-            | TypeExprKind::TypeApplication { .. }
-            | TypeExprKind::DatetimeApplication { .. }
-            | TypeExprKind::ComplexApplication { .. }
-            | TypeExprKind::KeyApplication { .. } => Ok(None),
-            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
-            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
-        }
-    }
-}
-
 /// Format a dimension, preferring a registered named alias for compound forms.
 ///
 /// A pure base dimension (`Length`) or `Dimensionless` keeps its canonical
@@ -130,7 +63,7 @@ impl<'a> DimensionScope<'a> {
 /// a matching named dimension (`Energy`) when one is registered; if several
 /// names match, the lexicographically smallest is chosen for determinism.
 fn format_dimension_preferring_alias(
-    named: &HashMap<DimRef, Dimension>,
+    named: &AliasedTable<DimRef, Dimension>,
     dim: &Dimension,
 ) -> String {
     // Base dimensions and Dimensionless render as a single bare name already;
@@ -204,11 +137,15 @@ pub struct CanonicalUnitAlreadyRegistered {
 
 /// Dimension table: base-dimension metadata keyed by [`BaseDimId`] plus the
 /// source-visible named dimensions and their aliases.
+///
+/// Every dimension-name lookup — direct [`Self::get_dimension`] calls and
+/// `DimExpr` resolution alike — goes through the one alias-aware
+/// [`AliasedTable`], so module qualifiers and source-visible aliases are
+/// honoured uniformly.
 #[derive(Debug, Clone, Default)]
 pub struct DimensionTable {
     bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
-    named: HashMap<DimRef, Dimension>,
-    aliases: HashMap<DimRef, DimRef>,
+    named: AliasedTable<DimRef, Dimension>,
 }
 
 impl DimensionTable {
@@ -217,10 +154,6 @@ impl DimensionTable {
             bases: self.bases,
             display_aliases: self.named,
         }
-    }
-
-    const fn scope(&self) -> DimensionScope<'_> {
-        DimensionScope::new(&self.named, &self.aliases)
     }
 
     // -- Mutation --
@@ -277,36 +210,29 @@ impl DimensionTable {
     }
 
     /// Register a source-visible dimension alias without changing identity.
-    pub(crate) fn register_dimension_alias(&mut self, alias: DimRef, target: DimRef) {
-        self.aliases.insert(alias, target);
+    pub(crate) fn register_dimension_alias(
+        &mut self,
+        alias: DimRef,
+        target: DimRef,
+    ) -> Result<(), AliasCycle<DimRef>> {
+        self.named.insert_alias(alias, target)
     }
 
-    /// Merge every entry of `parent` this table does not define yet.
+    /// Merge every entry of `parent` this table does not bind yet.
     pub(crate) fn merge_missing_from(&mut self, parent: &Self) {
         for (id, info) in &parent.bases {
             self.import_base_dimension(id.clone(), info);
         }
-        for (name, dim) in &parent.named {
-            self.named
-                .entry(name.clone())
-                .or_insert_with(|| dim.clone());
-        }
-        self.aliases.extend(parent.aliases.clone());
+        self.named.merge_missing_from(&parent.named);
     }
 
     // -- Lookup --
 
-    /// Look up an unqualified (local, selectively imported, or prelude)
-    /// dimension by name.
+    /// Look up a possibly module-qualified dimension reference, following
+    /// source-visible aliases.
     #[must_use]
-    pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        self.get_dimension_ref(&DimRef::local(DimName::try_new(name).ok()?))
-    }
-
-    /// Look up a possibly module-qualified dimension reference.
-    #[must_use]
-    pub fn get_dimension_ref(&self, reference: &DimRef) -> Option<&Dimension> {
-        self.scope().lookup(reference)
+    pub fn get_dimension(&self, reference: &DimRef) -> Option<&Dimension> {
+        self.named.get(reference)
     }
 
     /// Iterate over all named dimensions.
@@ -358,7 +284,11 @@ impl DimensionTable {
     /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
     /// dimension exponent arithmetic overflows `i32`.
     pub(crate) fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
-        self.scope().resolve_dim_expr(expr)
+        match self.resolve_dim_expr_detailed(expr) {
+            Ok(dim) => Ok(Some(dim)),
+            Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
+            Err(DimensionResolveError::Overflow(err)) => Err(err),
+        }
     }
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
@@ -367,7 +297,7 @@ impl DimensionTable {
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {
-        self.scope().resolve_dim_expr_detailed(expr)
+        resolve_dim_expr_with(expr, |reference| self.get_dimension(reference))
     }
 
     /// Resolve a `TypeExpr` to a concrete `Dimension`.
@@ -375,7 +305,19 @@ impl DimensionTable {
     /// Returns `Ok(None)` if the type references unknown dimensions, and
     /// `Err` if dimension exponent arithmetic overflows `i32`.
     pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
-        self.scope().resolve_type_expr(type_expr)
+        match &type_expr.kind {
+            TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
+            TypeExprKind::IndexLabel { .. }
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime
+            | TypeExprKind::TypeApplication { .. }
+            | TypeExprKind::DatetimeApplication { .. }
+            | TypeExprKind::ComplexApplication { .. }
+            | TypeExprKind::KeyApplication { .. } => Ok(None),
+            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
+            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
+        }
     }
 }
 
@@ -397,7 +339,7 @@ fn canonical_unit_symbols(
 #[derive(Debug, Clone)]
 pub struct DimensionFormattingRegistry {
     bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
-    display_aliases: HashMap<DimRef, Dimension>,
+    display_aliases: AliasedTable<DimRef, Dimension>,
 }
 
 impl DimensionFormattingRegistry {
@@ -509,11 +451,14 @@ mod tests {
         let mut table = DimensionTable::default();
         table.record_base_dimension(length());
         assert!(table.base_dimension(&length()).is_some());
-        assert_eq!(table.get_dimension("Length"), None);
+        assert_eq!(
+            table.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
+            None
+        );
 
         table.register_base_dimension(length());
         assert_eq!(
-            table.get_dimension("Length"),
+            table.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
             Some(&Dimension::base(length()))
         );
     }
@@ -531,12 +476,9 @@ mod tests {
         child.register_dimension(rate.clone(), Dimension::base(length()));
         child.merge_missing_from(&parent);
 
+        assert_eq!(child.get_dimension(&rate), Some(&Dimension::base(length())));
         assert_eq!(
-            child.get_dimension_ref(&rate),
-            Some(&Dimension::base(length()))
-        );
-        assert_eq!(
-            child.get_dimension("Length"),
+            child.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
             Some(&Dimension::base(length()))
         );
         assert!(child.is_affine_prone(&Dimension::base(temperature())));

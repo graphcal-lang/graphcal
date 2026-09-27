@@ -48,7 +48,7 @@ pub(super) fn seed_imported_type_system(
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     frontend_registry_imports: &[FrontendRegistryImport<'_>],
-    projected_static_aliases: &[ProjectedStaticAlias],
+    projected_static_aliases: &[graphcal_compiler::syntax::span::Spanned<ProjectedStaticAlias>],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -85,45 +85,59 @@ pub(super) fn seed_imported_type_system(
             let inline_body = graphcal_compiler::desugar::desugared_ast::File {
                 declarations: inline_dag.body(owner_file).to_vec(),
             };
+            // Resolve the selected declarations in a scratch copy of this
+            // scope, then bind dimensions and units under their
+            // importer-local names only (`dim Rate as R` binds `R`, never
+            // `Rate`), exactly like a selective import from a file module.
+            let mut scratch = builder.clone();
             graphcal_compiler::ir::lower::register_selected_declarations(
                 &inline_body,
-                builder,
+                &mut scratch,
                 owner_file.named_source(),
                 names,
                 dep_dag_id,
             )?;
-            // Source registration installs the inline DAG's declaration
-            // names; renamed selections (`dim Rate as R`) additionally bind
-            // their importer-local name.
-            for (local, source) in names.dimensions().filter(|(local, source)| local != source) {
-                builder.register_dimension_alias(
-                    DimRef::local(local.clone()),
-                    DimRef::local(source.clone()),
-                );
-            }
+            register_selected_resolved_dimensions_and_units(
+                builder,
+                &scratch.build(),
+                names,
+                owner_file.named_source(),
+            )?;
+            graphcal_compiler::ir::lower::register_selected_declarations(
+                &inline_body,
+                builder,
+                owner_file.named_source(),
+                &names.without_resolved_dimensions_and_units(),
+                dep_dag_id,
+            )?;
         }
     }
-    for alias in projected_static_aliases {
-        match alias {
-            ProjectedStaticAlias::Type { alias, target, .. } => {
-                builder.register_type_alias(alias.clone(), target.clone());
-            }
-            ProjectedStaticAlias::Dimension { alias, target } => {
-                builder.register_dimension_alias(
+    for projection in projected_static_aliases {
+        let cycle = |alias: String| GraphcalError::CyclicDependency {
+            name: alias,
+            src: file_src.clone(),
+            span: projection.span.into(),
+        };
+        match &projection.value {
+            ProjectedStaticAlias::Type { alias, target, .. } => builder
+                .register_type_alias(alias.clone(), target.clone())
+                .map_err(|error| cycle(error.alias.to_string())),
+            ProjectedStaticAlias::Dimension { alias, target } => builder
+                .register_dimension_alias(
                     DimRef::local(alias.clone()),
                     DimRef::local(target.clone()),
-                );
-            }
-            ProjectedStaticAlias::Index { alias, target } => {
-                builder.register_index_alias(alias.clone(), target.clone());
-            }
-            ProjectedStaticAlias::Unit { alias, target } => {
-                builder.register_unit_alias(
+                )
+                .map_err(|error| cycle(error.alias.to_string())),
+            ProjectedStaticAlias::Index { alias, target } => builder
+                .register_index_alias(alias.clone(), target.clone())
+                .map_err(|error| cycle(error.alias.to_string())),
+            ProjectedStaticAlias::Unit { alias, target } => builder
+                .register_unit_alias(
                     graphcal_compiler::syntax::dimension::UnitRef::local(alias.clone()),
                     graphcal_compiler::syntax::dimension::UnitRef::local(target.clone()),
-                );
-            }
-        }
+                )
+                .map_err(|error| cycle(error.alias.to_string())),
+        }?;
     }
     for import in frontend_registry_imports {
         merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
@@ -168,7 +182,7 @@ fn register_selected_resolved_dimensions_and_units(
     for (local, source) in selected.dimensions() {
         let dimension = dep_registry
             .dimensions
-            .get_dimension_ref(&DimRef::local(source.clone()))
+            .get_dimension(&DimRef::local(source.clone()))
             .cloned()
             .ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -185,23 +199,24 @@ fn register_selected_resolved_dimensions_and_units(
         builder.register_dimension(DimRef::local(local.clone()), dimension);
     }
 
-    for name in selected.units() {
+    for (local, source) in selected.units() {
         use graphcal_compiler::syntax::dimension::UnitRef;
 
-        let unit_ref = UnitRef::local(name.clone());
         let info = dep_registry
             .units
-            .get_unit(&unit_ref)
+            .get_unit(&UnitRef::local(source.clone()))
             .cloned()
             .ok_or_else(|| {
                 GraphcalError::internal_error(
-                    format!("resolved dependency registry is missing selected unit `{name}`"),
+                    format!("resolved dependency registry is missing selected unit `{source}`"),
                     dep_src,
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
         register_base_dimension_metadata(builder, dep_registry, &info.dimension);
-        builder.register_unit_with_scale(unit_ref, info.dimension, info.scale);
+        // Only the importer-local binding is source-visible (`unit spd as s`
+        // binds `s`, not `spd`).
+        builder.register_unit_with_scale(UnitRef::local(local.clone()), info.dimension, info.scale);
     }
 
     Ok(())

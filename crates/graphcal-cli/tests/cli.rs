@@ -1491,6 +1491,109 @@ fn same_leaf_imported_dimensions_resolve_qualified_in_declarations() {
 }
 
 #[test]
+fn renamed_selective_imports_bind_only_the_local_name_in_declarations() {
+    // `unit spd as s` and `dim IRate as R` (also from an inline DAG) bind only
+    // the importer-local name, in `dim` / `unit` declarations as well as in
+    // node annotations.
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/rename");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"rename\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("a.gcl"),
+        "pub const unit spd: Length / Time = 2.0 m/s;\n\
+         pub dag inner {\n\
+             pub dim IRate = Mass / Time;\n\
+             pub const unit ispd: Length / Time = 3.0 m/s;\n\
+             pub node one: Dimensionless = 1.0;\n\
+         }\n",
+    )
+    .unwrap();
+
+    let run = |name: &str, source: &str| {
+        let path = root_dir.join(format!("{name}.gcl"));
+        std::fs::write(&path, source).unwrap();
+        let output = graphcal_bin()
+            .args(["eval", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal");
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let has_line = |stdout: &str, name: &str, value: &str| {
+        stdout.lines().any(|line| {
+            line.split_once('=')
+                .is_some_and(|(lhs, rhs)| lhs.trim() == name && rhs.trim() == value)
+        })
+    };
+
+    for (name, source) in [
+        (
+            "unit_local",
+            "import rename.a::{unit spd as sp};\n\
+             const unit dbl: Length / Time = 2.0 sp;\n\
+             node v: Length / Time = 1.0 dbl;\n",
+        ),
+        (
+            "inline_unit_local",
+            "import rename.a.inner::{unit ispd as q};\n\
+             const unit dbl: Length / Time = 2.0 q;\n\
+             node v: Length / Time = 1.0 dbl;\n",
+        ),
+    ] {
+        let (ok, stdout, stderr) = run(name, source);
+        assert!(ok, "{name} stderr: {stderr}");
+        assert!(has_line(&stdout, "v", "1 dbl"), "{name} stdout: {stdout}");
+    }
+
+    let (ok, stdout, stderr) = run(
+        "inline_dim_local",
+        "import rename.a.inner::{dim IRate as R};\n\
+         dim D = R * Time;\n\
+         node x: D = 2.0 kg;\n",
+    );
+    assert!(ok, "stderr: {stderr}");
+    assert!(has_line(&stdout, "x", "2 kg"), "stdout: {stdout}");
+
+    for (name, source, code) in [
+        (
+            "unit_source_leak",
+            "import rename.a::{unit spd as sp};\n\
+             const unit dbl: Length / Time = 2.0 spd;\n",
+            "D003",
+        ),
+        (
+            "inline_unit_source_leak",
+            "import rename.a.inner::{unit ispd as q};\n\
+             const unit dbl: Length / Time = 2.0 ispd;\n",
+            "D003",
+        ),
+        (
+            "inline_dim_source_leak",
+            "import rename.a.inner::{dim IRate as R};\n\
+             dim D = IRate * Time;\n",
+            "D004",
+        ),
+        (
+            "inline_dim_source_leak_in_unit",
+            "import rename.a.inner::{dim IRate as R};\n\
+             unit u: IRate = 2.0 kg/s;\n",
+            "D004",
+        ),
+    ] {
+        let (ok, _, stderr) = run(name, source);
+        assert!(!ok && stderr.contains(code), "{name} stderr: {stderr}");
+    }
+}
+
+#[test]
 fn eval_output_view_selects_surface_or_all_include_values() {
     // #394/#480/#909: normal output follows the consumer surface while the
     // explicit debug view retains private instance state.
