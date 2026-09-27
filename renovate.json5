@@ -2,6 +2,8 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["config:best-practices", "helpers:pinGitHubActionDigestsToSemver"],
   minimumReleaseAge: "7 days",
+  // Keep transitive deps (e.g. @codemirror/state) from resolving to a stale duplicate after an update.
+  postUpdateOptions: ["pnpmDedupe"],
   lockFileMaintenance: {
     enabled: true,
   },
