@@ -15,9 +15,7 @@ use crate::ratio::RatioError;
 use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{
-    FormattingRegistry, IndexDef, RegistryBuildError, RegistryBuilder, UnitInfo,
-};
+use crate::registry::types::{FormattingRegistry, IndexDef, RegistryBuilder, UnitInfo};
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
@@ -363,17 +361,6 @@ pub struct ProjectTypeStore {
     constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
 }
 
-/// Error from constructing the project type store's prelude entries.
-#[derive(Debug, Error)]
-pub enum PreludeProjectTypeStoreError {
-    /// Built-in dimension exponent arithmetic failed.
-    #[error(transparent)]
-    Rational(#[from] RatioError),
-    /// The prelude registry violated a registry construction invariant.
-    #[error(transparent)]
-    RegistryBuild(#[from] RegistryBuildError),
-}
-
 /// Failure to transfer one complete HIR module into the semantic project type store.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProjectTypeStoreInsertError {
@@ -414,10 +401,10 @@ impl ProjectTypeStore {
     ///
     /// Returns an error only if the built-in prelude itself fails to construct,
     /// which would be a compiler bug.
-    pub fn insert_graphcal_prelude(&mut self) -> Result<(), PreludeProjectTypeStoreError> {
+    pub fn insert_graphcal_prelude(&mut self) -> Result<(), RatioError> {
         let mut builder = RegistryBuilder::new();
         crate::registry::prelude::load_prelude(&mut builder)?;
-        let registry = builder.try_build()?;
+        let registry = builder.build();
         let owner = crate::registry::prelude::prelude_dag_id();
         for name in crate::registry::prelude::prelude_dimension_names() {
             if let Some(dim) = registry.dimensions.get_dimension(name) {

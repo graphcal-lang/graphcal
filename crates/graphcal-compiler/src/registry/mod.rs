@@ -3,7 +3,7 @@
 pub mod builtins;
 pub mod dag;
 pub mod declared_type;
-pub mod dimension_registry;
+pub mod dimension_table;
 pub mod error;
 pub mod format;
 pub mod index;

@@ -761,7 +761,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         figures,
         layers,
         assumes_map,
-        base_dim_symbols: tir.registry().dimensions.base_dim_symbols().clone(),
+        base_dim_symbols: tir.registry().dimensions.base_unit_symbols(),
         domain_constraints,
     };
     Ok(RuntimeEvaluation {

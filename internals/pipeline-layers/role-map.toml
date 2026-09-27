@@ -537,7 +537,12 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "dimension_registry"]
+path = ["registry", "dimension_table"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "dimension_table", "tests"]
 role = "contracts"
 
 [[module]]

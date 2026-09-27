@@ -219,8 +219,7 @@ mod tests {
             Dimension::dimensionless(),
         );
         let registry = RegistryBuilder::new()
-            .try_build()
-            .unwrap()
+            .build()
             .into_semantic()
             .into_formatting();
         let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
@@ -270,8 +269,7 @@ mod tests {
             Dimension::dimensionless(),
         );
         let registry = RegistryBuilder::new()
-            .try_build()
-            .unwrap()
+            .build()
             .into_semantic()
             .into_formatting();
         let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));

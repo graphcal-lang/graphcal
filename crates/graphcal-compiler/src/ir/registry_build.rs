@@ -8,10 +8,9 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use crate::desugar::desugared_ast::{DeclKind, Expr, ExprKind, File, IndexDeclKind, TypeExpr};
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::ir::resolve::contains_graph_ref;
-use crate::registry::dimension_registry::DimensionResolveError;
+use crate::registry::dimension_table::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::types::{
@@ -473,7 +472,7 @@ fn register_base_dimension_decl(
     let dim_id = crate::dimension::BaseDimId::UserDefined(
         crate::syntax::dimension::ResolvedDimName::from_def(dag_id.clone(), d.name.value.clone()),
     );
-    registry.register_base_dimension(d.name.value.clone(), dim_id);
+    registry.register_base_dimension(dim_id);
 }
 
 fn register_dimension_decl(
@@ -507,18 +506,7 @@ fn register_required_dimension_decl(
     let dim_id = crate::dimension::BaseDimId::UserDefined(
         crate::syntax::dimension::ResolvedDimName::from_def(dag_id.clone(), d.name.value.clone()),
     );
-    registry.register_base_dimension(d.name.value.clone(), dim_id);
-}
-
-pub(super) fn registry_build_error(
-    err: &types::RegistryBuildError,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    GraphcalError::internal_error(
-        format!("registry build failed: {err}"),
-        src,
-        DiagnosticAnchor::WholeFile,
-    )
+    registry.register_base_dimension(dim_id);
 }
 
 fn dimension_resolve_error(

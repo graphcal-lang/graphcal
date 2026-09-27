@@ -309,9 +309,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     )?;
 
     cancellation.checkpoint()?;
-    let registry = builder
-        .try_build()
-        .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    let registry = builder.build();
     let frontend_registry = registry.clone();
     let root = store_and_freeze_module_template(
         module_templates,
@@ -572,9 +570,7 @@ fn compile_loaded_dag_module_ir<'a>(
     )?;
 
     cancellation.checkpoint()?;
-    let registry = builder
-        .try_build()
-        .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    let registry = builder.build();
     store_and_freeze_module_template(
         module_templates,
         loaded_dag.dag_id(),
@@ -624,17 +620,6 @@ fn store_and_freeze_module_template(
         },
     );
     Ok(frozen)
-}
-
-fn registry_build_compile_error(
-    err: &graphcal_compiler::registry::types::RegistryBuildError,
-    src: &NamedSource<Arc<String>>,
-) -> CompileError {
-    CompileError::Eval(GraphcalError::internal_error(
-        format!("registry build failed: {err}"),
-        src,
-        DiagnosticAnchor::WholeFile,
-    ))
 }
 
 fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {
@@ -1399,9 +1384,7 @@ fn elaborate_include_instances(
                 &mut dep_unfrozen,
                 cancellation,
             )?;
-            let dep_registry = dep_builder
-                .try_build()
-                .map_err(|err| registry_build_compile_error(&err, dep_src))?;
+            let dep_registry = dep_builder.build();
             let template = module_templates.insert(
                 dep_dag_id.clone(),
                 ElaboratedModuleTemplate {
@@ -1521,9 +1504,7 @@ fn elaborate_include_instances(
                 &mut dag_unfrozen,
                 cancellation,
             )?;
-            let dag_registry = dag_builder
-                .try_build()
-                .map_err(|err| registry_build_compile_error(&err, importer_src))?;
+            let dag_registry = dag_builder.build();
             let template = module_templates.insert(
                 dag_id.clone(),
                 ElaboratedModuleTemplate {
@@ -1780,7 +1761,7 @@ fn effective_index_binding_contract(
     binding_span: Span,
 ) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
-    use graphcal_compiler::registry::dimension_registry::{
+    use graphcal_compiler::registry::dimension_table::{
         DimensionResolveError, resolve_dim_expr_with,
     };
     use graphcal_compiler::registry::types::{IndexBindingContract, IndexKind};

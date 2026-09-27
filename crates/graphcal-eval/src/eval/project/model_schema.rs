@@ -485,7 +485,7 @@ fn model_quantity_schema(
         .then(|| {
             crate::eval::types::default_unit_label(
                 dimension,
-                tir.registry().dimensions.base_dim_symbols(),
+                &tir.registry().dimensions.base_unit_symbols(),
             )
         })
         .flatten()

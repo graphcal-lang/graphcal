@@ -340,7 +340,7 @@ impl DiagnosticNameQualification {
     fn dimension(self, dimension: &Dimension, dims: &DimensionFormattingRegistry) -> String {
         match self {
             Self::Leaf => dims.format_dimension(dimension),
-            Self::OwnerQualified => dims.format_dimension_owner_qualified(dimension),
+            Self::OwnerQualified => dimension.owner_qualified().to_string(),
         }
     }
 
