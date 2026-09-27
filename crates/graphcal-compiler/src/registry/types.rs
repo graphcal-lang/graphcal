@@ -8,7 +8,6 @@ use crate::registry::dimension_registry::{
     format_dimension_preferring_alias_after_validation,
 };
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
-use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -31,7 +30,8 @@ pub use super::type_def::{
 };
 pub(crate) use super::unit::{BaseUnitRegistrationError, UnitResolveError};
 pub use super::unit::{
-    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitScale, pow_scale,
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitScale,
+    UnitScaleStepError, UnitScaleTerm, try_fold_unit_scale,
 };
 
 // ---------------------------------------------------------------------------
@@ -340,7 +340,7 @@ impl RegistryBuilder {
 
         self.base_dim_symbols
             .insert(base_dimension, name.to_string());
-        self.register_unit(name, dimension, PositiveFiniteScale::new_unchecked(1.0));
+        self.register_unit(name, dimension, PositiveFiniteScale::ONE);
         Ok(())
     }
 
@@ -354,49 +354,26 @@ impl RegistryBuilder {
         self.dimension_aliases.insert(alias, target);
     }
 
-    /// Register a named unit with its dimension and SI scale factor.
+    /// Register a named compile-time unit with its dimension and SI scale factor.
     pub(crate) fn register_unit(
         &mut self,
         name: impl Into<UnitRef>,
         dimension: Dimension,
         scale: PositiveFiniteScale,
     ) {
-        self.units.insert(
-            name.into(),
-            UnitInfo {
-                dimension,
-                constness: UnitConstness::Const,
-                scale: UnitScale::Static(scale),
-            },
-        );
+        self.register_unit_with_scale(name, dimension, UnitScale::Const(scale));
     }
 
-    /// Register a named unit with an explicitly specified scale and constness.
+    /// Register a named unit with an explicitly specified scale (which also
+    /// determines its constness).
     pub fn register_unit_with_scale(
         &mut self,
         name: impl Into<UnitRef>,
         dimension: Dimension,
         scale: UnitScale,
-        constness: UnitConstness,
     ) {
-        self.units.insert(
-            name.into(),
-            UnitInfo {
-                dimension,
-                constness,
-                scale,
-            },
-        );
-    }
-
-    /// Register a named runtime unit with a static or dynamic scale factor.
-    pub fn register_unit_dynamic(
-        &mut self,
-        name: impl Into<UnitRef>,
-        dimension: Dimension,
-        scale: UnitScale,
-    ) {
-        self.register_unit_with_scale(name, dimension, scale, UnitConstness::Dynamic);
+        self.units
+            .insert(name.into(), UnitInfo { dimension, scale });
     }
 
     /// Register a source-visible unit alias without changing scale identity.
@@ -589,7 +566,7 @@ impl RegistryBuilder {
     pub(crate) fn resolve_unit_expr(
         &self,
         expr: &UnitExpr,
-    ) -> Result<(Dimension, f64), UnitResolveError> {
+    ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
 
@@ -708,7 +685,7 @@ mod tests {
             .get_unit(&UnitRef::local(UnitName::expect_valid("m")))
             .unwrap();
         assert_eq!(m.dimension, Dimension::base(length_id()));
-        assert!((m.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
+        assert_eq!(m.scale, UnitScale::Const(PositiveFiniteScale::ONE));
     }
 
     #[test]
@@ -719,7 +696,11 @@ mod tests {
             .get_unit(&UnitRef::local(UnitName::expect_valid("km")))
             .unwrap();
         assert_eq!(km.dimension, Dimension::base(length_id()));
-        assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
+        assert_eq!(
+            km.scale.static_scale().map(PositiveFiniteScale::get),
+            Some(1000.0)
+        );
+        assert!(km.scale.constness().is_const());
     }
 
     #[test]
@@ -831,7 +812,7 @@ mod tests {
         let expected_dim =
             (Dimension::base(length_id()) / Dimension::base(time_id()).pow(2).unwrap()).unwrap();
         assert_eq!(dim, expected_dim);
-        assert!((scale - 1.0).abs() < f64::EPSILON);
+        assert!((scale.get() - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -857,7 +838,7 @@ mod tests {
         let expected_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(dim, expected_dim);
         // km/h = 1000 m / 3600 s ≈ 0.2778 m/s
-        assert!((scale - 1000.0 / 3600.0).abs() < 1e-10);
+        assert!((scale.get() - 1000.0 / 3600.0).abs() < 1e-10);
     }
 
     #[test]
@@ -875,10 +856,8 @@ mod tests {
         assert!(
             matches!(
                 err,
-                UnitResolveError::InvalidScale {
-                    reason: PositiveFiniteScaleError::NonFinite,
-                    ..
-                }
+                UnitResolveError::InvalidScale(PositiveFiniteScaleError::NonFinite { value })
+                    if value == f64::INFINITY
             ),
             "got {err:?}"
         );
@@ -1029,10 +1008,7 @@ mod tests {
             .get_unit(&UnitRef::local(UnitName::expect_valid("bit")))
             .unwrap();
         assert_eq!(unit.dimension, Dimension::base(info_id));
-        assert_eq!(
-            unit.scale,
-            UnitScale::Static(PositiveFiniteScale::new_unchecked(1.0))
-        );
+        assert_eq!(unit.scale, UnitScale::Const(PositiveFiniteScale::ONE));
     }
 
     #[test]

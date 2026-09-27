@@ -56,7 +56,7 @@ impl LoweringModuleInterface {
             .all_units()
             .filter(|(unit, info)| {
                 !unit.is_qualified()
-                    && !info.constness.is_const()
+                    && !info.scale.constness().is_const()
                     && external_surface.is_unit_explicit_export(unit.name().atom())
             })
             .map(|(unit, _)| unit.name().clone())

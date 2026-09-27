@@ -619,7 +619,7 @@ fn index_schema_view(axis: &ModelIndexSchema, prepared: &PreparedProject) -> Ind
             labels: coordinates_si
                 .iter()
                 .map(|coordinate| {
-                    let value = coordinate / display_scale;
+                    let value = coordinate / display_scale.get();
                     display_label
                         .as_ref()
                         .map_or_else(|| value.to_string(), |label| format!("{value} {label}"))

@@ -17,6 +17,7 @@ use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, RegistryBuilder, UnitScale,
 };
+use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
@@ -556,23 +557,16 @@ fn validate_positive_finite_scale(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<PositiveFiniteScale, GraphcalError> {
-    PositiveFiniteScale::new(value).map_err(|err| {
-        let reason = match err {
-            PositiveFiniteScaleError::NonFinite => "must be finite",
-            PositiveFiniteScaleError::NonPositive => "must be greater than zero",
-        };
-        eval_error(format!("{context} {reason}, got {value}"), src, span)
-    })
+    PositiveFiniteScale::new(value).map_err(|err| scale_error(context, err, src, span))
 }
 
-fn multiply_positive_scales(
-    lhs: PositiveFiniteScale,
-    rhs: PositiveFiniteScale,
+fn scale_error(
     context: &str,
+    err: PositiveFiniteScaleError,
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<PositiveFiniteScale, GraphcalError> {
-    validate_positive_finite_scale(lhs.get() * rhs.get(), context, src, span)
+) -> GraphcalError {
+    eval_error(format!("{context} {err}"), src, span)
 }
 
 fn register_unit_decl(
@@ -675,16 +669,15 @@ fn register_unit_decl(
             src,
             def.scale_expr.span,
         )?;
-        let scale = multiply_positive_scales(
-            scale_expr,
-            resolved_definition.base_scale,
-            "unit scale",
-            src,
-            def.span,
-        )?;
-        UnitScale::Static(scale)
+        let scale = scale_expr
+            .checked_mul(resolved_definition.base_scale)
+            .map_err(|err| scale_error("unit scale", err, src, def.span))?;
+        match u.constness {
+            UnitConstness::Const => UnitScale::Const(scale),
+            UnitConstness::Dynamic => UnitScale::Runtime(scale),
+        }
     };
-    registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
+    registry.register_unit_with_scale(u.name.value.clone(), dim, scale);
     Ok(dynamic_unit_scale)
 }
 
@@ -716,7 +709,7 @@ fn first_non_const_unit_ref<'a>(
     unit_expr.terms.iter().find_map(|term| {
         registry
             .get_unit(&term.name.value)
-            .is_some_and(|info| !info.constness.is_const())
+            .is_some_and(|info| !info.scale.constness().is_const())
             .then_some(&term.name)
     })
 }
@@ -743,8 +736,6 @@ fn resolve_unit_definition(
     let (dimension, base_scale) = registry
         .resolve_unit_expr(unit_expr)
         .map_err(|err| unit_resolve_to_graphcal(err, src, unit_expr.span))?;
-    let base_scale =
-        validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)?;
     Ok(ResolvedUnitDefinition {
         dimension,
         base_scale,
@@ -769,17 +760,7 @@ fn unit_resolve_to_graphcal(
             src: src.clone(),
             span: span.into(),
         },
-        UnitResolveError::InvalidScale { value, reason } => {
-            let reason = match reason {
-                PositiveFiniteScaleError::NonFinite => "must be finite",
-                PositiveFiniteScaleError::NonPositive => "must be greater than zero",
-            };
-            GraphcalError::EvalError {
-                message: format!("compound unit scale {reason}, got {value}"),
-                src: src.clone(),
-                span: span.into(),
-            }
-        }
+        UnitResolveError::InvalidScale(err) => scale_error("compound unit scale", err, src, span),
         UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
             src: src.clone(),
             span: span.into(),
@@ -1401,8 +1382,6 @@ fn eval_coordinate_expr(
             let (dimension, scale) = registry
                 .resolve_unit_expr(unit)
                 .map_err(|error| unit_resolve_to_graphcal(error, src, unit.span))?;
-            let scale =
-                validate_positive_finite_scale(scale, "coordinate unit scale", src, unit.span)?;
             Ok((ensure_finite(*value * scale.get(), expr.span)?, dimension))
         }
         ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
@@ -1629,43 +1608,30 @@ fn coordinate_display_unit(
     start_expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Option<String>, f64), GraphcalError> {
+) -> Result<(Option<String>, PositiveFiniteScale), GraphcalError> {
     let unit = match &start_expr.kind {
         ExprKind::QuantityLiteral { unit, .. } => unit,
         ExprKind::UnaryOp {
             op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => return coordinate_display_unit(operand, registry, src),
-        _ => return Ok((None, 1.0)),
+        _ => return Ok((None, PositiveFiniteScale::ONE)),
     };
     match registry.resolve_unit_expr(unit) {
-        Ok((_dimension, scale)) => {
-            let scale = validate_positive_finite_scale(
-                scale,
-                "coordinate display unit scale",
-                src,
-                unit.span,
-            )?;
-            Ok((Some(format_unit_expr_with_config(unit, true)), scale.get()))
-        }
+        Ok((_dimension, scale)) => Ok((Some(format_unit_expr_with_config(unit, true)), scale)),
         Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
             Err(GraphcalError::DimensionOverflow {
                 src: src.clone(),
                 span: unit.span.into(),
             })
         }
-        Err(crate::registry::types::UnitResolveError::InvalidScale { value, reason }) => {
-            let reason = match reason {
-                PositiveFiniteScaleError::NonFinite => "must be finite",
-                PositiveFiniteScaleError::NonPositive => "must be greater than zero",
-            };
-            Err(eval_error(
-                format!("coordinate display unit scale {reason}, got {value}"),
-                src,
-                unit.span,
-            ))
-        }
-        Err(_) => Ok((None, 1.0)),
+        Err(crate::registry::types::UnitResolveError::InvalidScale(err)) => Err(scale_error(
+            "coordinate display unit scale",
+            err,
+            src,
+            unit.span,
+        )),
+        Err(_) => Ok((None, PositiveFiniteScale::ONE)),
     }
 }
 

@@ -454,7 +454,10 @@ mod tests {
 
     #[test]
     fn display_unit_scales_scalar_and_indexed_quantity_leaves() {
-        let kilometres = DisplayUnit::try_new("km", 1000.0).unwrap();
+        let kilometres = DisplayUnit::new(
+            "km",
+            graphcal_compiler::registry::unit::PositiveFiniteScale::new(1000.0).unwrap(),
+        );
         let scalar = channel_data_from_runtime_with_display_unit(
             &RuntimeValue::quantity(3000.0).unwrap(),
             Some(&kilometres),

@@ -16,8 +16,6 @@ pub(super) enum PresentationProjectionInvariant {
     Shape,
     #[error("presentation field or index is absent from its checked value")]
     Missing,
-    #[error("validated presentation scale was rejected")]
-    Scale,
 }
 
 pub(super) fn attach_presentation(
@@ -78,9 +76,7 @@ fn attach(
             PresentationInstance::Unit { label, scale },
             value @ (Value::Quantity { .. } | Value::Complex { .. }),
         ) => {
-            let unit = DisplayUnit::try_new(label.clone(), scale.get())
-                .map_err(|_| PresentationProjectionInvariant::Scale)?;
-            set_display_unit(value, Some(unit))?;
+            set_display_unit(value, Some(DisplayUnit::new(label.clone(), *scale)))?;
             if let Err(error) = validate_display_projection(value) {
                 set_display_unit(value, None)?;
                 diagnostics.push(LeafPresentationDiagnostic {
@@ -121,7 +117,7 @@ fn format_coordinate_impl(
     idx_def.coordinate_data().map_or_else(
         || format!("#{position}"),
         |data| {
-            let display_value = data.coordinate_value(position) / data.display_scale;
+            let display_value = data.coordinate_value(position) / data.display_scale.get();
             let formatted = if exact {
                 display_value.to_string()
             } else {

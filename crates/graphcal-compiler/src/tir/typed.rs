@@ -1615,7 +1615,7 @@ impl HirPolicyChecker<'_> {
                 // from dimension checking.
                 continue;
             };
-            if !info.constness.is_const() {
+            if !info.scale.constness().is_const() {
                 return Err(GraphcalError::NonConstUnitInConst {
                     name: term.name.value.spelling().clone(),
                     src: self.src.clone(),

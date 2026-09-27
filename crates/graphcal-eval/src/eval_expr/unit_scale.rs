@@ -1,8 +1,10 @@
 use graphcal_compiler::hir::ResolvedUnitExpr;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::UnitScale;
-use graphcal_compiler::syntax::ast::MulDivOp;
+use graphcal_compiler::registry::types::{
+    PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
+    try_fold_unit_scale,
+};
 use graphcal_compiler::syntax::dimension::{ResolvedUnitName, UnitRef};
 use graphcal_compiler::syntax::span::Span;
 
@@ -21,24 +23,23 @@ pub(in crate::eval_expr) fn checked_finite_quantity(
     RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
-fn checked_positive_finite_unit_scale(
-    value: f64,
+fn unit_scale_error(
     context: &str,
+    error: PositiveFiniteScaleError,
     span: Span,
     ctx: &EvalContext<'_>,
-) -> Result<f64, GraphcalError> {
-    numeric::positive_finite_scale(value, context)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
+) -> GraphcalError {
+    ctx.eval_error(format!("{context} {error}"), span)
 }
 
 /// Apply a unit scale to a literal value and validate that the SI value is finite.
 pub(in crate::eval_expr) fn checked_unit_scaled_value(
     value: f64,
-    scale: f64,
+    scale: PositiveFiniteScale,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let value = numeric::finite_quantity(value * scale, "quantity literal value")
+    let value = numeric::finite_quantity(value * scale.get(), "quantity literal value")
         .map_err(|err| ctx.eval_error(err.to_string(), span))?;
     RuntimeValue::quantity(value).map_err(|err| ctx.eval_error(err.to_string(), span))
 }
@@ -46,11 +47,11 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 fn resolve_dynamic_unit_scale(
     unit: &ResolvedUnitName,
     spelling: &UnitRef,
-    base_unit_scale: f64,
+    base_unit_scale: PositiveFiniteScale,
     span: Span,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Result<f64, GraphcalError> {
+) -> Result<PositiveFiniteScale, GraphcalError> {
     let unit_dag = ctx.tir.dag_registry().get(unit.owner()).ok_or_else(|| {
         ctx.internal_error(
             format!("dynamic unit owner for `{spelling}` could not be resolved"),
@@ -85,20 +86,12 @@ fn resolve_dynamic_unit_scale(
             scale_hir.expr.span,
         ));
     };
-    let dynamic_scale = checked_positive_finite_unit_scale(
-        scale_f64.get(),
-        "dynamic unit scale",
-        scale_hir.expr.span,
-        &scale_ctx,
-    )?;
-    let base_scale =
-        checked_positive_finite_unit_scale(base_unit_scale, "base unit scale", span, ctx)?;
-    checked_positive_finite_unit_scale(
-        dynamic_scale * base_scale,
-        "dynamic unit scale",
-        scale_hir.span,
-        ctx,
-    )
+    let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
+        unit_scale_error("dynamic unit scale", error, scale_hir.expr.span, &scale_ctx)
+    })?;
+    dynamic_scale
+        .checked_mul(base_unit_scale)
+        .map_err(|error| unit_scale_error("dynamic unit scale", error, scale_hir.span, ctx))
 }
 
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.
@@ -118,52 +111,47 @@ pub fn resolve_unit_scale(
     unit: &ResolvedUnitExpr,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
-) -> Result<f64, GraphcalError> {
-    let mut compound_scale = 1.0;
-    for item in &unit.terms {
-        let source_unit = item.name.value.resolved();
-        let instance_unit = ctx.current_dag.runtime_unit_identity(source_unit);
-        let resolved_unit = if ctx.tir.unit_info(&instance_unit).is_some() {
-            instance_unit
-        } else {
-            source_unit.clone()
-        };
-        let info = ctx.tir.unit_info(&resolved_unit).ok_or_else(|| {
-            ctx.internal_error(
-                format!("unknown checked unit `{}`", item.name.value.spelling()),
-                item.name.span,
-            )
-        })?;
-        let unit_scale = match &info.scale {
-            UnitScale::Static(s) => {
-                checked_positive_finite_unit_scale(s.get(), "unit scale", item.name.span, ctx)?
+) -> Result<PositiveFiniteScale, GraphcalError> {
+    try_fold_unit_scale(
+        &unit.terms,
+        |item| {
+            let source_unit = item.name.value.resolved();
+            let instance_unit = ctx.current_dag.runtime_unit_identity(source_unit);
+            let resolved_unit = if ctx.tir.unit_info(&instance_unit).is_some() {
+                instance_unit
+            } else {
+                source_unit.clone()
+            };
+            let info = ctx.tir.unit_info(&resolved_unit).ok_or_else(|| {
+                ctx.internal_error(
+                    format!("unknown checked unit `{}`", item.name.value.spelling()),
+                    item.name.span,
+                )
+            })?;
+            let scale = match &info.scale {
+                UnitScale::Const(scale) | UnitScale::Runtime(scale) => *scale,
+                UnitScale::Dynamic { base_unit_scale } => resolve_dynamic_unit_scale(
+                    &resolved_unit,
+                    item.name.value.spelling(),
+                    *base_unit_scale,
+                    item.name.span,
+                    values,
+                    ctx,
+                )?,
+            };
+            Ok(UnitScaleTerm {
+                op: item.op,
+                scale,
+                power: item.power,
+            })
+        },
+        |item, error| match error {
+            UnitScaleStepError::Power(error) => {
+                unit_scale_error("unit scale exponentiation", error, item.name.span, ctx)
             }
-            UnitScale::Dynamic { base_unit_scale } => resolve_dynamic_unit_scale(
-                &resolved_unit,
-                item.name.value.spelling(),
-                base_unit_scale.get(),
-                item.name.span,
-                values,
-                ctx,
-            )?,
-        };
-        let exp = item.power;
-        let powered_scale = checked_positive_finite_unit_scale(
-            graphcal_compiler::registry::types::pow_scale(unit_scale, exp),
-            "unit scale exponentiation",
-            item.name.span,
-            ctx,
-        )?;
-        compound_scale = match item.op {
-            MulDivOp::Mul => compound_scale * powered_scale,
-            MulDivOp::Div => compound_scale / powered_scale,
-        };
-        compound_scale = checked_positive_finite_unit_scale(
-            compound_scale,
-            "compound unit scale",
-            unit.span,
-            ctx,
-        )?;
-    }
-    Ok(compound_scale)
+            UnitScaleStepError::Compound(error) => {
+                unit_scale_error("compound unit scale", error, unit.span, ctx)
+            }
+        },
+    )
 }

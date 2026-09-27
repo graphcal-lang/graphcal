@@ -2117,7 +2117,7 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
             Value::Quantity {
                 display_unit: Some(unit),
                 ..
-            } => assert!((unit.scale() - expected_scale).abs() < f64::EPSILON),
+            } => assert!((unit.scale.get() - expected_scale).abs() < f64::EPSILON),
             other => panic!("expected instance-owned display unit, got {other:?}"),
         }
     }

@@ -617,6 +617,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["registry", "unit", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["source_line"]
 role = "contracts"
 
