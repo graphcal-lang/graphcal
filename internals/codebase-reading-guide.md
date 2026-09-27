@@ -416,7 +416,6 @@ TIR
   project_type_store            // canonical owner-qualified definitions
   root_dag_id
   dags: HashMap<DagId, DagTIR>
-  module_aliases
 ```
 
 Each file root and inline `dag` body is represented by a `DagTIR`. Dependency
@@ -1056,7 +1055,6 @@ TIR
     other_dags: HashMap<DagId, DagTIR>  // local inline/instance bodies
     shared_dags: HashMap<DagId, Arc<DagTIR>>  // immutable imports
   runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>
-  module_aliases: HashMap<ModuleAliasName, DagId>
 
 DagStore  // published by consuming local assembly, never by cloning its closure
   dags: HashMap<DagId, Arc<DagTIR>>  // only this module's own bodies
@@ -1081,11 +1079,9 @@ DagTIR
 
 `TIR::root()` borrows the file root; crate-internal `root_mut()` is an assembly
 operation. Imported bodies have no mutable registry view. Publication checks
-runtime-unit owners and never republishes imported unit definitions. `TIR::lookup_call_target`
-and `TIR::resolve_call_path` resolve inline DAG call paths through same-file
-children or `module_aliases`. Module-aware callers should prefer
-`DagTIR::semantic.inline_dag_refs` when evaluating a specific expression because
-it already carries canonical call routing.
+runtime-unit owners and never republishes imported unit definitions. Inline
+DAG call routing is not re-derived from source paths on `TIR`;
+each HIR `ExprKind::DagCall` already carries its canonical `DagId` target.
 
 ### 3.8 ExecPlan
 
