@@ -192,6 +192,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["dependency_graph"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["dependency_graph", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["sparse_monomial"]
 role = "contracts"
 
