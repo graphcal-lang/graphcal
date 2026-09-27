@@ -25,7 +25,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinConst, BuiltinFnName};
+use crate::builtin::{BuiltinApplication, BuiltinConst, BuiltinFnName, ScaleFreeBuiltin};
 use crate::dag_id::DagId;
 use crate::datetime_literal::{
     CivilDateTimeLiteral, DatetimeLiteralExpectation, OffsetDateTimeLiteral,
@@ -137,7 +137,7 @@ pub enum ExprLowerError {
     /// Named constructor-style arguments were supplied to a resolved function.
     #[error("function `{function}` uses positional arguments")]
     NamedArgumentsOnFunction {
-        function: FunctionRef,
+        function: UnappliedFunctionRef,
         argument_names: Vec<FieldName>,
         span: Span,
     },
@@ -1152,10 +1152,31 @@ pub enum ConstRef {
     GenericNatParam(super::types::GenericParamId),
 }
 
+/// A resolved function callee before its generic arguments are applied.
+///
+/// This is the pre-application form: `epoch` is still bare here, and becomes
+/// [`FunctionRef::Epoch`] only once its time-scale argument is lowered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnappliedFunctionRef {
+    Builtin(BuiltinFnName),
+    /// An externally-provided function declared by an `import plugin` block.
+    External(ExternFnRef),
+}
+
+impl std::fmt::Display for UnappliedFunctionRef {
+    /// Render source-like function spelling at diagnostic boundaries.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Builtin(name) => std::fmt::Display::fmt(name, f),
+            Self::External(extern_ref) => std::fmt::Display::fmt(extern_ref, f),
+        }
+    }
+}
+
 /// Function call target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionRef {
-    Builtin(BuiltinFnName),
+    Builtin(ScaleFreeBuiltin),
     /// `epoch<S>` with its required static time scale resolved at the HIR boundary.
     Epoch {
         scale: Spanned<TimeScale>,
@@ -1167,7 +1188,7 @@ pub enum FunctionRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResolvedCallable {
     Constructor(ResolvedConstructorName),
-    Function(FunctionRef),
+    Function(UnappliedFunctionRef),
 }
 
 impl FunctionRef {
@@ -1175,7 +1196,7 @@ impl FunctionRef {
     #[must_use]
     pub const fn builtin_name(&self) -> Option<BuiltinFnName> {
         match self {
-            Self::Builtin(name) => Some(*name),
+            Self::Builtin(builtin) => Some(builtin.name()),
             Self::Epoch { .. } => Some(BuiltinFnName::Epoch),
             Self::External(_) => None,
         }
@@ -2363,16 +2384,22 @@ impl<'a> ExprLowerer<'a> {
     }
 
     fn lower_function_application(
-        function_ref: FunctionRef,
+        function_ref: UnappliedFunctionRef,
         generic_args: &[ast::GenericArg],
         path: String,
         callee_span: Span,
     ) -> Result<FunctionRef, ExprLowerError> {
-        match function_ref {
-            FunctionRef::Builtin(BuiltinFnName::Epoch) => {
-                Self::lower_epoch_function_ref(generic_args, callee_span)
-            }
-            other if generic_args.is_empty() => Ok(other),
+        let applied = match function_ref {
+            UnappliedFunctionRef::Builtin(name) => match name.application() {
+                BuiltinApplication::Epoch => {
+                    return Self::lower_epoch_function_ref(generic_args, callee_span);
+                }
+                BuiltinApplication::ScaleFree(builtin) => FunctionRef::Builtin(builtin),
+            },
+            UnappliedFunctionRef::External(extern_ref) => FunctionRef::External(extern_ref),
+        };
+        match generic_args {
+            [] => Ok(applied),
             _ => Err(ExprLowerError::UnsupportedFunctionGenericArgs {
                 path,
                 span: generic_args
@@ -2416,7 +2443,9 @@ impl<'a> ExprLowerer<'a> {
         args: &[ast::Expr],
     ) -> Result<Vec<Expr>, ExprLowerError> {
         match (function_ref, args) {
-            (FunctionRef::Builtin(BuiltinFnName::Datetime), [datetime, time_zone]) => {
+            (FunctionRef::Builtin(builtin), [datetime, time_zone])
+                if builtin.name() == BuiltinFnName::Datetime =>
+            {
                 self.lower_zoned_datetime_args(datetime, time_zone)
             }
             _ => args
@@ -2425,11 +2454,13 @@ impl<'a> ExprLowerer<'a> {
                 .map(
                     |(index, arg)| match (function_ref, index, args.len(), &arg.kind) {
                         (
-                            FunctionRef::Builtin(BuiltinFnName::Datetime),
+                            FunctionRef::Builtin(builtin),
                             0,
                             1,
                             ast::ExprKind::StringLiteral(source),
-                        ) => Self::lower_offset_datetime_literal(source, arg.span),
+                        ) if builtin.name() == BuiltinFnName::Datetime => {
+                            Self::lower_offset_datetime_literal(source, arg.span)
+                        }
                         (
                             FunctionRef::Epoch { scale },
                             0,
@@ -2628,10 +2659,10 @@ impl<'a> ExprLowerer<'a> {
     fn lower_function_ref(
         &self,
         callee: &crate::syntax::ast::IdentPath,
-    ) -> Result<FunctionRef, ExprLowerError> {
+    ) -> Result<UnappliedFunctionRef, ExprLowerError> {
         if let Some(ident) = callee.as_bare() {
             return BuiltinFnName::parse(ident.name.as_str())
-                .map(FunctionRef::Builtin)
+                .map(UnappliedFunctionRef::Builtin)
                 .ok_or_else(|| ExprLowerError::UnknownFunction {
                     path: callee.display_path(),
                     span: callee.span(),
@@ -2654,7 +2685,7 @@ impl<'a> ExprLowerer<'a> {
                     span: callee.span(),
                 });
             }
-            return Ok(FunctionRef::External(ExternFnRef {
+            return Ok(UnappliedFunctionRef::External(ExternFnRef {
                 plugin: target.path().clone(),
                 alias: ModuleAliasName::from_atom(qualifier.name.clone()),
                 name,

@@ -9,7 +9,7 @@
 use std::fmt;
 
 use graphcal_compiler::function_signature::{
-    DimMonomial, ScalarValueKind, StructFieldKind, ValueKind,
+    DimMonomial, ParamKind, ResultKind, ScalarValueKind, StructFieldKind, StructResult,
 };
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -339,22 +339,26 @@ pub enum ValidatedHostResult {
 ///
 /// Returns [`HostResultDecodeError`] for a wrong wire shape, rank/arity
 /// mismatch, non-finite quantity, invalid `Int`, or invalid `Bool` encoding.
-pub fn decode_result(
-    declared: &ValueKind,
+pub fn decode_result<S: StructResult>(
+    declared: &ResultKind<S>,
     raw: &HostFnValue,
 ) -> Result<ValidatedHostResult, HostResultDecodeError> {
     match declared {
-        ValueKind::Scalar(ScalarValueKind::Bool) => scalar_slot(raw).and_then(|value| {
-            decode_bool(value)
-                .map(ValidatedHostResult::Bool)
-                .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
-        }),
-        ValueKind::Scalar(ScalarValueKind::Int) => scalar_slot(raw).and_then(|value| {
-            decode_int(value)
-                .map(ValidatedHostResult::Int)
-                .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
-        }),
-        ValueKind::Scalar(ScalarValueKind::Quantity(dimension)) => {
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => {
+            scalar_slot(raw).and_then(|value| {
+                decode_bool(value)
+                    .map(ValidatedHostResult::Bool)
+                    .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
+            })
+        }
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => {
+            scalar_slot(raw).and_then(|value| {
+                decode_int(value)
+                    .map(ValidatedHostResult::Int)
+                    .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
+            })
+        }
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(dimension))) => {
             scalar_slot(raw).and_then(|value| {
                 validate_quantity(value)
                     .map(|value| ValidatedHostResult::Quantity {
@@ -364,7 +368,7 @@ pub fn decode_result(
                     .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
             })
         }
-        ValueKind::Indexed { element, indexes } => {
+        ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
             let HostFnValue::Array(array) = raw else {
                 return Err(HostResultDecodeError::ExpectedArray);
             };
@@ -393,7 +397,8 @@ pub fn decode_result(
                 values,
             }))
         }
-        ValueKind::Struct(shape) => {
+        ResultKind::Struct(payload) => {
+            let shape = payload.shape();
             let HostFnValue::Record(slots) = raw else {
                 return Err(HostResultDecodeError::ExpectedRecord);
             };
@@ -510,11 +515,11 @@ mod tests {
         ));
     }
 
-    fn indexed_kind(element: ScalarValueKind) -> ValueKind {
-        ValueKind::Indexed {
+    fn indexed_kind(element: ScalarValueKind) -> ResultKind {
+        ResultKind::Value(ParamKind::Indexed {
             element,
             indexes: NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new()),
-        }
+        })
     }
 
     #[test]
@@ -564,10 +569,10 @@ mod tests {
     #[test]
     fn composite_results_validate_every_quantity_slot() {
         let indexes = NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new());
-        let array_kind = ValueKind::Indexed {
+        let array_kind: ResultKind = ResultKind::Value(ParamKind::Indexed {
             element: ScalarValueKind::Quantity(DimMonomial::fixed(Dimension::dimensionless())),
             indexes,
-        };
+        });
         let array =
             HostFnValue::Array(HostArray::try_new(vec![2], vec![1.0, f64::INFINITY]).unwrap());
         assert!(matches!(
@@ -585,7 +590,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             decode_result(
-                &ValueKind::Struct(shape),
+                &ResultKind::Struct(shape),
                 &HostFnValue::Record(vec![f64::NAN])
             ),
             Err(HostResultDecodeError::InvalidSlot {

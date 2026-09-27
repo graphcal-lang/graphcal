@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dimension::{Dimension, Rational};
 use graphcal_compiler::function_signature::{
-    DimMonomial, FunctionSignature, ScalarValueKind, StructFieldKind, ValueKind,
+    DimMonomial, FunctionSignature, ParamKind, ResultKind, ScalarValueKind, StructFieldKind,
 };
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
@@ -420,7 +420,7 @@ impl<'a> RenderableImport<'a> {
             .map(|(function, signature)| {
                 let function_name = parse_function_name(function.as_str())?;
                 validate_signature_names(function.as_str(), signature)?;
-                let result_type_name = matches!(signature.result(), ValueKind::Struct(_))
+                let result_type_name = matches!(signature.result(), ResultKind::Struct(_))
                     .then(|| {
                         allocate_result_type_name(function_name.as_str(), &mut used_result_names)
                     })
@@ -444,7 +444,7 @@ impl<'a> RenderableImport<'a> {
 
         let mut out = String::new();
         for function in &self.functions {
-            if let (Some(type_name), ValueKind::Struct(shape)) =
+            if let (Some(type_name), ResultKind::Struct(shape)) =
                 (&function.result_type_name, function.signature.result())
             {
                 out.push_str(&render_result_type_decl(type_name, shape));
@@ -549,7 +549,7 @@ fn validate_signature_names(
             }
         })?;
     }
-    if let ValueKind::Struct(shape) = signature.result() {
+    if let ResultKind::Struct(shape) = signature.result() {
         for field in shape.fields() {
             SourceIdentifier::parse(field.name.as_str()).map_err(|reason| {
                 ImportBlockRenderError::InvalidResultFieldName {
@@ -637,22 +637,22 @@ fn render_declaration(function: &RenderableFunction<'_>) -> String {
     let parameters = signature
         .params()
         .iter()
-        .map(|parameter| format!("{}: {}", parameter.name, render_value_kind(&parameter.kind)))
+        .map(|parameter| format!("{}: {}", parameter.name, render_param_kind(&parameter.kind)))
         .collect::<Vec<_>>()
         .join(", ");
     let _ = write!(out, "({parameters}) -> ");
     match (&function.result_type_name, signature.result()) {
-        (Some(type_name), ValueKind::Struct(_)) => out.push_str(type_name.as_str()),
-        (_, result) => out.push_str(&render_value_kind(result)),
+        (Some(type_name), ResultKind::Struct(_)) => out.push_str(type_name.as_str()),
+        (_, result) => out.push_str(&render_result_kind(result)),
     }
     out.push(';');
     out
 }
 
-fn render_value_kind(kind: &ValueKind) -> String {
+fn render_param_kind(kind: &ParamKind) -> String {
     match kind {
-        ValueKind::Scalar(scalar) => render_scalar_value_kind(scalar),
-        ValueKind::Indexed { element, indexes } => format!(
+        ParamKind::Scalar(scalar) => render_scalar_value_kind(scalar),
+        ParamKind::Indexed { element, indexes } => format!(
             "{}[{}]",
             render_scalar_value_kind(element),
             indexes
@@ -661,7 +661,13 @@ fn render_value_kind(kind: &ValueKind) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        ValueKind::Struct(shape) => format!(
+    }
+}
+
+fn render_result_kind(kind: &ResultKind) -> String {
+    match kind {
+        ResultKind::Value(kind) => render_param_kind(kind),
+        ResultKind::Struct(shape) => format!(
             "{{ {} }}",
             shape
                 .fields()
@@ -886,18 +892,18 @@ pub fn parse_call_args(
                 expected: expected.to_string(),
             };
             match &param.kind {
-                ValueKind::Scalar(ScalarValueKind::Bool) => match text.as_str() {
+                ParamKind::Scalar(ScalarValueKind::Bool) => match text.as_str() {
                     "true" => Ok(HostFnValue::F64(encode_bool(true))),
                     "false" => Ok(HostFnValue::F64(encode_bool(false))),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
-                ValueKind::Scalar(ScalarValueKind::Int) => {
+                ParamKind::Scalar(ScalarValueKind::Int) => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
                     encode_int(value)
                         .map(HostFnValue::F64)
                         .map_err(|error| invalid(&error.to_string()))
                 }
-                ValueKind::Scalar(ScalarValueKind::Quantity(_)) => {
+                ParamKind::Scalar(ScalarValueKind::Quantity(_)) => {
                     let value = text
                         .parse::<f64>()
                         .map_err(|_| invalid("expected a number (in SI base units)"))?;
@@ -905,9 +911,7 @@ pub fn parse_call_args(
                         .map(|value| HostFnValue::F64(value.get()))
                         .map_err(|error| invalid(&error.to_string()))
                 }
-                // Struct parameters never pass signature validation.
-                ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
-                ValueKind::Indexed { element, indexes } => {
+                ParamKind::Indexed { element, indexes } => {
                     parse_dense_array(text, indexes.len(), element)
                         .map(HostFnValue::Array)
                         .map_err(|error| invalid(&error))
@@ -1001,18 +1005,18 @@ mod tests {
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("a"),
-                    kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
+                    kind: ParamKind::quantity_monomial(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("b"),
-                    kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
+                    kind: ParamKind::quantity_monomial(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("t"),
-                    kind: ValueKind::dimensionless(),
+                    kind: ParamKind::dimensionless(),
                 },
             ],
-            ValueKind::quantity_monomial(DimMonomial::var(var())),
+            ParamKind::quantity_monomial(DimMonomial::var(var())).into(),
         )
         .expect("valid signature")
     }
@@ -1024,14 +1028,14 @@ mod tests {
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("n"),
-                    kind: ValueKind::int(),
+                    kind: ParamKind::int(),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("up"),
-                    kind: ValueKind::bool(),
+                    kind: ParamKind::bool(),
                 },
             ],
-            ValueKind::int(),
+            ParamKind::int().into(),
         )
         .expect("valid signature")
     }
@@ -1107,7 +1111,7 @@ mod tests {
 
     fn render_test_declaration(name: &str, signature: &FunctionSignature) -> String {
         let name = SourceIdentifier::parse(name).unwrap();
-        let result_type_name = matches!(signature.result(), ValueKind::Struct(_))
+        let result_type_name = matches!(signature.result(), ResultKind::Struct(_))
             .then(|| SourceIdentifier::parse(suggest_result_type_name(name.as_str())).unwrap());
         render_declaration(&RenderableFunction {
             name,
@@ -1142,9 +1146,9 @@ mod tests {
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("p"),
-                kind: ValueKind::quantity_monomial(DimMonomial::fixed(pressure)),
+                kind: ParamKind::quantity_monomial(DimMonomial::fixed(pressure)),
             }],
-            ValueKind::quantity_monomial(DimMonomial::fixed(sqrt_len)),
+            ParamKind::quantity_monomial(DimMonomial::fixed(sqrt_len)).into(),
         )
         .expect("valid signature");
         assert_eq!(
@@ -1279,15 +1283,16 @@ mod tests {
             vec![index.clone()],
             vec![FunctionParam {
                 name: FnParamName::expect_valid("values"),
-                kind: ValueKind::Indexed {
+                kind: ParamKind::Indexed {
                     element: element.clone(),
                     indexes: NonEmpty::singleton(index.clone()),
                 },
             }],
-            ValueKind::Indexed {
+            ParamKind::Indexed {
                 element,
                 indexes: NonEmpty::singleton(index),
-            },
+            }
+            .into(),
         )
         .unwrap()
     }
@@ -1366,9 +1371,9 @@ mod tests {
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
-                kind: ValueKind::dimensionless(),
+                kind: ParamKind::dimensionless(),
             }],
-            ValueKind::bool(),
+            ParamKind::bool().into(),
         )
         .expect("valid signature");
         assert_eq!(
@@ -1396,9 +1401,9 @@ mod tests {
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("x"),
-                kind: ValueKind::dimensionless(),
+                kind: ParamKind::dimensionless(),
             }],
-            ValueKind::quantity_monomial(DimMonomial::fixed(velocity)),
+            ParamKind::quantity_monomial(DimMonomial::fixed(velocity)).into(),
         )
         .expect("valid signature");
         assert_eq!(

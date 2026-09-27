@@ -1498,10 +1498,9 @@ impl TirBuilder {
         // Deterministic conflict reporting: earliest declaration first.
         let mut declared: Vec<_> = hir.extern_functions().iter().collect();
         declared.sort_by_key(|(_, function)| function.decl_span.offset());
-        declared.into_iter().try_for_each(|(key, function)| {
+        declared.into_iter().try_for_each(|(_, function)| {
             crate::ir::extern_fns::merge_extern_function(
                 &mut self.extern_functions,
-                key.clone(),
                 function.clone(),
                 src,
             )

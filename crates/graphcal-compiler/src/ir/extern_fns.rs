@@ -28,14 +28,10 @@ pub struct ExternFunctionEntry {
     pub alias: crate::syntax::module_name::ModuleAliasName,
     /// The function leaf name.
     pub name: crate::syntax::function_name::FnName,
-    /// The resolved dimensional signature.
-    pub signature: crate::function_signature::FunctionSignature,
-    /// The nominal identity of the record type a struct-returning function
-    /// produces. `Some` exactly when the signature's result is
-    /// [`crate::function_signature::ValueKind::Struct`]: the manifest side
-    /// is structural, but the declaration binds the shape to this type, and
-    /// checking/evaluation carry the nominal identity from here.
-    pub result_struct: Option<ExternStructResult>,
+    /// The resolved dimensional signature. A struct result carries both the
+    /// manifest-facing field shape and the nominal record type the
+    /// declaration binds it to.
+    pub signature: crate::function_signature::FunctionSignature<ExternStructResult>,
     /// Span of the function name inside the declaring block.
     pub name_span: Span,
     /// Span of the whole `fn ...;` declaration.
@@ -46,15 +42,21 @@ pub struct ExternFunctionEntry {
 }
 
 impl ExternFunctionEntry {
+    /// The plugin-scoped identity this entry is registered under.
+    #[must_use]
+    pub fn key(&self) -> crate::plugin_identity::ExternFnKey {
+        crate::plugin_identity::ExternFnKey {
+            plugin: self.plugin.clone(),
+            name: self.name.clone(),
+        }
+    }
+
     /// Whether two entries describe the same callable definition.
     ///
     /// Source aliases and spans are diagnostic provenance, not signature
     /// identity, so independently compiled copies may differ in those fields.
     pub(crate) fn has_same_callable_definition(&self, other: &Self) -> bool {
-        self.plugin == other.plugin
-            && self.name == other.name
-            && self.signature == other.signature
-            && self.result_struct == other.result_struct
+        self.plugin == other.plugin && self.name == other.name && self.signature == other.signature
     }
 }
 
@@ -65,6 +67,21 @@ pub struct ExternStructResult {
     pub resolved: crate::syntax::type_name::ResolvedStructTypeName,
     /// Checked record constructor; invocation need not recover it from a type spelling.
     pub constructor: crate::syntax::type_name::ConstructorName,
+    /// The record's flattened field shape, as the plugin manifest sees it.
+    pub shape: crate::function_signature::StructShape,
+}
+
+impl ExternStructResult {
+    /// Whether two struct results name the same record type.
+    fn same_record(&self, other: &Self) -> bool {
+        self.resolved == other.resolved && self.constructor == other.constructor
+    }
+}
+
+impl crate::function_signature::StructResult for ExternStructResult {
+    fn shape(&self) -> &crate::function_signature::StructShape {
+        &self.shape
+    }
 }
 
 /// Resolve every `import plugin` block's declared signatures against the
@@ -84,9 +101,8 @@ pub(super) fn resolve_plugin_imports(
     let mut map = HashMap::new();
     for decl in decls {
         for function in &decl.functions {
-            let (key, entry) =
-                resolve_extern_function(decl, function, registry, owner, resolver, src)?;
-            merge_extern_function(&mut map, key, entry, src)?;
+            let entry = resolve_extern_function(decl, function, registry, owner, resolver, src)?;
+            merge_extern_function(&mut map, entry, src)?;
         }
     }
     Ok(map)
@@ -108,13 +124,14 @@ pub(super) fn resolve_plugin_imports(
 /// nominal struct result type.
 pub fn merge_extern_function(
     map: &mut HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
-    key: crate::plugin_identity::ExternFnKey,
     entry: ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     use std::collections::hash_map::Entry;
 
-    match map.entry(key) {
+    use crate::function_signature::ResultKind;
+
+    match map.entry(entry.key()) {
         Entry::Occupied(existing) => {
             let existing = existing.get();
             if !existing.signature.structurally_equivalent(&entry.signature) {
@@ -130,7 +147,10 @@ pub fn merge_extern_function(
             // A struct return is nominal at the declaration site: two
             // declarations must also agree on WHICH record type the shared
             // shape produces.
-            if existing.result_struct != entry.result_struct {
+            if let (ResultKind::Struct(existing), ResultKind::Struct(declared)) =
+                (existing.signature.result(), entry.signature.result())
+                && !existing.same_record(declared)
+            {
                 return Err(GraphcalError::InvalidExternSignature {
                     message: format!(
                         "function `{}` of plugin \"{}\" is declared elsewhere with a different result type",
@@ -149,16 +169,16 @@ pub fn merge_extern_function(
     }
 }
 
-/// Resolve one extern-signature type annotation to a [`crate::function_signature::ValueKind`].
+/// Resolve one extern-signature type annotation to a [`crate::function_signature::ParamKind`].
 fn resolve_extern_value_kind(
     type_ann: &TypeExpr,
     dim_vars: &[crate::syntax::dimension::DimVarName],
     index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ValueKind, GraphcalError> {
+) -> Result<crate::function_signature::ParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
-    use crate::function_signature::ValueKind;
+    use crate::function_signature::ParamKind;
 
     if !type_ann.constraints.is_empty() {
         return Err(GraphcalError::InvalidExternSignature {
@@ -168,12 +188,12 @@ fn resolve_extern_value_kind(
         });
     }
     match &type_ann.kind {
-        TypeExprKind::Bool => Ok(ValueKind::bool()),
-        TypeExprKind::Int => Ok(ValueKind::int()),
-        TypeExprKind::Dimensionless => Ok(ValueKind::dimensionless()),
+        TypeExprKind::Bool => Ok(ParamKind::bool()),
+        TypeExprKind::Int => Ok(ParamKind::int()),
+        TypeExprKind::Dimensionless => Ok(ParamKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
             resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
-                .map(ValueKind::quantity_monomial)
+                .map(ParamKind::quantity_monomial)
         }
         TypeExprKind::Indexed { base, indexes } => {
             resolve_extern_array_kind(
@@ -209,7 +229,7 @@ fn resolve_extern_function(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<(crate::plugin_identity::ExternFnKey, ExternFunctionEntry), GraphcalError> {
+) -> Result<ExternFunctionEntry, GraphcalError> {
     // Binder idents share one lexical namespace regardless of
     // constraint: `<D: Dim, D: Index>` is a duplicate declaration.
     let mut seen_binders: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -253,7 +273,7 @@ fn resolve_extern_function(
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let (result, result_struct) = resolve_extern_result_kind(
+    let result = resolve_extern_result_kind(
         &function.result,
         &dim_vars,
         &index_vars,
@@ -262,46 +282,40 @@ fn resolve_extern_function(
         resolver,
         src,
     )?;
-    let signature =
-        crate::function_signature::FunctionSignature::try_new(dim_vars, index_vars, params, result)
-            .map_err(|err| {
-                if let crate::function_signature::SignatureError::DuplicateParamName {
-                    name,
-                    first,
-                    duplicate,
-                } = &err
-                    && let (Some(first_param), Some(duplicate_param)) =
-                        (function.params.get(*first), function.params.get(*duplicate))
-                {
-                    return GraphcalError::DuplicateExternParameter {
-                        name: name.clone(),
-                        src: src.clone(),
-                        duplicate: duplicate_param.name.span.into(),
-                        first: first_param.name.span.into(),
-                    };
-                }
-                GraphcalError::InvalidExternSignature {
-                    message: err.to_string(),
-                    src: src.clone(),
-                    span: function.span.into(),
-                }
-            })?;
-    let plugin = crate::plugin_identity::PluginIdentity::resolve(&decl.path.value, owner.package());
-    let key = crate::plugin_identity::ExternFnKey {
-        plugin: plugin.clone(),
-        name: function.name.value.clone(),
-    };
-    let entry = ExternFunctionEntry {
-        plugin,
+    let signature = crate::function_signature::FunctionSignature::try_from_parts(
+        dim_vars, index_vars, params, result,
+    )
+    .map_err(|err| {
+        if let crate::function_signature::SignatureError::DuplicateParamName {
+            name,
+            first,
+            duplicate,
+        } = &err
+            && let (Some(first_param), Some(duplicate_param)) =
+                (function.params.get(*first), function.params.get(*duplicate))
+        {
+            return GraphcalError::DuplicateExternParameter {
+                name: name.clone(),
+                src: src.clone(),
+                duplicate: duplicate_param.name.span.into(),
+                first: first_param.name.span.into(),
+            };
+        }
+        GraphcalError::InvalidExternSignature {
+            message: err.to_string(),
+            src: src.clone(),
+            span: function.span.into(),
+        }
+    })?;
+    Ok(ExternFunctionEntry {
+        plugin: crate::plugin_identity::PluginIdentity::resolve(&decl.path.value, owner.package()),
         alias: decl.alias.value.clone(),
         name: function.name.value.clone(),
         signature,
-        result_struct,
         name_span: function.name.span,
         decl_span: function.span,
         path_span: decl.path.span,
-    };
-    Ok((key, entry))
+    })
 }
 
 /// Resolve an extern RESULT type annotation: any parameter kind, or a
@@ -319,13 +333,7 @@ fn resolve_extern_result_kind(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<
-    (
-        crate::function_signature::ValueKind,
-        Option<ExternStructResult>,
-    ),
-    GraphcalError,
-> {
+) -> Result<crate::function_signature::ResultKind<ExternStructResult>, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
 
     if type_ann.constraints.is_empty()
@@ -355,8 +363,7 @@ fn resolve_extern_result_kind(
             span: type_ann.span.into(),
         });
     }
-    resolve_extern_value_kind(type_ann, dim_vars, index_vars, registry, src)
-        .map(|kind| (kind, None))
+    resolve_extern_value_kind(type_ann, dim_vars, index_vars, registry, src).map(Into::into)
 }
 
 /// Resolve a record-type extern result: nominal identity through the
@@ -368,14 +375,8 @@ pub(super) fn resolve_extern_struct_return(
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<
-    (
-        crate::function_signature::ValueKind,
-        Option<ExternStructResult>,
-    ),
-    GraphcalError,
-> {
-    use crate::function_signature::{StructShape, StructShapeField, ValueKind};
+) -> Result<crate::function_signature::ResultKind<ExternStructResult>, GraphcalError> {
+    use crate::function_signature::{ResultKind, StructShape, StructShapeField};
 
     let invalid = |message: String| GraphcalError::InvalidExternSignature {
         message,
@@ -422,13 +423,11 @@ pub(super) fn resolve_extern_struct_return(
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
-    Ok((
-        ValueKind::Struct(shape),
-        Some(ExternStructResult {
-            resolved: resolved_type,
-            constructor: crate::syntax::type_name::ConstructorName::from_atom(leaf.atom().clone()),
-        }),
-    ))
+    Ok(ResultKind::Struct(ExternStructResult {
+        resolved: resolved_type,
+        constructor: crate::syntax::type_name::ConstructorName::from_atom(leaf.atom().clone()),
+        shape,
+    }))
 }
 
 /// Resolve one record field to its concrete boundary kind.
@@ -475,7 +474,7 @@ fn resolve_extern_struct_field(
 }
 
 /// Resolve an array type annotation (`D[I]`, `Velocity[I, J]`) to
-/// [`crate::function_signature::ValueKind::Indexed`].
+/// [`crate::function_signature::ParamKind::Indexed`].
 ///
 /// Every axis must name one of the signature's `Index` binders. Concrete
 /// declared/structural indexes remain declaration-site concerns: an extern
@@ -488,9 +487,9 @@ fn resolve_extern_array_kind(
     index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::function_signature::ValueKind, GraphcalError> {
+) -> Result<crate::function_signature::ParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
-    use crate::function_signature::{DimMonomial, ScalarValueKind, ValueKind};
+    use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
     use crate::syntax::ast::IndexExpr;
 
     let resolved_indexes = indexes
@@ -545,7 +544,7 @@ fn resolve_extern_array_kind(
             });
         }
     };
-    Ok(ValueKind::Indexed { element, indexes })
+    Ok(ParamKind::Indexed { element, indexes })
 }
 
 /// Span covering an array annotation's index list (falls back to the base

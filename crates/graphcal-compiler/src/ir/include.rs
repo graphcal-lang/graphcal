@@ -544,7 +544,7 @@ impl UnfrozenIR {
                             LoweredPlotProperty::plot,
                         )?,
                     },
-                    displayed: entry.displayed,
+                    visibility: entry.visibility,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;

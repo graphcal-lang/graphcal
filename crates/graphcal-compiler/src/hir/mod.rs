@@ -37,8 +37,8 @@ pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
     AssertBody, CheckedAssertBody, CheckedExpr, ConstRef, Expr, ExprDependencies, ExprKind,
     ExprLowerError, ExprLoweringContext, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId,
-    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, collect_expr_dependencies,
-    find_dag_call, lower_expr_tolerant,
+    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, UnappliedFunctionRef,
+    collect_expr_dependencies, find_dag_call, lower_expr_tolerant,
 };
 pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr, visit_expr};
 pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};

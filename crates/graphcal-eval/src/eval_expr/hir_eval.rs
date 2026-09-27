@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
+use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName, KeyAggregation, ValueAggregation};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
@@ -691,7 +691,7 @@ fn eval_hir_fn_call(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
-        FunctionRef::Builtin(name) => (*name, None),
+        FunctionRef::Builtin(builtin) => (builtin.name(), None),
         FunctionRef::Epoch { scale } => (BuiltinFnName::Epoch, Some(scale.value)),
         FunctionRef::External(ext) => {
             return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
@@ -725,10 +725,14 @@ fn eval_hir_fn_call(
                     args[0].span,
                 ));
             };
-            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
-                return eval_hir_extremum_key(kind, &index_name, &entries, expr.span, ctx);
+            match kind {
+                AggregationFn::Key(function) => {
+                    eval_hir_extremum_key(function, &index_name, &entries, expr.span, ctx)
+                }
+                AggregationFn::Value(function) => {
+                    eval_hir_aggregation_fn(function, &entries, expr.span, ctx.src)
+                }
             }
-            eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src)
         }
         EvalBuiltinRule::LinearAlgebra(function) => {
             expect_hir_builtin_arity(name, args, function.arity(), callee.span, ctx)?;
@@ -954,7 +958,7 @@ fn eval_hir_key_form(
 /// Evaluate `argmin`/`argmax`: find the extremum entry and reify its entry
 /// key as the matching key runtime value for the reduced axis.
 fn eval_hir_extremum_key(
-    kind: AggregationFn,
+    kind: KeyAggregation,
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
     span: Span,
@@ -1026,7 +1030,7 @@ fn runtime_key_for_entry(
 }
 
 fn eval_hir_aggregation_fn(
-    kind: AggregationFn,
+    kind: ValueAggregation,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
     span: Span,
     src: &NamedSource<Arc<String>>,
@@ -1416,7 +1420,7 @@ fn eval_hir_extern_fn(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::function_signature::{ScalarValueKind, ValueKind};
+    use graphcal_compiler::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
     use crate::host_abi::{
         ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult, decode_result,
@@ -1466,7 +1470,7 @@ fn eval_hir_extern_fn(
     for (param, arg) in signature.params().iter().zip(args) {
         let value = eval_hir_expr(arg, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
-            (ValueKind::Scalar(ScalarValueKind::Quantity(_)), value) => {
+            (ParamKind::Scalar(ScalarValueKind::Quantity(_)), value) => {
                 let value = value
                     .expect_quantity("extern function argument")
                     .map_err(|error| ctx.eval_error(error.to_string(), arg.span))?;
@@ -1481,7 +1485,7 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::F64(value.get())
             }
-            (ValueKind::Scalar(ScalarValueKind::Int), RuntimeValue::Int(value)) => {
+            (ParamKind::Scalar(ScalarValueKind::Int), RuntimeValue::Int(value)) => {
                 let value = encode_int(value).map_err(|error| {
                     ctx.eval_error(
                         format!(
@@ -1493,10 +1497,10 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::F64(value)
             }
-            (ValueKind::Scalar(ScalarValueKind::Bool), RuntimeValue::Bool(value)) => {
+            (ParamKind::Scalar(ScalarValueKind::Bool), RuntimeValue::Bool(value)) => {
                 HostFnValue::F64(encode_bool(value))
             }
-            (ValueKind::Indexed { element, indexes }, value) => {
+            (ParamKind::Indexed { element, indexes }, value) => {
                 let flattened = flatten_extern_array(&value, element, ctx, arg.span)?;
                 if flattened.axes.len() != indexes.len() {
                     return Err(ctx.internal_error(
@@ -1573,7 +1577,7 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::Array(array)
             }
-            (ValueKind::Scalar(_) | ValueKind::Struct(_), _) => {
+            (ParamKind::Scalar(_), _) => {
                 return Err(ctx.internal_error(
                     format!(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
@@ -1657,11 +1661,9 @@ fn eval_hir_extern_fn(
             }
         }
         ValidatedHostResult::Struct(fields) => {
-            let Some(result_struct) = &function.result_struct else {
+            let ResultKind::Struct(result_struct) = signature.result() else {
                 return Err(ctx.internal_error(
-                    format!(
-                        "extern function `{ext}` declares a struct result without a resolved record type"
-                    ),
+                    format!("extern function `{ext}` decoded a struct for a non-struct result"),
                     expr.span,
                 ));
             };
@@ -2913,13 +2915,13 @@ node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
 
         for function in [
-            AggregationFn::Sum,
-            AggregationFn::Product,
-            AggregationFn::Minimum,
-            AggregationFn::Maximum,
-            AggregationFn::Mean,
-            AggregationFn::RootSumSquare,
-            AggregationFn::Count,
+            ValueAggregation::Sum,
+            ValueAggregation::Product,
+            ValueAggregation::Minimum,
+            ValueAggregation::Maximum,
+            ValueAggregation::Mean,
+            ValueAggregation::RootSumSquare,
+            ValueAggregation::Count,
         ] {
             let error =
                 eval_hir_aggregation_fn(function, &entries, Span::new(0, 0), &src).unwrap_err();

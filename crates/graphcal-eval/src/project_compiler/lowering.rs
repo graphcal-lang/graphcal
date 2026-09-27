@@ -1205,7 +1205,7 @@ fn semantic_plot_projections(
                 .map(|target| InstancePlotProjection {
                     target,
                     exposed_name: ScopedName::local(requested.alias.clone()),
-                    hidden: requested.hidden,
+                    visibility: requested.visibility,
                 })
                 .ok_or_else(|| {
                     CompileError::Eval(GraphcalError::internal_error(

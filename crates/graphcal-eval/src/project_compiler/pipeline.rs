@@ -412,14 +412,14 @@ fn verify_host_functions(
         if let Some(provided) = host_metadata.provided_signature(key)
             && !function.signature.structurally_equivalent(provided)
         {
-            let render = |signature: &graphcal_compiler::function_signature::FunctionSignature| {
-                signature.format_with(|dim| tir.registry().dimensions.format_dimension(dim))
+            let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
+                tir.registry().dimensions.format_dimension(dim)
             };
             return Err(CompileError::Eval(GraphcalError::ExternSignatureMismatch {
                 plugin: function.plugin.clone(),
                 name: function.name.clone(),
-                declared: render(&function.signature),
-                provided: render(provided),
+                declared: function.signature.format_with(format_dim),
+                provided: provided.format_with(format_dim),
                 src: src.clone(),
                 span: function.decl_span.into(),
             }));

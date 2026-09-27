@@ -11,7 +11,9 @@
 
 use std::{marker::PhantomData, num::NonZeroU32};
 
-use graphcal_compiler::function_signature::{FunctionSignature, ScalarValueKind, ValueKind};
+use graphcal_compiler::function_signature::{
+    FunctionSignature, ParamKind, ResultKind, ScalarValueKind,
+};
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_eval::host_abi::{decode_bool, decode_int, validate_quantity};
@@ -425,7 +427,7 @@ impl PluginModule {
             std::collections::HashMap::new();
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
-                (ValueKind::Scalar(kind), HostFnValue::F64(value)) => {
+                (ParamKind::Scalar(kind), HostFnValue::F64(value)) => {
                     validate_scalar_argument(kind, *value).map_err(|message| {
                         PluginCallError::InvalidArgument {
                             parameter: param.name.clone(),
@@ -435,7 +437,7 @@ impl PluginModule {
                     })?;
                     params.push(wasmi::Val::F64((*value).into()));
                 }
-                (ValueKind::Indexed { element, indexes }, HostFnValue::Array(array)) => {
+                (ParamKind::Indexed { element, indexes }, HostFnValue::Array(array)) => {
                     for (index, value) in array.values().iter().copied().enumerate() {
                         validate_scalar_argument(element, value).map_err(|message| {
                             PluginCallError::InvalidArgument {
@@ -510,7 +512,7 @@ impl PluginModule {
     fn allocate_result_buffer(
         live: &mut CallInstance<'_>,
         function: &FnName,
-        result: &ValueKind,
+        result: &ResultKind,
         bound_extents: &std::collections::HashMap<IndexVarName, usize>,
         buffers: &mut Option<BufferProtocol>,
         fuel_per_call: u64,
@@ -521,7 +523,7 @@ impl PluginModule {
             ),
         };
         let (len, kind) = match result {
-            ValueKind::Indexed { indexes, .. } => {
+            ResultKind::Value(ParamKind::Indexed { indexes, .. }) => {
                 let shape = indexes
                     .iter()
                     .map(|index| {
@@ -544,8 +546,8 @@ impl PluginModule {
             }
             // A struct result is a fixed-size out-buffer: one f64 slot per
             // flattened field, in declaration order.
-            ValueKind::Struct(shape) => (shape.fields().len(), OutBufferKind::Record),
-            ValueKind::Scalar(_) => return Ok(None),
+            ResultKind::Struct(shape) => (shape.fields().len(), OutBufferKind::Record),
+            ResultKind::Value(ParamKind::Scalar(_)) => return Ok(None),
         };
         let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
         let allocation = buffers.alloc(live, fuel_per_call, len)?;
@@ -805,9 +807,11 @@ fn signature_uses_buffers(signature: &FunctionSignature) -> bool {
     signature
         .params()
         .iter()
-        .map(|param| &param.kind)
-        .chain(std::iter::once(signature.result()))
-        .any(|kind| matches!(kind, ValueKind::Indexed { .. } | ValueKind::Struct(_)))
+        .any(|param| matches!(param.kind, ParamKind::Indexed { .. }))
+        || matches!(
+            signature.result(),
+            ResultKind::Value(ParamKind::Indexed { .. }) | ResultKind::Struct(_)
+        )
 }
 
 /// The wasm function type the ABI requires for one signature.
@@ -833,21 +837,18 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
     let mut params = Vec::new();
     for param in signature.params() {
         match &param.kind {
-            ValueKind::Scalar(_) => {
+            ParamKind::Scalar(_) => {
                 params.push(wasmi::ValType::F64);
             }
-            ValueKind::Indexed { indexes, .. } => {
+            ParamKind::Indexed { indexes, .. } => {
                 params.push(wasmi::ValType::I32);
                 params.extend(std::iter::repeat_n(wasmi::ValType::I32, indexes.len()));
             }
-            // Struct parameters never pass signature validation. Keep this
-            // match total for defense in depth.
-            ValueKind::Struct(_) => params.push(wasmi::ValType::I32),
         }
     }
     let results = match signature.result() {
-        ValueKind::Scalar(_) => vec![wasmi::ValType::F64],
-        ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
+        ResultKind::Value(ParamKind::Scalar(_)) => vec![wasmi::ValType::F64],
+        ResultKind::Value(ParamKind::Indexed { .. }) | ResultKind::Struct(_) => {
             params.push(wasmi::ValType::I32);
             Vec::new()
         }

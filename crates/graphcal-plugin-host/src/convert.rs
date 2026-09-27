@@ -10,8 +10,8 @@
 
 use graphcal_compiler::dimension::{Dimension, Rational, RationalError};
 use graphcal_compiler::function_signature::{
-    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, ScalarValueKind, SignatureError,
-    StructFieldKind, StructShape, StructShapeField, ValueKind,
+    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, ParamKind, ResultKind,
+    ScalarValueKind, SignatureError, StructFieldKind, StructShape, StructShapeField,
 };
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
 use graphcal_compiler::syntax::dimension::DimVarName;
@@ -104,32 +104,34 @@ fn convert_index_var(var: &str) -> Result<IndexVarName, ConvertErrorKind> {
     })
 }
 
-fn convert_param_kind(kind: &ManifestParamKind) -> Result<ValueKind, ConvertErrorKind> {
+fn convert_param_kind(kind: &ManifestParamKind) -> Result<ParamKind, ConvertErrorKind> {
     match kind {
-        ManifestParamKind::Bool => Ok(ValueKind::bool()),
-        ManifestParamKind::Int => Ok(ValueKind::int()),
+        ManifestParamKind::Bool => Ok(ParamKind::bool()),
+        ManifestParamKind::Int => Ok(ParamKind::int()),
         ManifestParamKind::Quantity(monomial) => {
-            Ok(ValueKind::quantity_monomial(convert_monomial(monomial)?))
+            Ok(ParamKind::quantity_monomial(convert_monomial(monomial)?))
         }
         ManifestParamKind::Array { element, indexes } => convert_array(element, indexes),
     }
 }
 
-fn convert_result_kind(kind: &ManifestResultKind) -> Result<ValueKind, ConvertErrorKind> {
+fn convert_result_kind(kind: &ManifestResultKind) -> Result<ResultKind, ConvertErrorKind> {
     match kind {
-        ManifestResultKind::Bool => Ok(ValueKind::bool()),
-        ManifestResultKind::Int => Ok(ValueKind::int()),
+        ManifestResultKind::Bool => Ok(ParamKind::bool().into()),
+        ManifestResultKind::Int => Ok(ParamKind::int().into()),
         ManifestResultKind::Quantity(monomial) => {
-            Ok(ValueKind::quantity_monomial(convert_monomial(monomial)?))
+            Ok(ParamKind::quantity_monomial(convert_monomial(monomial)?).into())
         }
-        ManifestResultKind::Array { element, indexes } => convert_array(element, indexes),
+        ManifestResultKind::Array { element, indexes } => {
+            convert_array(element, indexes).map(ResultKind::from)
+        }
         ManifestResultKind::Struct { fields } => {
             let fields = fields
                 .iter()
                 .map(convert_struct_field)
                 .collect::<Result<Vec<_>, _>>()?;
             let shape = StructShape::try_new(fields).map_err(ConvertErrorKind::Signature)?;
-            Ok(ValueKind::Struct(shape))
+            Ok(ResultKind::Struct(shape))
         }
     }
 }
@@ -137,7 +139,7 @@ fn convert_result_kind(kind: &ManifestResultKind) -> Result<ValueKind, ConvertEr
 fn convert_array(
     element: &ManifestArrayElementKind,
     indexes: &[String],
-) -> Result<ValueKind, ConvertErrorKind> {
+) -> Result<ParamKind, ConvertErrorKind> {
     let indexes = indexes
         .iter()
         .map(|index| convert_index_var(index))
@@ -151,7 +153,7 @@ fn convert_array(
         ManifestArrayElementKind::Bool => ScalarValueKind::Bool,
         ManifestArrayElementKind::Int => ScalarValueKind::Int,
     };
-    Ok(ValueKind::Indexed { element, indexes })
+    Ok(ParamKind::Indexed { element, indexes })
 }
 
 fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, ConvertErrorKind> {

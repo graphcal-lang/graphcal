@@ -1,5 +1,6 @@
 //! Pure projection from evaluated plot specs to Vega-Lite JSON.
 
+use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::syntax::ast::{EncodingChannel, MarkType};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
@@ -69,8 +70,9 @@ pub fn build_figures(
     // Standalone figures from displayed plots (#[hidden] plots are only
     // usable in figure/layer composition; #847)
     for spec in plots {
-        if !spec.displayed {
-            continue;
+        match spec.visibility {
+            PlotVisibility::Standalone => {}
+            PlotVisibility::CompositionOnly => continue,
         }
         result.push(RenderedFigure {
             name: spec.name.to_string(),

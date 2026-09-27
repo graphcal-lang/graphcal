@@ -9,7 +9,7 @@
 #![cfg(test)]
 
 use graphcal_compiler::function_signature::{
-    DimMonomial, FunctionParam, FunctionSignature, ValueKind,
+    DimMonomial, FunctionParam, FunctionSignature, ParamKind,
 };
 use graphcal_compiler::syntax::dimension::DimVarName;
 use graphcal_compiler::syntax::function_name::FnParamName;
@@ -268,18 +268,18 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("a"),
-                kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
+                kind: ParamKind::quantity_monomial(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("b"),
-                kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
+                kind: ParamKind::quantity_monomial(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("t"),
-                kind: ValueKind::dimensionless(),
+                kind: ParamKind::dimensionless(),
             },
         ],
-        ValueKind::quantity_monomial(DimMonomial::var(var())),
+        ParamKind::quantity_monomial(DimMonomial::var(var())).into(),
     )
     .expect("expected signature is valid");
 
@@ -301,14 +301,14 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("n"),
-                kind: ValueKind::int(),
+                kind: ParamKind::int(),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("up"),
-                kind: ValueKind::bool(),
+                kind: ParamKind::bool(),
             },
         ],
-        ValueKind::int(),
+        ParamKind::int().into(),
     )
     .expect("expected signature is valid");
     assert!(step_signature.structurally_equivalent(&expected_step));

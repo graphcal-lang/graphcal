@@ -618,7 +618,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             ) {
                 Ok(mut plot) => {
                     plot.name = projection.exposed_name.clone();
-                    plot.displayed = !projection.hidden;
+                    plot.visibility = projection.visibility;
                     plots.push(plot);
                 }
                 Err(PlotEvaluationError::Unavailable(reason)) => {
@@ -1211,7 +1211,7 @@ fn evaluate_plot(
         presentation_diagnostics,
         mark_properties,
         properties,
-        displayed: entry.displayed,
+        visibility: entry.visibility,
     })
 }
 

@@ -965,9 +965,9 @@ pub struct PlotSpec {
     pub mark_properties: Vec<(MarkProperty, PlotFieldValue)>,
     /// Evaluated plot-level properties (title, width, height, etc.).
     pub properties: Vec<(PlotProperty, PlotFieldValue)>,
-    /// Whether this plot renders standalone. `false` for `#[hidden]`
-    /// plots, which are only usable in figure/layer composition (#847).
-    pub displayed: bool,
+    /// Whether this plot renders standalone. `#[hidden]` plots are only
+    /// usable in figure/layer composition (#847).
+    pub visibility: graphcal_compiler::plot_visibility::PlotVisibility,
 }
 
 /// A single evaluated figure specification.
