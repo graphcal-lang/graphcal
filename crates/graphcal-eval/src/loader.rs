@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 use sha2::{Digest, Sha256};
 
+use crate::dependency_ordered::DependencyOrdered;
 use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
@@ -781,15 +782,8 @@ impl PluginCallPolicy {
 /// A loaded project: a root file plus all transitively imported files.
 #[derive(Debug)]
 pub struct LoadedProject {
-    /// All loaded files keyed by DAG identity.
-    files: HashMap<DagId, LoadedFile>,
-    /// The DAG identity of the root file.
-    root: DagId,
-    /// Topological load order: dependencies before dependents.
-    /// The root file is last.
-    load_order: Vec<DagId>,
-    /// Canonical owner source file for every file-root and inline DAG identity.
-    dag_owners: HashMap<DagId, DagId>,
+    /// All loaded files in topological load order, ending with the root file.
+    files: LoadedFiles,
     /// WASM plugin files referenced by `import plugin "….wasm"` declarations
     /// keyed by the declaring package instance and artifact path.
     ///
@@ -800,6 +794,95 @@ pub struct LoadedProject {
     /// Package-scoped plugin fuel settings resolved to typed function identities.
     plugin_call_policy: PluginCallPolicy,
     package_closure: Option<LoadedPackageClosure>,
+}
+
+/// Loaded source files in topological load order (dependencies before
+/// dependents, ending with the root file), indexed by semantic identity.
+#[derive(Debug)]
+pub struct LoadedFiles {
+    ordered: DependencyOrdered<LoadedFile>,
+    /// Position (in `ordered`) of the owner source file for every file-root
+    /// and inline DAG identity. Derived from `ordered` at construction.
+    owners: HashMap<DagId, usize>,
+}
+
+impl LoadedFiles {
+    fn new(ordered: DependencyOrdered<LoadedFile>) -> Self {
+        let owners = ordered
+            .iter()
+            .enumerate()
+            .flat_map(|(position, file)| {
+                std::iter::once((file.dag_id.clone(), position)).chain(
+                    file.inline_dags
+                        .iter()
+                        .map(move |dag| (dag.dag_id.clone(), position)),
+                )
+            })
+            .collect();
+        Self { ordered, owners }
+    }
+
+    /// Files in dependency order, ending with the root file.
+    #[must_use]
+    pub const fn ordered(&self) -> &DependencyOrdered<LoadedFile> {
+        &self.ordered
+    }
+
+    /// Iterate dependencies first, ending with the root file.
+    #[must_use]
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &LoadedFile> + Clone {
+        self.ordered.iter()
+    }
+
+    /// Number of loaded source files. Always at least 1.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.ordered.len()
+    }
+
+    /// Always `false`: the root file is always present.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Look up one loaded source file by its file-root identity.
+    #[must_use]
+    pub fn get(&self, dag_id: &DagId) -> Option<&LoadedFile> {
+        self.owner(dag_id).filter(|file| file.dag_id == *dag_id)
+    }
+
+    /// Source file that owns a file-root or inline DAG identity.
+    fn owner(&self, dag_id: &DagId) -> Option<&LoadedFile> {
+        self.owners
+            .get(dag_id)
+            .and_then(|position| self.ordered.get(*position))
+    }
+}
+
+impl std::ops::Index<&DagId> for LoadedFiles {
+    type Output = LoadedFile;
+
+    /// Keyed lookup with the same contract as indexing the former
+    /// `HashMap<DagId, LoadedFile>`: callers index only identities produced by
+    /// this project's loader.
+    #[expect(
+        clippy::panic,
+        reason = "preserves the former map-indexing contract of loader-produced identities"
+    )]
+    fn index(&self, dag_id: &DagId) -> &LoadedFile {
+        self.get(dag_id)
+            .unwrap_or_else(|| panic!("`{dag_id}` is not a loaded source file"))
+    }
+}
+
+impl<'a> IntoIterator for &'a LoadedFiles {
+    type Item = &'a LoadedFile;
+    type IntoIter = <&'a DependencyOrdered<LoadedFile> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&self.ordered).into_iter()
+    }
 }
 
 /// Lockfile and exact verified dependency bytes used by this loaded project.
@@ -833,11 +916,11 @@ fn wasm_plugin_paths(
 }
 
 fn validate_plugin_call_policy(
-    files: &HashMap<DagId, LoadedFile>,
+    files: &DependencyOrdered<LoadedFile>,
     policy: &PluginCallPolicy,
 ) -> Result<(), CompileError> {
     let declared_functions = files
-        .values()
+        .iter()
         .flat_map(|file| {
             file.ast
                 .plugin_imports()
@@ -1074,27 +1157,12 @@ fn apply_plugin_pins(
 
 impl LoadedProject {
     fn from_parts(
-        files: HashMap<DagId, LoadedFile>,
-        root: DagId,
-        load_order: Vec<DagId>,
+        files: DependencyOrdered<LoadedFile>,
         plugins: HashMap<PluginIdentity, PluginFileEntry>,
         plugin_call_policy: PluginCallPolicy,
     ) -> Self {
-        let dag_owners = files
-            .iter()
-            .flat_map(|(file_id, file)| {
-                std::iter::once((file_id.clone(), file_id.clone())).chain(
-                    file.inline_dags
-                        .iter()
-                        .map(|dag| (dag.dag_id.clone(), file_id.clone())),
-                )
-            })
-            .collect();
         Self {
-            files,
-            root,
-            load_order,
-            dag_owners,
+            files: LoadedFiles::new(files),
             plugins,
             plugin_call_policy,
             package_closure: None,
@@ -1107,9 +1175,9 @@ impl LoadedProject {
         self.package_closure.as_ref()
     }
 
-    /// All loaded files, keyed by their canonical semantic identity.
+    /// All loaded files in dependency order, ending with the root file.
     #[must_use]
-    pub const fn files(&self) -> &HashMap<DagId, LoadedFile> {
+    pub const fn files(&self) -> &LoadedFiles {
         &self.files
     }
 
@@ -1120,8 +1188,7 @@ impl LoadedProject {
     }
 
     pub(crate) fn inline_dag(&self, dag_id: &DagId) -> Option<(&LoadedFile, &LoadedDag)> {
-        let owner = self.dag_owners.get(dag_id)?;
-        let file = self.files.get(owner)?;
+        let file = self.files.owner(dag_id)?;
         file.inline_dags
             .iter()
             .find(|inline| inline.dag_id == *dag_id)
@@ -1131,25 +1198,13 @@ impl LoadedProject {
     /// Root source-file identity.
     #[must_use]
     pub const fn root_id(&self) -> &DagId {
-        &self.root
+        &self.files.ordered.root().dag_id
     }
 
-    /// Root source file. Construction guarantees that `root_id` is present.
+    /// Root source file.
     #[must_use]
-    #[expect(
-        clippy::expect_used,
-        reason = "private construction preserves the root-file membership invariant"
-    )]
-    pub fn root_file(&self) -> &LoadedFile {
-        self.files
-            .get(&self.root)
-            .expect("loaded project root must identify one loaded file")
-    }
-
-    /// Dependency-first source-file identities, ending with the root.
-    #[must_use]
-    pub(crate) fn load_order(&self) -> &[DagId] {
-        &self.load_order
+    pub const fn root_file(&self) -> &LoadedFile {
+        self.files.ordered.root()
     }
 
     /// Validated plugin artifacts and deferred plugin-loading errors.
@@ -1251,19 +1306,15 @@ impl LoadedProject {
         cancellation.checkpoint()?;
         let loaded_file = LoadedFile {
             path,
-            dag_id: dag_id.clone(),
+            dag_id,
             source,
             ast,
             named_source,
             resolved_imports: HashMap::new(),
             inline_dags,
         };
-        let mut files = HashMap::new();
-        files.insert(dag_id.clone(), loaded_file);
         Ok(Self::from_parts(
-            files,
-            dag_id.clone(),
-            vec![dag_id],
+            DependencyOrdered::new(Vec::new(), loaded_file),
             plugins,
             PluginCallPolicy::default(),
         ))
@@ -1279,10 +1330,11 @@ impl LoadedProject {
         &self,
         resolved: &DagId,
     ) -> Result<ResolvedModuleTarget, ResolvedModuleTargetError> {
-        self.dag_owners
-            .get(resolved)
-            .cloned()
-            .map(|source_file| ResolvedModuleTarget::in_file(source_file, resolved.clone()))
+        self.files
+            .owner(resolved)
+            .map(|source_file| {
+                ResolvedModuleTarget::in_file(source_file.dag_id.clone(), resolved.clone())
+            })
             .ok_or_else(|| ResolvedModuleTargetError::UnknownOwner {
                 target: resolved.clone(),
             })
@@ -1306,22 +1358,20 @@ impl LoadedProject {
         ensure_acyclic_include_expansion(self)?;
         let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
 
-        for dag_id in &self.load_order {
-            let loaded = &self.files[dag_id];
+        for loaded in &self.files {
             resolver.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
             for inline in &loaded.inline_dags {
                 resolver.add_module(inline.dag_id.clone(), inline.body(loaded))?;
             }
         }
 
-        for dag_id in &self.load_order {
-            let loaded = &self.files[dag_id];
+        for loaded in &self.files {
             add_include_instance_modules(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
-                &self.files,
+                self,
             )?;
             for inline in &loaded.inline_dags {
                 add_include_instance_modules(
@@ -1329,7 +1379,7 @@ impl LoadedProject {
                     &inline.dag_id,
                     inline.body(loaded),
                     &inline.resolved_imports,
-                    &self.files,
+                    self,
                 )?;
             }
         }
@@ -1338,14 +1388,13 @@ impl LoadedProject {
         // include edges, give each synthetic target the already-completed scope
         // of its canonical dependency; public re-exports are then selectable at
         // the next composition level.
-        for dag_id in &self.load_order {
-            let loaded = &self.files[dag_id];
+        for loaded in &self.files {
             inherit_include_instance_scopes(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
-                &self.files,
+                self,
             )?;
             register_module_imports(
                 &mut resolver,
@@ -1359,7 +1408,7 @@ impl LoadedProject {
                     &inline.dag_id,
                     inline.body(loaded),
                     &inline.resolved_imports,
-                    &self.files,
+                    self,
                 )?;
                 register_module_imports(
                     &mut resolver,
@@ -1383,9 +1432,8 @@ enum IncludeGraphVisit {
 fn ensure_acyclic_include_expansion(
     project: &LoadedProject,
 ) -> Result<(), ModuleResolverBuildError> {
-    let module_ids = project.load_order.iter().flat_map(|file_id| {
-        let file = &project.files[file_id];
-        std::iter::once(file_id.clone())
+    let module_ids = project.files.iter().flat_map(|file| {
+        std::iter::once(file.dag_id.clone())
             .chain(file.inline_dags.iter().map(|inline| inline.dag_id.clone()))
     });
     let mut complete = HashSet::new();
@@ -1415,7 +1463,7 @@ fn ensure_acyclic_include_expansion(
                     active_path.push(module.clone());
                     visits.push(IncludeGraphVisit::Exit(module.clone()));
                     visits.extend(
-                        module_include_targets(&module, &project.files)
+                        module_include_targets(&module, project)
                             .into_iter()
                             .rev()
                             .map(IncludeGraphVisit::Enter),
@@ -1433,15 +1481,15 @@ fn ensure_acyclic_include_expansion(
     Ok(())
 }
 
-fn module_include_targets(source: &DagId, files: &HashMap<DagId, LoadedFile>) -> Vec<DagId> {
-    module_declarations(source, files).map_or_else(Vec::new, |declarations| {
+fn module_include_targets(source: &DagId, project: &LoadedProject) -> Vec<DagId> {
+    module_declarations(source, project).map_or_else(Vec::new, |declarations| {
         declarations
             .iter()
             .filter_map(|declaration| {
                 let DeclKind::Include(include) = &declaration.kind else {
                     return None;
                 };
-                resolved_module_target_from(source, &include.path, files)
+                resolved_module_target_from(source, &include.path, project)
             })
             .collect()
     })
@@ -1471,7 +1519,7 @@ fn add_include_instance_modules(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         let DeclKind::Include(include) = &decl.kind else {
@@ -1484,12 +1532,12 @@ fn add_include_instance_modules(
         else {
             continue;
         };
-        let Some(target_decls) = module_declarations(target.target(), files) else {
+        let Some(target_decls) = module_declarations(target.target(), project) else {
             continue;
         };
         let instance = owner.instance_child(prefix.as_str());
         resolver.add_module(instance.clone(), target_decls)?;
-        add_nested_include_instance_modules(resolver, target.target(), &instance, files)?;
+        add_nested_include_instance_modules(resolver, target.target(), &instance, project)?;
     }
     Ok(())
 }
@@ -1505,7 +1553,7 @@ fn inherit_include_instance_scopes(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for declaration in declarations {
         let DeclKind::Include(include) = &declaration.kind else {
@@ -1519,7 +1567,7 @@ fn inherit_include_instance_scopes(
         };
         let instance = owner.instance_child(instance_scope.merge_scope_name().as_str());
         resolver.inherit_module_scope(source.target(), &instance)?;
-        inherit_nested_include_instance_scopes(resolver, source.target(), &instance, files)?;
+        inherit_nested_include_instance_scopes(resolver, source.target(), &instance, project)?;
     }
     Ok(())
 }
@@ -1532,9 +1580,9 @@ struct NestedIncludeInstance {
 fn nested_include_instances(
     source: &DagId,
     instance: &DagId,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Vec<NestedIncludeInstance> {
-    module_declarations(source, files).map_or_else(Vec::new, |declarations| {
+    module_declarations(source, project).map_or_else(Vec::new, |declarations| {
         declarations
             .iter()
             .filter_map(|declaration| {
@@ -1542,7 +1590,7 @@ fn nested_include_instances(
                     return None;
                 };
                 let instance_scope = include_instance_scope(include);
-                let source = resolved_module_target_from(source, &include.path, files)?;
+                let source = resolved_module_target_from(source, &include.path, project)?;
                 Some(NestedIncludeInstance {
                     source,
                     instance: instance.instance_child(instance_scope.merge_scope_name().as_str()),
@@ -1556,19 +1604,19 @@ fn add_nested_include_instance_modules(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     source: &DagId,
     instance: &DagId,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    let mut pending = nested_include_instances(source, instance, files)
+    let mut pending = nested_include_instances(source, instance, project)
         .into_iter()
         .rev()
         .collect::<Vec<_>>();
     while let Some(child) = pending.pop() {
-        let Some(child_declarations) = module_declarations(&child.source, files) else {
+        let Some(child_declarations) = module_declarations(&child.source, project) else {
             continue;
         };
         resolver.add_module(child.instance.clone(), child_declarations)?;
         pending.extend(
-            nested_include_instances(&child.source, &child.instance, files)
+            nested_include_instances(&child.source, &child.instance, project)
                 .into_iter()
                 .rev(),
         );
@@ -1580,16 +1628,16 @@ fn inherit_nested_include_instance_scopes(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     source: &DagId,
     instance: &DagId,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    let mut pending = nested_include_instances(source, instance, files)
+    let mut pending = nested_include_instances(source, instance, project)
         .into_iter()
         .rev()
         .collect::<Vec<_>>();
     while let Some(child) = pending.pop() {
         resolver.inherit_module_scope(&child.source, &child.instance)?;
         pending.extend(
-            nested_include_instances(&child.source, &child.instance, files)
+            nested_include_instances(&child.source, &child.instance, project)
                 .into_iter()
                 .rev(),
         );
@@ -1600,19 +1648,16 @@ fn inherit_nested_include_instance_scopes(
 fn resolved_module_target_from(
     source: &DagId,
     path: &ModulePath,
-    files: &HashMap<DagId, LoadedFile>,
+    project: &LoadedProject,
 ) -> Option<DagId> {
     let key = ModulePathKey::from_path(path);
-    let resolved = files.get(source).map_or_else(
+    let resolved = project.file(source).map_or_else(
         || {
-            files.values().find_map(|file| {
-                file.inline_dags
-                    .iter()
-                    .find(|inline| inline.dag_id == *source)
-                    .and_then(|inline| match inline.resolved_imports.get(&key) {
-                        Some(InlineBodyImportResolution::Resolved(target)) => Some(target.clone()),
-                        Some(InlineBodyImportResolution::Unresolved) | None => None,
-                    })
+            project.inline_dag(source).and_then(|(_, inline)| {
+                match inline.resolved_imports.get(&key) {
+                    Some(InlineBodyImportResolution::Resolved(target)) => Some(target.clone()),
+                    Some(InlineBodyImportResolution::Unresolved) | None => None,
+                }
             })
         },
         |file| file.resolved_imports.get(&key).cloned(),
@@ -1626,17 +1671,14 @@ fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> IncludeInstance
 
 fn module_declarations<'a>(
     target: &DagId,
-    files: &'a HashMap<DagId, LoadedFile>,
+    project: &'a LoadedProject,
 ) -> Option<&'a [Declaration]> {
-    if let Some(file) = files.get(target) {
+    if let Some(file) = project.file(target) {
         return Some(file.ast.declarations.as_slice());
     }
-    files.values().find_map(|file| {
-        file.inline_dags
-            .iter()
-            .find(|inline| inline.dag_id == *target)
-            .map(|inline| inline.body(file))
-    })
+    project
+        .inline_dag(target)
+        .map(|(file, inline)| inline.body(file))
 }
 
 fn register_module_imports(
@@ -1809,9 +1851,8 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
     let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
 
-    let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
+    let mut deps: Vec<LoadedFile> = Vec::new();
     let mut path_to_dag_id: HashMap<PathBuf, DagId> = HashMap::new();
-    let mut load_order: Vec<DagId> = Vec::new();
     let mut loading: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
@@ -1848,13 +1889,12 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         None => virtual_package_id_for_path(&root_canonical)?,
     };
 
-    load_file_dfs(
+    let root_file = load_file_dfs(
         &root_canonical,
         &project_root,
         &package_id,
-        &mut files,
+        &mut deps,
         &mut path_to_dag_id,
-        &mut load_order,
         &mut loading,
         &mut stack,
         manifest.as_ref(),
@@ -1863,15 +1903,12 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         cancellation,
     )?;
 
-    cancellation.checkpoint()?;
-    let root_dag_id = path_to_dag_id[&root_canonical].clone();
+    let files = DependencyOrdered::new(deps, root_file);
     cancellation.checkpoint()?;
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(
-        files
-            .values()
-            .map(|file| (file.dag_id.package(), &file.ast)),
+        files.iter().map(|file| (file.dag_id.package(), &file.ast)),
         &project_root,
         fs,
         budget,
@@ -1894,8 +1931,6 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
         files,
-        root_dag_id,
-        load_order,
         plugins,
         plugin_call_policy,
     ))
@@ -1983,27 +2018,24 @@ fn load_locked_package_project<F: FileSystemReader>(
             .extend(policy.function_fuel_per_call);
     }
 
-    let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
+    let mut deps: Vec<LoadedFile> = Vec::new();
     let mut path_to_dag_id: HashMap<(PackageInstanceId, PathBuf), DagId> = HashMap::new();
-    let mut load_order: Vec<DagId> = Vec::new();
     let mut loading: HashSet<(PackageInstanceId, PathBuf)> = HashSet::new();
     let mut stack: Vec<String> = Vec::new();
 
-    load_package_file_dfs(
+    let root_file = load_package_file_dfs(
         root_canonical,
         &root_package,
         &context,
-        &mut files,
+        &mut deps,
         &mut path_to_dag_id,
-        &mut load_order,
         &mut loading,
         &mut stack,
         budget,
         cancellation,
     )?;
 
-    cancellation.checkpoint()?;
-    let root_dag_id = path_to_dag_id[&(root_package.clone(), root_canonical.to_path_buf())].clone();
+    let files = DependencyOrdered::new(deps, root_file);
     cancellation.checkpoint()?;
     // Each artifact resolves within its declaring package's authority. Root
     // plugins use explicit pins; dependency binaries need verified coverage.
@@ -2012,7 +2044,7 @@ fn load_locked_package_project<F: FileSystemReader>(
         let owner = DagPackageId::new(package.as_str());
         let mut package_plugins = read_wasm_plugins(
             files
-                .values()
+                .iter()
                 .filter(|file| file.dag_id.package() == &owner)
                 .map(|file| (file.dag_id.package(), &file.ast)),
             context.root_for(package)?,
@@ -2027,8 +2059,7 @@ fn load_locked_package_project<F: FileSystemReader>(
     }
     validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
-    let mut project =
-        LoadedProject::from_parts(files, root_dag_id, load_order, plugins, plugin_call_policy);
+    let mut project = LoadedProject::from_parts(files, plugins, plugin_call_policy);
     project.package_closure = Some(context.closure);
     Ok(project)
 }
@@ -2222,19 +2253,15 @@ fn load_package_file_dfs(
     canonical_path: &Path,
     package_id: &PackageInstanceId,
     context: &PackageLoadContext<'_>,
-    files: &mut HashMap<DagId, LoadedFile>,
+    deps: &mut Vec<LoadedFile>,
     path_to_dag_id: &mut HashMap<(PackageInstanceId, PathBuf), DagId>,
-    load_order: &mut Vec<DagId>,
     loading: &mut HashSet<(PackageInstanceId, PathBuf)>,
     stack: &mut Vec<String>,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<LoadedFile, CompileError> {
     cancellation.checkpoint()?;
     let path_key = (package_id.clone(), canonical_path.to_path_buf());
-    if path_to_dag_id.contains_key(&path_key) {
-        return Ok(());
-    }
 
     let display_name = format!("{package_id}:{}", canonical_path.display());
     if !loading.insert(path_key.clone()) {
@@ -2305,18 +2332,20 @@ fn load_package_file_dfs(
             resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
             continue;
         }
-        load_package_file_dfs(
-            &resolved.path,
-            &resolved.package,
-            context,
-            files,
-            path_to_dag_id,
-            load_order,
-            loading,
-            stack,
-            budget,
-            cancellation,
-        )?;
+        if !path_to_dag_id.contains_key(&(resolved.package.clone(), resolved.path.clone())) {
+            let dependency = load_package_file_dfs(
+                &resolved.path,
+                &resolved.package,
+                context,
+                deps,
+                path_to_dag_id,
+                loading,
+                stack,
+                budget,
+                cancellation,
+            )?;
+            deps.push(dependency);
+        }
         resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
     }
 
@@ -2335,18 +2364,20 @@ fn load_package_file_dfs(
         if resolved.path == canonical_path && resolved.package == *package_id {
             continue;
         }
-        load_package_file_dfs(
-            &resolved.path,
-            &resolved.package,
-            context,
-            files,
-            path_to_dag_id,
-            load_order,
-            loading,
-            stack,
-            budget,
-            cancellation,
-        )?;
+        if !path_to_dag_id.contains_key(&(resolved.package.clone(), resolved.path.clone())) {
+            let dependency = load_package_file_dfs(
+                &resolved.path,
+                &resolved.package,
+                context,
+                deps,
+                path_to_dag_id,
+                loading,
+                stack,
+                budget,
+                cancellation,
+            )?;
+            deps.push(dependency);
+        }
     }
 
     cancellation.checkpoint()?;
@@ -2380,24 +2411,19 @@ fn load_package_file_dfs(
     let inline_dags = lift_package_inline_dags(&ast, &dag_id, &inline_context);
     cancellation.checkpoint()?;
 
-    load_order.push(dag_id.clone());
     loading.remove(&path_key);
     stack.pop();
 
     path_to_dag_id.insert(path_key, dag_id.clone());
-    files.insert(
-        dag_id.clone(),
-        LoadedFile {
-            path: canonical_path.to_path_buf(),
-            dag_id,
-            source,
-            ast,
-            named_source,
-            resolved_imports,
-            inline_dags,
-        },
-    );
-    Ok(())
+    Ok(LoadedFile {
+        path: canonical_path.to_path_buf(),
+        dag_id,
+        source,
+        ast,
+        named_source,
+        resolved_imports,
+        inline_dags,
+    })
 }
 
 fn package_dag_id(
@@ -2781,21 +2807,16 @@ fn load_file_dfs<F: FileSystemReader>(
     canonical_path: &Path,
     project_root: &Path,
     package_id: &DagPackageId,
-    files: &mut HashMap<DagId, LoadedFile>,
+    deps: &mut Vec<LoadedFile>,
     path_to_dag_id: &mut HashMap<PathBuf, DagId>,
-    load_order: &mut Vec<DagId>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
     manifest: Option<&PackageManifest>,
     fs: &F,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<LoadedFile, CompileError> {
     cancellation.checkpoint()?;
-    // Already fully loaded — skip.
-    if path_to_dag_id.contains_key(canonical_path) {
-        return Ok(());
-    }
 
     let display_name = canonical_path.display().to_string();
 
@@ -2893,20 +2914,24 @@ fn load_file_dfs<F: FileSystemReader>(
             continue;
         }
 
-        load_file_dfs(
-            &resolved.file,
-            project_root,
-            package_id,
-            files,
-            path_to_dag_id,
-            load_order,
-            loading,
-            stack,
-            manifest,
-            fs,
-            budget,
-            cancellation,
-        )?;
+        // Already fully loaded files are skipped; each file is pushed after
+        // its own dependencies (post-order).
+        if !path_to_dag_id.contains_key(&resolved.file) {
+            let dependency = load_file_dfs(
+                &resolved.file,
+                project_root,
+                package_id,
+                deps,
+                path_to_dag_id,
+                loading,
+                stack,
+                manifest,
+                fs,
+                budget,
+                cancellation,
+            )?;
+            deps.push(dependency);
+        }
     }
 
     // Inline DAG bodies are semantic DAG modules in their own right: their
@@ -2941,20 +2966,24 @@ fn load_file_dfs<F: FileSystemReader>(
         if resolved.file == canonical_path {
             continue;
         }
-        load_file_dfs(
-            &resolved.file,
-            project_root,
-            package_id,
-            files,
-            path_to_dag_id,
-            load_order,
-            loading,
-            stack,
-            manifest,
-            fs,
-            budget,
-            cancellation,
-        )?;
+        // Already fully loaded files are skipped; each file is pushed after
+        // its own dependencies (post-order).
+        if !path_to_dag_id.contains_key(&resolved.file) {
+            let dependency = load_file_dfs(
+                &resolved.file,
+                project_root,
+                package_id,
+                deps,
+                path_to_dag_id,
+                loading,
+                stack,
+                manifest,
+                fs,
+                budget,
+                cancellation,
+            )?;
+            deps.push(dependency);
+        }
     }
 
     cancellation.checkpoint()?;
@@ -3003,26 +3032,20 @@ fn load_file_dfs<F: FileSystemReader>(
     );
     cancellation.checkpoint()?;
 
-    // Post-order: add this file after its dependencies.
-    load_order.push(dag_id.clone());
+    // Post-order: the caller places this file after its dependencies.
     loading.remove(canonical_path);
     stack.pop();
 
     path_to_dag_id.insert(canonical_path.to_path_buf(), dag_id.clone());
-    files.insert(
-        dag_id.clone(),
-        LoadedFile {
-            path: canonical_path.to_path_buf(),
-            dag_id,
-            source,
-            ast,
-            named_source,
-            resolved_imports,
-            inline_dags,
-        },
-    );
-
-    Ok(())
+    Ok(LoadedFile {
+        path: canonical_path.to_path_buf(),
+        dag_id,
+        source,
+        ast,
+        named_source,
+        resolved_imports,
+        inline_dags,
+    })
 }
 
 fn collect_inline_dag_names(declarations: &[Declaration]) -> HashSet<String> {
@@ -3663,8 +3686,11 @@ path = "{escaped_outside}"
         let dir = setup_temp_dir(&[("standalone.gcl", "param x: Dimensionless = 1.0;")]);
         let project = load_project(&dir.path().join("standalone.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 1);
-        assert_eq!(project.load_order.len(), 1);
-        assert_eq!(project.root.package(), &DagPackageId::new("standalone"));
+        assert_eq!(project.files.len(), 1);
+        assert_eq!(
+            project.root_id().package(),
+            &DagPackageId::new("standalone")
+        );
     }
 
     #[test]
@@ -3678,7 +3704,7 @@ path = "{escaped_outside}"
         let project = load_project(&dir.path().join("src/mission/main.gcl"), None, &fs).unwrap();
 
         assert_eq!(fs.manifest_reads.get(), 1);
-        assert_eq!(project.root.package(), &DagPackageId::new("mission"));
+        assert_eq!(project.root_id().package(), &DagPackageId::new("mission"));
     }
 
     #[test]
@@ -3693,13 +3719,13 @@ path = "{escaped_outside}"
         ]);
         let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 2);
-        assert_eq!(project.load_order.len(), 2);
+        assert_eq!(project.files.len(), 2);
         // helper.lib should be loaded before main (topological order)
         let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
         let main_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "main"]));
-        assert_eq!(project.load_order[0], lib_dag_id);
-        assert_eq!(project.load_order[1], main_dag_id);
-        assert_eq!(project.root.package(), &DagPackageId::new("helper"));
+        assert_eq!(project.files.ordered().get(0).unwrap().dag_id, lib_dag_id);
+        assert_eq!(project.files.ordered().get(1).unwrap().dag_id, main_dag_id);
+        assert_eq!(project.root_id().package(), &DagPackageId::new("helper"));
     }
 
     #[test]
@@ -3715,7 +3741,7 @@ path = "{escaped_outside}"
 
         let resolved_variant = resolver
             .resolve_index_variant_parts(
-                &project.root,
+                project.root_id(),
                 &name_path(&["lib", "Phase"]),
                 &graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
             )
@@ -3787,10 +3813,10 @@ path = "{escaped_outside}"
         let source = "param x: Dimensionless = 1.0;";
         let project = LoadedProject::from_source(source, "test.gcl").unwrap();
         assert_eq!(project.files.len(), 1);
-        assert_eq!(project.load_order.len(), 1);
-        let root_file = &project.files[&project.root];
+        assert_eq!(project.files.len(), 1);
+        let root_file = project.root_file();
         assert_eq!(root_file.source.as_str(), source);
-        assert_eq!(project.root.package(), &DagPackageId::new("test"));
+        assert_eq!(project.root_id().package(), &DagPackageId::new("test"));
     }
 
     #[test]
@@ -3800,11 +3826,11 @@ path = "{escaped_outside}"
             "/virtual/project/main.gcl",
         )
         .unwrap();
-        let root_file = &project.files[&project.root];
+        let root_file = project.root_file();
 
         assert_eq!(root_file.named_source.name(), "/virtual/project/main.gcl");
-        assert_eq!(project.root.package(), &DagPackageId::new("main"));
-        assert_eq!(project.root.to_string(), "main");
+        assert_eq!(project.root_id().package(), &DagPackageId::new("main"));
+        assert_eq!(project.root_id().to_string(), "main");
     }
 
     #[test]
@@ -3817,7 +3843,7 @@ dag calc {
 }
 ";
         let project = LoadedProject::from_source(source, "test.gcl").unwrap();
-        let root_file = &project.files[&project.root];
+        let root_file = project.root_file();
         let loaded_dag = root_file
             .inline_dags
             .iter()
@@ -3854,7 +3880,7 @@ dag calc {
         .unwrap();
         let project = load_project(&root_path, None, &fs).unwrap();
 
-        let root_file = &project.files[&project.root];
+        let root_file = project.root_file();
         assert_eq!(root_file.source.as_str(), overlay_source);
     }
 
@@ -3881,7 +3907,7 @@ dag calc {
         let project = load_project(&root_path, None, &fs).unwrap();
 
         // Root file should use overlay content
-        let root_file = &project.files[&project.root];
+        let root_file = project.root_file();
         assert_eq!(root_file.source.as_str(), overlay_source);
 
         // Helper.lib file should use disk content
@@ -3937,7 +3963,7 @@ dag calc {
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
         let d_dag_id = DagId::new("graph", NonEmpty::new("src", vec!["graph", "d"]));
-        assert_eq!(project.load_order[0], d_dag_id);
+        assert_eq!(project.files.ordered().get(0).unwrap().dag_id, d_dag_id);
     }
 
     #[test]
@@ -4248,7 +4274,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         .unwrap();
 
         let project = load_project(&fixture.root_file, None, &overlay).unwrap();
-        assert_eq!(project.files[&project.root].source.as_str(), overlay_source);
+        assert_eq!(project.root_file().source.as_str(), overlay_source);
     }
 
     #[test]
@@ -4283,7 +4309,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         let project = load_project(&fixture.root_file, None, &overlay).unwrap();
         let helper = project
             .files
-            .values()
+            .iter()
             .find(|file| file.path == fixture.root_helper.canonicalize().unwrap())
             .expect("loaded helper");
         assert_eq!(helper.source.as_str(), overlay_source);

@@ -102,10 +102,7 @@ fn prepare_virtual(project: &VirtualProject, capabilities: BrowserCapabilities) 
     };
 
     if matches!(capabilities, BrowserCapabilities::SourcesOnly)
-        && loaded
-            .files()
-            .values()
-            .any(|file| file.ast().uses_plugins())
+        && loaded.files().iter().any(|file| file.ast().uses_plugins())
     {
         let error = ProjectValidationError::PluginsUnsupported;
         return PrepareOutcome::Rejected {

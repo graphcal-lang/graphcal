@@ -76,11 +76,7 @@ pub fn evaluate(request: PlaygroundRequest) -> PlaygroundOutcome {
         Err(error) => return compile_error_outcome(&error, &project),
     };
 
-    if loaded
-        .files()
-        .values()
-        .any(|file| file.ast().uses_plugins())
-    {
+    if loaded.files().iter().any(|file| file.ast().uses_plugins()) {
         let error = ProjectValidationError::PluginsUnsupported;
         return PlaygroundOutcome::Rejected {
             error: RequestErrorView::from(&error),
