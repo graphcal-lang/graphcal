@@ -106,7 +106,7 @@ Stop. Ask yourself:
 2. Will multiple sites need to construct or destructure it the same way?
 3. If the convention changed (separator, casing rule, prefix), how many sites would I have to touch?
 
-If any answer is "yes / many", introduce a type. A newtype for opaque identifiers (see `crates/graphcal-compiler/src/syntax/names.rs`'s `define_name_type!` macro), an enum for finite variants, a struct for composites. Place it where the data lives in the layering, not where it's first consumed.
+If any answer is "yes / many", introduce a type. A namespace-tagged name for opaque identifiers (see `NameDef<Ns>` / `ResolvedName<Ns>` in `crates/graphcal-compiler/src/syntax/names.rs` and a namespace marker such as `crates/graphcal-compiler/src/syntax/decl_name.rs`), an enum for finite variants, a struct for composites. Place it where the data lives in the layering, not where it's first consumed.
 
 ### When the rule conflicts with adjacent code
 

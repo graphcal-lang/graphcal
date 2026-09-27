@@ -724,10 +724,10 @@ pub enum ExprKind<P: Phase = Raw> {
     Bool(bool),
     /// String literal: `"hello"` (classified contextually during HIR lowering).
     StringLiteral(String),
-    /// Graph reference: `@name` or `@alias.member`. The payload encodes
-    /// qualification structurally — `Local` for bare `@name`, `Qualified`
-    /// for `@alias.member` (after the namespace-alias rewrite). Producers
-    /// never invent or interpret a flat-string separator.
+    /// Graph reference: `@name` or `@alias.member`. The [`ScopedName`]
+    /// payload encodes qualification structurally — an empty qualifier for
+    /// bare `@name`, the alias segments for `@alias.member`. Producers never
+    /// invent or interpret a flat-string separator.
     GraphRef(Spanned<ScopedName>),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
