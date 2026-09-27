@@ -56,34 +56,33 @@ pub(super) fn check_plot_entry(
     GraphcalError,
 > {
     let body = &entry.body;
-    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
     let owner = dag.require_bound_decl_identity(
         &entry.name,
-        entry_ctx.src,
+        ctx.src,
         crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
     )?;
-    let types = check_plot_encodings(&entry_ctx, &owner, body)?;
+    let types = check_plot_encodings(ctx, &owner, body)?;
     for field in &body.mark_properties {
         let LoweredPlotProperty::Mark(prop) = &field.property else {
             return Err(invalid_property(
-                &entry_ctx,
+                ctx,
                 field,
                 "a mark block",
                 &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
             ));
         };
-        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     for field in &body.properties {
         let LoweredPlotProperty::Plot(prop) = &field.property else {
             return Err(invalid_property(
-                &entry_ctx,
+                ctx,
                 field,
                 "a plot declaration",
                 &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
             ));
         };
-        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     Ok((owner, types))
 }
@@ -93,16 +92,15 @@ pub(super) fn check_figure_entry(
     dag: &crate::tir::typed::DagTIR,
     entry: &crate::ir::lower::FigureEntry,
 ) -> Result<(), GraphcalError> {
-    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
     let owner = dag.require_bound_decl_identity(
         &entry.name,
-        entry_ctx.src,
+        ctx.src,
         crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
     )?;
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
             return Err(invalid_property(
-                &entry_ctx,
+                ctx,
                 field,
                 "a figure declaration",
                 &format!(
@@ -119,7 +117,7 @@ pub(super) fn check_figure_entry(
         };
         if !prop.applies_to_figure() {
             return Err(invalid_property(
-                &entry_ctx,
+                ctx,
                 field,
                 "a figure declaration",
                 &format!(
@@ -134,7 +132,7 @@ pub(super) fn check_figure_entry(
                 ),
             ));
         }
-        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     Ok(())
 }
@@ -144,22 +142,21 @@ pub(super) fn check_layer_entry(
     dag: &crate::tir::typed::DagTIR,
     entry: &crate::ir::lower::LayerEntry,
 ) -> Result<(), GraphcalError> {
-    let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
     let owner = dag.require_bound_decl_identity(
         &entry.name,
-        entry_ctx.src,
+        ctx.src,
         crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
     )?;
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
             return Err(invalid_property(
-                &entry_ctx,
+                ctx,
                 field,
                 "a layer declaration",
                 &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
             ));
         };
-        check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
+        check_property_value(ctx, &owner, prop.name(), prop.value_type(), field)?;
     }
     Ok(())
 }
@@ -174,14 +171,9 @@ fn check_plot_references(
     let owners = dag
         .figures
         .iter()
-        .map(|f| ("figure", &f.name, &f.plot_names, &f.body_src))
-        .chain(
-            dag.layers
-                .iter()
-                .map(|l| ("layer", &l.name, &l.plot_names, &l.body_src)),
-        );
-    for (owner_kind, owner, plot_names, body_src) in owners {
-        let owner_ctx = ctx.for_body(body_src.resolve(ctx.src));
+        .map(|f| ("figure", &f.name, &f.plot_names))
+        .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
+    for (owner_kind, owner, plot_names) in owners {
         for (i, reference) in plot_names.iter().enumerate() {
             let is_known_plot = dag.plots.iter().any(|p| p.name == reference.value)
                 || dag.included_plots.iter().any(|p| p.name == reference.value);
@@ -198,14 +190,14 @@ fn check_plot_references(
                         owner_kind,
                         owner: owner.clone(),
                         name: reference.value.clone(),
-                        src: owner_ctx.src.clone(),
+                        src: ctx.src.clone(),
                         span: reference.span.into(),
                     },
                     |actual_kind| GraphcalError::CompositionReferencesNonPlot {
                         owner_kind,
                         actual_kind,
                         name: reference.value.clone(),
-                        src: owner_ctx.src.clone(),
+                        src: ctx.src.clone(),
                         span: reference.span.into(),
                     },
                 ));
@@ -215,7 +207,7 @@ fn check_plot_references(
                     owner_kind,
                     owner: owner.clone(),
                     name: reference.value.clone(),
-                    src: owner_ctx.src.clone(),
+                    src: ctx.src.clone(),
                     span: reference.span.into(),
                 });
             }

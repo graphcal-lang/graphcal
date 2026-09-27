@@ -637,22 +637,14 @@ fn resolve_declared_type_exprs(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ScopedName, ResolvedTypeExpr>, GraphcalError> {
     let mut resolved = HashMap::new();
-    for (name, type_ann, type_src) in consts
+    for (name, type_ann) in consts
         .iter()
-        .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src))
-        .chain(
-            params
-                .iter()
-                .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src)),
-        )
-        .chain(
-            nodes
-                .iter()
-                .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src)),
-        )
+        .map(|entry| (&entry.name, &entry.type_ann))
+        .chain(params.iter().map(|entry| (&entry.name, &entry.type_ann)))
+        .chain(nodes.iter().map(|entry| (&entry.name, &entry.type_ann)))
     {
         cancellation.checkpoint()?;
-        let ty = resolve_hir_type_expr(&type_ann.type_expr, type_src.resolve(src), module_ctx)?;
+        let ty = resolve_hir_type_expr(&type_ann.type_expr, src, module_ctx)?;
         resolved.insert(name.clone(), ty);
     }
     Ok(resolved)
@@ -1241,31 +1233,18 @@ fn take_declaration_domain_bounds(
 ) -> HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>> {
     consts
         .iter_mut()
-        .map(|entry| {
-            (
-                &entry.name,
-                &entry.declaration_owner,
-                &mut entry.type_ann,
-                entry.type_src.resolve(src),
-            )
-        })
-        .chain(params.iter_mut().map(|entry| {
-            (
-                &entry.name,
-                &entry.declaration_owner,
-                &mut entry.type_ann,
-                entry.type_src.resolve(src),
-            )
-        }))
-        .chain(nodes.iter_mut().map(|entry| {
-            (
-                &entry.name,
-                &entry.declaration_owner,
-                &mut entry.type_ann,
-                entry.type_src.resolve(src),
-            )
-        }))
-        .filter_map(|(name, owner, annotation, signature_src)| {
+        .map(|entry| (&entry.name, &entry.declaration_owner, &mut entry.type_ann))
+        .chain(
+            params
+                .iter_mut()
+                .map(|entry| (&entry.name, &entry.declaration_owner, &mut entry.type_ann)),
+        )
+        .chain(
+            nodes
+                .iter_mut()
+                .map(|entry| (&entry.name, &entry.declaration_owner, &mut entry.type_ann)),
+        )
+        .filter_map(|(name, owner, annotation)| {
             let bounds = std::mem::take(&mut annotation.domain_bounds);
             (!bounds.is_empty()).then(|| {
                 (
@@ -1276,7 +1255,7 @@ fn take_declaration_domain_bounds(
                             kind: bound.kind,
                             value: bound.value,
                             span: bound.span,
-                            src: signature_src.clone(),
+                            src: src.clone(),
                         })
                         .collect(),
                 )
@@ -1307,13 +1286,12 @@ fn check_hir_body_policies(
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
 
     for entry in &dag.consts {
-        let body_src = entry.body_src.resolve(src);
         let key = dag.require_bound_decl_identity(
             &entry.name,
-            body_src,
+            src,
             DiagnosticAnchor::Source(entry.span),
         )?;
-        HirPolicyChecker { ctx, src: body_src }.check_expr(
+        HirPolicyChecker { ctx, src }.check_expr(
             &entry.expr,
             BodyPhase::CompileTime,
             local(&key),
@@ -1322,18 +1300,13 @@ fn check_hir_body_policies(
     check_domain_bound_policies(semantic, ctx)?;
     check_dynamic_unit_policies(semantic, ctx)?;
     for entry in &dag.nodes {
-        let body_src = entry.body_src.resolve(src);
         let key = dag.require_bound_decl_identity(
             &entry.name,
-            body_src,
+            src,
             DiagnosticAnchor::Source(entry.span),
         )?;
         entry.definition.formula().map_or(Ok(()), |expression| {
-            HirPolicyChecker { ctx, src: body_src }.check_expr(
-                expression,
-                BodyPhase::Runtime,
-                local(&key),
-            )
+            HirPolicyChecker { ctx, src }.check_expr(expression, BodyPhase::Runtime, local(&key))
         })?;
     }
     for entry in &dag.params {
@@ -1342,11 +1315,7 @@ fn check_hir_body_policies(
         };
         // Params are exempt from A10 (a rebinding importer is forced to
         // rebind the param too — V005 at the include site).
-        HirPolicyChecker {
-            ctx,
-            src: default.src.resolve(src),
-        }
-        .check_expr(&default.expr, BodyPhase::Runtime, false)?;
+        HirPolicyChecker { ctx, src }.check_expr(&default.expr, BodyPhase::Runtime, false)?;
     }
     check_sink_body_policies(dag, external_surface, ctx, src)
 }
@@ -1423,14 +1392,13 @@ fn check_sink_body_policies(
     let is_explicit_export =
         |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
     for entry in &dag.asserts {
-        let body_src = entry.body_src.resolve(src);
         let key = dag.require_bound_decl_identity(
             &entry.name,
-            body_src,
+            src,
             DiagnosticAnchor::Source(entry.span),
         )?;
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
-        let checker = HirPolicyChecker { ctx, src: body_src };
+        let checker = HirPolicyChecker { ctx, src };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => {
                 checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1451,10 +1419,7 @@ fn check_sink_body_policies(
         let body = &entry.body;
         let check_literals =
             !entry.name.is_qualified() && is_explicit_export(entry.name.member().as_str());
-        let checker = HirPolicyChecker {
-            ctx,
-            src: entry.body_src.resolve(src),
-        };
+        let checker = HirPolicyChecker { ctx, src };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
         }
@@ -1462,21 +1427,14 @@ fn check_sink_body_policies(
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
         }
     }
-    for (name, fields, body_src) in dag
+    for (name, fields) in dag
         .figures
         .iter()
-        .map(|entry| (&entry.name, &entry.fields, &entry.body_src))
-        .chain(
-            dag.layers
-                .iter()
-                .map(|entry| (&entry.name, &entry.fields, &entry.body_src)),
-        )
+        .map(|entry| (&entry.name, &entry.fields))
+        .chain(dag.layers.iter().map(|entry| (&entry.name, &entry.fields)))
     {
         let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
-        let checker = HirPolicyChecker {
-            ctx,
-            src: body_src.resolve(src),
-        };
+        let checker = HirPolicyChecker { ctx, src };
         for field in fields {
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
         }
@@ -1961,35 +1919,22 @@ pub(crate) fn rigid_dimension_view(
     let resolved = dag
         .consts
         .iter()
-        .map(|entry| {
-            (
-                &entry.name,
-                &entry.type_ann,
-                &entry.type_src,
-                &entry.declaration_owner,
-            )
-        })
-        .chain(dag.params.iter().map(|entry| {
-            (
-                &entry.name,
-                &entry.type_ann,
-                &entry.type_src,
-                &entry.declaration_owner,
-            )
-        }))
-        .chain(dag.nodes.iter().map(|entry| {
-            (
-                &entry.name,
-                &entry.type_ann,
-                &entry.type_src,
-                &entry.declaration_owner,
-            )
-        }))
-        .filter(|(_, _, _, owner)| *owner == dag_id)
-        .map(|(name, annotation, type_src, _)| {
+        .map(|entry| (&entry.name, &entry.type_ann, &entry.declaration_owner))
+        .chain(
+            dag.params
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann, &entry.declaration_owner)),
+        )
+        .chain(
+            dag.nodes
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann, &entry.declaration_owner)),
+        )
+        .filter(|(_, _, owner)| *owner == dag_id)
+        .map(|(name, annotation, _)| {
             type_expr::resolve_hir_type_expr_with_project_types(
                 &annotation.type_expr,
-                type_src.resolve(src),
+                src,
                 &rigid_types,
             )
             .map(|resolved| (name.clone(), resolved))

@@ -726,7 +726,6 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
         if let Some(binding) = edge.value_bindings.get(&template_port) {
             entry.default = Some(crate::ir::lower::ParamDefault {
                 expr: binding.clone(),
-                src: crate::ir::lower::BodySource::own(),
             });
         }
     }

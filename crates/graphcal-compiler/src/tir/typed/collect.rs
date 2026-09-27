@@ -44,22 +44,20 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
         .iter()
         .filter_map(|entry| entry.default.as_ref().map(|default| (entry, default)))
         .map(|(entry, default)| {
-            let entry_src = default.src.resolve(src);
             Ok((
                 dag.require_bound_decl_identity(
                     &entry.name,
-                    entry_src,
+                    src,
                     DiagnosticAnchor::Source(entry.span),
                 )?,
                 collect_unit_names(&default.expr),
             ))
         })
         .chain(dag.nodes.iter().map(|entry| {
-            let entry_src = entry.body_src.resolve(src);
             Ok((
                 dag.require_bound_decl_identity(
                     &entry.name,
-                    entry_src,
+                    src,
                     DiagnosticAnchor::Source(entry.span),
                 )?,
                 entry
@@ -131,7 +129,6 @@ pub(super) fn collect_resolved_dag_dependencies(
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
-        let body_src = entry.body_src.resolve(src);
         let key = ResolvedDeclName::from_def(
             entry.declaration_owner.clone(),
             entry.name.member().clone(),
@@ -144,7 +141,7 @@ pub(super) fn collect_resolved_dag_dependencies(
             let kind = ctx
                 .resolver
                 .decl_symbol_kind(graph_ref)
-                .map_err(|err| module_resolve_error(&err, body_src, entry.span))?;
+                .map_err(|err| module_resolve_error(&err, src, entry.span))?;
             if kind.is_const() {
                 deps.const_refs.insert(graph_ref.clone());
             }
@@ -321,10 +318,8 @@ pub(super) fn resolve_expected_fail_keys(
             let ParsedExpectedFailMetadata {
                 expected,
                 resolution_owner,
-                src: metadata_src,
                 attribute_span,
             } = metadata;
-            let metadata_src = metadata_src.resolve(src).clone();
             let resolved = match expected {
                 ExpectedFail::All => ExpectedFail::All,
                 ExpectedFail::Variants(keys) => {
@@ -346,7 +341,7 @@ pub(super) fn resolve_expected_fail_keys(
                                                 &variant,
                                             )
                                             .map_err(|err| {
-                                                module_resolve_error(&err, &metadata_src, span)
+                                                module_resolve_error(&err, src, span)
                                             })?;
                                         Ok(crate::assertion_expectation::ExpectedFailKeyPart::resolved(
                                             resolved, span,
@@ -372,7 +367,7 @@ pub(super) fn resolve_expected_fail_keys(
                 assert_name,
                 ResolvedExpectedFailMetadata {
                     expected: resolved,
-                    src: metadata_src,
+                    src: src.clone(),
                     attribute_span,
                 },
             ))

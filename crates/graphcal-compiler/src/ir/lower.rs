@@ -105,33 +105,7 @@ pub struct LoweredPlotField {
     pub value: crate::hir::CheckedExpr,
 }
 
-/// Source provenance for a declaration body's spans.
-///
-/// Semantic include instances retain independently checked template bodies,
-/// so ordinary entries resolve against the ambient source for their DAG.
-#[derive(Debug, Clone, Default)]
-pub struct BodySource(Option<NamedSource<Arc<String>>>);
-
-impl BodySource {
-    /// The declaration belongs to the file being compiled; its span indexes
-    /// into the ambient `src` threaded through the pipeline.
-    #[must_use]
-    pub(crate) const fn own() -> Self {
-        Self(None)
-    }
-
-    /// Resolve the source the span should render against, falling back to the
-    /// ambient `default` source for declarations native to the compiled file.
-    #[must_use]
-    pub(crate) fn resolve<'a>(
-        &'a self,
-        default: &'a NamedSource<Arc<String>>,
-    ) -> &'a NamedSource<Arc<String>> {
-        self.0.as_ref().unwrap_or(default)
-    }
-}
-
-/// Unresolved expected-fail metadata with the scope and source that authored it.
+/// Unresolved expected-fail metadata with the scope that authored it.
 ///
 /// Include assembly may rename the assertion key, but the attribute's index
 /// paths and spans remain owned by the file where the attribute was written.
@@ -139,7 +113,6 @@ impl BodySource {
 pub(crate) struct ParsedExpectedFailMetadata {
     pub(crate) expected: ParsedExpectedFail,
     pub(crate) resolution_owner: crate::dag_id::DagId,
-    pub(crate) src: BodySource,
     pub(crate) attribute_span: Span,
 }
 
@@ -152,19 +125,12 @@ pub struct ConstEntry {
     pub type_ann: crate::hir::TypeAnnotation,
     pub(crate) expr: crate::hir::CheckedExpr,
     pub span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(crate) type_src: BodySource,
-    /// Source of the body expression and its spans.
-    pub(crate) body_src: BodySource,
 }
 
-/// A lowered parameter default and the source that owns its spans.
+/// A lowered parameter default.
 #[derive(Debug, Clone)]
 pub struct ParamDefault {
     pub expr: crate::hir::CheckedExpr,
-    /// An include binding is importer-owned even when the signature is
-    /// producer-owned.
-    pub(crate) src: BodySource,
 }
 
 /// A param declaration with type annotation and an atomic lowered default.
@@ -176,8 +142,6 @@ pub struct ParamEntry {
     pub type_ann: crate::hir::TypeAnnotation,
     pub default: Option<ParamDefault>,
     pub span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(crate) type_src: BodySource,
     /// Include overrides whose nominal dependencies must be checked after
     /// canonical type inference.
     pub(crate) override_reconciliations:
@@ -193,10 +157,6 @@ pub struct NodeEntry {
     pub type_ann: crate::hir::TypeAnnotation,
     pub definition: crate::hir::node_definition::NodeDefinition,
     pub span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(crate) type_src: BodySource,
-    /// Source of the body expression and its spans.
-    pub(crate) body_src: BodySource,
 }
 
 /// An assert declaration with lowered body.
@@ -207,8 +167,6 @@ pub struct AssertEntry {
     pub(crate) declaration_owner: crate::dag_id::DagId,
     pub body: crate::hir::CheckedAssertBody,
     pub span: Span,
-    /// Source of the assertion body and its spans.
-    pub(crate) body_src: BodySource,
 }
 
 /// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -226,10 +184,6 @@ pub struct UnfrozenConstEntry {
     /// Module scope for the declaration body expression.
     pub(super) body_resolution_owner: crate::dag_id::DagId,
     pub(super) span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(super) type_src: BodySource,
-    /// Source of the body expression and its spans.
-    pub(super) body_src: BodySource,
 }
 
 /// A syntactic parameter default awaiting lowering at [`UnfrozenIR::freeze`].
@@ -238,7 +192,6 @@ pub(super) struct UnfrozenParamDefault {
     pub(super) expr: Expr,
     /// Module scope used to resolve the default expression.
     pub(super) resolution_owner: crate::dag_id::DagId,
-    pub(super) src: BodySource,
 }
 
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
@@ -251,8 +204,6 @@ pub struct UnfrozenParamEntry {
     pub(super) type_resolution_owner: crate::dag_id::DagId,
     pub(super) default: Option<UnfrozenParamDefault>,
     pub(super) span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(super) type_src: BodySource,
     /// Include overrides awaiting canonical typed dependency checking.
     pub(super) override_reconciliations:
         Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
@@ -270,10 +221,6 @@ pub struct UnfrozenNodeEntry {
     /// Module scope for the declaration body expression.
     pub(super) body_resolution_owner: crate::dag_id::DagId,
     pub(super) span: Span,
-    /// Source of the type annotation and declaration span.
-    pub(super) type_src: BodySource,
-    /// Source of the body expression and its spans.
-    pub(super) body_src: BodySource,
 }
 
 /// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -285,8 +232,6 @@ pub struct UnfrozenAssertEntry {
     /// Module scope for the assertion body expression(s).
     pub(super) body_resolution_owner: crate::dag_id::DagId,
     pub(super) span: Span,
-    /// Source of the assertion body and its spans.
-    pub(super) body_src: BodySource,
 }
 
 /// A plot declaration with lowered body.
@@ -297,8 +242,6 @@ pub struct PlotEntry {
     pub mark_type: crate::syntax::ast::MarkType,
     /// Strictly lowered semantic body.
     pub body: LoweredPlotBody,
-    /// Source of every expression in the plot body.
-    pub(crate) body_src: BodySource,
     /// Whether this plot renders standalone when its file is the entry
     /// point. `true` unless the declaration carries `#[hidden]` (#847).
     pub displayed: bool,
@@ -344,7 +287,6 @@ pub(super) struct UnfrozenDynamicUnitScaleEntry {
     pub(super) declared_dimension: Dimension,
     pub(super) base_unit_dimension: Dimension,
     pub(super) span: Span,
-    pub(super) src: BodySource,
 }
 
 /// A plot requested by an include brace list item (#847).
@@ -364,8 +306,6 @@ pub struct FigureEntry {
     pub plot_names: Vec<Spanned<ScopedName>>,
     /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
-    /// Source of every field expression.
-    pub(crate) body_src: BodySource,
 }
 
 /// A layer declaration with lowered fields.
@@ -376,8 +316,6 @@ pub struct LayerEntry {
     pub plot_names: Vec<Spanned<ScopedName>>,
     /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
-    /// Source of every field expression.
-    pub(crate) body_src: BodySource,
 }
 
 /// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -388,8 +326,6 @@ pub struct UnfrozenPlotEntry {
     /// Module scope for plot field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
-    /// Source of every plot expression.
-    pub(super) body_src: BodySource,
     /// Whether this plot renders standalone (no `#[hidden]`).
     pub(super) displayed: bool,
 }
@@ -401,8 +337,6 @@ pub struct UnfrozenFigureEntry {
     pub(super) decl: FigureDecl,
     /// Module scope for figure field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
-    /// Source of every figure field expression.
-    pub(super) body_src: BodySource,
 }
 
 /// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -412,8 +346,6 @@ pub struct UnfrozenLayerEntry {
     pub(super) decl: LayerDecl,
     /// Module scope for layer field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
-    /// Source of every layer field expression.
-    pub(super) body_src: BodySource,
 }
 
 /// Intermediate Representation produced by [`lower`].
@@ -980,8 +912,6 @@ fn build_ir_from_resolved(
                 expr: entry.expr,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                type_src: BodySource::own(),
-                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -996,7 +926,6 @@ fn build_ir_from_resolved(
             let default = entry.default_expr.map(|expr| UnfrozenParamDefault {
                 expr,
                 resolution_owner: dag_id.clone(),
-                src: BodySource::own(),
             });
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
@@ -1005,7 +934,6 @@ fn build_ir_from_resolved(
                 type_resolution_owner: dag_id.clone(),
                 default,
                 span: entry.span,
-                type_src: BodySource::own(),
                 override_reconciliations: Vec::new(),
             })
         })
@@ -1026,8 +954,6 @@ fn build_ir_from_resolved(
                 definition: entry.definition,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                type_src: BodySource::own(),
-                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1045,7 +971,6 @@ fn build_ir_from_resolved(
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                body_src: BodySource::own(),
             })
             .collect(),
         plots: resolved
@@ -1058,7 +983,6 @@ fn build_ir_from_resolved(
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
-                    body_src: BodySource::own(),
                     displayed,
                 }
             })
@@ -1070,7 +994,6 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
-                body_src: BodySource::own(),
             })
             .collect(),
         layers: resolved
@@ -1080,7 +1003,6 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
-                body_src: BodySource::own(),
             })
             .collect(),
         included_plots: Vec::new(),
@@ -1110,7 +1032,6 @@ fn build_ir_from_resolved(
                     ParsedExpectedFailMetadata {
                         expected: collected.expected,
                         resolution_owner: dag_id.clone(),
-                        src: BodySource::own(),
                         attribute_span: collected.attribute_span,
                     },
                 )

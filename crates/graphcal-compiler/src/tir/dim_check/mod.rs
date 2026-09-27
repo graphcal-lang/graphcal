@@ -289,10 +289,8 @@ struct DimCheckContext<'a> {
 }
 
 impl<'a> DimCheckContext<'a> {
-    /// Re-anchor diagnostics on the source whose bytes a declaration body
-    /// indexes. Canonical template DAGs are checked against their definition
-    /// source; semantic instances reuse those checked bodies without
-    /// reinterpreting spans in the importer.
+    /// Re-anchor diagnostics on the source whose bytes a dynamic unit scale
+    /// expression indexes (carried by `DynamicUnitScaleEntry::src`).
     const fn for_body(self, body_src: &'a NamedSource<Arc<String>>) -> Self {
         Self {
             src: body_src,
@@ -371,39 +369,36 @@ fn validate_declared_shape(
 
 /// Check that a declaration's expression type matches its declared type annotation.
 fn check_decl_expr_type(
-    body_ctx: &DimCheckContext<'_>,
+    ctx: &DimCheckContext<'_>,
     name: &crate::syntax::module_name::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
-    annotation_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let declared =
-        body_ctx
-            .declared_types
-            .get(name)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("no declared type recorded for `{name}`"),
-                src: annotation_src.clone(),
-                span: (*type_ann_span).into(),
-            })?;
-    let identity = body_ctx.dag.require_bound_decl_identity(
+    let declared = ctx
+        .declared_types
+        .get(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("no declared type recorded for `{name}`"),
+            src: ctx.src.clone(),
+            span: (*type_ann_span).into(),
+        })?;
+    let identity = ctx.dag.require_bound_decl_identity(
         name,
-        body_ctx.src,
+        ctx.src,
         DiagnosticAnchor::Source(*type_ann_span),
     )?;
-    if body_ctx.dag.todo(&identity).is_some() {
+    if ctx.dag.todo(&identity).is_some() {
         // The explicit declaration type is the entire contract; there is no
         // formula to infer or expression fact to fabricate.
         return Ok(());
     }
-    let hir_expr =
-        body_ctx
-            .hir_expr_for_decl(name)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("value declaration record missing while checking `{name}`"),
-                src: body_ctx.src.clone(),
-                span: (*type_ann_span).into(),
-            })?;
-    if body_ctx
+    let hir_expr = ctx
+        .hir_expr_for_decl(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("value declaration record missing while checking `{name}`"),
+            src: ctx.src.clone(),
+            span: (*type_ann_span).into(),
+        })?;
+    if ctx
         .dag
         .semantic_instances()
         .iter()
@@ -412,44 +407,44 @@ fn check_decl_expr_type(
     {
         // Projection bodies are generated from the already checked instance
         // interface. Retain that proof rather than treating them as unchecked.
-        return body_ctx.expression_facts.record(
+        return ctx.expression_facts.record(
             hir_expr,
             &InferredType::from(declared),
-            body_ctx.dag,
-            body_ctx.tir,
-            body_ctx.src,
+            ctx.dag,
+            ctx.tir,
+            ctx.src,
         );
     }
-    let owner = body_ctx.dag.require_bound_decl_identity(
+    let owner = ctx.dag.require_bound_decl_identity(
         name,
-        body_ctx.src,
+        ctx.src,
         DiagnosticAnchor::Source(*type_ann_span),
     )?;
     let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         hir_expr,
         Some(&owner),
-        body_ctx.declared_types,
-        body_ctx.dag,
-        body_ctx.tir,
-        body_ctx.registry,
-        body_ctx.builtin_fns,
-        body_ctx.src,
-        body_ctx.cancellation,
-        body_ctx.expression_facts.clone(),
+        ctx.declared_types,
+        ctx.dag,
+        ctx.tir,
+        ctx.registry,
+        ctx.builtin_fns,
+        ctx.src,
+        ctx.cancellation,
+        ctx.expression_facts.clone(),
     )?;
-    let matches = body_ctx.dag.resolved_decl_types.get(name).map_or_else(
+    let matches = ctx.dag.resolved_decl_types.get(name).map_or_else(
         || types_match(declared, &inferred),
         |resolved| resolved_type_matches_inferred(resolved, &inferred),
     );
     if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(declared, body_ctx.registry),
-            inferred: format_inferred_type(&inferred, body_ctx.registry),
-            src: annotation_src.clone(),
+            declared: format_declared_type(declared, ctx.registry),
+            inferred: format_inferred_type(&inferred, ctx.registry),
+            src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         });
     }
-    check_ineffective_conversions(hir_expr, true, body_ctx.src)?;
+    check_ineffective_conversions(hir_expr, true, ctx.src)?;
     Ok(())
 }
 
@@ -1175,24 +1170,23 @@ pub fn collect_override_dependency_summary_with_cancellation(
                 continue;
             };
             cancellation.checkpoint()?;
-            let body_src = default.src.resolve(src);
             let owner = dag.require_bound_decl_identity(
                 &param.name,
-                body_src,
+                src,
                 DiagnosticAnchor::Source(param.span),
             )?;
             let record = facts
                 .get(default.expr.id().map_err(|error| {
                     GraphcalError::internal_error(
                         error.to_string(),
-                        body_src,
+                        src,
                         DiagnosticAnchor::Source(default.expr.span),
                     )
                 })?)
                 .map_err(|error| {
                     GraphcalError::internal_error(
                         error.to_string(),
-                        body_src,
+                        src,
                         DiagnosticAnchor::Source(default.expr.span),
                     )
                 })?;
@@ -1313,17 +1307,11 @@ pub fn check_external_value_expr_type(
 fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.params {
         ctx.checkpoint()?;
-        let annotation_src = entry.type_src.resolve(ctx.src);
-        validate_declared_shape(
-            &ctx.for_body(annotation_src),
-            &entry.name,
-            entry.type_ann.span,
-        )?;
-        let Some(default) = entry.default.as_ref() else {
+        validate_declared_shape(ctx, &entry.name, entry.type_ann.span)?;
+        if entry.default.is_none() {
             continue;
-        };
-        let body_ctx = ctx.for_body(default.src.resolve(ctx.src));
-        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
+        }
+        check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
     }
     Ok(())
 }
@@ -1352,29 +1340,15 @@ fn check_dimensions_dag(
         src,
     };
 
-    // Each canonical source declaration is checked against the provenance
-    // carried by its own annotation and body.
     for entry in &dag.consts {
         ctx.checkpoint()?;
-        let annotation_src = entry.type_src.resolve(src);
-        validate_declared_shape(
-            &ctx.for_body(annotation_src),
-            &entry.name,
-            entry.type_ann.span,
-        )?;
-        let body_ctx = ctx.for_body(entry.body_src.resolve(src));
-        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
+        validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
         ctx.checkpoint()?;
-        let annotation_src = entry.type_src.resolve(src);
-        validate_declared_shape(
-            &ctx.for_body(annotation_src),
-            &entry.name,
-            entry.type_ann.span,
-        )?;
-        let body_ctx = ctx.for_body(entry.body_src.resolve(src));
-        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
+        validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
     }
     check_param_defaults(&ctx)?;
 
@@ -1383,15 +1357,13 @@ fn check_dimensions_dag(
 
     for entry in &dag.asserts {
         ctx.checkpoint()?;
-        let body_src = entry.body_src.resolve(src);
-        let entry_ctx = ctx.for_body(body_src);
-        let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
+        let body = ctx.hir_assert_body(&entry.name, entry.span)?;
         let owner = dag.require_bound_decl_identity(
             &entry.name,
-            body_src,
+            src,
             DiagnosticAnchor::Source(entry.span),
         )?;
-        let shape = check_hir_assert_body(&entry_ctx, &owner, body, entry.span)?;
+        let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&entry.name) {
             validate_expected_fail(
                 &metadata.expected,
@@ -1404,7 +1376,7 @@ fn check_dimensions_dag(
         // inside an assert body is display-effective.
         match body {
             crate::hir::expr::AssertBody::Expr(e) => {
-                check_ineffective_conversions(e, false, body_src)?;
+                check_ineffective_conversions(e, false, src)?;
             }
             crate::hir::expr::AssertBody::Tolerance {
                 actual,
@@ -1412,9 +1384,9 @@ fn check_dimensions_dag(
                 tolerance,
                 ..
             } => {
-                check_ineffective_conversions(actual, false, body_src)?;
-                check_ineffective_conversions(expected, false, body_src)?;
-                check_ineffective_conversions(tolerance, false, body_src)?;
+                check_ineffective_conversions(actual, false, src)?;
+                check_ineffective_conversions(expected, false, src)?;
+                check_ineffective_conversions(tolerance, false, src)?;
             }
         }
     }
@@ -1457,17 +1429,15 @@ enum ExpectedBound {
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     let dag = ctx.dag;
-    // Domain bounds are checked against their declaration's source provenance.
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| (&e.name, &e.type_src))
-        .chain(dag.params.iter().map(|e| (&e.name, &e.type_src)))
-        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_src)));
+        .map(|e| &e.name)
+        .chain(dag.params.iter().map(|e| &e.name))
+        .chain(dag.nodes.iter().map(|e| &e.name));
 
-    for (name, signature_provenance) in decl_iter {
-        let body_src = signature_provenance.resolve(ctx.src);
-        let key = dag.require_bound_decl_identity(name, body_src, DiagnosticAnchor::WholeFile)?;
+    for name in decl_iter {
+        let key = dag.require_bound_decl_identity(name, ctx.src, DiagnosticAnchor::WholeFile)?;
         let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
@@ -1498,11 +1468,11 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
                 ctx.tir,
                 ctx.registry,
                 ctx.builtin_fns,
-                body_src,
+                ctx.src,
                 ctx.cancellation,
                 ctx.expression_facts.clone(),
             )?;
-            check_one_bound(name, bound, &inferred, &expected, ctx.registry, body_src)?;
+            check_one_bound(name, bound, &inferred, &expected, ctx.registry, ctx.src)?;
         }
     }
 
