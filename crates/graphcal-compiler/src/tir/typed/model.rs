@@ -1551,6 +1551,37 @@ impl TirBuilder {
         }
     }
 
+    /// Merge the extern signatures a same-file DAG body declared with its
+    /// own `import plugin` blocks.
+    ///
+    /// Unlike [`Self::insert_extern_function`] (which installs signatures an
+    /// already-checked dependency published), these are fresh source
+    /// declarations, so they follow the same rule as several declarations in
+    /// one body: a structurally equivalent redeclaration is accepted and a
+    /// conflicting one is a user-facing diagnostic at the later declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphcalError::InvalidExternSignature`] when a declaration
+    /// conflicts with an already-merged signature of the same plugin function.
+    pub fn merge_declared_extern_functions(
+        &mut self,
+        hir: &crate::ir::lower::HirDag,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        // Deterministic conflict reporting: earliest declaration first.
+        let mut declared: Vec<_> = hir.extern_functions().iter().collect();
+        declared.sort_by_key(|(_, function)| function.decl_span.offset());
+        declared.into_iter().try_for_each(|(key, function)| {
+            crate::ir::extern_fns::merge_extern_function(
+                &mut self.extern_functions,
+                key.clone(),
+                function.clone(),
+                src,
+            )
+        })
+    }
+
     /// Finalize project assembly into an immutable, structurally valid TIR.
     #[must_use]
     pub fn finish(self) -> TIR {

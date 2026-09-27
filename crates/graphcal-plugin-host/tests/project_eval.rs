@@ -300,6 +300,98 @@ fn missing_plugin_file_is_reported_at_the_import() {
     assert!(reason.contains("cannot read"), "reason: {reason}");
 }
 
+/// A dag body that imports the lerp plugin and exposes one call through
+/// `@inner()::mid`.
+const NESTED_LERP_SOURCE: &str = r#"
+dag inner {
+    import plugin "plugins/demo.wasm" as demo {
+        fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+    }
+    pub node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
+}
+node y: Length = @inner()::mid;
+"#;
+
+#[test]
+fn wasm_plugin_imported_inside_a_dag_body_evaluates() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = eval_project_with_plugin(
+        dir.path(),
+        NESTED_LERP_SOURCE,
+        Some(("plugins/demo.wasm", lerp_plugin())),
+    )
+    .unwrap();
+    let value = value_for(&result, "y");
+    assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+}
+
+#[test]
+fn missing_plugin_file_inside_a_dag_body_is_reported_at_the_import() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = eval_project_with_plugin(dir.path(), NESTED_LERP_SOURCE, None).unwrap_err();
+    let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, span, .. }) = err else {
+        panic!("expected PluginLoadFailed, got {err:?}");
+    };
+    assert!(reason.contains("cannot read"), "reason: {reason}");
+    let import_path = NESTED_LERP_SOURCE.find("\"plugins/demo.wasm\"").unwrap();
+    assert_eq!(span.offset(), import_path);
+}
+
+#[test]
+fn dag_body_redeclaring_a_plugin_function_with_another_signature_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = format!(
+        r#"{LERP_IMPORT}
+dag inner {{
+    import plugin "plugins/demo.wasm" as demo {{
+        fn lerp(a: Length, b: Length, t: Dimensionless) -> Length;
+    }}
+    pub node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
+}}
+node y: Length = @inner()::mid;
+"#
+    );
+    let err = eval_project_with_plugin(
+        dir.path(),
+        &source,
+        Some(("plugins/demo.wasm", lerp_plugin())),
+    )
+    .unwrap_err();
+    let CompileError::Eval(GraphcalError::InvalidExternSignature { message, span, .. }) = err
+    else {
+        panic!("expected InvalidExternSignature, got {err:?}");
+    };
+    assert!(message.contains("different signature"), "{message}");
+    let nested_decl = source.find("fn lerp(a: Length").unwrap();
+    assert_eq!(span.offset(), nested_decl);
+}
+
+#[test]
+fn host_registry_plugin_imported_inside_a_dag_body_evaluates() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+dag inner {
+    import plugin "graphcal:demo" as native {
+        fn inverse<D: Dim>(x: D) -> D^-1;
+    }
+    pub node a: Dimensionless = native::inverse(4.0);
+}
+node y: Dimensionless = @inner()::a;
+"#;
+    let root = dir.path().join("main.gcl");
+    std::fs::write(&root, source).unwrap();
+
+    let fs = RealFileSystem::default();
+    let project = load_project(&root, None, &fs).unwrap();
+    let registry = graphcal_eval::host_fns::demo_registry();
+    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
+        .unwrap();
+
+    assert!((value_for(&result, "y").si_value().unwrap() - 0.25).abs() < 1e-12);
+}
+
 #[test]
 fn plugin_paths_may_not_leave_the_project_root() {
     let dir = tempfile::tempdir().unwrap();
