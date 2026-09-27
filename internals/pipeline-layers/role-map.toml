@@ -137,6 +137,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["import_cycle"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["import_cycle", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["datetime_literal"]
 role = "contracts"
 
@@ -1584,6 +1594,21 @@ role = "checking"
 [[module]]
 package = "eval"
 path = ["loader", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["loader", "build"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["loader", "build", "tests"]
+role = "loading"
+
+[[module]]
+package = "eval"
+path = ["loader", "source_snapshot"]
 role = "loading"
 
 [[module]]

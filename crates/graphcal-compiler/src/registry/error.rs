@@ -1259,7 +1259,9 @@ pub enum GraphcalError {
         code(graphcal::M001),
         help("files cannot import each other in a cycle")
     )]
-    CircularImport { cycle: String },
+    CircularImport {
+        cycle: crate::import_cycle::ImportCycle,
+    },
 
     #[error("imported file not found: {path}")]
     #[diagnostic(code(graphcal::M002))]

@@ -239,14 +239,15 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
 /// host signatures, or construct TIR.
 pub(in crate::project_compiler) fn lower_file_to_hir(
     semantic_context: ProjectSemanticContext<'_>,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
-    file_src: &NamedSource<Arc<String>>,
-    file_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    loaded_file: &crate::loader::LoadedFile,
     ctx: ImportContext<'_>,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
     cancellation.checkpoint()?;
+    let file_dag_id = loaded_file.dag_id();
+    let file_src = loaded_file.named_source();
+    let file_ast = loaded_file.ast();
     let ProjectSemanticContext {
         project,
         module_resolver,
@@ -323,8 +324,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     )?;
     let inline_dags = lower_inline_dag_modules(
         project,
-        file_dag_id,
-        file_src,
+        loaded_file,
         &frontend_registry,
         module_artifacts,
         module_resolver,
@@ -418,22 +418,16 @@ pub(super) fn module_resolve_compile_error(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline DAG HIR lowering threads project interfaces and template state"
-)]
 fn lower_inline_dag_modules<'a>(
     project: &'a crate::loader::LoadedProject,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
-    file_src: &NamedSource<Arc<String>>,
+    loaded_file: &crate::loader::LoadedFile,
     parent_registry: &Registry,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
-    let loaded_file = &project.files()[file_dag_id];
-
+    let file_src = loaded_file.named_source();
     loaded_file
         .inline_dags()
         .iter()
@@ -443,6 +437,7 @@ fn lower_inline_dag_modules<'a>(
             compile_loaded_dag_module_ir(
                 parent_registry,
                 project,
+                loaded_file,
                 loaded_dag,
                 dag_body,
                 file_src,
@@ -463,6 +458,7 @@ fn lower_inline_dag_modules<'a>(
 fn compile_loaded_dag_module_ir<'a>(
     parent_registry: &Registry,
     project: &'a crate::loader::LoadedProject,
+    parent_loaded: &crate::loader::LoadedFile,
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
@@ -481,7 +477,6 @@ fn compile_loaded_dag_module_ir<'a>(
             cancellation,
         );
     }
-    let parent_loaded = &project.files()[loaded_dag.parent_dag_id()];
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         dag_body,
         loaded_dag.parent_dag_id(),
@@ -1363,7 +1358,7 @@ fn elaborate_include_instances(
             };
             imports::process_file_body_declarations(
                 project,
-                dep_dag_id,
+                dep_loaded,
                 module_artifacts,
                 module_resolver,
                 &mut body_ctx,

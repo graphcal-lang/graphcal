@@ -63,7 +63,7 @@ fn lower_single_file_to_hir(
 
     imports::process_file_body_declarations(
         project,
-        file_dag_id,
+        loaded_file,
         module_artifacts,
         module_resolver,
         &mut ctx,
@@ -76,9 +76,7 @@ fn lower_single_file_to_hir(
             module_resolver,
             module_templates,
         },
-        file_dag_id,
-        file_src,
-        loaded_file.ast(),
+        loaded_file,
         ctx,
         module_artifacts,
         cancellation,

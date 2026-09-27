@@ -25,6 +25,7 @@ pub mod finite_value;
 pub(crate) mod fresh_identity;
 pub mod function_signature;
 pub mod hir;
+pub mod import_cycle;
 pub mod ir;
 pub mod nat;
 pub mod node_definition;
