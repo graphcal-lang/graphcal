@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::registry::prelude::{
-    PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
+    PRELUDE_BUILTIN_TYPE_NAMES, prelude_dimension_names, prelude_unit_names,
 };
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::names::NameAtom;
@@ -78,7 +78,7 @@ pub fn validate_reserved_name(
 ) -> Result<(), ReservedNameError<'_>> {
     let reserved = match namespace {
         ReservedNameNamespace::Static => {
-            if PRELUDE_DIMENSION_NAMES.contains(&name.as_str()) {
+            if prelude_dimension_names().any(|prelude| prelude == name.as_str()) {
                 Some(ReservedName::PreludeDimension)
             } else if PRELUDE_BUILTIN_TYPE_NAMES.contains(&name.as_str()) {
                 Some(ReservedName::BuiltinType)
@@ -106,8 +106,8 @@ pub fn validate_reserved_name(
                 )
                 .then_some(ReservedName::ContextualCallable)
             }),
-        ReservedNameNamespace::Unit => PRELUDE_UNIT_NAMES
-            .contains(&name.as_str())
+        ReservedNameNamespace::Unit => prelude_unit_names()
+            .any(|prelude| prelude == name.as_str())
             .then_some(ReservedName::PreludeUnit),
     };
 
@@ -126,11 +126,8 @@ mod tests {
 
     #[test]
     fn each_namespace_rejects_its_complete_reserved_vocabulary() {
-        for name in PRELUDE_DIMENSION_NAMES
-            .iter()
-            .chain(PRELUDE_BUILTIN_TYPE_NAMES)
-        {
-            let atom = NameAtom::parse(*name).unwrap();
+        for name in prelude_dimension_names().chain(PRELUDE_BUILTIN_TYPE_NAMES.iter().copied()) {
+            let atom = NameAtom::parse(name).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
         }
         for scale in TimeScale::ALL {
@@ -141,8 +138,8 @@ mod tests {
             let atom = NameAtom::parse(name).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
         }
-        for name in PRELUDE_UNIT_NAMES {
-            let atom = NameAtom::parse(*name).unwrap();
+        for name in prelude_unit_names() {
+            let atom = NameAtom::parse(name).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Unit, &atom).is_err());
         }
         for constant in BuiltinConst::ALL {

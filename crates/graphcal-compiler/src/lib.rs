@@ -22,6 +22,7 @@ pub mod exact_rational;
 pub mod expression_id;
 pub mod expression_source;
 pub mod finite_value;
+pub(crate) mod fresh_identity;
 pub mod function_signature;
 pub mod hir;
 pub mod ir;

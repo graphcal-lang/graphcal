@@ -419,17 +419,17 @@ impl ProjectTypeStore {
         crate::registry::prelude::load_prelude(&mut builder)?;
         let registry = builder.try_build()?;
         let owner = crate::registry::prelude::prelude_dag_id();
-        for name in crate::registry::prelude::PRELUDE_DIMENSION_NAMES {
+        for name in crate::registry::prelude::prelude_dimension_names() {
             if let Some(dim) = registry.dimensions.get_dimension(name) {
                 self.dimensions.insert(
-                    ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(*name)),
+                    ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name)),
                     dim.clone(),
                 );
             }
         }
-        for name in crate::registry::prelude::PRELUDE_UNIT_NAMES {
+        for name in crate::registry::prelude::prelude_unit_names() {
             let reference = crate::syntax::dimension::UnitRef::local(
-                crate::syntax::dimension::UnitName::expect_valid(*name),
+                crate::syntax::dimension::UnitName::expect_valid(name),
             );
             if let Some(info) = registry.units.get_unit(&reference) {
                 self.units.insert(

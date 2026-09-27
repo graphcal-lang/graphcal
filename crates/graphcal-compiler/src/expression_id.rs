@@ -1,31 +1,15 @@
 //! Expression identity within one immutable lowering revision, independent of source coordinates.
 
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(Debug)]
-struct Revision;
+use crate::fresh_identity::FreshIdentity;
 
 /// One occurrence in a body revision. Holding the revision prevents address reuse.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExprId {
-    revision: Arc<Revision>,
+    revision: FreshIdentity,
     // A position in an in-memory body, not a language Nat or serialized identity.
     ordinal: usize,
-}
-
-impl PartialEq for ExprId {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.revision, &other.revision) && self.ordinal == other.ordinal
-    }
-}
-impl Eq for ExprId {}
-impl Hash for ExprId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        std::ptr::hash(Arc::as_ptr(&self.revision), state);
-        self.ordinal.hash(state);
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -34,14 +18,14 @@ pub struct UnassignedExprId;
 
 /// Construction-only allocator. Each allocator represents a fresh body revision.
 pub(crate) struct ExprIds {
-    revision: Arc<Revision>,
+    revision: FreshIdentity,
     next: usize,
 }
 
 impl Default for ExprIds {
     fn default() -> Self {
         Self {
-            revision: Arc::new(Revision),
+            revision: FreshIdentity::fresh(),
             next: 0,
         }
     }
@@ -55,7 +39,7 @@ impl ExprIds {
     pub(crate) fn allocate(&mut self) -> Result<ExprId, ExprIdExhausted> {
         let next = self.next.checked_add(1).ok_or(ExprIdExhausted)?;
         let id = ExprId {
-            revision: Arc::clone(&self.revision),
+            revision: self.revision.clone(),
             ordinal: self.next,
         };
         self.next = next;
@@ -86,7 +70,7 @@ mod tests {
     #[test]
     fn exhausted_allocator_does_not_publish_or_wrap() {
         let mut ids = ExprIds {
-            revision: Arc::new(Revision),
+            revision: FreshIdentity::fresh(),
             next: usize::MAX,
         };
         assert!(ids.allocate().is_err());

@@ -8,14 +8,14 @@
 //! [`FunctionSignature::try_new`], which enforces the binding-discipline
 //! invariants. Nothing downstream of this module handles manifest strings.
 
-use graphcal_compiler::dimension::{Dimension, Rational};
+use graphcal_compiler::dimension::{Dimension, PreludeBaseDimension, Rational};
 use graphcal_compiler::function_signature::{
     DimMonomial, FunctionParam, FunctionSignature, NamedDimMonomial, NamedParamKind,
     NamedResultKind, ParamKind, ResultKind, ScalarValueKind, SignatureError, StructFieldKind,
     StructShape, StructShapeField,
 };
 use graphcal_compiler::ratio::RatioError;
-use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
+use graphcal_compiler::registry::prelude::prelude_base_dimension;
 use graphcal_compiler::syntax::dimension::DimVarName;
 use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
 use graphcal_compiler::syntax::index_name::IndexVarName;
@@ -262,7 +262,7 @@ pub enum ConvertErrorKind {
     /// A fixed dimension is not one of the prelude base dimensions.
     #[error(
         "`{dim}` is not a prelude base dimension; manifests may only use: {}",
-        PRELUDE_BASE_DIMENSION_NAMES.join(", ")
+        PreludeBaseDimension::ALL_NAMES.join(", ")
     )]
     UnknownBaseDimension {
         /// The unknown dimension name.

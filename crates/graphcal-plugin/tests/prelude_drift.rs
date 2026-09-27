@@ -16,8 +16,8 @@
 
 use std::path::Path;
 
+use graphcal_compiler::dimension::PreludeBaseDimension;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::prelude::PRELUDE_BASE_DIMENSION_NAMES;
 use graphcal_compiler::syntax::plugin::PluginPath;
 use graphcal_eval::eval::CompileError;
 use graphcal_eval::host_fns::HostFunctionRegistry;
@@ -183,7 +183,7 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
         |function_name: &str, monomial: &graphcal_plugin_abi::ManifestMonomial| {
             for factor in &monomial.fixed {
                 assert!(
-                    PRELUDE_BASE_DIMENSION_NAMES.contains(&factor.dim.as_str()),
+                    PreludeBaseDimension::ALL_NAMES.contains(&factor.dim.as_str()),
                     "function `{function_name}` leaked non-base dimension `{}` into the manifest",
                     factor.dim
                 );
