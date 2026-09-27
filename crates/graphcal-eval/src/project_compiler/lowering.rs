@@ -787,12 +787,11 @@ fn process_dag_body_include_declarations<'a>(
     Ok(())
 }
 
-/// Install shared handles to each published module's own DAG bodies and units,
-/// and record this file root's source alias mappings.
+/// Install shared handles to each published module's own DAG bodies and units.
 ///
-/// Imports inside inline DAG bodies have their own lexical scopes and therefore
-/// do not appear in the file root's `module_map`. Their HIR calls already carry
-/// canonical targets, so all loaded dependency TIRs must be available here.
+/// HIR calls already carry canonical targets (including calls from imports
+/// inside inline DAG bodies, which have their own lexical scopes), so all loaded
+/// dependency TIRs must be available here.
 /// Visibility is enforced while HIR resolves each import edge; retaining private
 /// dependency DAGs internally is also necessary when a public DAG calls one of
 /// its private implementation children.
@@ -802,18 +801,9 @@ fn process_dag_body_include_declarations<'a>(
 /// bindings or injects values into its immutable body.
 pub(super) fn install_shared_module_artifacts(
     tir: &mut graphcal_compiler::tir::typed::TirBuilder,
-    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
-    for (alias, binding) in module_map {
-        // Imported aliases name their exact reusable DAG target. Included
-        // aliases are namespaces for an existing instance and are not callable.
-        if binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
-            tir.insert_module_alias(alias.clone(), binding.target.clone());
-        }
-    }
-
     for dep_eval in module_artifacts.values() {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its

@@ -20,7 +20,7 @@ use crate::registry::types::{
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{
@@ -1426,8 +1426,8 @@ pub struct CompetingExternFunctionDefinition {
 /// Mutable assembly state for a project TIR.
 ///
 /// Type resolution creates this builder with a mandatory root DAG. Project
-/// lowering may then add file-defined child DAGs, imported DAG modules, aliases,
-/// and the completed canonical project type store. [`Self::finish`] consumes the
+/// lowering may then add file-defined child DAGs, imported DAG modules, and the
+/// completed canonical project type store. [`Self::finish`] consumes the
 /// mutable shell and exposes an immutable [`TIR`].
 #[derive(Debug)]
 pub struct TirBuilder {
@@ -1435,7 +1435,6 @@ pub struct TirBuilder {
     project_types: Arc<ProjectTypeStore>,
     dags: DagRegistry,
     runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
-    module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     extern_functions:
         HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
@@ -1455,7 +1454,6 @@ impl TirBuilder {
             project_types,
             dags: DagRegistry::new(root),
             runtime_units: HashMap::new(),
-            module_aliases: HashMap::new(),
             extern_functions,
         }
     }
@@ -1517,15 +1515,6 @@ impl TirBuilder {
                 .map(|(name, info)| (name.clone(), Arc::clone(info))),
         );
         Ok(())
-    }
-
-    /// Bind a source module alias to its canonical callable DAG target.
-    pub fn insert_module_alias(
-        &mut self,
-        alias: ModuleAliasName,
-        target: crate::dag_id::DagId,
-    ) -> Option<crate::dag_id::DagId> {
-        self.module_aliases.insert(alias, target)
     }
 
     /// Merge one canonical extern signature without replacing an identical copy.
@@ -1593,7 +1582,6 @@ impl TirBuilder {
             project_types: self.project_types,
             dags: self.dags,
             runtime_units: self.runtime_units,
-            module_aliases: self.module_aliases,
             extern_functions: self.extern_functions,
         }
     }
@@ -1611,7 +1599,6 @@ pub struct TIR {
     pub(in crate::tir::typed) project_types: Arc<ProjectTypeStore>,
     pub(crate) dags: DagRegistry,
     pub(crate) runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
-    module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     pub(crate) extern_functions:
         HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
@@ -1866,34 +1853,6 @@ impl TIR {
     ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
     {
         self.root().build_declared_types(src)
-    }
-
-    /// Resolve a user-typed DAG call path to a canonical compiled module.
-    #[must_use]
-    pub fn lookup_call_target(&self, path: &crate::syntax::ast::ModulePath) -> Option<&DagTIR> {
-        let id = self.resolve_call_path(path)?;
-        self.dags.get(&id)
-    }
-
-    /// Build the canonical DAG identity that a source call path denotes.
-    #[must_use]
-    pub fn resolve_call_path(
-        &self,
-        path: &crate::syntax::ast::ModulePath,
-    ) -> Option<crate::dag_id::DagId> {
-        let head = path.segments[0].name.as_str();
-        match self.module_aliases.get(head) {
-            Some(imported) => Some(
-                path.segments
-                    .iter()
-                    .skip(1)
-                    .fold(imported.clone(), |owner, segment| {
-                        owner.child(segment.name.as_str())
-                    }),
-            ),
-            None if path.segments.len() == 1 => Some(self.root_dag_id().child(head)),
-            None => None,
-        }
     }
 }
 

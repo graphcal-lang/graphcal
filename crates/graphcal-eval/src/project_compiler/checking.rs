@@ -246,12 +246,7 @@ pub(super) fn check_hir_file(
         })?;
     }
 
-    lowering::install_shared_module_artifacts(
-        &mut tir,
-        &hir.module_map,
-        module_artifacts,
-        file_src,
-    )?;
+    lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
     let tir = finish_module_assembly(tir, module_artifacts, file_src, cancellation)?;
     let checked_execution_facts = execution_check::check_execution_facts_with_inherited(
         &tir,
