@@ -328,10 +328,9 @@ fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
 /// with D006, so offering all units keeps the list useful while mid-edit
 /// source (which often does not parse) cannot be type-inferred.
 fn complete_conversion_targets(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items: Vec<CompletionItem> = graphcal_compiler::registry::prelude::PRELUDE_UNIT_NAMES
-        .iter()
+    let mut items: Vec<CompletionItem> = graphcal_compiler::registry::prelude::prelude_unit_names()
         .map(|name| CompletionItem {
-            label: (*name).to_string(),
+            label: name.to_string(),
             kind: Some(CompletionItemKind::UNIT),
             detail: Some("prelude unit".to_string()),
             ..Default::default()

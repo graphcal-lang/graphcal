@@ -247,6 +247,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["fresh_identity"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["fresh_identity", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["expression_id"]
 role = "contracts"
 

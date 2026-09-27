@@ -1,5 +1,5 @@
 use crate::dag_id::DagId;
-use crate::dimension::{Dimension, PreludeBaseDimension};
+use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, UnitName};
 
@@ -12,61 +12,28 @@ use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
 /// [`DagId`] is that owner at the compiler boundary.
 const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
 
-/// Names of the prelude *base* dimensions, in registration order.
+/// Look up a prelude *base* dimension by name.
 ///
-/// This is the dimension alphabet of boundaries that carry dimensions
-/// structurally as base-dimension exponent vectors — in particular WASM
-/// plugin manifests (ABI v1, #25), which may reference these names and
+/// Returns the single-factor [`Dimension`] for one of
+/// [`PreludeBaseDimension::ALL_NAMES`], without needing a loaded registry, and
+/// `None` for every other name (including prelude-derived dimensions, which
+/// exist only through registry resolution).
+///
+/// The base dimensions are the dimension alphabet of boundaries that carry
+/// dimensions structurally as base-dimension exponent vectors — in particular
+/// WASM plugin manifests (ABI v1, #25), which may reference these names and
 /// nothing else. Every other dimension (prelude-derived or user-defined
 /// derived) reduces to exponents over base dimensions; user-defined *base*
 /// dimensions are scoped to their defining module and never cross such
 /// boundaries.
-pub const PRELUDE_BASE_DIMENSION_NAMES: [&str; PreludeBaseDimension::ALL.len()] =
-    PreludeBaseDimension::ALL_NAMES;
-
-/// Look up a prelude *base* dimension by name.
-///
-/// Returns the single-factor [`Dimension`] for one of
-/// [`PRELUDE_BASE_DIMENSION_NAMES`], without needing a loaded registry, and
-/// `None` for every other name (including prelude-derived dimensions, which
-/// exist only through registry resolution).
 #[must_use]
 pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
-    use crate::dimension::BaseDimId;
-
     PreludeBaseDimension::parse(name).map(|base| Dimension::base(BaseDimId::Prelude(base)))
 }
-
-/// Dimension names provided by the Graphcal prelude.
-pub(crate) const PRELUDE_DIMENSION_NAMES: &[&str] = &[
-    "Length",
-    "Time",
-    "Mass",
-    "Temperature",
-    "ElectricCurrent",
-    "Amount",
-    "LuminousIntensity",
-    "Angle",
-    "Velocity",
-    "Acceleration",
-    "Force",
-    "Energy",
-    "Power",
-    "Frequency",
-    "Pressure",
-    "Area",
-    "Volume",
-];
 
 /// Non-dimension type names provided by the Graphcal prelude.
 pub(crate) const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] =
     &["Dimensionless", "Bool", "Int", "Datetime", "Complex", "Key"];
-
-/// Unit names provided by the Graphcal prelude.
-pub const PRELUDE_UNIT_NAMES: &[&str] = &[
-    "m", "s", "kg", "K", "A", "mol", "cd", "rad", "km", "cm", "mm", "h", "min", "deg", "g", "N",
-    "kN", "J", "kJ", "W", "kW", "Pa", "kPa", "MPa", "Hz",
-];
 
 /// Canonical synthetic owner for Graphcal prelude symbols.
 #[must_use]
@@ -74,268 +41,199 @@ pub fn prelude_dag_id() -> DagId {
     DagId::root_in_package(PRELUDE_DAG_ID_SEGMENT, PRELUDE_DAG_ID_SEGMENT)
 }
 
-/// Base dimension IDs returned by `load_base_dimensions`.
+// Declaration table. Registration and the public name lists are generated
+// from these declarations, so they cannot drift apart.
+
+/// A prelude dimension as integer exponents over prelude base dimensions.
+type BaseFactors = &'static [(PreludeBaseDimension, i16)];
+
+const LENGTH: BaseFactors = &[(PreludeBaseDimension::Length, 1)];
+const TIME: BaseFactors = &[(PreludeBaseDimension::Time, 1)];
+const MASS: BaseFactors = &[(PreludeBaseDimension::Mass, 1)];
+const ANGLE: BaseFactors = &[(PreludeBaseDimension::Angle, 1)];
+const FORCE: BaseFactors = &[
+    (PreludeBaseDimension::Mass, 1),
+    (PreludeBaseDimension::Length, 1),
+    (PreludeBaseDimension::Time, -2),
+];
+const ENERGY: BaseFactors = &[
+    (PreludeBaseDimension::Mass, 1),
+    (PreludeBaseDimension::Length, 2),
+    (PreludeBaseDimension::Time, -2),
+];
+const POWER: BaseFactors = &[
+    (PreludeBaseDimension::Mass, 1),
+    (PreludeBaseDimension::Length, 2),
+    (PreludeBaseDimension::Time, -3),
+];
+const PRESSURE: BaseFactors = &[
+    (PreludeBaseDimension::Mass, 1),
+    (PreludeBaseDimension::Length, -1),
+    (PreludeBaseDimension::Time, -2),
+];
+const FREQUENCY: BaseFactors = &[(PreludeBaseDimension::Time, -1)];
+
+/// The display symbol of a base dimension, which is also the spelling of its
+/// coherent base unit (scale 1).
+const fn base_symbol(base: PreludeBaseDimension) -> &'static str {
+    match base {
+        PreludeBaseDimension::Length => "m",
+        PreludeBaseDimension::Time => "s",
+        PreludeBaseDimension::Mass => "kg",
+        PreludeBaseDimension::Temperature => "K",
+        PreludeBaseDimension::ElectricCurrent => "A",
+        PreludeBaseDimension::Amount => "mol",
+        PreludeBaseDimension::LuminousIntensity => "cd",
+        PreludeBaseDimension::Angle => "rad",
+    }
+}
+
+/// Whether real-world units of this base dimension are affine scales.
 ///
-/// Thread these through the prelude loading pipeline to avoid
-/// re-looking up dimensions by name.
-struct BaseDimIds {
-    length: Dimension,
-    time: Dimension,
-    mass: Dimension,
-    temperature: Dimension,
-    electric_current: Dimension,
-    amount: Dimension,
-    luminous_intensity: Dimension,
-    angle: Dimension,
+/// Temperature units (°C, °F) are affine, so user unit definitions on bare
+/// Temperature are rejected: a linear definition would silently display wrong
+/// values (#648 U4).
+const fn is_affine_prone(base: PreludeBaseDimension) -> bool {
+    matches!(base, PreludeBaseDimension::Temperature)
+}
+
+/// A named prelude dimension derived from the base dimensions.
+struct DerivedDimensionDecl {
+    name: &'static str,
+    factors: BaseFactors,
+}
+
+const fn dimension(name: &'static str, factors: BaseFactors) -> DerivedDimensionDecl {
+    DerivedDimensionDecl { name, factors }
+}
+
+/// Derived prelude dimensions, in registration order.
+const DERIVED_DIMENSIONS: &[DerivedDimensionDecl] = &[
+    dimension(
+        "Velocity",
+        &[
+            (PreludeBaseDimension::Length, 1),
+            (PreludeBaseDimension::Time, -1),
+        ],
+    ),
+    dimension(
+        "Acceleration",
+        &[
+            (PreludeBaseDimension::Length, 1),
+            (PreludeBaseDimension::Time, -2),
+        ],
+    ),
+    dimension("Force", FORCE),
+    dimension("Energy", ENERGY),
+    dimension("Power", POWER),
+    dimension("Frequency", FREQUENCY),
+    dimension("Pressure", PRESSURE),
+    dimension("Area", &[(PreludeBaseDimension::Length, 2)]),
+    dimension("Volume", &[(PreludeBaseDimension::Length, 3)]),
+];
+
+/// A prelude unit other than a coherent base unit.
+struct DerivedUnitDecl {
+    name: &'static str,
+    factors: BaseFactors,
+    scale: PositiveFiniteScale,
+}
+
+/// Evaluated only in the `DERIVED_UNITS` const initializer, so an invalid
+/// built-in scale fails the build.
+const fn unit(name: &'static str, factors: BaseFactors, scale: f64) -> DerivedUnitDecl {
+    DerivedUnitDecl {
+        name,
+        factors,
+        scale: PositiveFiniteScale::from_const(scale),
+    }
+}
+
+/// Prelude units other than the coherent base units, in registration order.
+const DERIVED_UNITS: &[DerivedUnitDecl] = &[
+    unit("km", LENGTH, 1000.0),
+    unit("cm", LENGTH, 0.01),
+    unit("mm", LENGTH, 0.001),
+    unit("h", TIME, 3600.0),
+    unit("min", TIME, 60.0),
+    unit("deg", ANGLE, std::f64::consts::PI / 180.0),
+    unit("g", MASS, 0.001),
+    unit("N", FORCE, 1.0),
+    unit("kN", FORCE, 1000.0),
+    unit("J", ENERGY, 1.0),
+    unit("kJ", ENERGY, 1000.0),
+    unit("W", POWER, 1.0),
+    unit("kW", POWER, 1000.0),
+    unit("Pa", PRESSURE, 1.0),
+    unit("kPa", PRESSURE, 1000.0),
+    unit("MPa", PRESSURE, 1_000_000.0),
+    unit("Hz", FREQUENCY, 1.0),
+];
+
+/// Dimension names provided by the Graphcal prelude: base dimensions first,
+/// then derived dimensions, in registration order.
+pub(crate) fn prelude_dimension_names() -> impl Iterator<Item = &'static str> + Clone {
+    PreludeBaseDimension::ALL_NAMES
+        .into_iter()
+        .chain(DERIVED_DIMENSIONS.iter().map(|decl| decl.name))
+}
+
+/// Unit names provided by the Graphcal prelude: coherent base units first,
+/// then the other units, in registration order.
+pub fn prelude_unit_names() -> impl Iterator<Item = &'static str> + Clone {
+    PreludeBaseDimension::ALL
+        .into_iter()
+        .map(base_symbol)
+        .chain(DERIVED_UNITS.iter().map(|decl| decl.name))
+}
+
+fn dimension_of(factors: BaseFactors) -> Result<Dimension, RatioError> {
+    factors
+        .iter()
+        .try_fold(Dimension::dimensionless(), |product, &(base, exponent)| {
+            product * Dimension::base(BaseDimId::Prelude(base)).pow(exponent)?
+        })
 }
 
 /// Load all built-in dimensions and units into the registry builder.
 pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RatioError> {
-    let ids = load_base_dimensions(builder);
-    load_derived_dimensions(builder, &ids)?;
-    load_base_units(builder, &ids);
-    load_derived_units(builder, &ids)?;
-    Ok(())
-}
-
-fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
-    use crate::dimension::BaseDimId;
-
-    let length_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Length"),
-        BaseDimId::Prelude(PreludeBaseDimension::Length),
-        "m".to_string(),
-    );
-    let time_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Time"),
-        BaseDimId::Prelude(PreludeBaseDimension::Time),
-        "s".to_string(),
-    );
-    let mass_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Mass"),
-        BaseDimId::Prelude(PreludeBaseDimension::Mass),
-        "kg".to_string(),
-    );
-    let temperature_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Temperature"),
-        BaseDimId::Prelude(PreludeBaseDimension::Temperature),
-        "K".to_string(),
-    );
-    // Real-world temperature units (°C, °F) are affine scales; reject user
-    // unit definitions on bare Temperature so a linear definition cannot
-    // silently display wrong values (#648 U4).
-    r.mark_affine_prone(temperature_id.clone());
-    let electric_current_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("ElectricCurrent"),
-        BaseDimId::Prelude(PreludeBaseDimension::ElectricCurrent),
-        "A".to_string(),
-    );
-    let amount_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Amount"),
-        BaseDimId::Prelude(PreludeBaseDimension::Amount),
-        "mol".to_string(),
-    );
-    let luminous_intensity_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("LuminousIntensity"),
-        BaseDimId::Prelude(PreludeBaseDimension::LuminousIntensity),
-        "cd".to_string(),
-    );
-    let angle_id = r.register_base_dimension_with_symbol(
-        DimName::expect_valid("Angle"),
-        BaseDimId::Prelude(PreludeBaseDimension::Angle),
-        "rad".to_string(),
-    );
-
-    BaseDimIds {
-        length: Dimension::base(length_id),
-        time: Dimension::base(time_id),
-        mass: Dimension::base(mass_id),
-        temperature: Dimension::base(temperature_id),
-        electric_current: Dimension::base(electric_current_id),
-        amount: Dimension::base(amount_id),
-        luminous_intensity: Dimension::base(luminous_intensity_id),
-        angle: Dimension::base(angle_id),
+    for base in PreludeBaseDimension::ALL {
+        let id = builder.register_base_dimension_with_symbol(
+            DimName::expect_valid(base.as_str()),
+            BaseDimId::Prelude(base),
+            base_symbol(base).to_string(),
+        );
+        if is_affine_prone(base) {
+            builder.mark_affine_prone(id);
+        }
     }
-}
-
-fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RatioError> {
-    let velocity = (&ids.length / &ids.time)?;
-    let time_squared = ids.time.pow(2)?;
-    let acceleration = (&ids.length / &time_squared)?;
-    let force = (&ids.mass * &acceleration)?;
-    let energy = (&force * &ids.length)?;
-    let power = (&energy / &ids.time)?;
-    let frequency = (Dimension::dimensionless() / ids.time.clone())?;
-    let length_squared = ids.length.pow(2)?;
-    let pressure = (&force / &length_squared)?;
-    let area = ids.length.pow(2)?;
-    let volume = ids.length.pow(3)?;
-
-    r.register_dimension(DimName::expect_valid("Velocity"), velocity);
-    r.register_dimension(DimName::expect_valid("Acceleration"), acceleration);
-    r.register_dimension(DimName::expect_valid("Force"), force);
-    r.register_dimension(DimName::expect_valid("Energy"), energy);
-    r.register_dimension(DimName::expect_valid("Power"), power);
-    r.register_dimension(DimName::expect_valid("Frequency"), frequency);
-    r.register_dimension(DimName::expect_valid("Pressure"), pressure);
-    r.register_dimension(DimName::expect_valid("Area"), area);
-    r.register_dimension(DimName::expect_valid("Volume"), volume);
-    Ok(())
-}
-
-/// Validate a built-in scale while the compiler itself is compiled.
-macro_rules! prelude_scale {
-    ($value:expr) => {
-        const { PositiveFiniteScale::from_const($value) }
-    };
-}
-
-fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
-    r.register_unit(
-        UnitName::expect_valid("m"),
-        ids.length.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("s"),
-        ids.time.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("kg"),
-        ids.mass.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("K"),
-        ids.temperature.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("A"),
-        ids.electric_current.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("mol"),
-        ids.amount.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("cd"),
-        ids.luminous_intensity.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("rad"),
-        ids.angle.clone(),
-        prelude_scale!(1.0),
-    );
-}
-
-fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RatioError> {
-    let mass_length = (&ids.mass * &ids.length)?;
-    let time_squared = ids.time.pow(2)?;
-    let force = (mass_length / time_squared)?;
-    let energy = (&force * &ids.length)?;
-    let power = (&energy / &ids.time)?;
-    let length_squared = ids.length.pow(2)?;
-    let pressure = (&force / &length_squared)?;
-    let frequency = (Dimension::dimensionless() / ids.time.clone())?;
-
-    // Length
-    r.register_unit(
-        UnitName::expect_valid("km"),
-        ids.length.clone(),
-        prelude_scale!(1000.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("cm"),
-        ids.length.clone(),
-        prelude_scale!(0.01),
-    );
-    r.register_unit(
-        UnitName::expect_valid("mm"),
-        ids.length.clone(),
-        prelude_scale!(0.001),
-    );
-
-    // Time
-    r.register_unit(
-        UnitName::expect_valid("h"),
-        ids.time.clone(),
-        prelude_scale!(3600.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("min"),
-        ids.time.clone(),
-        prelude_scale!(60.0),
-    );
-
-    // Angle
-    r.register_unit(
-        UnitName::expect_valid("deg"),
-        ids.angle.clone(),
-        prelude_scale!(std::f64::consts::PI / 180.0),
-    );
-
-    // Mass
-    r.register_unit(
-        UnitName::expect_valid("g"),
-        ids.mass.clone(),
-        prelude_scale!(0.001),
-    );
-
-    // Force
-    r.register_unit(
-        UnitName::expect_valid("N"),
-        force.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(UnitName::expect_valid("kN"), force, prelude_scale!(1000.0));
-
-    // Energy
-    r.register_unit(
-        UnitName::expect_valid("J"),
-        energy.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(UnitName::expect_valid("kJ"), energy, prelude_scale!(1000.0));
-
-    // Power
-    r.register_unit(
-        UnitName::expect_valid("W"),
-        power.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(UnitName::expect_valid("kW"), power, prelude_scale!(1000.0));
-
-    // Pressure
-    r.register_unit(
-        UnitName::expect_valid("Pa"),
-        pressure.clone(),
-        prelude_scale!(1.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("kPa"),
-        pressure.clone(),
-        prelude_scale!(1000.0),
-    );
-    r.register_unit(
-        UnitName::expect_valid("MPa"),
-        pressure,
-        prelude_scale!(1_000_000.0),
-    );
-
-    // Frequency
-    r.register_unit(UnitName::expect_valid("Hz"), frequency, prelude_scale!(1.0));
+    for decl in DERIVED_DIMENSIONS {
+        builder.register_dimension(
+            DimName::expect_valid(decl.name),
+            dimension_of(decl.factors)?,
+        );
+    }
+    for base in PreludeBaseDimension::ALL {
+        builder.register_unit(
+            UnitName::expect_valid(base_symbol(base)),
+            Dimension::base(BaseDimId::Prelude(base)),
+            PositiveFiniteScale::ONE,
+        );
+    }
+    for decl in DERIVED_UNITS {
+        builder.register_unit(
+            UnitName::expect_valid(decl.name),
+            dimension_of(decl.factors)?,
+            decl.scale,
+        );
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dimension::{BaseDimId, Rational};
+    use crate::dimension::Rational;
     use crate::registry::types::{RegistryBuilder, UnitScale};
 
     // Well-known IDs matching prelude dimension names.
@@ -402,10 +300,7 @@ mod tests {
         load_prelude(&mut b).unwrap();
         let r = b.try_build().unwrap();
 
-        let listed_dims = PRELUDE_DIMENSION_NAMES
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
+        let listed_dims = prelude_dimension_names().collect::<BTreeSet<_>>();
         let loaded_dims = r
             .dimensions
             .all_dimensions()
@@ -413,7 +308,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_dims, loaded_dims);
 
-        let listed_units = PRELUDE_UNIT_NAMES.iter().copied().collect::<BTreeSet<_>>();
+        let listed_units = prelude_unit_names().collect::<BTreeSet<_>>();
         let loaded_units = r
             .units
             .all_units()
@@ -497,14 +392,15 @@ mod tests {
 
     #[test]
     fn base_dimension_names_const_matches_registrations() {
-        assert_eq!(
-            PRELUDE_DIMENSION_NAMES[..PRELUDE_BASE_DIMENSION_NAMES.len()],
-            PRELUDE_BASE_DIMENSION_NAMES
+        assert!(
+            prelude_dimension_names()
+                .take(PreludeBaseDimension::ALL.len())
+                .eq(PreludeBaseDimension::ALL_NAMES)
         );
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let r = b.try_build().unwrap();
-        for name in PRELUDE_BASE_DIMENSION_NAMES {
+        for name in PreludeBaseDimension::ALL_NAMES {
             let expected = prelude_base_dimension(name).unwrap();
             assert_eq!(r.dimensions.get_dimension(name), Some(&expected));
         }
@@ -553,5 +449,99 @@ mod tests {
             Some(60.0)
         );
         assert!(registry.units.get_unit(&unit("hour")).is_none());
+    }
+
+    /// The declaration table must reproduce the dimensions the prelude used to
+    /// build with explicit products and quotients.
+    #[test]
+    fn declared_dimensions_match_their_defining_products() {
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder).unwrap();
+        let registry = builder.try_build().unwrap();
+        let base = |base| Dimension::base(BaseDimId::Prelude(base));
+        let length = base(PreludeBaseDimension::Length);
+        let time = base(PreludeBaseDimension::Time);
+        let mass = base(PreludeBaseDimension::Mass);
+        let velocity = (&length / &time).unwrap();
+        let acceleration = (&velocity / &time).unwrap();
+        let force = (&mass * &acceleration).unwrap();
+        let energy = (&force * &length).unwrap();
+        let power = (&energy / &time).unwrap();
+        let area = length.pow(2).unwrap();
+        let expected = [
+            ("Velocity", velocity),
+            ("Acceleration", acceleration),
+            ("Force", force.clone()),
+            ("Energy", energy.clone()),
+            ("Power", power.clone()),
+            ("Frequency", (Dimension::dimensionless() / time).unwrap()),
+            ("Pressure", (&force / &area).unwrap()),
+            ("Area", area),
+            ("Volume", length.pow(3).unwrap()),
+        ];
+        for (name, dimension) in &expected {
+            assert_eq!(
+                registry.dimensions.get_dimension(name),
+                Some(dimension),
+                "{name}"
+            );
+        }
+        let unit = |name| {
+            registry
+                .units
+                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                    UnitName::expect_valid(name),
+                ))
+                .unwrap()
+        };
+        for (name, dimension, scale) in [
+            ("m", &length, 1.0),
+            ("rad", &base(PreludeBaseDimension::Angle), 1.0),
+            ("mm", &length, 0.001),
+            ("g", &mass, 0.001),
+            ("kJ", &energy, 1000.0),
+            ("kW", &power, 1000.0),
+            ("MPa", &expected[6].1, 1_000_000.0),
+            ("Hz", &expected[5].1, 1.0),
+        ] {
+            assert_eq!(&unit(name).dimension, dimension, "{name}");
+            assert_eq!(
+                unit(name)
+                    .scale
+                    .static_scale()
+                    .map(PositiveFiniteScale::get),
+                Some(scale),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_bare_temperature_is_affine_prone() {
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder).unwrap();
+        for base in PreludeBaseDimension::ALL {
+            assert_eq!(
+                builder.is_affine_prone(&Dimension::base(BaseDimId::Prelude(base))),
+                base == PreludeBaseDimension::Temperature,
+                "{base}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_name_lists_follow_registration_order() {
+        let dimensions = prelude_dimension_names().collect::<Vec<_>>();
+        assert_eq!(dimensions.len(), 17);
+        assert_eq!(dimensions[..2], ["Length", "Time"]);
+        assert_eq!(dimensions[8..10], ["Velocity", "Acceleration"]);
+        let units = prelude_unit_names().collect::<Vec<_>>();
+        assert_eq!(
+            units,
+            [
+                "m", "s", "kg", "K", "A", "mol", "cd", "rad", "km", "cm", "mm", "h", "min", "deg",
+                "g", "N", "kN", "J", "kJ", "W", "kW", "Pa", "kPa", "MPa", "Hz",
+            ]
+        );
     }
 }

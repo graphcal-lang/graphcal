@@ -142,14 +142,8 @@ impl PreludeTypeScope {
     pub fn graphcal() -> Self {
         Self::new(
             crate::registry::prelude::prelude_dag_id(),
-            crate::registry::prelude::PRELUDE_DIMENSION_NAMES
-                .iter()
-                .copied()
-                .map(DimName::expect_valid),
-            crate::registry::prelude::PRELUDE_UNIT_NAMES
-                .iter()
-                .copied()
-                .map(UnitName::expect_valid),
+            crate::registry::prelude::prelude_dimension_names().map(DimName::expect_valid),
+            crate::registry::prelude::prelude_unit_names().map(UnitName::expect_valid),
         )
     }
 
