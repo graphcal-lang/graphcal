@@ -676,7 +676,7 @@ fn materialize_git_revision(
         DepsError::GitMaterialize {
             url: url_text.clone(),
             rev: rev.as_str().to_string(),
-            source: Box::new(source),
+            source: source.into(),
         }
     })?;
     let fetch_refspec = format!("+{}:{FETCHED_COMMIT_REF}", rev.as_str());
@@ -694,7 +694,7 @@ fn materialize_git_revision(
         remote
             .with_refspecs([fetch_refspec.as_str()], gix::remote::Direction::Fetch)
             .map(|remote| remote.with_fetch_tags(gix::remote::fetch::Tags::None))
-            .map_err(|source| Box::new(source) as BoxError)
+            .map_err(|source| gix::Exn::new(source).erased())
     });
     let (repo, _) = prepare_fetch
         .fetch_only(gix::progress::Discard, &should_interrupt)
