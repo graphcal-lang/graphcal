@@ -4,7 +4,7 @@ use crate::syntax::ast::{
     Visibility,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
 
@@ -24,17 +24,18 @@ impl Parser<'_> {
         let mut properties: Vec<PlotField> = Vec::new();
 
         while self.lexer.peek() != Some(&Token::RBrace) {
+            let field_keyword = self.peek_contextual_keyword();
             let field_name = self.parse_any_ident()?;
             let field_start = field_name.span;
             self.expect(Token::Colon)?;
 
             // Duplicate fields would silently shadow each other with
             // implementation-defined precedence; reject them (#844).
-            match field_name.name.as_str() {
-                "mark" => {
+            match field_keyword {
+                Some(ContextualKeyword::Mark) => {
                     if mark.is_some() {
                         return Err(self.duplicate_plot_field(
-                            "mark",
+                            ContextualKeyword::Mark.as_str(),
                             "plot declaration",
                             field_start,
                         ));
@@ -42,10 +43,10 @@ impl Parser<'_> {
                     let mark_spec = self.parse_mark_spec(field_start)?;
                     mark = Some(mark_spec);
                 }
-                "encode" => {
+                Some(ContextualKeyword::Encode) => {
                     if encode_seen {
                         return Err(self.duplicate_plot_field(
-                            "encode",
+                            ContextualKeyword::Encode.as_str(),
                             "plot declaration",
                             field_start,
                         ));

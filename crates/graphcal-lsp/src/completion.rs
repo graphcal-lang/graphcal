@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::names::NameAtom;
-use graphcal_compiler::syntax::token::Token;
+use graphcal_compiler::syntax::token::{ContextualKeyword, Token};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{
@@ -14,15 +14,6 @@ use crate::cursor_context::{
 };
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
-
-/// Top-level declaration keywords.
-///
-/// Mirrors the grammar keywords that can introduce a declaration at the file
-/// level.
-const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "param", "node", "const", "type", "dim", "unit", "index", "assert", "dag", "plot", "figure",
-    "layer", "import", "include",
-];
 
 /// Built-ins available while editing a type annotation. `Fin` is offered for
 /// nested Index positions such as `T[Fin(N)]`.
@@ -75,9 +66,11 @@ pub fn completion(
 ) -> Option<Vec<CompletionItem>> {
     if let Some(context) = determine_coordinate_index_completion_context(source, offset) {
         let keywords = match context {
-            CoordinateIndexCompletionContext::Constructor => &["range", "linspace"][..],
-            CoordinateIndexCompletionContext::StepLabel => &["step"][..],
-            CoordinateIndexCompletionContext::PointsLabel => &["points"][..],
+            CoordinateIndexCompletionContext::Constructor => {
+                &[ContextualKeyword::Range, ContextualKeyword::Linspace][..]
+            }
+            CoordinateIndexCompletionContext::StepLabel => &[ContextualKeyword::Step][..],
+            CoordinateIndexCompletionContext::PointsLabel => &[ContextualKeyword::Points][..],
         };
         return Some(keyword_items(keywords));
     }
@@ -173,11 +166,11 @@ fn build_definition_items(
 }
 
 /// Build completion items for static keyword lists (always `KEYWORD` kind).
-fn keyword_items(keywords: &[&str]) -> Vec<CompletionItem> {
+fn keyword_items(keywords: &[impl std::fmt::Display]) -> Vec<CompletionItem> {
     keywords
         .iter()
         .map(|kw| CompletionItem {
-            label: (*kw).to_string(),
+            label: kw.to_string(),
             kind: Some(CompletionItemKind::KEYWORD),
             ..Default::default()
         })
@@ -353,7 +346,7 @@ fn complete_conversion_targets(analysis: &AnalysisResult) -> Vec<CompletionItem>
 
 /// Complete top-level keywords.
 fn complete_top_level() -> Vec<CompletionItem> {
-    keyword_items(TOP_LEVEL_KEYWORDS)
+    keyword_items(Token::DECLARATION_KEYWORDS)
 }
 
 /// Complete expression-level items: constants, functions, boolean keywords.
@@ -370,25 +363,23 @@ fn complete_expression(analysis: &AnalysisResult) -> Vec<CompletionItem> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TOP_LEVEL_KEYWORDS, completion};
+    use super::{complete_top_level, completion};
 
     #[test]
-    fn top_level_keywords_do_not_include_removed_fn() {
+    fn top_level_keywords_are_declaration_keywords() {
+        let labels: Vec<_> = complete_top_level()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
         assert!(
-            !TOP_LEVEL_KEYWORDS.contains(&"fn"),
+            !labels.iter().any(|label| label == "fn"),
             "`fn` was removed from the language; completions must not suggest it"
         );
-    }
-
-    #[test]
-    fn top_level_keywords_include_core_decl_kinds() {
-        for required in [
-            "param", "node", "const", "type", "dim", "unit", "index", "dag", "plot", "figure",
-            "layer", "import", "include",
-        ] {
+        for keyword in graphcal_compiler::syntax::token::Token::DECLARATION_KEYWORDS {
+            let keyword = keyword.to_string();
             assert!(
-                TOP_LEVEL_KEYWORDS.contains(&required),
-                "missing top-level keyword: {required}"
+                labels.contains(&keyword),
+                "missing top-level keyword: {keyword}"
             );
         }
     }

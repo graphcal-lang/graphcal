@@ -2091,3 +2091,28 @@ fn parse_plugin_import_allows_empty_block() {
     };
     assert!(plugin.functions.is_empty());
 }
+
+/// `Token::DECLARATION_KEYWORDS` drives editor completions and code actions;
+/// it must be exactly the hard keywords the declaration dispatch accepts.
+#[test]
+fn declaration_keywords_match_parser_dispatch() {
+    use crate::syntax::token::Token;
+
+    for &keyword in Token::HARD_KEYWORDS {
+        let source = keyword.to_string();
+        let error = Parser::new(&source).parse_file().unwrap_err();
+        let rejected_at_start = matches!(
+            &error,
+            ParseError::UnexpectedToken { found, span, .. }
+                if span.offset() == 0 && *found == source
+        );
+        // `pub` is accepted at a declaration start as a visibility prefix,
+        // not as a declaration keyword.
+        let expected_to_start_declaration =
+            Token::DECLARATION_KEYWORDS.contains(&keyword) || keyword == Token::Pub;
+        assert_eq!(
+            !rejected_at_start, expected_to_start_declaration,
+            "{source}: {error:?}"
+        );
+    }
+}

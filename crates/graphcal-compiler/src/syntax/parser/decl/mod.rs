@@ -6,7 +6,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::{ParseError, Parser};
 use multi::SlotKind;
@@ -87,13 +87,18 @@ impl Parser<'_> {
         let mut fields = Vec::new();
 
         while self.lexer.peek() != Some(&Token::RBrace) {
+            let field_keyword = self.peek_contextual_keyword();
             let field_name = self.parse_any_ident()?;
             let field_start = field_name.span;
             self.expect(Token::Colon)?;
 
-            if field_name.name == "plots" {
+            if field_keyword == Some(ContextualKeyword::Plots) {
                 if plots_seen {
-                    return Err(self.duplicate_plot_field("plots", kind, field_start));
+                    return Err(self.duplicate_plot_field(
+                        ContextualKeyword::Plots.as_str(),
+                        kind,
+                        field_start,
+                    ));
                 }
                 plots_seen = true;
                 self.expect(Token::LBracket)?;
@@ -437,7 +442,7 @@ impl Parser<'_> {
         }
         self.expect(Token::LParen)?;
         let (bind_tok, bind_span) = self.advance()?;
-        if bind_tok != Token::Ident || self.lexer.slice_at(bind_span) != "bind" {
+        if bind_tok != Token::ContextualKeyword(ContextualKeyword::Bind) {
             return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
         }
         let (_, rparen_span) = self.expect(Token::RParen)?;
