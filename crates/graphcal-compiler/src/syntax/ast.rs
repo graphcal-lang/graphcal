@@ -11,7 +11,6 @@ mod value;
 pub use crate::syntax::import_category::ImportItemNamespace;
 pub use common::*;
 pub use decl::*;
-pub use format_equivalent::FormatEquivalent;
 pub use plot_props::*;
 pub use value::*;
 

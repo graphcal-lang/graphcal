@@ -13,8 +13,9 @@ mod format;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::syntax::ast::{File, FormatEquivalent};
+use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::comments::SourceMetadata;
+use graphcal_compiler::syntax::format_equivalent::FormatEquivalent;
 use graphcal_compiler::syntax::parser::{ParseError, Parser};
 
 /// Default line width for formatting.
@@ -153,8 +154,7 @@ fn ensure_trailing_newline(result: &mut String) {
 /// Confirm that formatting changed only layout, not the program.
 ///
 /// Compares the re-parsed formatted output with the input AST, ignoring
-/// source spans (see
-/// [`FormatEquivalent`](graphcal_compiler::syntax::ast::FormatEquivalent)).
+/// source spans (see [`FormatEquivalent`]).
 /// Any divergence is a formatter bug, reported as a [`FormatError`] rather than
 /// silently returning text whose meaning may differ from the source.
 fn ensure_ast_preserved(original: &File, reparsed: &File) -> Result<(), FormatError> {

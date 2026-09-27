@@ -1,3 +1,4 @@
+use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ModuleAliasName;
@@ -7,10 +8,11 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 
 /// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct Attribute {
     pub name: Ident,
     pub args: Vec<AttributeArg>,
+    #[fe(skip)]
     pub span: Span,
 }
 
@@ -18,7 +20,7 @@ pub struct Attribute {
 ///
 /// Supports Term names (`pressure_safe`, `checks::pressure_safe`), index labels
 /// (`Mode#Boost`), finite structural positions (`#2`), and parenthesized groups.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum AttributeArg {
     /// A syntax-directed Term name.
     Path { path: Spanned<NamePath> },
@@ -26,13 +28,22 @@ pub enum AttributeArg {
     IndexLabel {
         index: Spanned<NamePath>,
         label: Spanned<IndexVariantName>,
+        #[fe(skip)]
         span: Span,
     },
     /// A finite structural position key: `#N` — matches the `#N` slice-label
     /// syntax of `table` expressions over `Fin(N)` axes.
-    FinitePosition { position: u64, span: Span },
+    FinitePosition {
+        position: u64,
+        #[fe(skip)]
+        span: Span,
+    },
     /// A parenthesized group of args: `(Index#A, Index#B).`
-    Group { elements: Vec<Self>, span: Span },
+    Group {
+        elements: Vec<Self>,
+        #[fe(skip)]
+        span: Span,
+    },
 }
 
 impl AttributeArg {
@@ -49,7 +60,7 @@ impl AttributeArg {
 }
 
 /// Visibility annotation for declaration kinds that can be public but cannot be bindable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum Visibility {
     Private,
     Public,
@@ -64,7 +75,7 @@ impl Visibility {
 }
 
 /// Visibility and bindability annotation for declaration kinds that support `pub(bind)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FormatEquivalent)]
 pub enum BindableVisibility {
     Private,
     Public,
@@ -108,7 +119,7 @@ impl From<Visibility> for BindableVisibility {
 ///   - `Module { alias: None }`: bare form `include path(args);` — sugar for
 ///     `as <leaf>`.
 ///   - `Module { alias: Some(a) }`: aliased form `include path(args) as a;`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum ImportKind {
     /// Brace-list selector: `path::{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
@@ -125,9 +136,10 @@ pub enum ImportKind {
 /// (directories under `source_dir`, files inside the package, and inline `dag`
 /// declarations). There are no file-path strings, no `..` parent navigation,
 /// and no `/` separators in the source language — only `.`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct ModulePath {
     pub segments: NonEmpty<Ident>,
+    #[fe(skip)]
     pub span: Span,
 }
 
@@ -209,7 +221,7 @@ impl ModulePath {
 /// Example: `unit m` → imports from the unit namespace.
 /// Example: `index Case` → imports from the index namespace.
 /// Example: `pub name1` → re-exported at the importer (selective form).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct ImportItem {
     /// Attributes on this import item (e.g., `#[expected_fail(...)]`).
     pub attributes: Vec<Attribute>,
@@ -251,9 +263,10 @@ impl ImportItem {
 }
 
 /// An identifier with its source span.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
 pub struct Ident {
     pub name: NameAtom,
+    #[fe(skip)]
     pub span: Span,
 }
 

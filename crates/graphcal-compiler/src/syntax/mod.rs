@@ -7,6 +7,7 @@ pub mod decl_name;
 pub mod desugar;
 pub mod dimension;
 pub(crate) mod doc_attach;
+pub mod format_equivalent;
 pub mod function_name;
 pub mod import_category;
 pub mod index_name;
