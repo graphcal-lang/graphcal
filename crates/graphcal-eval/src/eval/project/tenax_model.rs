@@ -6,10 +6,11 @@ use crate::eval::runtime::{evaluate_assertions, root_source_names};
 use crate::eval::types::NodeUnavailable;
 
 use super::{
-    Arc, AssertResult, CompileError, DeclName, DeclaredType, Error, EvalContext, EvalLoopResult,
-    GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema,
-    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
-    Value, index_def_for_ref, remap_include_debug_name, run_eval_loop_with_bindings,
+    Arc, AssertResult, CompileError, ConcreteIndexKind, DeclName, DeclaredType, Error, EvalContext,
+    EvalLoopResult, GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph,
+    ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName,
+    Span, TimeScale, Value, index_def_for_ref, remap_include_debug_name,
+    run_eval_loop_with_bindings,
 };
 
 /// Inclusive lower and upper bounds for one external input family.
@@ -472,24 +473,20 @@ impl PreparedProject {
                         actual: port.declared_type.format(&self.tir.registry().dimensions),
                     });
                 };
-                let IndexKind::Named { variants } = &definition.kind else {
+                let IndexKind::Concrete(ConcreteIndexKind::Named { variants }) = &definition.kind
+                else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
                         actual: port.declared_type.format(&self.tir.registry().dimensions),
                     });
                 };
-                if variants.is_empty() {
-                    return Err(ModelDefinitionError::EmptyCategoricalDomain {
-                        name: port.name.clone(),
-                    });
-                }
-                if variants.len() > i32::MAX as usize {
+                if variants.len().get() > i32::MAX as usize {
                     return Err(ModelDefinitionError::CategoricalDomainTooLarge {
                         name: port.name.clone(),
-                        count: variants.len(),
+                        count: variants.len().get(),
                     });
                 }
-                let mut categories = variants.clone();
+                let mut categories = variants.as_slice().to_vec();
                 categories.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
                 TenaxV2InputKind::Categorical { categories }
             }
@@ -684,8 +681,6 @@ pub enum ModelDefinitionError {
     RecursiveInputTypeUnsupported { name: DeclName, actual: String },
     #[error("input `{name}` has unsupported Tenax v2 type `{actual}`")]
     UnsupportedInputType { name: DeclName, actual: String },
-    #[error("categorical input `{name}` has an empty domain")]
-    EmptyCategoricalDomain { name: DeclName },
     #[error(
         "categorical input `{name}` has {count} categories, exceeding Arrow Int32 dictionary capacity"
     )]

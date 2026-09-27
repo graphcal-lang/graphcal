@@ -26,7 +26,9 @@ use graphcal_compiler::syntax::type_name::{
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::registry::format::format_unit_terms_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
-use graphcal_compiler::registry::types::{FormattingRegistry, IndexKind, UnitScale};
+use graphcal_compiler::registry::types::{
+    ConcreteIndexKind, FormattingRegistry, IndexKind, RequiredIndexKind, UnitScale,
+};
 use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
@@ -2587,7 +2589,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     match &idx_def.kind {
-                        IndexKind::Named { variants } => {
+                        IndexKind::Concrete(ConcreteIndexKind::Named { variants }) => {
                             let vs: Vec<&str> = variants
                                 .iter()
                                 .map(
@@ -2596,31 +2598,33 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }
-                        IndexKind::Coordinate(data) => {
-                            def_mut.type_description = Some(match data.spacing {
+                        IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => {
+                            def_mut.type_description = Some(match data.spacing() {
                                 graphcal_compiler::registry::types::CoordinateSpacing::Step {
                                     step,
-                                } => format!("range({}, {}, step: {step})", data.start, data.end),
+                                } => {
+                                    format!("range({}, {}, step: {step})", data.start(), data.end())
+                                }
                                 graphcal_compiler::registry::types::CoordinateSpacing::Linspace => {
                                     format!(
                                         "linspace({}, {}, points: {})",
-                                        data.start,
-                                        data.end,
-                                        idx_def.cardinality()
+                                        data.start(),
+                                        data.end(),
+                                        data.cardinality()
                                     )
                                 }
                             });
                         }
-                        IndexKind::RequiredNamed => {
+                        IndexKind::Required(RequiredIndexKind::Named) => {
                             def_mut.type_description = Some("(required)".to_string());
                         }
-                        IndexKind::RequiredCoordinate { dimension } => {
+                        IndexKind::Required(RequiredIndexKind::Coordinate { dimension }) => {
                             def_mut.type_description = Some(format!(
                                 "(required, dim: {})",
                                 registry.dimensions.format_dimension(dimension)
                             ));
                         }
-                        IndexKind::Finite { cardinality } => {
+                        IndexKind::Concrete(ConcreteIndexKind::Finite { cardinality }) => {
                             def_mut.type_description = Some(format!("Fin({})", cardinality.get()));
                         }
                     }

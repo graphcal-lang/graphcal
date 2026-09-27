@@ -14,7 +14,7 @@ use graphcal_compiler::registry::declared_type::{
 };
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{IndexDef, IndexKind};
+use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use miette::NamedSource;
@@ -520,21 +520,21 @@ fn model_index_schema(
         )
     })?;
     let kind = match &definition.kind {
-        IndexKind::Named { variants } => ModelIndexKind::Named {
-            variants: variants.clone(),
+        IndexKind::Concrete(ConcreteIndexKind::Named { variants }) => ModelIndexKind::Named {
+            variants: variants.as_slice().to_vec(),
         },
-        IndexKind::Coordinate(data) => ModelIndexKind::Coordinate {
+        IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => ModelIndexKind::Coordinate {
             coordinates_si: (0..data.cardinality())
                 .map(|position| data.coordinate_value(position))
                 .collect(),
-            dimension: data.dimension.clone(),
-            display_label: data.display_label.clone(),
-            display_scale: data.display_scale,
+            dimension: data.dimension().clone(),
+            display_label: data.display().label.clone(),
+            display_scale: data.display().scale,
         },
-        IndexKind::Finite { cardinality } => ModelIndexKind::Finite {
+        IndexKind::Concrete(ConcreteIndexKind::Finite { cardinality }) => ModelIndexKind::Finite {
             cardinality: cardinality.get(),
         },
-        IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => {
+        IndexKind::Required(_) => {
             return Err(GraphcalError::internal_error(
                 format!("required model index `{index}` was not concretely bound"),
                 source,

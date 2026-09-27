@@ -117,13 +117,13 @@ fn format_coordinate_impl(
     idx_def.coordinate_data().map_or_else(
         || format!("#{position}"),
         |data| {
-            let display_value = data.coordinate_value(position) / data.display_scale.get();
+            let display_value = data.coordinate_value(position) / data.display().scale.get();
             let formatted = if exact {
                 display_value.to_string()
             } else {
                 format_number(display_value)
             };
-            match &data.display_label {
+            match &data.display().label {
                 Some(label) => format!("{formatted} {label}"),
                 None => formatted,
             }

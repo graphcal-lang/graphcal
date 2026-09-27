@@ -16,10 +16,10 @@ use super::time_zone::TimeZoneRegistry;
 pub use super::dag::DagRegistry;
 pub use super::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry, DimensionTable};
 pub use super::index::{
-    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory,
-    IndexBindingContract, IndexBindingContractError, IndexBindingTarget, IndexCardinality,
-    IndexCardinalityError, IndexCategory, IndexDef, IndexKind, IndexRegistry,
-    MAX_INDEX_CARDINALITY,
+    ConcreteIndexKind, CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
+    CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory, IndexBindingContract,
+    IndexBindingContractError, IndexBindingTarget, IndexCardinality, IndexCardinalityError,
+    IndexCategory, IndexDef, IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY, RequiredIndexKind,
 };
 pub use super::type_def::{
     StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericParam, TypeRegistry, UnionMemberDef,
@@ -359,9 +359,8 @@ impl RegistryBuilder {
     pub fn ensure_finite_index(&mut self, cardinality: IndexCardinality) -> FiniteIndex {
         let finite_index = FiniteIndex::new(cardinality);
         self.indexes
-            .insert_if_missing(IndexBindingTarget::Finite(finite_index), || IndexDef {
-                name: finite_index.display_name(),
-                kind: IndexKind::Finite { cardinality },
+            .insert_if_missing(IndexBindingTarget::Finite(finite_index), || {
+                IndexDef::finite(finite_index)
             });
         finite_index
     }
@@ -476,6 +475,14 @@ mod tests {
     use crate::syntax::dimension::{DimName, UnitName};
     use crate::syntax::index_name::IndexVariantName;
     use crate::syntax::names::NamePath;
+    use crate::syntax::non_empty::{NonEmpty, NonEmptyUnique};
+
+    fn named_index_kind<const N: usize>(labels: [&str; N]) -> IndexKind {
+        let labels = NonEmpty::try_from(labels.map(IndexVariantName::expect_valid)).unwrap();
+        IndexKind::Concrete(ConcreteIndexKind::Named {
+            variants: NonEmptyUnique::try_from_non_empty(labels).unwrap(),
+        })
+    }
     use crate::syntax::span::Span;
     use crate::syntax::span::Spanned;
     use crate::syntax::type_name::FieldName;
@@ -809,13 +816,7 @@ mod tests {
         load_prelude(&mut b).unwrap();
         b.register_index(IndexDef {
             name: IndexName::expect_valid("Maneuver"),
-            kind: IndexKind::Named {
-                variants: vec![
-                    IndexVariantName::expect_valid("Departure"),
-                    IndexVariantName::expect_valid("Correction"),
-                    IndexVariantName::expect_valid("Insertion"),
-                ],
-            },
+            kind: named_index_kind(["Departure", "Correction", "Insertion"]),
         });
         let r = b.build();
         let def = r
@@ -980,9 +981,7 @@ mod tests {
         let axis = IndexName::expect_valid("Axis");
         b.register_index(IndexDef {
             name: axis.clone(),
-            kind: IndexKind::Named {
-                variants: vec![IndexVariantName::expect_valid("Only")],
-            },
+            kind: named_index_kind(["Only"]),
         });
         let pair = b.ensure_finite_index(IndexCardinality::try_from_u64(2).unwrap());
         let effective = IndexName::expect_valid("EffectiveAxis");

@@ -22,6 +22,7 @@ use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
+use crate::syntax::non_empty::{DuplicateItemError, NonEmptyUnique};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, GenericParamName};
 use crate::syntax::visitor::ExprVisitor;
@@ -952,9 +953,19 @@ fn register_index_decl(
 ) -> Result<(), GraphcalError> {
     let kind = match &idx.kind {
         crate::desugar::desugared_ast::IndexDeclKind::Named { variants } => {
-            types::IndexKind::Named {
-                variants: variants.iter().map(|v| v.value.clone()).collect(),
-            }
+            let unique = NonEmptyUnique::try_from_non_empty(variants.map_ref(|v| v.value.clone()))
+                .map_err(|DuplicateItemError { first, duplicate }| {
+                    GraphcalError::DuplicateName {
+                        name: variants[duplicate]
+                            .value
+                            .qualified_by(&idx.name.value)
+                            .to_string(),
+                        src: src.clone(),
+                        duplicate: variants[duplicate].span.into(),
+                        first: variants[first].span.into(),
+                    }
+                })?;
+            types::IndexKind::Concrete(types::ConcreteIndexKind::Named { variants: unique })
         }
         crate::desugar::desugared_ast::IndexDeclKind::Range {
             start: start_expr,
@@ -983,13 +994,13 @@ fn register_index_decl(
             decl_span,
         )?,
         crate::desugar::desugared_ast::IndexDeclKind::RequiredNamed => {
-            types::IndexKind::RequiredNamed
+            types::IndexKind::Required(types::RequiredIndexKind::Named)
         }
         crate::desugar::desugared_ast::IndexDeclKind::RequiredCoordinate { dimension } => {
             let dim = registry
                 .resolve_dim_expr_detailed(dimension)
                 .map_err(|err| dimension_resolve_error(err, src, dimension.span))?;
-            types::IndexKind::RequiredCoordinate { dimension: dim }
+            types::IndexKind::Required(types::RequiredIndexKind::Coordinate { dimension: dim })
         }
     };
     registry.register_index(types::IndexDef {
@@ -1470,120 +1481,27 @@ fn eval_coordinate_expr(
     }
 }
 
+/// Render a coordinate construction failure, blaming the `linspace` point
+/// count when the failure concerns it and the whole declaration otherwise.
 fn coordinate_invalid(
     name: &IndexName,
-    message: impl Into<String>,
-    help: impl Into<String>,
+    error: types::CoordinateIndexError,
     src: &NamedSource<Arc<String>>,
-    span: Span,
+    decl_span: Span,
+    points_span: Span,
 ) -> GraphcalError {
+    let span = if error.concerns_point_count() {
+        points_span
+    } else {
+        decl_span
+    };
     GraphcalError::CoordinateIndexInvalid {
         name: name.clone(),
-        message: message.into(),
-        help: help.into(),
+        message: error.to_string(),
+        help: error.help(),
         src: src.clone(),
         span: span.into(),
     }
-}
-
-/// One centralized binary64 endpoint comparison for coordinate construction.
-fn coordinate_values_equal(actual: f64, expected: f64, scale_hint: f64) -> bool {
-    let scale = actual.abs().max(expected.abs()).max(scale_hint.abs());
-    // Keep the tolerance relative even for coordinates near zero. A unit-scale
-    // floor would accept steps that miss tiny endpoints by a large fraction.
-    // The subnormal floor covers a small number of binary64 ULPs at zero.
-    let tolerance = (scale * (32.0 * f64::EPSILON)).max(f64::from_bits(32));
-    (actual - expected).abs() <= tolerance
-}
-
-/// Exact numeric endpoint equality after finite-value validation.
-fn coordinate_endpoints_equal(start: f64, end: f64) -> bool {
-    matches!(start.partial_cmp(&end), Some(std::cmp::Ordering::Equal))
-}
-
-fn checked_range_cardinality(
-    name: &IndexName,
-    start: f64,
-    end: f64,
-    step: f64,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<types::IndexCardinality, GraphcalError> {
-    if step == 0.0 {
-        return Err(coordinate_invalid(
-            name,
-            "step must be nonzero",
-            "use an explicitly positive or negative quantity step",
-            src,
-            span,
-        ));
-    }
-    if (start < end && step < 0.0) || (start > end && step > 0.0) {
-        return Err(coordinate_invalid(
-            name,
-            format!("step {step} moves away from endpoint {end}"),
-            "use a positive step for an ascending range and a negative step for a descending range",
-            src,
-            span,
-        ));
-    }
-    if coordinate_endpoints_equal(start, end) {
-        return types::IndexCardinality::try_from_u64(1).map_err(|error| {
-            coordinate_invalid(name, error.to_string(), "reduce the index size", src, span)
-        });
-    }
-
-    let raw_intervals = (end - start) / step;
-    if !raw_intervals.is_finite() || raw_intervals < 0.0 {
-        return Err(coordinate_invalid(
-            name,
-            "range interval count is not a finite non-negative value",
-            "choose finite bounds and a finite nonzero step with matching direction",
-            src,
-            span,
-        ));
-    }
-    let intervals = raw_intervals.round();
-    let reconstructed_end = intervals.mul_add(step, start);
-    if intervals < 1.0 || !coordinate_values_equal(reconstructed_end, end, intervals * step) {
-        return Err(coordinate_invalid(
-            name,
-            format!("step {step} does not land on endpoint {end}"),
-            "change the endpoint or use `linspace(start, end, points: N)` when the point count is authoritative",
-            src,
-            span,
-        ));
-    }
-
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the practical limit is far below f64's exact integer range"
-    )]
-    if intervals >= types::MAX_INDEX_CARDINALITY as f64 {
-        return Err(coordinate_invalid(
-            name,
-            format!(
-                "range requires {} coordinate points, which exceeds the practical limit of {}",
-                intervals + 1.0,
-                types::MAX_INDEX_CARDINALITY
-            ),
-            format!(
-                "reduce the index to at most {} points",
-                types::MAX_INDEX_CARDINALITY
-            ),
-            src,
-            span,
-        ));
-    }
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the rounded interval count is finite, non-negative, and practically bounded"
-    )]
-    let count = intervals as u64 + 1;
-    types::IndexCardinality::try_from_u64(count).map_err(|error| {
-        coordinate_invalid(name, error.to_string(), "reduce the index size", src, span)
-    })
 }
 
 fn eval_static_nat_expr(
@@ -1619,17 +1537,20 @@ fn coordinate_display_unit(
     start_expr: &Expr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(Option<String>, PositiveFiniteScale), GraphcalError> {
+) -> Result<types::CoordinateDisplayUnit, GraphcalError> {
     let unit = match &start_expr.kind {
         ExprKind::QuantityLiteral { unit, .. } => unit,
         ExprKind::UnaryOp {
             op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => return coordinate_display_unit(operand, registry, src),
-        _ => return Ok((None, PositiveFiniteScale::ONE)),
+        _ => return Ok(types::CoordinateDisplayUnit::SI),
     };
     match registry.resolve_unit_expr(unit) {
-        Ok((_dimension, scale)) => Ok((Some(format_unit_expr_with_config(unit, true)), scale)),
+        Ok((_dimension, scale)) => Ok(types::CoordinateDisplayUnit {
+            label: Some(format_unit_expr_with_config(unit, true)),
+            scale,
+        }),
         Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
             Err(GraphcalError::DimensionOverflow {
                 src: src.clone(),
@@ -1642,50 +1563,8 @@ fn coordinate_display_unit(
             src,
             unit.span,
         )),
-        Err(_) => Ok((None, PositiveFiniteScale::ONE)),
+        Err(_) => Ok(types::CoordinateDisplayUnit::SI),
     }
-}
-
-fn validate_coordinate_values(
-    name: &IndexName,
-    data: &types::CoordinateIndexData,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<(), GraphcalError> {
-    let direction = data.end.total_cmp(&data.start);
-    let count = data.cardinality.get();
-    let first = data.coordinate_value(0);
-    (1..count).try_fold(first, |previous, position| {
-        let current = data.coordinate_value(position);
-        if !current.is_finite() {
-            return Err(coordinate_invalid(
-                name,
-                format!("coordinate at position {position} is not finite"),
-                "reduce the cardinality or use bounds and spacing with stable binary64 coordinates",
-                src,
-                span,
-            ));
-        }
-        let monotonic = match direction {
-            std::cmp::Ordering::Less => current < previous,
-            std::cmp::Ordering::Equal => false,
-            std::cmp::Ordering::Greater => current > previous,
-        };
-        if !monotonic {
-            return Err(coordinate_invalid(
-                name,
-                format!(
-                    "coordinates at positions {} and {position} are duplicate or non-monotonic in binary64",
-                    position - 1
-                ),
-                "reduce the cardinality or increase the spacing between adjacent coordinates",
-                src,
-                span,
-            ));
-        }
-        Ok(current)
-    })?;
-    Ok(())
 }
 
 /// Lower `range(start, end, step: delta)` with exact endpoint semantics.
@@ -1714,21 +1593,10 @@ fn lower_range_index(
             span: decl_span.into(),
         });
     }
-    let cardinality = checked_range_cardinality(name, start, end, step, src, decl_span)?;
-    let (display_label, display_scale) = coordinate_display_unit(start_expr, registry, src)?;
-    let data = types::CoordinateIndexData {
-        start,
-        end,
-        spacing: types::CoordinateSpacing::Step { step },
-        cardinality,
-        dimension: start_dimension,
-        display_label,
-        display_scale,
-    };
-    if cardinality.get() > 1 {
-        validate_coordinate_values(name, &data, src, decl_span)?;
-    }
-    Ok(types::IndexKind::Coordinate(data))
+    let display = coordinate_display_unit(start_expr, registry, src)?;
+    types::CoordinateIndexData::try_range(start, end, step, start_dimension, display)
+        .map(|data| types::IndexKind::Concrete(types::ConcreteIndexKind::Coordinate(data)))
+        .map_err(|error| coordinate_invalid(name, error, src, decl_span, decl_span))
 }
 
 /// Lower `linspace(start, end, points: N)` with exact endpoint semantics.
@@ -1756,62 +1624,10 @@ fn lower_linspace_index(
         });
     }
     let points = eval_static_nat_expr(points_expr, src)?;
-    if points == 0 {
-        return Err(coordinate_invalid(
-            name,
-            "linspace requires at least one point",
-            "use `points: 1` or greater",
-            src,
-            points_expr.span(),
-        ));
-    }
-    let cardinality = types::IndexCardinality::try_from_u64(points).map_err(|error| {
-        coordinate_invalid(
-            name,
-            error.to_string(),
-            format!(
-                "use a point count from 1 through {}",
-                types::MAX_INDEX_CARDINALITY
-            ),
-            src,
-            points_expr.span(),
-        )
-    })?;
-    match (cardinality.get(), coordinate_endpoints_equal(start, end)) {
-        (1, false) => {
-            return Err(coordinate_invalid(
-                name,
-                "linspace with one point requires identical start and end values",
-                "set end equal to start or request at least two points",
-                src,
-                decl_span,
-            ));
-        }
-        (2.., true) => {
-            return Err(coordinate_invalid(
-                name,
-                "linspace with two or more points requires distinct endpoints",
-                "use `points: 1` for a singleton or choose distinct endpoints",
-                src,
-                decl_span,
-            ));
-        }
-        _ => {}
-    }
-    let (display_label, display_scale) = coordinate_display_unit(start_expr, registry, src)?;
-    let data = types::CoordinateIndexData {
-        start,
-        end,
-        spacing: types::CoordinateSpacing::Linspace,
-        cardinality,
-        dimension: start_dimension,
-        display_label,
-        display_scale,
-    };
-    if cardinality.get() > 1 {
-        validate_coordinate_values(name, &data, src, decl_span)?;
-    }
-    Ok(types::IndexKind::Coordinate(data))
+    let display = coordinate_display_unit(start_expr, registry, src)?;
+    types::CoordinateIndexData::try_linspace(start, end, points, start_dimension, display)
+        .map(|data| types::IndexKind::Concrete(types::ConcreteIndexKind::Coordinate(data)))
+        .map_err(|error| coordinate_invalid(name, error, src, decl_span, points_expr.span()))
 }
 
 /// Extract a map of type annotations from const/param/node declarations,

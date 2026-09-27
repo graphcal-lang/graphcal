@@ -2154,23 +2154,20 @@ fn infer_hir_type_conversion(
                     span: args[0].span.into(),
                 }
             })?;
-            match &index_def.kind {
-                crate::registry::types::IndexKind::Coordinate(data) => {
-                    Ok(InferredType::Quantity(data.dimension.clone()))
-                }
-                crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
-                    Ok(InferredType::Quantity(dimension.clone()))
-                }
-                _ => Err(GraphcalError::DimensionMismatch {
-                    expected: "Key<C> for a coordinate axis C".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "coord() applies to coordinate-axis keys only; named \
-                           keys are opaque and Fin keys expose to_int()"
-                        .to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                }),
-            }
+            index_def.coordinate_dimension().map_or_else(
+                || {
+                    Err(GraphcalError::DimensionMismatch {
+                        expected: "Key<C> for a coordinate axis C".to_string(),
+                        found: format_inferred_type(&arg_type, registry),
+                        help: "coord() applies to coordinate-axis keys only; named \
+                               keys are opaque and Fin keys expose to_int()"
+                            .to_string(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    })
+                },
+                |dimension| Ok(InferredType::Quantity(dimension.clone())),
+            )
         }
     }
 }
@@ -2724,12 +2721,12 @@ fn infer_hir_key_form(
         }
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
             let idx_def = super::index_def_for_inferred(&index_identity, tir);
-            let dimension = match idx_def.as_deref().map(|def| &def.kind) {
-                Some(crate::registry::types::IndexKind::Coordinate(data)) => data.dimension.clone(),
-                Some(crate::registry::types::IndexKind::RequiredCoordinate { dimension }) => {
-                    dimension.clone()
-                }
-                _ => {
+            let dimension = match idx_def
+                .as_deref()
+                .and_then(crate::registry::types::IndexDef::coordinate_dimension)
+            {
+                Some(dimension) => dimension.clone(),
+                None => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "{}() requires a coordinate axis, got `{}`",
@@ -4531,19 +4528,15 @@ fn infer_hir_unfold(
                 src: src.clone(),
                 span: axis.span.into(),
             })?;
-    match &idx_def.kind {
-        crate::registry::types::IndexKind::Coordinate(_)
-        | crate::registry::types::IndexKind::RequiredCoordinate { .. } => {}
-        _ => {
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "unfold requires a coordinate index, got `{}`",
-                    index.display_name()
-                ),
-                src: src.clone(),
-                span: axis.span.into(),
-            });
-        }
+    if !idx_def.is_coordinate() {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "unfold requires a coordinate index, got `{}`",
+                index.display_name()
+            ),
+            src: src.clone(),
+            span: axis.span.into(),
+        });
     }
     // The recurrence coordinate binders are keys of the axis; the coordinate
     // quantity is extracted with coord().
@@ -4658,8 +4651,12 @@ fn infer_hir_match(
                     }
                 })?;
             let variants = match &index_def.kind {
-                crate::registry::types::IndexKind::Named { variants } => variants.clone(),
-                crate::registry::types::IndexKind::RequiredNamed => vec![],
+                crate::registry::types::IndexKind::Concrete(
+                    crate::registry::types::ConcreteIndexKind::Named { variants },
+                ) => variants.as_slice().to_vec(),
+                crate::registry::types::IndexKind::Required(
+                    crate::registry::types::RequiredIndexKind::Named,
+                ) => vec![],
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(

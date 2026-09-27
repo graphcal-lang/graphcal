@@ -66,12 +66,7 @@ impl Parser<'_> {
         })?;
         self.expect(Token::RBrace)?;
         let (_, end_span) = self.expect(Token::Semicolon)?;
-        Ok((
-            IndexDeclKind::Named {
-                variants: variants.into_vec(),
-            },
-            end_span,
-        ))
+        Ok((IndexDeclKind::Named { variants }, end_span))
     }
 
     fn parse_range_index_kind(&mut self) -> Result<(IndexDeclKind, Span), ParseError> {
