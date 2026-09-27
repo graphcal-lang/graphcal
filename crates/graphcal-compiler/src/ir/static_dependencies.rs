@@ -6,6 +6,7 @@ use crate::desugar::desugared_ast::{DeclKind, Declaration, IndexExpr, TypeExpr, 
 use crate::ir::static_interface::{StaticInputKind, StaticRole, static_interface};
 use crate::syntax::ast::{GenericArg, ImportItemNamespace};
 use crate::syntax::names::{NameAtom, NamePath};
+use crate::syntax::phase::never;
 
 /// Namespace candidates carried by one unresolved Static reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,7 +263,11 @@ pub fn declaration_static_references(kind: &DeclKind) -> Vec<StaticReference> {
         | DeclKind::Import(_)
         | DeclKind::PluginImport(_)
         | DeclKind::Include(_) => {}
-        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     }
     references
 }

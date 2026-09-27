@@ -12,6 +12,7 @@ use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
+use crate::syntax::phase::never;
 use crate::syntax::span::Span;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ pub enum DeclarationKind {
 impl DeclarationKind {
     /// Classify one post-desugar declaration.
     #[must_use]
-    pub fn from_decl_kind(kind: &DeclKind) -> Self {
+    pub const fn from_decl_kind(kind: &DeclKind) -> Self {
         match kind {
             DeclKind::ConstNode(_) => Self::ConstNode,
             DeclKind::Param(_) => Self::Param,
@@ -60,7 +61,11 @@ impl DeclarationKind {
             DeclKind::Import(_) | DeclKind::PluginImport(_) => Self::Import,
             DeclKind::Include(_) => Self::Include,
             DeclKind::Dag(_) => Self::Dag,
-            DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
         }
     }
 }

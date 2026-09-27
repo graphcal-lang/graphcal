@@ -23,21 +23,6 @@
 //!   `table[…] {…}` body; each entry's value carries the span of the source
 //!   cell it came from.
 
-/// Panic used in post-desugar exhaustive matches over `DeclKind`. Marks
-/// the invariant that [`desugar_multi_decls_in_file`] has already run.
-#[cold]
-#[track_caller]
-#[inline(never)]
-#[expect(
-    clippy::panic,
-    reason = "indicates a broken invariant — multi-decls must be desugared before this pass"
-)]
-pub fn unreachable_post_desugar() -> ! {
-    panic!(
-        "DeclKind::Sugar should have been removed by syntax::desugar::desugar_multi_decls_in_file"
-    )
-}
-
 use crate::syntax::ast::{
     ConstNodeDecl, Expr, ExprKind, File, MapEntry, MapEntryIndex, MapEntryKey, MultiDecl,
     MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,

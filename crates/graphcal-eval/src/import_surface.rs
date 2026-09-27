@@ -16,6 +16,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
 use graphcal_compiler::syntax::module_resolve::ExportedImportItemKind;
 use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
 use miette::NamedSource;
 use std::sync::Arc;
@@ -42,7 +43,7 @@ pub struct ProjectDeclIdentity<'a> {
     pub kind: ProjectDeclKind,
 }
 
-pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
+pub const fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
     let (name, kind) = match &decl.kind {
         DeclKind::Param(p) => (p.name.value.atom(), ProjectDeclKind::Param),
         DeclKind::Node(n) => (n.name.value.atom(), ProjectDeclKind::Node),
@@ -58,12 +59,16 @@ pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
         DeclKind::Layer(l) => (l.name.value.atom(), ProjectDeclKind::Layer),
         DeclKind::Dag(d) => (d.name.value.atom(), ProjectDeclKind::Dag),
         DeclKind::Import(_) | DeclKind::PluginImport(_) | DeclKind::Include(_) => return None,
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     };
     Some(ProjectDeclIdentity { name, kind })
 }
 
-pub fn decl_is_explicit_export(decl: &Declaration) -> bool {
+pub const fn decl_is_explicit_export(decl: &Declaration) -> bool {
     match &decl.kind {
         // Params carry the distinct input-port role. Import/include visibility
         // exists only on selected items; plugin functions are never re-exported.
@@ -83,13 +88,17 @@ pub fn decl_is_explicit_export(decl: &Declaration) -> bool {
         DeclKind::Plot(d) => d.visibility.is_public(),
         DeclKind::Figure(d) => d.visibility.is_public(),
         DeclKind::Layer(d) => d.visibility.is_public(),
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     }
 }
 
 /// Whether the declaration is externally addressable as an explicit export or
 /// param input port.
-pub fn decl_has_external_role(decl: &Declaration) -> bool {
+pub const fn decl_has_external_role(decl: &Declaration) -> bool {
     matches!(&decl.kind, DeclKind::Param(_)) || decl_is_explicit_export(decl)
 }
 
@@ -376,7 +385,11 @@ fn decl_pure_import_term_disposition(
         DeclKind::Include(include) if selective_include_reexport_matches(&include.kind, name) => {
             Some(PureImportTermDisposition::ResolverOnly)
         }
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
         DeclKind::Param(_)
         | DeclKind::Node(_)
         | DeclKind::ConstNode(_)
@@ -472,7 +485,11 @@ fn decl_import_item_presence(
         DeclKind::Include(d) => (namespace == ImportItemNamespace::Term
             && selective_include_reexport_matches(&d.kind, name))
         .then_some(ImportItemPresence::ExplicitExport),
-        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     }
 }
 

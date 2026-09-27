@@ -68,10 +68,10 @@ impl sealed::Sealed for Desugared {}
 
 /// Helper for matching against `Sugar(Infallible)` arms.
 ///
-/// In post-desugar code, `match decl.kind { ..., Sugar(s) => never(s) }`
+/// In post-desugar code, `match &decl.kind { ..., Sugar(s) => never(*s) }`
 /// is the canonical way to handle the impossible case without runtime panic.
 #[inline]
 #[must_use]
-pub(crate) const fn never<T>(x: Infallible) -> T {
+pub const fn never<T>(x: Infallible) -> T {
     match x {}
 }

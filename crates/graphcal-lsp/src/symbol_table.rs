@@ -17,6 +17,7 @@ use graphcal_compiler::syntax::index_name::ResolvedIndexName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
+use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{
     ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
@@ -1514,9 +1515,9 @@ fn collect_declarations(
             }
             #[expect(
                 clippy::uninhabited_references,
-                reason = "Sugar(Infallible) — proof of unreachability"
+                reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(sugar) => match *sugar {},
+            DeclKind::Sugar(s) => never(*s),
         }
     }
 }
