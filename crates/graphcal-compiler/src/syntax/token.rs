@@ -19,160 +19,291 @@
 //! Keyword vocabularies have one table each: hard keywords are the
 //! `hard_keywords` section of [`Token`] (listed by [`Token::HARD_KEYWORDS`]) and
 //! contextual keywords are [`ContextualKeyword`] (listed by
-//! [`ContextualKeyword::ALL`]). Tests lex every table entry, so a spelling
-//! missing from the Logos attributes cannot go unnoticed.
+//! [`ContextualKeyword::ALL`]). Both tables live in one `define_lexicon!`
+//! invocation, which also generates the Logos `#[token]` attributes for every
+//! keyword, so each spelling is written exactly once.
 
 use logos::Logos;
 
-#[derive(Logos, Debug, Clone, PartialEq)]
-pub(crate) enum LexicalToken {
-    // Trivia. The parser-facing lexer consumes these and exposes them through
-    // typed source metadata instead of yielding them as syntax tokens.
-    #[regex(r"[ \t\r\n]+")]
-    Whitespace,
-    #[regex(r"//[^\n\r]*", allow_greedy = true)]
-    Comment,
+/// Define the lexer's [`LexicalToken`], the parser-facing [`Token`] (with its
+/// `Display` rendering and [`Token::HARD_KEYWORDS`]), and [`ContextualKeyword`]
+/// (with its spellings and `ALL` listing) from one table.
+///
+/// Each keyword spelling is written exactly once: the Logos `#[token]`
+/// attributes for hard and contextual keywords are generated from the
+/// `hard_keywords` and `contextual_keywords` sections. `lexical_only` holds the
+/// remaining Logos variants verbatim. Tests lex every table entry.
+macro_rules! define_lexicon {
+    (
+        hard_keywords { $($keyword:ident => $keyword_text:literal),+ $(,)? }
+        contextual_keywords { $($contextual:ident => $contextual_text:literal),+ $(,)? }
+        others { $($variant:ident => $text:literal),+ $(,)? }
+        lexical_only { $($lexical:tt)* }
+    ) => {
+        #[derive(Logos, Debug, Clone, PartialEq)]
+        pub(crate) enum LexicalToken {
+            // Hard keywords: reserved spellings that never lex as identifiers.
+            $(#[token($keyword_text, |_| Token::$keyword)])+
+            HardKeyword(Token),
 
-    // Hard keywords: reserved spellings that never lex as identifiers. Each
-    // spelling yields an entry of `Token::HARD_KEYWORDS`.
-    #[token("param", |_| Token::Param)]
-    #[token("node", |_| Token::Node)]
-    #[token("const", |_| Token::Const)]
-    #[token("if", |_| Token::If)]
-    #[token("else", |_| Token::Else)]
-    #[token("true", |_| Token::True)]
-    #[token("false", |_| Token::False)]
-    #[token("base", |_| Token::Base)]
-    #[token("dim", |_| Token::Dimension)]
-    #[token("unit", |_| Token::Unit)]
-    #[token("type", |_| Token::Type)]
-    #[token("index", |_| Token::Index)]
-    #[token("for", |_| Token::For)]
-    #[token("import", |_| Token::Import)]
-    #[token("include", |_| Token::Include)]
-    #[token("dag", |_| Token::Dag)]
-    #[token("match", |_| Token::Match)]
-    #[token("as", |_| Token::As)]
-    #[token("assert", |_| Token::Assert)]
-    #[token("table", |_| Token::Table)]
-    #[token("plot", |_| Token::Plot)]
-    #[token("figure", |_| Token::Figure)]
-    #[token("layer", |_| Token::Layer)]
-    #[token("pub", |_| Token::Pub)]
-    HardKeyword(Token),
+            // Contextual keywords: identifier spellings with a special meaning
+            // only in selected productions.
+            $(#[token($contextual_text, |_| ContextualKeyword::$contextual)])+
+            ContextualKeyword(ContextualKeyword),
 
-    // Contextual keywords: identifier spellings with a special meaning only in
-    // selected productions.
-    #[token("todo", |_| ContextualKeyword::Todo)]
-    #[token("scan", |_| ContextualKeyword::Scan)]
-    #[token("unfold", |_| ContextualKeyword::Unfold)]
-    #[token("range", |_| ContextualKeyword::Range)]
-    #[token("linspace", |_| ContextualKeyword::Linspace)]
-    #[token("step", |_| ContextualKeyword::Step)]
-    #[token("points", |_| ContextualKeyword::Points)]
-    #[token("Fin", |_| ContextualKeyword::Fin)]
-    #[token("key", |_| ContextualKeyword::Key)]
-    #[token("fin_key", |_| ContextualKeyword::FinKey)]
-    #[token("floor_key", |_| ContextualKeyword::FloorKey)]
-    #[token("ceil_key", |_| ContextualKeyword::CeilKey)]
-    #[token("nearest_key", |_| ContextualKeyword::NearestKey)]
-    #[token("plugin", |_| ContextualKeyword::Plugin)]
-    #[token("fn", |_| ContextualKeyword::Fn)]
-    #[token("bind", |_| ContextualKeyword::Bind)]
-    #[token("mark", |_| ContextualKeyword::Mark)]
-    #[token("encode", |_| ContextualKeyword::Encode)]
-    #[token("plots", |_| ContextualKeyword::Plots)]
-    ContextualKeyword(ContextualKeyword),
+            $($lexical)*
+        }
 
-    // Literals
-    #[regex(r#""[^"\r\n]*""#)]
-    StringLiteral,
+        /// An identifier spelling that has keyword meaning only in a precise parser context.
+        ///
+        /// These spellings remain ordinary identifiers everywhere else. Keeping their
+        /// lexical classification typed lets parser code select a special production
+        /// without recovering semantics from source strings or repeating unions of
+        /// otherwise unrelated token variants.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum ContextualKeyword {
+            $($contextual),+
+        }
 
-    // Operators
-    #[token("+")]
-    Plus,
-    #[token("-")]
-    Minus,
-    #[token("*")]
-    Star,
-    #[token("/")]
-    Slash,
-    #[token("^")]
-    Caret,
-    #[token("%")]
-    Percent,
-    #[token("=")]
-    Eq,
-    #[token("==")]
-    EqEq,
-    #[token("!=")]
-    BangEq,
-    #[token("<")]
-    Lt,
-    #[token(">")]
-    Gt,
-    #[token("<=")]
-    LtEq,
-    #[token(">=")]
-    GtEq,
-    #[token("&&")]
-    AmpAmp,
-    #[token("||")]
-    PipePipe,
-    #[token("!")]
-    Bang,
-    #[token("->")]
-    Arrow,
-    #[token("|")]
-    Pipe,
-    #[token("=>")]
-    FatArrow,
-    #[token("~=")]
-    TildeEq,
-    #[token("+/-")]
-    PlusMinus,
+        impl ContextualKeyword {
+            /// Every contextual keyword, in table order.
+            pub const ALL: &'static [Self] = &[$(Self::$contextual),+];
 
-    // Attribute prefix
-    #[token("#")]
-    Hash,
+            /// Canonical source spelling recognized by the lexer.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$contextual => $contextual_text),+
+                }
+            }
+        }
 
-    // Delimiters
-    #[token("(")]
-    LParen,
-    #[token(")")]
-    RParen,
-    #[token("{")]
-    LBrace,
-    #[token("}")]
-    RBrace,
-    #[token("[")]
-    LBracket,
-    #[token("]")]
-    RBracket,
-    #[token(";")]
-    Semicolon,
-    #[token(",")]
-    Comma,
-    #[token("@")]
-    At,
-    #[token("::")]
-    DoubleColon,
-    #[token(":")]
-    Colon,
-    #[token(".")]
-    Dot,
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Token {
+            $($keyword,)+
 
-    // Wildcard pattern
-    #[token("_")]
-    Underscore,
+            /// Identifier spellings with a special meaning in selected productions.
+            ContextualKeyword(ContextualKeyword),
 
-    // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
-    #[regex(r"[a-zA-Z][a-zA-Z0-9_]*")]
-    Ident,
+            $($variant,)+
+        }
 
-    // Numeric literal (with _ separators and scientific notation)
-    #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?")]
-    Number,
+        impl Token {
+            /// Every hard keyword, in table order.
+            pub const HARD_KEYWORDS: &'static [Self] = &[$(Self::$keyword),+];
+        }
+
+        impl std::fmt::Display for Token {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$keyword => f.write_str($keyword_text),)+
+                    Self::ContextualKeyword(keyword) => keyword.fmt(f),
+                    $(Self::$variant => f.write_str($text),)+
+                }
+            }
+        }
+    };
+}
+
+define_lexicon! {
+    hard_keywords {
+        Param => "param",
+        Node => "node",
+        Const => "const",
+        If => "if",
+        Else => "else",
+        True => "true",
+        False => "false",
+        Base => "base",
+        Dimension => "dim",
+        Unit => "unit",
+        Type => "type",
+        Index => "index",
+        For => "for",
+        Import => "import",
+        Include => "include",
+        Dag => "dag",
+        Match => "match",
+        As => "as",
+        Assert => "assert",
+        Table => "table",
+        Plot => "plot",
+        Figure => "figure",
+        Layer => "layer",
+        Pub => "pub",
+    }
+    contextual_keywords {
+        Todo => "todo",
+        Scan => "scan",
+        Unfold => "unfold",
+        Range => "range",
+        Linspace => "linspace",
+        Step => "step",
+        Points => "points",
+        Fin => "Fin",
+        Key => "key",
+        FinKey => "fin_key",
+        FloorKey => "floor_key",
+        CeilKey => "ceil_key",
+        NearestKey => "nearest_key",
+        Plugin => "plugin",
+        Fn => "fn",
+        Bind => "bind",
+        Mark => "mark",
+        Encode => "encode",
+        Plots => "plots",
+    }
+    others {
+        // Literals
+        StringLiteral => "string",
+
+        // Operators
+        Plus => "+",
+        Minus => "-",
+        Star => "*",
+        Slash => "/",
+        Caret => "^",
+        Percent => "%",
+        Eq => "=",
+        EqEq => "==",
+        BangEq => "!=",
+        Lt => "<",
+        Gt => ">",
+        LtEq => "<=",
+        GtEq => ">=",
+        AmpAmp => "&&",
+        PipePipe => "||",
+        Bang => "!",
+        Arrow => "->",
+        Pipe => "|",
+        FatArrow => "=>",
+        TildeEq => "~=",
+        PlusMinus => "+/-",
+
+        // Attribute prefix
+        Hash => "#",
+
+        // Delimiters
+        LParen => "(",
+        RParen => ")",
+        LBrace => "{",
+        RBrace => "}",
+        LBracket => "[",
+        RBracket => "]",
+        Semicolon => ";",
+        Comma => ",",
+        At => "@",
+        DoubleColon => "::",
+        Colon => ":",
+        Dot => ".",
+
+        // Wildcard pattern
+        Underscore => "_",
+
+        // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
+        Ident => "identifier",
+
+        // Numeric literal (with _ separators and scientific notation)
+        Number => "number",
+    }
+    lexical_only {
+        // Trivia. The parser-facing lexer consumes these and exposes them through
+        // typed source metadata instead of yielding them as syntax tokens.
+        #[regex(r"[ \t\r\n]+")]
+        Whitespace,
+        #[regex(r"//[^\n\r]*", allow_greedy = true)]
+        Comment,
+
+        // Literals
+        #[regex(r#""[^"\r\n]*""#)]
+        StringLiteral,
+
+        // Operators
+        #[token("+")]
+        Plus,
+        #[token("-")]
+        Minus,
+        #[token("*")]
+        Star,
+        #[token("/")]
+        Slash,
+        #[token("^")]
+        Caret,
+        #[token("%")]
+        Percent,
+        #[token("=")]
+        Eq,
+        #[token("==")]
+        EqEq,
+        #[token("!=")]
+        BangEq,
+        #[token("<")]
+        Lt,
+        #[token(">")]
+        Gt,
+        #[token("<=")]
+        LtEq,
+        #[token(">=")]
+        GtEq,
+        #[token("&&")]
+        AmpAmp,
+        #[token("||")]
+        PipePipe,
+        #[token("!")]
+        Bang,
+        #[token("->")]
+        Arrow,
+        #[token("|")]
+        Pipe,
+        #[token("=>")]
+        FatArrow,
+        #[token("~=")]
+        TildeEq,
+        #[token("+/-")]
+        PlusMinus,
+
+        // Attribute prefix
+        #[token("#")]
+        Hash,
+
+        // Delimiters
+        #[token("(")]
+        LParen,
+        #[token(")")]
+        RParen,
+        #[token("{")]
+        LBrace,
+        #[token("}")]
+        RBrace,
+        #[token("[")]
+        LBracket,
+        #[token("]")]
+        RBracket,
+        #[token(";")]
+        Semicolon,
+        #[token(",")]
+        Comma,
+        #[token("@")]
+        At,
+        #[token("::")]
+        DoubleColon,
+        #[token(":")]
+        Colon,
+        #[token(".")]
+        Dot,
+
+        // Wildcard pattern
+        #[token("_")]
+        Underscore,
+
+        // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
+        #[regex(r"[a-zA-Z][a-zA-Z0-9_]*")]
+        Ident,
+
+        // Numeric literal (with _ separators and scientific notation)
+        #[regex(r"[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)?")]
+        Number,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,58 +368,6 @@ impl LexicalToken {
             Self::Number => LexicalItem::Syntax(Token::Number),
         }
     }
-}
-
-/// Define [`ContextualKeyword`], its canonical spellings, and its `ALL` listing
-/// from a single table so tests can iterate every entry.
-macro_rules! define_contextual_keywords {
-    ($($variant:ident => $spelling:literal),+ $(,)?) => {
-        /// An identifier spelling that has keyword meaning only in a precise parser context.
-        ///
-        /// These spellings remain ordinary identifiers everywhere else. Keeping their
-        /// lexical classification typed lets parser code select a special production
-        /// without recovering semantics from source strings or repeating unions of
-        /// otherwise unrelated token variants.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum ContextualKeyword {
-            $($variant),+
-        }
-
-        impl ContextualKeyword {
-            /// Every contextual keyword, in table order.
-            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-
-            /// Canonical source spelling recognized by the lexer.
-            #[must_use]
-            pub const fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $spelling),+
-                }
-            }
-        }
-    };
-}
-
-define_contextual_keywords! {
-    Todo => "todo",
-    Scan => "scan",
-    Unfold => "unfold",
-    Range => "range",
-    Linspace => "linspace",
-    Step => "step",
-    Points => "points",
-    Fin => "Fin",
-    Key => "key",
-    FinKey => "fin_key",
-    FloorKey => "floor_key",
-    CeilKey => "ceil_key",
-    NearestKey => "nearest_key",
-    Plugin => "plugin",
-    Fn => "fn",
-    Bind => "bind",
-    Mark => "mark",
-    Encode => "encode",
-    Plots => "plots",
 }
 
 impl ContextualKeyword {
@@ -365,123 +444,6 @@ impl SourceIdentifier {
 impl std::fmt::Display for SourceIdentifier {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
-    }
-}
-
-/// Define [`Token`], its `Display` rendering, and the [`Token::HARD_KEYWORDS`]
-/// listing from a single table. Every variant in the `hard_keywords` section
-/// is a reserved spelling; tests lex each one to prove the lexer agrees.
-macro_rules! define_tokens {
-    (
-        hard_keywords { $($keyword:ident => $keyword_text:literal),+ $(,)? }
-        others { $($variant:ident => $text:literal),+ $(,)? }
-    ) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum Token {
-            $($keyword,)+
-
-            /// Identifier spellings with a special meaning in selected productions.
-            ContextualKeyword(ContextualKeyword),
-
-            $($variant,)+
-        }
-
-        impl Token {
-            /// Every hard keyword, in table order.
-            pub const HARD_KEYWORDS: &'static [Self] = &[$(Self::$keyword),+];
-        }
-
-        impl std::fmt::Display for Token {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                match self {
-                    $(Self::$keyword => f.write_str($keyword_text),)+
-                    Self::ContextualKeyword(keyword) => keyword.fmt(f),
-                    $(Self::$variant => f.write_str($text),)+
-                }
-            }
-        }
-    };
-}
-
-define_tokens! {
-    hard_keywords {
-        Param => "param",
-        Node => "node",
-        Const => "const",
-        If => "if",
-        Else => "else",
-        True => "true",
-        False => "false",
-        Base => "base",
-        Dimension => "dim",
-        Unit => "unit",
-        Type => "type",
-        Index => "index",
-        For => "for",
-        Import => "import",
-        Include => "include",
-        Dag => "dag",
-        Match => "match",
-        As => "as",
-        Assert => "assert",
-        Table => "table",
-        Plot => "plot",
-        Figure => "figure",
-        Layer => "layer",
-        Pub => "pub",
-    }
-    others {
-        // Literals
-        StringLiteral => "string",
-
-        // Operators
-        Plus => "+",
-        Minus => "-",
-        Star => "*",
-        Slash => "/",
-        Caret => "^",
-        Percent => "%",
-        Eq => "=",
-        EqEq => "==",
-        BangEq => "!=",
-        Lt => "<",
-        Gt => ">",
-        LtEq => "<=",
-        GtEq => ">=",
-        AmpAmp => "&&",
-        PipePipe => "||",
-        Bang => "!",
-        Arrow => "->",
-        Pipe => "|",
-        FatArrow => "=>",
-        TildeEq => "~=",
-        PlusMinus => "+/-",
-
-        // Attribute prefix
-        Hash => "#",
-
-        // Delimiters
-        LParen => "(",
-        RParen => ")",
-        LBrace => "{",
-        RBrace => "}",
-        LBracket => "[",
-        RBracket => "]",
-        Semicolon => ";",
-        Comma => ",",
-        At => "@",
-        DoubleColon => "::",
-        Colon => ":",
-        Dot => ".",
-
-        // Wildcard pattern
-        Underscore => "_",
-
-        // General identifier: covers lower_snake_case, UPPER_SNAKE_CASE, PascalCase, and mixed
-        Ident => "identifier",
-
-        // Numeric literal (with _ separators and scientific notation)
-        Number => "number",
     }
 }
 

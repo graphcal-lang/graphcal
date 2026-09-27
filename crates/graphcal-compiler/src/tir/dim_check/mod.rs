@@ -128,17 +128,6 @@ struct DimCheckContext<'a> {
     src: &'a NamedSource<Arc<String>>,
 }
 
-impl<'a> DimCheckContext<'a> {
-    /// Re-anchor diagnostics on the source whose bytes a dynamic unit scale
-    /// expression indexes (carried by `DynamicUnitScaleEntry::src`).
-    const fn for_body(self, body_src: &'a NamedSource<Arc<String>>) -> Self {
-        Self {
-            src: body_src,
-            ..self
-        }
-    }
-}
-
 impl DimCheckContext<'_> {
     fn checkpoint(&self) -> Result<(), GraphcalError> {
         self.cancellation.checkpoint().map_err(GraphcalError::from)
@@ -313,22 +302,21 @@ fn check_dynamic_unit_scale_type(
                 .registry
                 .dimensions
                 .format_dimension(&entry.base_unit_dimension),
-            src: entry.src.clone(),
+            src: ctx.src.clone(),
             span: entry.span.into(),
         });
     }
-    let entry_ctx = ctx.for_body(&entry.src);
     let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         &entry.expr,
         None,
-        entry_ctx.declared_types,
-        entry_ctx.dag,
-        entry_ctx.tir,
-        entry_ctx.registry,
-        entry_ctx.builtin_fns,
-        entry_ctx.src,
-        entry_ctx.cancellation,
-        entry_ctx.expression_facts.clone(),
+        ctx.declared_types,
+        ctx.dag,
+        ctx.tir,
+        ctx.registry,
+        ctx.builtin_fns,
+        ctx.src,
+        ctx.cancellation,
+        ctx.expression_facts.clone(),
     )?;
     if !matches!(
         &inferred,
@@ -336,8 +324,8 @@ fn check_dynamic_unit_scale_type(
     ) {
         return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
             name: entry.spelling.clone(),
-            found: format_inferred_type(&inferred, entry_ctx.registry),
-            src: entry.src.clone(),
+            found: format_inferred_type(&inferred, ctx.registry),
+            src: ctx.src.clone(),
             span: entry.expr.span.into(),
         });
     }
@@ -1202,12 +1190,7 @@ fn check_dimensions_dag(
         )?;
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&entry.name) {
-            validate_expected_fail(
-                &metadata.expected,
-                &shape,
-                &metadata.src,
-                metadata.attribute_span,
-            )?;
+            validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;
         }
         // Assertion results are never displayed with units, so no position
         // inside an assert body is display-effective.

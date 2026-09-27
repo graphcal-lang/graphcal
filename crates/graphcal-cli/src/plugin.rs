@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use graphcal_compiler::dimension::{Dimension, Rational};
 use graphcal_compiler::function_signature::{
     DimMonomial, FunctionSignature, ParamKind, ResultKind, ScalarValueKind, StructFieldKind,
+    StructShape,
 };
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
@@ -396,7 +397,32 @@ impl<'a> SourceStringLiteral<'a> {
 struct RenderableFunction<'a> {
     name: SourceIdentifier,
     signature: &'a FunctionSignature,
-    result_type_name: Option<SourceIdentifier>,
+    result: RenderableResult<'a>,
+}
+
+/// A function result; struct results always carry their generated record name.
+enum RenderableResult<'a> {
+    Value(&'a ParamKind),
+    Struct {
+        type_name: SourceIdentifier,
+        shape: &'a StructShape,
+    },
+}
+
+impl<'a> RenderableResult<'a> {
+    fn try_new(
+        function: &str,
+        result: &'a ResultKind,
+        used_result_names: &mut HashSet<String>,
+    ) -> Result<Self, ImportBlockRenderError> {
+        match result {
+            ResultKind::Value(kind) => Ok(Self::Value(kind)),
+            ResultKind::Struct(shape) => Ok(Self::Struct {
+                type_name: allocate_result_type_name(function, used_result_names)?,
+                shape,
+            }),
+        }
+    }
 }
 
 /// A complete import that cannot contain source-breaking manifest text.
@@ -420,15 +446,15 @@ impl<'a> RenderableImport<'a> {
             .map(|(function, signature)| {
                 let function_name = parse_function_name(function.as_str())?;
                 validate_signature_names(function.as_str(), signature)?;
-                let result_type_name = matches!(signature.result(), ResultKind::Struct(_))
-                    .then(|| {
-                        allocate_result_type_name(function_name.as_str(), &mut used_result_names)
-                    })
-                    .transpose()?;
+                let result = RenderableResult::try_new(
+                    function_name.as_str(),
+                    signature.result(),
+                    &mut used_result_names,
+                )?;
                 Ok(RenderableFunction {
                     name: function_name,
                     signature,
-                    result_type_name,
+                    result,
                 })
             })
             .collect::<Result<_, ImportBlockRenderError>>()?;
@@ -444,9 +470,7 @@ impl<'a> RenderableImport<'a> {
 
         let mut out = String::new();
         for function in &self.functions {
-            if let (Some(type_name), ResultKind::Struct(shape)) =
-                (&function.result_type_name, function.signature.result())
-            {
+            if let RenderableResult::Struct { type_name, shape } = &function.result {
                 out.push_str(&render_result_type_decl(type_name, shape));
                 out.push_str("\n\n");
             }
@@ -601,10 +625,7 @@ fn suggest_result_type_name(function: &str) -> String {
     out
 }
 
-fn render_result_type_decl(
-    type_name: &SourceIdentifier,
-    shape: &graphcal_compiler::function_signature::StructShape,
-) -> String {
+fn render_result_type_decl(type_name: &SourceIdentifier, shape: &StructShape) -> String {
     let fields = shape
         .fields()
         .iter()
@@ -641,9 +662,9 @@ fn render_declaration(function: &RenderableFunction<'_>) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let _ = write!(out, "({parameters}) -> ");
-    match (&function.result_type_name, signature.result()) {
-        (Some(type_name), ResultKind::Struct(_)) => out.push_str(type_name.as_str()),
-        (_, result) => out.push_str(&render_result_kind(result)),
+    match &function.result {
+        RenderableResult::Value(kind) => out.push_str(&render_param_kind(kind)),
+        RenderableResult::Struct { type_name, .. } => out.push_str(type_name.as_str()),
     }
     out.push(';');
     out
@@ -658,21 +679,6 @@ fn render_param_kind(kind: &ParamKind) -> String {
             indexes
                 .iter()
                 .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn render_result_kind(kind: &ResultKind) -> String {
-    match kind {
-        ResultKind::Value(kind) => render_param_kind(kind),
-        ResultKind::Struct(shape) => format!(
-            "{{ {} }}",
-            shape
-                .fields()
-                .iter()
-                .map(|field| format!("{}: {}", field.name, render_struct_field_kind(&field.kind)))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -988,12 +994,13 @@ fn render_quantity_result_dimension(
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dimension::Rational;
-    use graphcal_compiler::function_signature::{DimMonomial, FunctionParam};
+    use graphcal_compiler::function_signature::{DimMonomial, FunctionParam, StructShapeField};
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::dimension::DimVarName;
     use graphcal_compiler::syntax::function_name::FnParamName;
     use graphcal_compiler::syntax::index_name::IndexVarName;
     use graphcal_compiler::syntax::non_empty::NonEmpty;
+    use graphcal_compiler::syntax::type_name::FieldName;
 
     use super::*;
 
@@ -1111,13 +1118,87 @@ mod tests {
 
     fn render_test_declaration(name: &str, signature: &FunctionSignature) -> String {
         let name = SourceIdentifier::parse(name).unwrap();
-        let result_type_name = matches!(signature.result(), ResultKind::Struct(_))
-            .then(|| SourceIdentifier::parse(suggest_result_type_name(name.as_str())).unwrap());
+        let result =
+            RenderableResult::try_new(name.as_str(), signature.result(), &mut HashSet::new())
+                .unwrap();
         render_declaration(&RenderableFunction {
             name,
             signature,
-            result_type_name,
+            result,
         })
+    }
+
+    fn struct_result_signature(param: &str, field: &str) -> FunctionSignature {
+        FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![FunctionParam {
+                name: FnParamName::expect_valid(param),
+                kind: ParamKind::dimensionless(),
+            }],
+            ResultKind::Struct(
+                StructShape::try_new(vec![StructShapeField {
+                    name: FieldName::expect_valid(field),
+                    kind: StructFieldKind::Int,
+                }])
+                .unwrap(),
+            ),
+        )
+        .expect("valid signature")
+    }
+
+    #[test]
+    fn struct_results_render_their_generated_record_name() {
+        assert_eq!(
+            render_test_declaration("solve_orbit", &struct_result_signature("x", "steps")),
+            "fn solve_orbit(x: Dimensionless) -> SolveOrbitResult;"
+        );
+    }
+
+    #[test]
+    fn signature_names_outside_source_identifiers_are_rejected() {
+        assert!(validate_signature_names("f", &struct_result_signature("x", "steps")).is_ok());
+        assert!(matches!(
+            validate_signature_names("f", &struct_result_signature("node", "steps")),
+            Err(ImportBlockRenderError::InvalidParameterName { name, .. }) if name == "node"
+        ));
+        assert!(matches!(
+            validate_signature_names("f", &struct_result_signature("x", "node")),
+            Err(ImportBlockRenderError::InvalidResultFieldName { name, .. }) if name == "node"
+        ));
+        let dim = DimVarName::expect_valid("node");
+        let dim_var = FunctionSignature::try_new(
+            vec![dim.clone()],
+            Vec::new(),
+            vec![FunctionParam {
+                name: FnParamName::expect_valid("x"),
+                kind: ParamKind::quantity_monomial(DimMonomial::var(dim)),
+            }],
+            ParamKind::dimensionless().into(),
+        )
+        .expect("valid signature");
+        assert!(matches!(
+            validate_signature_names("f", &dim_var),
+            Err(ImportBlockRenderError::InvalidDimensionVariable { name, .. }) if name == "node"
+        ));
+        let index = IndexVarName::expect_valid("node");
+        let index_var = FunctionSignature::try_new(
+            Vec::new(),
+            vec![index.clone()],
+            vec![FunctionParam {
+                name: FnParamName::expect_valid("values"),
+                kind: ParamKind::Indexed {
+                    element: ScalarValueKind::Int,
+                    indexes: NonEmpty::singleton(index),
+                },
+            }],
+            ParamKind::dimensionless().into(),
+        )
+        .expect("valid signature");
+        assert!(matches!(
+            validate_signature_names("f", &index_var),
+            Err(ImportBlockRenderError::InvalidIndexVariable { name, .. }) if name == "node"
+        ));
     }
 
     #[test]

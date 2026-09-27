@@ -324,17 +324,16 @@ fn check_rigid_unit_bodies(
         if entry.unit.owner() != ctx.dag.dag_id() {
             continue;
         }
-        let body_ctx = ctx.for_body(&entry.src);
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Unit,
             name: entry.unit.atom().clone(),
         };
         rigid_dimension_error(
-            &body_ctx,
+            ctx,
             &body,
             port,
             entry.expr.span,
-            super::check_dynamic_unit_scale_type(&body_ctx, entry),
+            super::check_dynamic_unit_scale_type(ctx, entry),
         )?;
     }
     Ok(())
@@ -532,12 +531,11 @@ fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
         if entry.unit.owner() != ctx.dag.dag_id() {
             continue;
         }
-        let body_ctx = ctx.for_body(&entry.src);
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Unit,
             name: entry.unit.atom().clone(),
         };
-        check_expr(&body_ctx, None, &identity, &entry.expr)?;
+        check_expr(ctx, None, &identity, &entry.expr)?;
     }
     Ok(())
 }

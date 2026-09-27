@@ -356,7 +356,6 @@ pub(super) fn resolve_expected_fail_keys(
                 assert_name,
                 ResolvedExpectedFailMetadata {
                     expected: resolved,
-                    src: src.clone(),
                     attribute_span,
                 },
             ))
