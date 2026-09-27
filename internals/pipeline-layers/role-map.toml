@@ -1443,6 +1443,16 @@ role = "contracts"
 
 [[module]]
 package = "eval"
+path = ["dependency_ordered"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["dependency_ordered", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["graph_ir"]
 role = "contracts"
 

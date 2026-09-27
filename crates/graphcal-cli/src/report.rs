@@ -288,7 +288,8 @@ fn source_digests(
     let mut digests: Vec<SourceDigest> = project
         .files()
         .iter()
-        .map(|(id, file)| {
+        .map(|file| {
+            let id = file.dag_id();
             let path = file.path();
             let scope = dependency_roots
                 .get(id.package())
@@ -427,10 +428,10 @@ fn hydration_project(
         .ok()
         .and_then(|entry| relative_source_name(&entry, root_dir.as_deref()));
     let mut files = Vec::new();
-    for (_, file) in project
+    for file in project
         .files()
         .iter()
-        .filter(|(id, _)| id.package() == project.root_id().package())
+        .filter(|file| file.dag_id().package() == project.root_id().package())
     {
         let Some(name) = relative_source_name(file.path(), root_dir.as_deref()) else {
             return Err(ReportError::HydrationUnsupported {

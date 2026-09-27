@@ -1364,9 +1364,10 @@ fn build_project(
 fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIdentity> {
     project
         .files()
+        .ordered()
+        .deps()
         .iter()
-        .filter(|(file_id, _)| *file_id != project.root_id())
-        .map(|(_, file)| DocumentIdentity::file(file.path().to_path_buf()))
+        .map(|file| DocumentIdentity::file(file.path().to_path_buf()))
         .chain(
             project
                 .package_closure()
@@ -2233,7 +2234,8 @@ fn build_project_symbol_documents(
     project
         .files()
         .iter()
-        .map(|(file_id, loaded_file)| {
+        .map(|loaded_file| {
+            let file_id = loaded_file.dag_id();
             cancellation.checkpoint()?;
             let mut table = symbol_table::build_from_ast(
                 loaded_file.ast(),
@@ -2334,7 +2336,8 @@ fn collect_imported_definitions(
     let mut imported_by_file = project
         .files()
         .iter()
-        .map(|(file_id, loaded_file)| {
+        .map(|loaded_file| {
+            let file_id = loaded_file.dag_id();
             collect_file_imported_symbols(
                 file_id,
                 loaded_file,

@@ -5642,7 +5642,7 @@ fn loaded_file_dag_id(
 ) -> graphcal_compiler::dag_id::DagId {
     project
         .files()
-        .values()
+        .iter()
         .find(|file| file.path().file_name().and_then(|name| name.to_str()) == Some(file_name))
         .map_or_else(
             || panic!("loaded file `{file_name}` not found"),

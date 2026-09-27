@@ -17,7 +17,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 pub(in crate::project_compiler) fn validate_project_dag_recursion(
     project: &crate::loader::LoadedProject,
 ) -> Result<(), CompileError> {
-    project.files().values().try_for_each(|loaded_file| {
+    project.files().iter().try_for_each(|loaded_file| {
         let definitions = loaded_file
             .ast()
             .declarations
@@ -34,7 +34,7 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
 /// Lower one physical file after every dependency HIR interface is available.
 fn lower_single_file_to_hir(
     project: &crate::loader::LoadedProject,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    loaded_file: &crate::loader::LoadedFile,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
@@ -47,7 +47,7 @@ fn lower_single_file_to_hir(
     CompileError,
 > {
     cancellation.checkpoint()?;
-    let loaded_file = &project.files()[file_dag_id];
+    let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
 
     let mut ctx = ImportContext {
@@ -203,32 +203,24 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirProject<'project>, CompileError> {
     cancellation.checkpoint()?;
-    let mut files = HashMap::new();
     let mut module_interfaces = HashMap::new();
     let mut module_templates = ModuleTemplateStore::default();
 
-    for file_dag_id in project.load_order() {
+    // Dependency order guarantees every imported HIR interface is available
+    // before its dependents are lowered.
+    let files = project.files().ordered().as_ref().try_map(|loaded_file| {
         cancellation.checkpoint()?;
         let (hir, lowering_interfaces) = lower_single_file_to_hir(
             project,
-            file_dag_id,
+            loaded_file,
             &module_interfaces,
             &module_resolver,
             &mut module_templates,
             cancellation,
         )?;
         module_interfaces.extend(lowering_interfaces);
-        files.insert(file_dag_id.clone(), hir);
-    }
-
-    if !files.contains_key(project.root_id()) {
-        let internal_source = NamedSource::new("internal", Arc::new(String::new()));
-        return Err(CompileError::Eval(GraphcalError::internal_error(
-            "root file not found in project load order",
-            &internal_source,
-            DiagnosticAnchor::Builtin,
-        )));
-    }
+        Ok::<_, CompileError>(hir)
+    })?;
 
     let exported_runtime_units = module_interfaces
         .iter()
@@ -236,8 +228,6 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         .collect();
 
     Ok(HirProject {
-        root: project.root_id().clone(),
-        load_order: project.load_order().to_vec(),
         files,
         plugins: project.plugins(),
         exported_runtime_units,
@@ -249,7 +239,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
 fn build_project_type_store(
     hir: &HirProject<'_>,
 ) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, CompileError> {
-    let root_source = &hir.files[&hir.root].source;
+    let root_source = &hir.files.root().source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|error| {
         GraphcalError::internal_error(
@@ -258,14 +248,7 @@ fn build_project_type_store(
             DiagnosticAnchor::Builtin,
         )
     })?;
-    for file_dag_id in &hir.load_order {
-        let file = hir.files.get(file_dag_id).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("HIR module `{file_dag_id}` is unavailable"),
-                root_source,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })?;
+    for file in &hir.files {
         let source = &file.source;
         std::iter::once(&file.root)
             .chain(&file.inline_dags)
@@ -292,42 +275,27 @@ pub(in crate::project_compiler) fn check_hir_project(
     hir.cancellation.checkpoint()?;
     let project_types = build_project_type_store(&hir)?;
     let HirProject {
-        root,
-        load_order,
-        mut files,
+        files,
         plugins,
         exported_runtime_units,
         module_resolver,
         cancellation,
     } = hir;
-    let root_source = files
-        .get(&root)
-        .map(|file| file.source.clone())
-        .ok_or_else(|| {
-            let internal_source = NamedSource::new("internal", Arc::new(String::new()));
-            CompileError::Eval(GraphcalError::internal_error(
-                "root HIR module is unavailable before checking",
-                &internal_source,
-                DiagnosticAnchor::Builtin,
-            ))
-        })?;
+    let (deps, root_file) = files.into_parts();
     let mut module_artifacts = ModuleArtifactStore::default();
     let mut inherited_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
-
-    for file_dag_id in &load_order {
+    // Check one HIR file against every dependency artifact published so far
+    // and verify its declared host functions.
+    let check_file = |hir_file: HirFile,
+                      module_artifacts: &ModuleArtifactStore,
+                      inherited_execution_facts: &crate::execution_facts::CheckedExecutionFacts|
+     -> Result<(CompiledFile, NamedSource<Arc<String>>), CompileError> {
         cancellation.checkpoint()?;
-        let hir_file = files.remove(file_dag_id).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("HIR module `{file_dag_id}` was already consumed or is missing"),
-                &root_source,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })?;
         let file_src = hir_file.source.clone();
         let compiled = checking::check_hir_file(
             hir_file,
-            &module_artifacts,
-            &inherited_execution_facts,
+            module_artifacts,
+            inherited_execution_facts,
             &exported_runtime_units,
             &module_resolver,
             &project_types,
@@ -340,30 +308,29 @@ pub(in crate::project_compiler) fn check_hir_project(
             host_metadata,
             &cancellation,
         )?;
+        Ok((compiled, file_src))
+    };
 
-        if *file_dag_id == root {
-            return Ok(CheckedProject {
-                compiled,
-                source: file_src,
-                module_resolver,
-            });
-        }
-
+    for hir_file in deps {
+        let file_dag_id = hir_file.root.dag_id().clone();
+        let (compiled, file_src) =
+            check_file(hir_file, &module_artifacts, &inherited_execution_facts)?;
         inherited_execution_facts = compiled.checked_execution_facts.clone();
         store_module_artifact(
             compiled,
-            file_dag_id,
+            &file_dag_id,
             &file_src,
             &mut module_artifacts,
             &cancellation,
         )?;
     }
 
-    Err(CompileError::Eval(GraphcalError::internal_error(
-        "root HIR module was not checked",
-        &root_source,
-        DiagnosticAnchor::WholeFile,
-    )))
+    let (compiled, source) = check_file(root_file, &module_artifacts, &inherited_execution_facts)?;
+    Ok(CheckedProject {
+        compiled,
+        source,
+        module_resolver,
+    })
 }
 
 /// Load-time verification of every extern function declared by a file.

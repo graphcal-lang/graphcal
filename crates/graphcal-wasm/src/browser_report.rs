@@ -30,7 +30,7 @@ impl ReportMetadata {
         let docs = collect_doc_captions(project.root_file().ast());
         let mut sources = project
             .files()
-            .values()
+            .iter()
             .map(|file| {
                 let name = VirtualProject::relative_source_name(&file.path().to_string_lossy())
                     .unwrap_or_else(|| file.path().display().to_string());
