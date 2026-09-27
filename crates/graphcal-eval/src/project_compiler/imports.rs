@@ -81,13 +81,13 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 )]
 pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    loaded_file: &crate::loader::LoadedFile,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    let loaded_file = &project.files()[file_dag_id];
+    let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
     let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl> =
         loaded_file
