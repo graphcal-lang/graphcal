@@ -407,7 +407,13 @@ impl ProjectTypeStore {
         let registry = builder.build();
         let owner = crate::registry::prelude::prelude_dag_id();
         for name in crate::registry::prelude::prelude_dimension_names() {
-            if let Some(dim) = registry.dimensions.get_dimension(name) {
+            if let Some(dim) =
+                registry
+                    .dimensions
+                    .get_dimension(&crate::syntax::dimension::DimRef::local(
+                        DimName::expect_valid(name),
+                    ))
+            {
                 self.dimensions.insert(
                     ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name)),
                     dim.clone(),
@@ -546,7 +552,7 @@ impl ProjectTypeStore {
             let dimension = hir
                 .registry
                 .dimensions
-                .get_dimension(name.as_str())
+                .get_dimension(&crate::syntax::dimension::DimRef::local(name.clone()))
                 .ok_or_else(|| ProjectTypeStoreInsertError::MissingDimension {
                     identity: identity.clone(),
                 })?;
@@ -574,13 +580,11 @@ impl ProjectTypeStore {
         }
         for name in symbols.indexes().keys() {
             let identity = ResolvedIndexName::from_def(owner.clone(), name.clone());
-            let index = hir
-                .registry
-                .indexes
-                .get_index(name.as_str())
-                .ok_or_else(|| ProjectTypeStoreInsertError::MissingIndex {
+            let index = hir.registry.indexes.get_index(name).ok_or_else(|| {
+                ProjectTypeStoreInsertError::MissingIndex {
                     identity: identity.clone(),
-                })?;
+                }
+            })?;
             self.insert_index_definition(identity, index)?;
         }
         self.insert_nominal_types(hir)?;

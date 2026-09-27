@@ -1657,17 +1657,16 @@ fn capture_index_binding_candidates(
         .iter()
         .map(|(dep_index, target)| {
             let candidate = match target {
-                IndexBindingTarget::Declared(importer_index) => builder
-                    .get_index(importer_index.as_str())
-                    .cloned()
-                    .ok_or_else(|| {
+                IndexBindingTarget::Declared(importer_index) => {
+                    builder.get_index(importer_index).cloned().ok_or_else(|| {
                         CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
                             dep_index: dep_index.to_string(),
                             value: target.to_string(),
                             src: importer_src.clone(),
                             span: index_binding_span(dep_index, spans, include_span).into(),
                         })
-                    })?,
+                    })?
+                }
                 IndexBindingTarget::Finite(finite) => {
                     builder.ensure_finite_index(finite.cardinality());
                     builder.get_finite_index(*finite).cloned().ok_or_else(|| {
@@ -1767,18 +1766,13 @@ fn effective_index_binding_contract(
     use graphcal_compiler::registry::types::{IndexBindingContract, IndexKind};
     use graphcal_compiler::syntax::dimension::DimRef;
 
-    let definition = dep_registry
-        .indexes
-        .get_index(dep_index.as_str())
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!(
-                    "bound dependency index `{dep_index}` is missing from its registry"
-                ),
-                src: importer_src.clone(),
-                span: binding_span.into(),
-            })
-        })?;
+    let definition = dep_registry.indexes.get_index(dep_index).ok_or_else(|| {
+        CompileError::Eval(GraphcalError::InternalError {
+            message: format!("bound dependency index `{dep_index}` is missing from its registry"),
+            src: importer_src.clone(),
+            span: binding_span.into(),
+        })
+    })?;
 
     match &definition.kind {
         IndexKind::Named { .. } => Ok(IndexBindingContract::Named),
@@ -1813,8 +1807,8 @@ fn effective_index_binding_contract(
                     .get(reference.name())
                     .filter(|_| !reference.is_qualified())
                     .map_or_else(
-                        || dep_registry.dimensions.get_dimension_ref(reference),
-                        |target| builder.get_dimension_ref(&DimRef::local(target.clone())),
+                        || dep_registry.dimensions.get_dimension(reference),
+                        |target| builder.get_dimension(&DimRef::local(target.clone())),
                     )
             })
             .map_err(|error| {

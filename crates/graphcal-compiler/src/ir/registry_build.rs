@@ -58,7 +58,10 @@ pub struct SelectedDeclarations {
     /// to the dependency's source declaration name (`dim Rate as R` stores
     /// `R -> Rate`). Local names are what the importer's source can spell.
     dimensions: HashMap<crate::syntax::dimension::DimName, crate::syntax::dimension::DimName>,
-    units: HashSet<crate::syntax::dimension::UnitName>,
+    /// Selected units keyed by importer-local binding name, mapped to the
+    /// dependency's source declaration name (`unit spd as s` stores
+    /// `s -> spd`).
+    units: HashMap<crate::syntax::dimension::UnitName, crate::syntax::dimension::UnitName>,
     indexes: HashSet<crate::syntax::index_name::IndexName>,
     types: HashSet<crate::syntax::type_name::StructTypeName>,
 }
@@ -92,8 +95,8 @@ impl SelectedDeclarations {
                 self.dimensions.insert(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Unit => {
-                self.units
-                    .insert(crate::syntax::dimension::UnitName::from_atom(name));
+                let name = crate::syntax::dimension::UnitName::from_atom(name);
+                self.units.insert(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Index => {
                 self.indexes
@@ -138,8 +141,26 @@ impl SelectedDeclarations {
         selected
     }
 
-    /// Unit names selected with the explicit `unit` marker.
-    pub fn units(&self) -> impl Iterator<Item = &crate::syntax::dimension::UnitName> {
+    /// Record one selectively imported unit bound under an importer-local
+    /// name that may differ from its source declaration (`unit spd as s`).
+    pub fn insert_unit_as(
+        &mut self,
+        source: crate::syntax::dimension::UnitName,
+        local: crate::syntax::dimension::UnitName,
+    ) {
+        self.units.insert(local, source);
+    }
+
+    /// Units selected with the explicit `unit` marker, as
+    /// `(importer-local name, dependency source name)` pairs.
+    pub fn units(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::syntax::dimension::UnitName,
+            &crate::syntax::dimension::UnitName,
+        ),
+    > {
         self.units.iter()
     }
 }
@@ -197,7 +218,9 @@ fn register_declarations_impl(
                 .any(|source| source.as_str() == name)
         })
     };
-    let should_register_unit = |name: &str| filter.is_none_or(|names| names.units.contains(name));
+    let should_register_unit = |name: &str| {
+        filter.is_none_or(|names| names.units.values().any(|source| source.as_str() == name))
+    };
     let should_register_index =
         |name: &str| filter.is_none_or(|names| names.indexes.contains(name));
     let should_register_type = |name: &str| filter.is_none_or(|names| names.types.contains(name));

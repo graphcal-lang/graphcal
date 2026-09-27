@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{GenericConstraint, TypeExpr};
+use crate::registry::aliased_table::AliasedTable;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 /// A typed field in a constructor payload.
@@ -264,8 +265,7 @@ impl TypeDef {
 /// side; [`get_type`](Self::get_type) walks the type side.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
-    pub(crate) types: HashMap<StructTypeName, TypeDef>,
-    pub(crate) aliases: HashMap<StructTypeName, StructTypeName>,
+    pub(crate) types: AliasedTable<StructTypeName, TypeDef>,
     /// Constructor namespace: each constructor name resolves to the
     /// union it belongs to. With no module system, the namespace is
     /// flat. Duplicate names are rejected upstream during name
@@ -275,18 +275,11 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
-    /// Look up a type definition by type name.
+    /// Look up a type definition by source-visible type name, following
+    /// aliases.
     #[must_use]
-    pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
-        let mut current = StructTypeName::try_new(name).ok()?;
-        let mut remaining = self.aliases.len() + 1;
-        loop {
-            if let Some(definition) = self.types.get(&current) {
-                return Some(definition);
-            }
-            current = self.aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+    pub fn get_type(&self, name: &StructTypeName) -> Option<&TypeDef> {
+        self.types.get(name)
     }
 
     /// Look up the union that owns a constructor name, plus the
@@ -295,7 +288,7 @@ impl TypeRegistry {
     #[must_use]
     pub fn lookup_ctor(&self, ctor: &ConstructorName) -> Option<(&TypeDef, &UnionMemberDef)> {
         let union_name = self.ctors.get(ctor)?;
-        let td = self.types.get(union_name)?;
+        let td = self.types.get_defined(union_name)?;
         let members = td.union_members()?;
         let member = members.iter().find(|m| m.name == *ctor)?;
         Some((td, member))

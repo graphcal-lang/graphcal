@@ -1142,6 +1142,20 @@ fn selective_include_projects_closed_static_and_runtime_unit_categories() {
 }
 
 #[test]
+fn selective_include_unit_projection_resolves_in_unit_definitions() {
+    // A projected unit alias is visible to the importer's own unit
+    // definitions, not only to expressions.
+    let source = "dag target {\n\
+                      pub const unit double_metre: Length = 2.0 m;\n\
+                  }\n\
+                  include target()::{ unit double_metre as effective_double_metre };\n\
+                  const unit quad_metre: Length = 2.0 effective_double_metre;\n\
+                  node scaled: Length = 1.0 quad_metre;";
+    let result = compile_and_eval(source).expect("projected unit alias resolves");
+    assert_quantity_value(&result, "scaled", 4.0);
+}
+
+#[test]
 fn selective_include_projects_specialized_adt_constructors() {
     let source = "dag target {\n\
                       pub(bind) dim Quantity;\n\

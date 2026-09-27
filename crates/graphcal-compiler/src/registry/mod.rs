@@ -1,5 +1,6 @@
 //! Graphcal registry: shared types, error definitions, builtins, and the unit/dimension registry.
 
+pub mod aliased_table;
 pub mod builtins;
 pub mod dag;
 pub mod declared_type;

@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 
 use thiserror::Error;
 
 use crate::dimension::Dimension;
+use crate::registry::aliased_table::AliasedTable;
 use crate::registry::unit::PositiveFiniteScale;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 
@@ -461,7 +461,7 @@ impl FiniteIndex {
 /// Declared axes retain their typed declaration names. Structural axes retain
 /// their validated finite identity instead of fabricating a recoverable name
 /// such as `"Fin(3)"`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IndexBindingTarget {
     /// A declared axis in the including DAG's registry.
     Declared(IndexName),
@@ -489,50 +489,43 @@ impl fmt::Display for IndexBindingTarget {
     }
 }
 
-/// Index registry: maps declared names and typed structural identities to definitions.
+/// Index registry: maps declared names and typed structural identities to
+/// definitions. Declared names may alias another declared name or a
+/// structural identity.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {
-    pub(crate) indexes: HashMap<IndexName, IndexDef>,
-    pub(crate) finite_indexes: HashMap<FiniteIndex, IndexDef>,
-    pub(crate) aliases: HashMap<IndexName, IndexBindingTarget>,
+    pub(crate) indexes: AliasedTable<IndexBindingTarget, IndexDef>,
 }
 
 impl IndexRegistry {
-    /// Look up a declared index definition by name.
+    /// Look up a declared index definition by source-visible name, following
+    /// aliases.
     #[must_use]
-    pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
-        let mut current = IndexBindingTarget::Declared(IndexName::try_new(name).ok()?);
-        let mut remaining = self.aliases.len() + 1;
-        loop {
-            match current {
-                IndexBindingTarget::Declared(ref declared) => {
-                    if let Some(definition) = self.indexes.get(declared) {
-                        return Some(definition);
-                    }
-                    current = self.aliases.get(declared)?.clone();
-                }
-                IndexBindingTarget::Finite(index) => {
-                    return self.finite_indexes.get(&index);
-                }
-            }
-            remaining = remaining.checked_sub(1)?;
-        }
+    pub fn get_index(&self, name: &IndexName) -> Option<&IndexDef> {
+        self.indexes
+            .get(&IndexBindingTarget::Declared(name.clone()))
     }
 
     /// Look up a compiler-generated structural index by typed identity.
     #[must_use]
     pub fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
-        self.finite_indexes.get(&index)
+        self.indexes.get_defined(&IndexBindingTarget::Finite(index))
     }
 
     /// Iterate over declared index definitions.
     pub fn declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
-        self.indexes.values()
+        self.indexes
+            .iter()
+            .filter(|(key, _)| matches!(key, IndexBindingTarget::Declared(_)))
+            .map(|(_, definition)| definition)
     }
 
     /// Iterate over compiler-generated structural index identities.
     pub fn finite_indexes(&self) -> impl Iterator<Item = FiniteIndex> + '_ {
-        self.finite_indexes.keys().copied()
+        self.indexes.keys().filter_map(|key| match key {
+            IndexBindingTarget::Declared(_) => None,
+            IndexBindingTarget::Finite(index) => Some(*index),
+        })
     }
 }
 

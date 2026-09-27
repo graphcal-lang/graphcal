@@ -512,6 +512,16 @@ role = "facade"
 
 [[module]]
 package = "compiler"
+path = ["registry", "aliased_table"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["registry", "aliased_table", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["registry", "builtins"]
 role = "contracts"
 

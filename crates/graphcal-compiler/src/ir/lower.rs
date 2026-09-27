@@ -1140,7 +1140,14 @@ mod tests {
         assert_eq!(ir.consts.len(), 1); // G0
         assert_eq!(ir.params.len(), 3); // dry_mass, fuel_mass, isp
         assert_eq!(ir.nodes.len(), 3); // v_exhaust, mass_ratio, delta_v
-        assert!(ir.registry.dimensions.get_dimension("Length").is_some());
+        assert!(
+            ir.registry
+                .dimensions
+                .get_dimension(&crate::syntax::dimension::DimRef::local(
+                    crate::syntax::dimension::DimName::expect_valid("Length")
+                ))
+                .is_some()
+        );
         assert!(
             ir.registry
                 .units
@@ -1164,7 +1171,14 @@ mod tests {
     fn lower_indexed() {
         let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert!(ir.registry.indexes.get_index("Maneuver").is_some());
+        assert!(
+            ir.registry
+                .indexes
+                .get_index(&crate::syntax::index_name::IndexName::expect_valid(
+                    "Maneuver"
+                ))
+                .is_some()
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ratio::RatioError;
+use crate::registry::aliased_table::{AliasCycle, AliasedTable};
 use crate::registry::dimension_table::DimensionResolveError;
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
 use crate::syntax::decl_name::DeclName;
@@ -107,17 +108,13 @@ pub struct FormattingRegistry {
 ///
 /// Used during IR lowering and prelude loading. Call [`build()`](Self::build)
 /// to produce an immutable [`Registry`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RegistryBuilder {
     dimensions: DimensionTable,
-    units: HashMap<UnitRef, UnitInfo>,
-    unit_aliases: HashMap<UnitRef, UnitRef>,
-    types: HashMap<StructTypeName, TypeDef>,
-    type_aliases: HashMap<StructTypeName, StructTypeName>,
+    units: AliasedTable<UnitRef, UnitInfo>,
+    types: AliasedTable<StructTypeName, TypeDef>,
     ctors: HashMap<ConstructorName, StructTypeName>,
-    indexes: HashMap<IndexName, IndexDef>,
-    finite_indexes: HashMap<FiniteIndex, IndexDef>,
-    index_aliases: HashMap<IndexName, IndexBindingTarget>,
+    indexes: AliasedTable<IndexBindingTarget, IndexDef>,
     dags: HashMap<DeclName, DagDecl>,
 }
 
@@ -132,19 +129,13 @@ impl RegistryBuilder {
     pub fn build(self) -> Registry {
         Registry {
             dimensions: self.dimensions,
-            units: UnitRegistry {
-                units: self.units,
-                aliases: self.unit_aliases,
-            },
+            units: UnitRegistry { units: self.units },
             types: TypeRegistry {
                 types: self.types,
-                aliases: self.type_aliases,
                 ctors: self.ctors,
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
-                finite_indexes: self.finite_indexes,
-                aliases: self.index_aliases,
             },
             time_zones: TimeZoneRegistry::bundled(),
             dags: DagRegistry { dags: self.dags },
@@ -168,34 +159,14 @@ impl RegistryBuilder {
     /// top level.
     pub(crate) fn merge_from_registry(&mut self, parent: &Registry) {
         self.dimensions.merge_missing_from(&parent.dimensions);
-        for (name, info) in &parent.units.units {
-            self.units
-                .entry(name.clone())
-                .or_insert_with(|| info.clone());
-        }
-        self.unit_aliases.extend(parent.units.aliases.clone());
-        for (name, def) in &parent.types.types {
-            self.types
-                .entry(name.clone())
-                .or_insert_with(|| def.clone());
-        }
-        self.type_aliases.extend(parent.types.aliases.clone());
+        self.units.merge_missing_from(&parent.units.units);
+        self.types.merge_missing_from(&parent.types.types);
         for (ctor, union_name) in &parent.types.ctors {
             self.ctors
                 .entry(ctor.clone())
                 .or_insert_with(|| union_name.clone());
         }
-        for (name, def) in &parent.indexes.indexes {
-            self.indexes
-                .entry(name.clone())
-                .or_insert_with(|| def.clone());
-        }
-        for (index, def) in &parent.indexes.finite_indexes {
-            self.finite_indexes
-                .entry(*index)
-                .or_insert_with(|| def.clone());
-        }
-        self.index_aliases.extend(parent.indexes.aliases.clone());
+        self.indexes.merge_missing_from(&parent.indexes.indexes);
         for (name, decl) in &parent.dags.dags {
             self.dags
                 .entry(name.clone())
@@ -284,8 +255,16 @@ impl RegistryBuilder {
     }
 
     /// Register a source-visible dimension alias without changing identity.
-    pub fn register_dimension_alias(&mut self, alias: DimRef, target: DimRef) {
-        self.dimensions.register_dimension_alias(alias, target);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AliasCycle`] when `target` already resolves through `alias`.
+    pub fn register_dimension_alias(
+        &mut self,
+        alias: DimRef,
+        target: DimRef,
+    ) -> Result<(), AliasCycle<DimRef>> {
+        self.dimensions.register_dimension_alias(alias, target)
     }
 
     /// Register a named compile-time unit with its dimension and SI scale factor.
@@ -311,8 +290,16 @@ impl RegistryBuilder {
     }
 
     /// Register a source-visible unit alias without changing scale identity.
-    pub fn register_unit_alias(&mut self, alias: UnitRef, target: UnitRef) {
-        self.unit_aliases.insert(alias, target);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AliasCycle`] when `target` already resolves through `alias`.
+    pub fn register_unit_alias(
+        &mut self,
+        alias: UnitRef,
+        target: UnitRef,
+    ) -> Result<(), AliasCycle<UnitRef>> {
+        self.units.insert_alias(alias, target)
     }
 
     /// Register a type definition.
@@ -334,18 +321,36 @@ impl RegistryBuilder {
     }
 
     /// Register a source-visible type alias without changing nominal identity.
-    pub fn register_type_alias(&mut self, alias: StructTypeName, target: StructTypeName) {
-        self.type_aliases.insert(alias, target);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AliasCycle`] when `target` already resolves through `alias`.
+    pub fn register_type_alias(
+        &mut self,
+        alias: StructTypeName,
+        target: StructTypeName,
+    ) -> Result<(), AliasCycle<StructTypeName>> {
+        self.types.insert_alias(alias, target)
     }
 
     /// Register an index definition.
     pub fn register_index(&mut self, def: IndexDef) {
-        self.indexes.insert(def.name.clone(), def);
+        self.indexes
+            .insert(IndexBindingTarget::Declared(def.name.clone()), def);
     }
 
     /// Register a source-visible index alias to a declared or structural target.
-    pub fn register_index_alias(&mut self, alias: IndexName, target: IndexBindingTarget) {
-        self.index_aliases.insert(alias, target);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AliasCycle`] when `target` already resolves through `alias`.
+    pub fn register_index_alias(
+        &mut self,
+        alias: IndexName,
+        target: IndexBindingTarget,
+    ) -> Result<(), AliasCycle<IndexBindingTarget>> {
+        self.indexes
+            .insert_alias(IndexBindingTarget::Declared(alias), target)
     }
 
     /// Ensure that a concrete structural `Fin(N)` definition exists.
@@ -353,9 +358,8 @@ impl RegistryBuilder {
     /// If the index already exists, this is a no-op.
     pub fn ensure_finite_index(&mut self, cardinality: IndexCardinality) -> FiniteIndex {
         let finite_index = FiniteIndex::new(cardinality);
-        self.finite_indexes
-            .entry(finite_index)
-            .or_insert_with(|| IndexDef {
+        self.indexes
+            .insert_if_missing(IndexBindingTarget::Finite(finite_index), || IndexDef {
                 name: finite_index.display_name(),
                 kind: IndexKind::Finite { cardinality },
             });
@@ -364,31 +368,17 @@ impl RegistryBuilder {
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
 
-    /// Look up an unqualified (local, selectively imported, or prelude)
-    /// dimension by name.
+    /// Look up a possibly module-qualified dimension reference, following
+    /// source-visible aliases.
     #[must_use]
-    pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        self.dimensions.get_dimension(name)
+    pub fn get_dimension(&self, reference: &DimRef) -> Option<&Dimension> {
+        self.dimensions.get_dimension(reference)
     }
 
-    /// Look up a possibly module-qualified dimension reference.
-    #[must_use]
-    pub fn get_dimension_ref(&self, reference: &DimRef) -> Option<&Dimension> {
-        self.dimensions.get_dimension_ref(reference)
-    }
-
-    /// Look up a unit by name.
+    /// Look up a unit by reference, following source-visible aliases.
     #[must_use]
     pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
-        let mut current = name.clone();
-        let mut remaining = self.unit_aliases.len() + 1;
-        loop {
-            if let Some(info) = self.units.get(&current) {
-                return Some(info);
-            }
-            current = self.unit_aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+        self.units.get(name)
     }
 
     /// Iterate over every unit reference and its complete semantic definition.
@@ -396,45 +386,24 @@ impl RegistryBuilder {
         self.units.iter()
     }
 
-    /// Look up a type definition by type name.
+    /// Look up a type definition by source-visible name, following aliases.
     #[must_use]
-    pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
-        let mut current = StructTypeName::try_new(name).ok()?;
-        let mut remaining = self.type_aliases.len() + 1;
-        loop {
-            if let Some(definition) = self.types.get(&current) {
-                return Some(definition);
-            }
-            current = self.type_aliases.get(&current)?.clone();
-            remaining = remaining.checked_sub(1)?;
-        }
+    pub fn get_type(&self, name: &StructTypeName) -> Option<&TypeDef> {
+        self.types.get(name)
     }
 
-    /// Look up a declared index definition by name.
+    /// Look up a declared index definition by source-visible name, following
+    /// aliases.
     #[must_use]
-    pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
-        let mut current = IndexBindingTarget::Declared(IndexName::try_new(name).ok()?);
-        let mut remaining = self.index_aliases.len() + 1;
-        loop {
-            match current {
-                IndexBindingTarget::Declared(ref declared) => {
-                    if let Some(definition) = self.indexes.get(declared) {
-                        return Some(definition);
-                    }
-                    current = self.index_aliases.get(declared)?.clone();
-                }
-                IndexBindingTarget::Finite(index) => {
-                    return self.finite_indexes.get(&index);
-                }
-            }
-            remaining = remaining.checked_sub(1)?;
-        }
+    pub fn get_index(&self, name: &IndexName) -> Option<&IndexDef> {
+        self.indexes
+            .get(&IndexBindingTarget::Declared(name.clone()))
     }
 
     /// Look up a compiler-generated structural index by typed identity.
     #[must_use]
     pub fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
-        self.finite_indexes.get(&index)
+        self.indexes.get_defined(&IndexBindingTarget::Finite(index))
     }
 
     /// Format a dimension as a human-readable string.
@@ -570,15 +539,18 @@ mod tests {
     fn registry_base_dimensions() {
         let r = make_registry();
         assert_eq!(
-            r.dimensions.get_dimension("Length"),
+            r.dimensions
+                .get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
             Some(&Dimension::base(length_id()))
         );
         assert_eq!(
-            r.dimensions.get_dimension("Time"),
+            r.dimensions
+                .get_dimension(&DimRef::local(DimName::expect_valid("Time"))),
             Some(&Dimension::base(time_id()))
         );
         assert_eq!(
-            r.dimensions.get_dimension("Mass"),
+            r.dimensions
+                .get_dimension(&DimRef::local(DimName::expect_valid("Mass"))),
             Some(&Dimension::base(mass_id()))
         );
     }
@@ -586,7 +558,10 @@ mod tests {
     #[test]
     fn registry_derived_dimensions() {
         let r = make_registry();
-        let velocity = r.dimensions.get_dimension("Velocity").unwrap();
+        let velocity = r
+            .dimensions
+            .get_dimension(&DimRef::local(DimName::expect_valid("Velocity")))
+            .unwrap();
         let expected = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         assert_eq!(*velocity, expected);
     }
@@ -676,7 +651,8 @@ mod tests {
         b.register_dimension(qualified("a"), velocity.clone());
         b.register_dimension(qualified("b"), mass_rate.clone());
         b.register_dimension(rate.clone(), Dimension::base(mass_id()));
-        b.register_dimension_alias(DimRef::local(DimName::expect_valid("R")), qualified("a"));
+        b.register_dimension_alias(DimRef::local(DimName::expect_valid("R")), qualified("a"))
+            .unwrap();
 
         let member = |owner: &str| NamePath::member(NamespacePath::root(atom(owner)), atom("Rate"));
         assert_eq!(
@@ -807,7 +783,10 @@ mod tests {
         );
         let r = b.build();
         let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
-        let def = r.types.get_type("TransferResult").unwrap();
+        let def = r
+            .types
+            .get_type(&StructTypeName::expect_valid("TransferResult"))
+            .unwrap();
         assert_eq!(def.name().as_str(), "TransferResult");
         assert!(def.is_union());
         let fields = def.record_fields().expect("single-variant collision");
@@ -817,7 +796,11 @@ mod tests {
             r.dimensions.resolve_type_expr(fields[0].type_ann()),
             Ok(Some(velocity_dim))
         );
-        assert!(r.types.get_type("NonExistent").is_none());
+        assert!(
+            r.types
+                .get_type(&StructTypeName::expect_valid("NonExistent"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -835,7 +818,10 @@ mod tests {
             },
         });
         let r = b.build();
-        let def = r.indexes.get_index("Maneuver").unwrap();
+        let def = r
+            .indexes
+            .get_index(&IndexName::expect_valid("Maneuver"))
+            .unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
         let entry_keys = def.entry_keys();
         let variant_strs: Vec<&str> = entry_keys
@@ -847,7 +833,11 @@ mod tests {
             })
             .collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
-        assert!(r.indexes.get_index("NonExistent").is_none());
+        assert!(
+            r.indexes
+                .get_index(&IndexName::expect_valid("NonExistent"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -873,7 +863,10 @@ mod tests {
         b.register_base_dimension(info_id.clone());
         let r = b.build();
         // Should be retrievable under its leaf name
-        let dim = r.dimensions.get_dimension("Information").unwrap();
+        let dim = r
+            .dimensions
+            .get_dimension(&DimRef::local(DimName::expect_valid("Information")))
+            .unwrap();
         assert_eq!(*dim, Dimension::base(info_id.clone()));
         assert_eq!(
             r.dimensions.base_dimension(&info_id),
@@ -973,6 +966,126 @@ mod tests {
             Some(&"bit".to_string())
         );
         // Recorded and imported base dimensions are never source-visible.
-        assert_eq!(r.dimensions.get_dimension("Information"), None);
+        assert_eq!(
+            r.dimensions
+                .get_dimension(&DimRef::local(DimName::expect_valid("Information"))),
+            None
+        );
+    }
+
+    #[test]
+    fn aliases_resolve_in_every_namespace_and_reject_cycles() {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        let axis = IndexName::expect_valid("Axis");
+        b.register_index(IndexDef {
+            name: axis.clone(),
+            kind: IndexKind::Named {
+                variants: vec![IndexVariantName::expect_valid("Only")],
+            },
+        });
+        let pair = b.ensure_finite_index(IndexCardinality::try_from_u64(2).unwrap());
+        let effective = IndexName::expect_valid("EffectiveAxis");
+        let structural = IndexName::expect_valid("Pair");
+        b.register_index_alias(
+            effective.clone(),
+            IndexBindingTarget::Declared(axis.clone()),
+        )
+        .unwrap();
+        b.register_index_alias(structural.clone(), IndexBindingTarget::Finite(pair))
+            .unwrap();
+        assert_eq!(
+            b.register_index_alias(
+                axis.clone(),
+                IndexBindingTarget::Declared(effective.clone())
+            ),
+            Err(AliasCycle {
+                alias: IndexBindingTarget::Declared(axis.clone())
+            })
+        );
+
+        let record = StructTypeName::expect_valid("Record");
+        let member =
+            UnionMemberDef::try_new(ConstructorName::expect_valid("Record"), vec![]).unwrap();
+        b.register_type(TypeDef::try_union(record.clone(), vec![], vec![member]).unwrap());
+        let effective_record = StructTypeName::expect_valid("EffectiveRecord");
+        b.register_type_alias(effective_record.clone(), record.clone())
+            .unwrap();
+        assert!(
+            b.register_type_alias(record.clone(), effective_record.clone())
+                .is_err()
+        );
+
+        let r = b.build();
+        assert_eq!(
+            r.indexes.get_index(&effective).map(|d| &d.name),
+            Some(&axis)
+        );
+        assert_eq!(
+            r.indexes.get_index(&structural),
+            r.indexes.get_finite_index(pair)
+        );
+        assert!(r.indexes.get_index(&structural).is_some());
+        assert_eq!(r.indexes.declared_indexes().count(), 1);
+        assert_eq!(r.indexes.finite_indexes().collect::<Vec<_>>(), [pair]);
+        assert_eq!(
+            r.types.get_type(&effective_record).map(TypeDef::name),
+            Some(&record)
+        );
+        let (owner, ctor) = r
+            .types
+            .lookup_ctor(&ConstructorName::expect_valid("Record"))
+            .unwrap();
+        assert_eq!(owner.name(), &record);
+        assert_eq!(ctor.name().as_str(), "Record");
+    }
+
+    #[test]
+    fn unit_and_dimension_aliases_resolve_and_reject_cycles() {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        let metre = UnitRef::local(UnitName::expect_valid("m"));
+        let local_metre = UnitRef::local(UnitName::expect_valid("metre"));
+        b.register_unit_alias(local_metre.clone(), metre.clone())
+            .unwrap();
+        assert!(b.register_unit_alias(metre, local_metre.clone()).is_err());
+        assert_eq!(
+            b.get_unit(&local_metre).map(|info| &info.dimension),
+            Some(&Dimension::base(length_id()))
+        );
+
+        let span = DimRef::local(DimName::expect_valid("Span"));
+        b.register_dimension_alias(span.clone(), DimRef::local(DimName::expect_valid("Length")))
+            .unwrap();
+        assert!(
+            b.register_dimension_alias(
+                DimRef::local(DimName::expect_valid("Length")),
+                span.clone()
+            )
+            .is_err()
+        );
+
+        let r = b.build();
+        assert_eq!(
+            r.units.get_unit(&local_metre).map(|info| &info.dimension),
+            Some(&Dimension::base(length_id()))
+        );
+        assert_eq!(
+            r.dimensions.get_dimension(&span),
+            Some(&Dimension::base(length_id()))
+        );
+        // Unit expressions resolve through unit aliases too.
+        let expr = UnitExpr {
+            terms: vec![UnitExprItem {
+                op: MulDivOp::Mul,
+                name: Spanned::new(local_metre, Span::new(0, 0)),
+                power: None,
+            }],
+            span: Span::new(0, 0),
+        };
+        assert_eq!(
+            r.units.resolve_unit_expr(&expr).map(|(dim, _)| dim),
+            Ok(Dimension::base(length_id()))
+        );
     }
 }
