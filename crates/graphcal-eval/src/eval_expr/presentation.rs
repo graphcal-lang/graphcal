@@ -21,26 +21,22 @@ pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> Present
 
 pub(super) fn scaled(
     unit: &ResolvedUnitExpr,
-    scale: f64,
+    scale: PositiveFiniteScale,
     ctx: &EvalContext<'_>,
-) -> Result<PresentationInstance, GraphcalError> {
-    let scale = PositiveFiniteScale::new(scale)
-        .map_err(|error| ctx.internal_error(error.to_string(), unit.span))?;
-    // The computational scale has already been validated. Label algebra is
-    // display-only, including during immutable constant-evidence capture.
-    Ok(
-        match format_unit_terms_canonical(
-            unit.terms
-                .iter()
-                .map(|item| (item.op, item.name.value.to_string(), item.power)),
-        ) {
-            Ok(label) => PresentationInstance::Unit { label, scale },
-            Err(error) => PresentationInstance::Failed(PresentationFailure::Formatting {
-                source_name: ctx.src.name().to_owned(),
-                error,
-            }),
-        },
-    )
+) -> PresentationInstance {
+    // Label algebra is display-only, including during immutable
+    // constant-evidence capture.
+    match format_unit_terms_canonical(
+        unit.terms
+            .iter()
+            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+    ) {
+        Ok(label) => PresentationInstance::Unit { label, scale },
+        Err(error) => PresentationInstance::Failed(PresentationFailure::Formatting {
+            source_name: ctx.src.name().to_owned(),
+            error,
+        }),
+    }
 }
 
 /// Future operation-budget accounting belongs here, shared with unit-scale work.
@@ -85,7 +81,7 @@ fn resolve_selected(
             let context = ctx.for_dag(owner, &request.source)?;
             crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PresentationEvaluation);
             match super::unit_scale::resolve_unit_scale(&request.unit, values, &context)
-                .and_then(|scale| scaled(&request.unit, scale, &context))
+                .map(|scale| scaled(&request.unit, scale, &context))
             {
                 Ok(evidence) => Ok(evidence),
                 Err(

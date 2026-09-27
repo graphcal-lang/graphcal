@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use graphcal_compiler::dimension::{BaseDimId, Dimension};
-use graphcal_eval::eval::{DisplayUnit, NodeUnavailable, Value};
+use graphcal_eval::eval::{NodeUnavailable, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -156,7 +156,7 @@ fn table_leaf_presentation(
         } => TableLeafPresentation::Quantity(QuantityPresentation {
             dimension: dimension.clone(),
             label: value.display_label(symbols),
-            scale: display_unit.as_ref().map_or(1.0, DisplayUnit::scale),
+            scale: display_unit.as_ref().map_or(1.0, |unit| unit.scale.get()),
         }),
         Value::Bool(_)
         | Value::Int(_)
@@ -418,8 +418,10 @@ mod tests {
     use graphcal_compiler::complex_value::ComplexValue;
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
+    use graphcal_compiler::registry::unit::PositiveFiniteScale;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+    use graphcal_eval::eval::DisplayUnit;
     use indexmap::IndexMap;
 
     fn quantity(si: f64) -> Value {
@@ -434,7 +436,10 @@ mod tests {
         Value::Quantity {
             si_value: si,
             dimension: prelude_base_dimension("Length").unwrap(),
-            display_unit: Some(DisplayUnit::try_new(label, scale).unwrap()),
+            display_unit: Some(DisplayUnit::new(
+                label,
+                PositiveFiniteScale::new(scale).unwrap(),
+            )),
         }
     }
 
@@ -442,7 +447,10 @@ mod tests {
         Value::Complex {
             si_value: ComplexValue::try_new(re, im).unwrap(),
             dimension: prelude_base_dimension("Length").unwrap(),
-            display_unit: Some(DisplayUnit::try_new(label, scale).unwrap()),
+            display_unit: Some(DisplayUnit::new(
+                label,
+                PositiveFiniteScale::new(scale).unwrap(),
+            )),
         }
     }
 

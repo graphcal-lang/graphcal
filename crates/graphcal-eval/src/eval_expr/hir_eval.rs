@@ -139,7 +139,7 @@ fn eval_hir_expr_inner(
         hir::ExprKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
             let value = checked_unit_scaled_value(*value, scale, expr.span, ctx)?;
-            let presentation = super::presentation::scaled(unit, scale, ctx)?;
+            let presentation = super::presentation::scaled(unit, scale, ctx);
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
         hir::ExprKind::GraphRef(target) => {

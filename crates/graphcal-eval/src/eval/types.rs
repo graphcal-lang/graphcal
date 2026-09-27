@@ -13,64 +13,36 @@ use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
+use graphcal_compiler::registry::unit::PositiveFiniteScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct PositiveFiniteDisplayScale(f64);
-
-impl PositiveFiniteDisplayScale {
-    fn try_new(value: f64) -> Result<Self, DisplayProjectionError> {
-        if !value.is_finite() || value <= 0.0 {
-            Err(DisplayProjectionError::InvalidScale { scale: value })
-        } else {
-            Ok(Self(value))
-        }
-    }
-
-    const fn get(self) -> f64 {
-        self.0
-    }
-}
-
 /// Display unit metadata: the unit name(s) and validated scale factor for pretty-printing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayUnit {
     /// Human-readable unit string (e.g., "km", "m/s^2", "km/h")
     pub label: String,
-    scale: PositiveFiniteDisplayScale,
+    /// Scale factor from SI to this display unit.
+    pub scale: PositiveFiniteScale,
 }
 
 impl DisplayUnit {
-    /// Construct display metadata with a positive finite scale.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DisplayProjectionError::InvalidScale`] for zero, negative, or
-    /// non-finite scales.
-    pub fn try_new(label: impl Into<String>, scale: f64) -> Result<Self, DisplayProjectionError> {
-        Ok(Self {
-            label: label.into(),
-            scale: PositiveFiniteDisplayScale::try_new(scale)?,
-        })
-    }
-
-    /// Scale factor from SI to this display unit.
+    /// Construct display metadata from an already validated scale.
     #[must_use]
-    pub const fn scale(&self) -> f64 {
-        self.scale.get()
+    pub fn new(label: impl Into<String>, scale: PositiveFiniteScale) -> Self {
+        Self {
+            label: label.into(),
+            scale,
+        }
     }
 }
 
 /// Failure to project a finite SI quantity into a requested display unit.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum DisplayProjectionError {
-    /// Display scales must be finite and strictly positive.
-    #[error("display-unit scale must be positive and finite, got {scale}")]
-    InvalidScale { scale: f64 },
     /// Public quantity values must remain finite.
     #[error("display input must be finite, got {value}")]
     NonFiniteInput { value: f64 },
@@ -567,7 +539,7 @@ pub fn quantity_display_value(
     let Some(display_unit) = display_unit else {
         return Ok(si_value);
     };
-    let displayed = si_value / display_unit.scale();
+    let displayed = si_value / display_unit.scale.get();
     if !displayed.is_finite() {
         return Err(DisplayProjectionError::NonFiniteResult {
             unit: display_unit.label.clone(),
@@ -1157,13 +1129,10 @@ mod tests {
     }
 
     #[test]
-    fn display_projection_rejects_invalid_scales_overflow_and_underflow() {
-        assert!(DisplayUnit::try_new("bad", 0.0).is_err());
-        assert!(DisplayUnit::try_new("bad", f64::INFINITY).is_err());
-
-        let tiny = DisplayUnit::try_new("tiny", 1.0e-300).unwrap();
+    fn display_projection_rejects_overflow_and_underflow() {
+        let tiny = DisplayUnit::new("tiny", PositiveFiniteScale::new(1.0e-300).unwrap());
         assert!(quantity_display_value(1.0e300, Some(&tiny)).is_err());
-        let huge = DisplayUnit::try_new("huge", 1.0e300).unwrap();
+        let huge = DisplayUnit::new("huge", PositiveFiniteScale::new(1.0e300).unwrap());
         assert!(quantity_display_value(1.0e-300, Some(&huge)).is_err());
         assert!(quantity_display_value(0.0, Some(&huge)).unwrap().abs() < f64::MIN_POSITIVE);
     }
@@ -1207,7 +1176,10 @@ mod tests {
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
         let value = quantity(
             velocity,
-            Some(DisplayUnit::try_new("km/h", 1000.0 / 3600.0).unwrap()),
+            Some(DisplayUnit::new(
+                "km/h",
+                PositiveFiniteScale::new(1000.0 / 3600.0).unwrap(),
+            )),
         );
 
         assert_eq!(value.display_label(&symbols()), Some("km/h".to_string()));

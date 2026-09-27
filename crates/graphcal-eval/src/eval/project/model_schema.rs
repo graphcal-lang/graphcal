@@ -57,7 +57,7 @@ pub enum ModelIndexKind {
         /// Optional source display-unit label.
         display_label: Option<String>,
         /// Display-unit scale to SI.
-        display_scale: f64,
+        display_scale: graphcal_compiler::registry::unit::PositiveFiniteScale,
     },
     /// Structural `Fin(N)` axis.
     Finite {

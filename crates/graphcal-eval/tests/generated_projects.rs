@@ -88,7 +88,7 @@ fn assert_expected(project: &GeneratedProject) -> Result<(), TestCaseError> {
                 .expect("bounded positive integer");
             prop_assert!((*actual_si - expected_si).abs() < f64::EPSILON);
             prop_assert_eq!(actual_unit.label.as_str(), display_unit.as_str());
-            prop_assert!((actual_unit.scale() - expected_scale).abs() < f64::EPSILON);
+            prop_assert!((actual_unit.scale.get() - expected_scale).abs() < f64::EPSILON);
             let projected =
                 graphcal_eval::eval::quantity_display_value(*actual_si, Some(actual_unit))
                     .map_err(|error| TestCaseError::fail(error.to_string()))?;

@@ -2585,14 +2585,10 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 if let Some(unit_info) = tir.unit_info(resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
-                    let scale_str = match &unit_info.scale {
-                        UnitScale::Static(s) => format!("{s}"),
-                        UnitScale::Dynamic { .. } => "dynamic".to_string(),
-                    };
-                    let timing = if unit_info.constness.is_const() {
-                        "const"
-                    } else {
-                        "runtime"
+                    let (timing, scale_str) = match &unit_info.scale {
+                        UnitScale::Const(s) => ("const", format!("{s}")),
+                        UnitScale::Runtime(s) => ("runtime", format!("{s}")),
+                        UnitScale::Dynamic { .. } => ("runtime", "dynamic".to_string()),
                     };
                     def_mut.type_description = Some(format!(
                         "{}, {timing}, scale = {scale_str}",

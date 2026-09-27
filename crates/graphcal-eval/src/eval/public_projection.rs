@@ -423,11 +423,7 @@ fn project_runtime_value(
             let display_unit = data
                 .display_label
                 .as_ref()
-                .map(|label| DisplayUnit::try_new(label.clone(), data.display_scale))
-                .transpose()
-                .map_err(|error| {
-                    projection_error(runtime, declared_type, error.to_string(), tir, src)
-                })?;
+                .map(|label| DisplayUnit::new(label.clone(), data.display_scale));
             let dimension = match declared_type {
                 DeclaredType::Quantity(dimension) if dimension == &data.dimension => {
                     dimension.clone()

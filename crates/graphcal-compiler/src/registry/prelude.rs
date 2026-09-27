@@ -183,50 +183,53 @@ fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<
     Ok(())
 }
 
-const fn prelude_scale(value: f64) -> PositiveFiniteScale {
-    PositiveFiniteScale::new_unchecked(value)
+/// Validate a built-in scale while the compiler itself is compiled.
+macro_rules! prelude_scale {
+    ($value:expr) => {
+        const { PositiveFiniteScale::from_const($value) }
+    };
 }
 
 fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
     r.register_unit(
         UnitName::expect_valid("m"),
         ids.length.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("s"),
         ids.time.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("kg"),
         ids.mass.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("K"),
         ids.temperature.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("A"),
         ids.electric_current.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("mol"),
         ids.amount.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("cd"),
         ids.luminous_intensity.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("rad"),
         ids.angle.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
 }
 
@@ -244,88 +247,88 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
     r.register_unit(
         UnitName::expect_valid("km"),
         ids.length.clone(),
-        prelude_scale(1000.0),
+        prelude_scale!(1000.0),
     );
     r.register_unit(
         UnitName::expect_valid("cm"),
         ids.length.clone(),
-        prelude_scale(0.01),
+        prelude_scale!(0.01),
     );
     r.register_unit(
         UnitName::expect_valid("mm"),
         ids.length.clone(),
-        prelude_scale(0.001),
+        prelude_scale!(0.001),
     );
 
     // Time
     r.register_unit(
         UnitName::expect_valid("h"),
         ids.time.clone(),
-        prelude_scale(3600.0),
+        prelude_scale!(3600.0),
     );
     r.register_unit(
         UnitName::expect_valid("min"),
         ids.time.clone(),
-        prelude_scale(60.0),
+        prelude_scale!(60.0),
     );
 
     // Angle
     r.register_unit(
         UnitName::expect_valid("deg"),
         ids.angle.clone(),
-        prelude_scale(std::f64::consts::PI / 180.0),
+        prelude_scale!(std::f64::consts::PI / 180.0),
     );
 
     // Mass
     r.register_unit(
         UnitName::expect_valid("g"),
         ids.mass.clone(),
-        prelude_scale(0.001),
+        prelude_scale!(0.001),
     );
 
     // Force
     r.register_unit(
         UnitName::expect_valid("N"),
         force.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
-    r.register_unit(UnitName::expect_valid("kN"), force, prelude_scale(1000.0));
+    r.register_unit(UnitName::expect_valid("kN"), force, prelude_scale!(1000.0));
 
     // Energy
     r.register_unit(
         UnitName::expect_valid("J"),
         energy.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
-    r.register_unit(UnitName::expect_valid("kJ"), energy, prelude_scale(1000.0));
+    r.register_unit(UnitName::expect_valid("kJ"), energy, prelude_scale!(1000.0));
 
     // Power
     r.register_unit(
         UnitName::expect_valid("W"),
         power.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
-    r.register_unit(UnitName::expect_valid("kW"), power, prelude_scale(1000.0));
+    r.register_unit(UnitName::expect_valid("kW"), power, prelude_scale!(1000.0));
 
     // Pressure
     r.register_unit(
         UnitName::expect_valid("Pa"),
         pressure.clone(),
-        prelude_scale(1.0),
+        prelude_scale!(1.0),
     );
     r.register_unit(
         UnitName::expect_valid("kPa"),
         pressure.clone(),
-        prelude_scale(1000.0),
+        prelude_scale!(1000.0),
     );
     r.register_unit(
         UnitName::expect_valid("MPa"),
         pressure,
-        prelude_scale(1_000_000.0),
+        prelude_scale!(1_000_000.0),
     );
 
     // Frequency
-    r.register_unit(UnitName::expect_valid("Hz"), frequency, prelude_scale(1.0));
+    r.register_unit(UnitName::expect_valid("Hz"), frequency, prelude_scale!(1.0));
     Ok(())
 }
 
@@ -333,7 +336,7 @@ fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), R
 mod tests {
     use super::*;
     use crate::dimension::{BaseDimId, Rational};
-    use crate::registry::types::RegistryBuilder;
+    use crate::registry::types::{RegistryBuilder, UnitScale};
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
@@ -444,7 +447,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(newton.dimension, force_dim);
-        assert!((newton.scale.as_static().unwrap() - 1.0).abs() < f64::EPSILON);
+        assert_eq!(newton.scale, UnitScale::Const(PositiveFiniteScale::ONE));
     }
 
     #[test]
@@ -458,7 +461,10 @@ mod tests {
                 UnitName::expect_valid("km"),
             ))
             .unwrap();
-        assert!((km.scale.as_static().unwrap() - 1000.0).abs() < f64::EPSILON);
+        assert_eq!(
+            km.scale.static_scale().map(PositiveFiniteScale::get),
+            Some(1000.0)
+        );
     }
 
     #[test]
@@ -472,7 +478,10 @@ mod tests {
                 crate::syntax::dimension::UnitName::expect_valid("deg"),
             ))
             .unwrap();
-        assert!((deg.scale.as_static().unwrap() - std::f64::consts::PI / 180.0).abs() < 1e-15);
+        assert_eq!(
+            deg.scale.static_scale().map(PositiveFiniteScale::get),
+            Some(std::f64::consts::PI / 180.0)
+        );
     }
 
     #[test]
@@ -529,7 +538,8 @@ mod tests {
                 .get_unit(&unit("h"))
                 .unwrap()
                 .scale
-                .as_static(),
+                .static_scale()
+                .map(PositiveFiniteScale::get),
             Some(3600.0)
         );
         assert_eq!(
@@ -538,7 +548,8 @@ mod tests {
                 .get_unit(&unit("min"))
                 .unwrap()
                 .scale
-                .as_static(),
+                .static_scale()
+                .map(PositiveFiniteScale::get),
             Some(60.0)
         );
         assert!(registry.units.get_unit(&unit("hour")).is_none());

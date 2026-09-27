@@ -1549,9 +1549,9 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 77. `crates/graphcal-compiler/src/function_signature.rs`
 78. `crates/graphcal-compiler/src/registry/dag.rs`
 79. `crates/graphcal-compiler/src/registry/dimension_registry.rs`
-80. `crates/graphcal-compiler/src/registry/index.rs`
-81. `crates/graphcal-compiler/src/registry/type_def.rs`
-82. `crates/graphcal-compiler/src/registry/unit.rs`
+80. `crates/graphcal-compiler/src/registry/unit.rs`
+81. `crates/graphcal-compiler/src/registry/index.rs`
+82. `crates/graphcal-compiler/src/registry/type_def.rs`
 83. `crates/graphcal-compiler/src/registry/types.rs`
 84. `crates/graphcal-compiler/src/registry/prelude.rs`
 85. `crates/graphcal-compiler/src/registry/reserved_name.rs`

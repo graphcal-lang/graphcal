@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use thiserror::Error;
 
 use crate::dimension::Dimension;
+use crate::registry::unit::PositiveFiniteScale;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 
 /// Largest concrete index that Graphcal will materialize eagerly.
@@ -85,7 +86,7 @@ pub struct CoordinateIndexData {
     /// Display unit label (e.g., `"s"`) for formatting coordinate values.
     pub display_label: Option<String>,
     /// Scale factor from SI to display unit: `display_value = si_value / scale`.
-    pub display_scale: f64,
+    pub display_scale: PositiveFiniteScale,
 }
 
 impl CoordinateIndexData {
@@ -644,7 +645,7 @@ mod tests {
                 cardinality,
                 dimension: Dimension::dimensionless(),
                 display_label: None,
-                display_scale: 1.0,
+                display_scale: PositiveFiniteScale::ONE,
             }),
         ] {
             let definition = IndexDef {

@@ -206,7 +206,7 @@ fn register_selected_resolved_dimensions_and_units(
                 )
             })?;
         register_base_dimension_metadata(builder, dep_registry, &info.dimension);
-        builder.register_unit_with_scale(unit_ref, info.dimension, info.scale, info.constness);
+        builder.register_unit_with_scale(unit_ref, info.dimension, info.scale);
     }
 
     Ok(())
@@ -338,7 +338,8 @@ fn merge_registry_into_builder_filtered(
     // reference is a conflict.
     for (name, info) in dep_registry.units.all_units() {
         if pure_import_rejects(name.name().atom(), ImportItemNamespace::Unit)
-            || (!info.constness.is_const() && !runtime_unit_boundary.includes_runtime_units())
+            || (!info.scale.constness().is_const()
+                && !runtime_unit_boundary.includes_runtime_units())
         {
             continue;
         }
@@ -363,15 +364,18 @@ fn merge_registry_into_builder_filtered(
             }
             name.clone()
         };
-        let merged_scale = info.scale.clone();
-        let constness = info.constness;
         if let Some(existing) = builder.get_unit(&target) {
-            if unit_definitions_compatible(existing, &info.dimension, &merged_scale, constness) {
+            // Compatible definitions agree on dimension, scale, and constness
+            // (all carried by `UnitInfo`). Dynamic scales cannot be compared
+            // structurally; two dynamic definitions with the same base-unit
+            // scale are assumed to be the same declaration reached through a
+            // diamond import.
+            if existing == info {
                 continue;
             }
             return Err(UnitMergeConflict { name: target });
         }
-        builder.register_unit_with_scale(target, info.dimension.clone(), merged_scale, constness);
+        builder.register_unit_with_scale(target, info.dimension.clone(), info.scale.clone());
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
@@ -422,34 +426,4 @@ fn merge_registry_into_builder_filtered(
         builder.register_type(specialized);
     }
     Ok(())
-}
-
-/// Two unit definitions are compatible when they agree on dimension and
-/// scale. Dynamic scales cannot be compared structurally; two dynamic
-/// definitions are assumed to be the same declaration reached through a
-/// diamond import (a genuinely different pair still differs in dimension or
-/// base scale in practice).
-fn unit_definitions_compatible(
-    existing: &graphcal_compiler::registry::types::UnitInfo,
-    dim: &graphcal_compiler::dimension::Dimension,
-    scale: &graphcal_compiler::registry::types::UnitScale,
-    constness: graphcal_compiler::syntax::ast::UnitConstness,
-) -> bool {
-    use graphcal_compiler::registry::types::UnitScale;
-    if existing.dimension != *dim || existing.constness != constness {
-        return false;
-    }
-    match (&existing.scale, scale) {
-        (UnitScale::Static(a), UnitScale::Static(b))
-        | (
-            UnitScale::Dynamic {
-                base_unit_scale: a, ..
-            },
-            UnitScale::Dynamic {
-                base_unit_scale: b, ..
-            },
-        ) => a == b,
-        (UnitScale::Static(_), UnitScale::Dynamic { .. })
-        | (UnitScale::Dynamic { .. }, UnitScale::Static(_)) => false,
-    }
 }
