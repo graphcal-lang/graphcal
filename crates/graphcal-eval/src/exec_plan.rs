@@ -1,11 +1,12 @@
 //! Runtime execution-plan selection from retained checked facts.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::dependency_graph::{DependencyGraph, TopoOrder};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
@@ -109,68 +110,34 @@ pub fn combined_runtime_order_for(
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let candidate_set = candidates.iter().cloned().collect::<HashSet<_>>();
-    let mut indegree = candidates
-        .iter()
-        .cloned()
-        .map(|candidate| (candidate, 0_usize))
-        .collect::<HashMap<_, _>>();
-    let mut dependents: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> = HashMap::new();
+    let mut graph = DependencyGraph::new();
+    for candidate in candidates {
+        graph.add_node(candidate);
+    }
     for dag in dags {
         for (declaration, dependencies) in &dag.semantic().dependencies.runtime_deps {
             let declaration = dag.runtime_decl_identity(declaration);
-            if !candidate_set.contains(&declaration) {
+            if !graph.contains(&declaration) {
                 continue;
             }
             for dependency in dependencies {
                 let dependency = dag.runtime_decl_identity(dependency);
-                if candidate_set.contains(&dependency) {
-                    let count = indegree.entry(declaration.clone()).or_default();
-                    *count = count.checked_add(1).ok_or_else(|| {
-                        GraphcalError::internal_error(
-                            "combined runtime dependency count overflowed",
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?;
-                    dependents
-                        .entry(dependency)
-                        .or_default()
-                        .push(declaration.clone());
+                if graph.contains(&dependency) {
+                    graph.add_dependency(declaration.clone(), dependency);
                 }
             }
         }
     }
-    let mut ready = candidates
-        .iter()
-        .filter(|candidate| indegree.get(*candidate) == Some(&0))
-        .cloned()
-        .collect::<VecDeque<_>>();
-    let mut order = Vec::with_capacity(candidates.len());
-    while let Some(declaration) = ready.pop_front() {
-        order.push(declaration.clone());
-        for dependent in dependents.get(&declaration).into_iter().flatten() {
-            let count = indegree.get_mut(dependent).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("combined runtime dependency `{dependent}` has no schedule entry"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                ready.push_back(dependent.clone());
-            }
-        }
-    }
-    if order.len() != candidates.len() {
-        return Err(GraphcalError::internal_error(
-            "semantic instance runtime dependencies are cyclic",
-            src,
-            DiagnosticAnchor::WholeFile,
-        ));
-    }
-    Ok(order)
+    graph
+        .into_topo_order()
+        .map(TopoOrder::into_vec)
+        .map_err(|_| {
+            GraphcalError::internal_error(
+                "semantic instance runtime dependencies are cyclic",
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })
 }
 
 /// Build a runtime schedule from facts retained by the checked project.
