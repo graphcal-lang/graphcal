@@ -6,6 +6,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::ratio::{ExponentStyle, Ratio, RatioError};
+use crate::sparse_monomial::SparseMonomial;
 
 /// A dimension exponent (e.g., `1/2` for sqrt), in the symmetric `i32` range.
 pub type Rational = Ratio<i32>;
@@ -125,12 +126,12 @@ impl BaseDimId {
 /// For example, Velocity = Length^1 * Time^-1 is represented as
 /// `{BaseDimId::Prelude(Length): 1, BaseDimId::Prelude(Time): -1}`.
 ///
-/// Only non-zero exponents are stored. An empty map represents the dimensionless
-/// dimension.
+/// Only non-zero exponents are stored. The unit monomial represents the
+/// dimensionless dimension.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Dimension {
     /// Non-zero exponents only. Sorted by `BaseDimId` for deterministic equality/hash.
-    exponents: BTreeMap<BaseDimId, Rational>,
+    exponents: SparseMonomial<BaseDimId, Rational>,
 }
 
 impl fmt::Debug for Dimension {
@@ -140,7 +141,7 @@ impl fmt::Debug for Dimension {
         } else {
             write!(f, "Dimension(")?;
             let mut first = true;
-            for (id, exp) in &self.exponents {
+            for (id, exp) in self.exponents.iter() {
                 if !first {
                     write!(f, " * ")?;
                 }
@@ -160,16 +161,16 @@ impl Dimension {
     #[must_use]
     pub const fn dimensionless() -> Self {
         Self {
-            exponents: BTreeMap::new(),
+            exponents: SparseMonomial::one(),
         }
     }
 
     /// A dimension with a single base dimension at exponent 1.
     #[must_use]
     pub fn base(id: BaseDimId) -> Self {
-        let mut exponents = BTreeMap::new();
-        exponents.insert(id, Rational::ONE);
-        Self { exponents }
+        Self {
+            exponents: SparseMonomial::single(id, Rational::ONE),
+        }
     }
 
     #[must_use]
@@ -181,8 +182,8 @@ impl Dimension {
     /// exactly one base dimension to the first power.
     #[must_use]
     pub(crate) fn base_dimension_id(&self) -> Option<&BaseDimId> {
-        match self.exponents.iter().next() {
-            Some((id, &Rational::ONE)) if self.exponents.len() == 1 => Some(id),
+        match self.exponents.as_single() {
+            Some((id, &Rational::ONE)) => Some(id),
             _ => None,
         }
     }
@@ -198,7 +199,7 @@ impl Dimension {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn get_exponent(&self, id: &BaseDimId) -> Rational {
-        self.exponents.get(id).copied().unwrap_or(Rational::ZERO)
+        self.exponents.get(id).unwrap_or(Rational::ZERO)
     }
 
     /// Returns an iterator over the non-zero `(BaseDimId, Rational)` pairs.
@@ -213,18 +214,9 @@ impl Dimension {
     /// Returns `Err(RatioError::Overflow)` if any exponent multiplication
     /// produces a reduced value outside the symmetric `i32` range.
     pub fn pow(&self, exp: impl Into<Rational>) -> Result<Self, RatioError> {
-        let exp = exp.into();
-        if exp.is_zero() {
-            return Ok(Self::dimensionless());
-        }
-        let mut exponents = BTreeMap::new();
-        for (id, &e) in &self.exponents {
-            let new_exp = (e * exp)?;
-            if !new_exp.is_zero() {
-                exponents.insert(id.clone(), new_exp);
-            }
-        }
-        Ok(Self { exponents })
+        Ok(Self {
+            exponents: self.exponents.try_pow(exp.into())?,
+        })
     }
 
     /// Format this dimension using named base dimensions for display.
@@ -261,7 +253,7 @@ impl Dimension {
         let mut first = true;
 
         // Positive exponents (numerator)
-        for (id, &exp) in &self.exponents {
+        for (id, &exp) in self.exponents.iter() {
             if !exp.is_positive() {
                 continue;
             }
@@ -273,7 +265,7 @@ impl Dimension {
         }
 
         // Negative exponents (denominator)
-        for (id, &exp) in &self.exponents {
+        for (id, &exp) in self.exponents.iter() {
             if !exp.is_negative() {
                 continue;
             }
@@ -316,40 +308,19 @@ pub struct MissingBaseDimensionName {
     id: BaseDimId,
 }
 
-/// Whether to add or subtract exponents when combining dimensions.
-#[derive(Clone, Copy)]
-enum CombineOp {
-    /// Add exponents (dimension multiplication).
-    Add,
-    /// Subtract exponents (dimension division).
-    Sub,
-}
-
 impl Dimension {
     /// Multiply two dimensions, returning an error if exponent arithmetic overflows.
     pub fn checked_mul(self, other: &Self) -> Result<Self, RatioError> {
-        self.combine(other, CombineOp::Add)
+        Ok(Self {
+            exponents: self.exponents.try_mul(&other.exponents)?,
+        })
     }
 
     /// Divide two dimensions, returning an error if exponent arithmetic overflows.
     pub fn checked_div(self, other: &Self) -> Result<Self, RatioError> {
-        self.combine(other, CombineOp::Sub)
-    }
-
-    /// Combine two dimensions by adding or subtracting exponents.
-    fn combine(self, other: &Self, op: CombineOp) -> Result<Self, RatioError> {
-        let mut exponents = self.exponents;
-        for (id, exp) in &other.exponents {
-            let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
-            *entry = match op {
-                CombineOp::Add => (*entry + *exp)?,
-                CombineOp::Sub => (*entry - *exp)?,
-            };
-            if entry.is_zero() {
-                exponents.remove(id);
-            }
-        }
-        Ok(Self { exponents })
+        Ok(Self {
+            exponents: self.exponents.try_div(&other.exponents)?,
+        })
     }
 }
 
@@ -572,10 +543,11 @@ mod tests {
     #[test]
     fn dimension_display_renders_extreme_denominator_magnitude() {
         let dimension = Dimension {
-            exponents: BTreeMap::from([
+            exponents: SparseMonomial::try_from_factors([
                 (length(), Rational::integer(-i32::MAX).unwrap()),
                 (mass(), Rational::ONE),
-            ]),
+            ])
+            .unwrap(),
         };
 
         assert_eq!(
@@ -657,9 +629,10 @@ mod tests {
                 let exponents = map
                     .into_iter()
                     .filter(|(_, r)| !r.is_zero())
-                    .map(|(idx, r)| (BaseDimId::Prelude(PreludeBaseDimension::ALL[idx]), r))
-                    .collect();
-                Dimension { exponents }
+                    .map(|(idx, r)| (BaseDimId::Prelude(PreludeBaseDimension::ALL[idx]), r));
+                Dimension {
+                    exponents: SparseMonomial::try_from_factors(exponents).unwrap(),
+                }
             })
         }
 

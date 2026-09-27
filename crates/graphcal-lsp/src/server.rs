@@ -1716,18 +1716,21 @@ fn build_extern_fn_signatures(
         cancellation.checkpoint()?;
         let format_monomial = |monomial: &graphcal_compiler::function_signature::DimMonomial| {
             let mut parts: Vec<String> = monomial
-                .vars
-                .iter()
-                .map(|factor| {
-                    if factor.power == Rational::ONE {
-                        factor.var.to_string()
+                .var_factors()
+                .map(|(var, power)| {
+                    if power == Rational::ONE {
+                        var.to_string()
                     } else {
-                        format!("{}^({})", factor.var, factor.power)
+                        format!("{var}^({power})")
                     }
                 })
                 .collect();
-            if !monomial.fixed.is_dimensionless() {
-                parts.push(tir.registry().dimensions.format_dimension(&monomial.fixed));
+            if !monomial.fixed_factor().is_dimensionless() {
+                parts.push(
+                    tir.registry()
+                        .dimensions
+                        .format_dimension(monomial.fixed_factor()),
+                );
             }
             if parts.is_empty() {
                 "Dimensionless".to_string()
@@ -1936,18 +1939,17 @@ fn param_kind_display(kind: &ParamKind) -> std::result::Result<String, String> {
 
 fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, String> {
     let mut parts: Vec<String> = monomial
-        .vars
-        .iter()
-        .map(|factor| {
-            if factor.power == Rational::ONE {
-                factor.var.to_string()
+        .var_factors()
+        .map(|(var, power)| {
+            if power == Rational::ONE {
+                var.to_string()
             } else {
-                format!("{}^({})", factor.var, factor.power)
+                format!("{var}^({power})")
             }
         })
         .collect();
-    if !monomial.fixed.is_dimensionless() {
-        parts.push(format_dim_display(&monomial.fixed)?);
+    if !monomial.fixed_factor().is_dimensionless() {
+        parts.push(format_dim_display(monomial.fixed_factor())?);
     }
     if parts.is_empty() {
         return Ok("Dimensionless".to_string());
@@ -3184,7 +3186,6 @@ mod tests {
                 element: element.clone(),
                 indexes: NonEmpty::singleton(index.clone()),
             };
-            assert_eq!(param_kind_display(&kind).unwrap(), expected);
             let signature = FunctionSignature::try_new(
                 Vec::new(),
                 vec![index.clone()],
@@ -3195,6 +3196,10 @@ mod tests {
                 kind.into(),
             )
             .unwrap();
+            assert_eq!(
+                param_kind_display(&signature.params()[0].kind).unwrap(),
+                expected
+            );
             assert!(signature.format_with(|_| String::new()).contains(expected));
         }
     }

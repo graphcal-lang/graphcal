@@ -9,9 +9,8 @@
 use std::fmt;
 
 use graphcal_compiler::function_signature::{
-    DimMonomial, ParamKind, ResultKind, ScalarValueKind, StructFieldKind, StructResult,
+    DimMonomial, IndexBinder, ParamKind, ResultKind, ScalarValueKind, StructFieldKind, StructResult,
 };
-use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
 use thiserror::Error;
@@ -255,7 +254,7 @@ pub enum ValidatedHostArrayValues {
 /// consumers to rebuild or render it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedHostArray {
-    indexes: NonEmpty<IndexVarName>,
+    indexes: NonEmpty<IndexBinder>,
     shape: Vec<usize>,
     values: ValidatedHostArrayValues,
 }
@@ -263,7 +262,7 @@ pub struct ValidatedHostArray {
 impl ValidatedHostArray {
     /// Declared index variables in row-major axis order.
     #[must_use]
-    pub const fn indexes(&self) -> &NonEmpty<IndexVarName> {
+    pub const fn indexes(&self) -> &NonEmpty<IndexBinder> {
         &self.indexes
     }
 
@@ -471,7 +470,12 @@ const fn invalid_slot(
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dimension::Dimension;
-    use graphcal_compiler::function_signature::{DimMonomial, StructShape, StructShapeField};
+    use graphcal_compiler::function_signature::{
+        FunctionParam, FunctionSignature, StructShape, StructShapeField,
+    };
+    use graphcal_compiler::syntax::dimension::DimVarName;
+    use graphcal_compiler::syntax::function_name::FnParamName;
+    use graphcal_compiler::syntax::index_name::IndexVarName;
 
     use super::*;
     use crate::host_fns::HostArray;
@@ -515,16 +519,29 @@ mod tests {
         ));
     }
 
-    fn indexed_kind(element: ScalarValueKind) -> ResultKind {
-        ResultKind::Value(ParamKind::Indexed {
-            element,
+    /// The validated result kind of `<I: Index>(values: element[I]) -> element[I]`.
+    fn indexed_kind(element: &ScalarValueKind<DimVarName>) -> ResultKind {
+        let kind = || ParamKind::Indexed {
+            element: element.clone(),
             indexes: NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new()),
-        })
+        };
+        FunctionSignature::try_new(
+            Vec::new(),
+            vec![IndexVarName::expect_valid("I")],
+            vec![FunctionParam {
+                name: FnParamName::expect_valid("values"),
+                kind: kind(),
+            }],
+            kind().into(),
+        )
+        .unwrap()
+        .result()
+        .clone()
     }
 
     #[test]
     fn bool_and_int_arrays_decode_with_scalar_policy_and_element_locations() {
-        let bool_kind = indexed_kind(ScalarValueKind::Bool);
+        let bool_kind = indexed_kind(&ScalarValueKind::Bool);
         let bools = HostFnValue::Array(HostArray::try_new(vec![3], vec![0.0, -0.0, 1.0]).unwrap());
         assert!(matches!(
             decode_result(&bool_kind, &bools),
@@ -544,7 +561,7 @@ mod tests {
             ));
         }
 
-        let int_kind = indexed_kind(ScalarValueKind::Int);
+        let int_kind = indexed_kind(&ScalarValueKind::Int);
         let ints =
             HostFnValue::Array(HostArray::vector(vec![-0.0, 2.0_f64.powi(54), -3.0]).unwrap());
         assert!(matches!(
@@ -568,11 +585,9 @@ mod tests {
 
     #[test]
     fn composite_results_validate_every_quantity_slot() {
-        let indexes = NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new());
-        let array_kind: ResultKind = ResultKind::Value(ParamKind::Indexed {
-            element: ScalarValueKind::Quantity(DimMonomial::fixed(Dimension::dimensionless())),
-            indexes,
-        });
+        let array_kind = indexed_kind(&ScalarValueKind::Quantity(DimMonomial::fixed(
+            Dimension::dimensionless(),
+        )));
         let array =
             HostFnValue::Array(HostArray::try_new(vec![2], vec![1.0, f64::INFINITY]).unwrap());
         assert!(matches!(

@@ -20,6 +20,8 @@ use std::ops::Neg;
 
 use thiserror::Error;
 
+use crate::sparse_monomial::MonomialExponent;
+
 mod sealed {
     pub trait Sealed {}
 }
@@ -231,6 +233,22 @@ impl<T: RatioInt> Ratio<T> {
             }
             _ => Err(RatioError::Overflow),
         }
+    }
+}
+
+impl<T: RatioInt> MonomialExponent for Ratio<T> {
+    type Error = RatioError;
+
+    fn is_zero(self) -> bool {
+        Self::is_zero(self)
+    }
+
+    fn checked_add(self, rhs: Self) -> Result<Self, RatioError> {
+        self + rhs
+    }
+
+    fn checked_mul(self, rhs: Self) -> Result<Self, RatioError> {
+        self * rhs
     }
 }
 

@@ -9,6 +9,13 @@
 //! [`Dimension`] — generalizing single-variable forms like `D -> D^(1/2)`
 //! to cross-variable algebra such as `(D1, D2) -> D1 * D2`.
 //!
+//! Signature parts are written with binders referenced by name (the
+//! `Named*` aliases); [`FunctionSignature::try_from_parts`] resolves every
+//! reference to a [`DimBinder`] / [`IndexBinder`], which identifies the binder
+//! by its declaration position. Binder identity is therefore positional, and
+//! structural equivalence is a comparison of binder positions up to a
+//! renumbering rather than a comparison of spellings.
+//!
 //! This module owns only the pure signature algebra. Interpreting a signature
 //! against inferred argument types (producing diagnostics) lives in the
 //! dimension checker; evaluating the kernel lives in the evaluator. The model
@@ -16,117 +23,225 @@
 //! serialize it without the core ever carrying strings.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use thiserror::Error;
 
 use crate::dimension::{Dimension, Rational};
-use crate::ratio::RatioError;
+use crate::ratio::{ExponentStyle, RatioError};
+use crate::sparse_monomial::{MonomialFactorError, SparseMonomial};
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::index_name::IndexVarName;
 use crate::syntax::non_empty::NonEmpty;
 
-/// One dimension-variable factor in a [`DimMonomial`]: `var^power`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DimVarPower {
-    /// The dimension variable being raised.
-    pub var: DimVarName,
-    /// The rational exponent. Never zero in a validated signature.
-    pub power: Rational,
+/// A display callback rendering a concrete [`Dimension`].
+pub type DimFormatter<'a> = dyn FnMut(&Dimension) -> String + 'a;
+
+/// A dimension variable declared by a signature, identified by its position
+/// in [`FunctionSignature::dim_vars`]. The name is carried for display only.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DimBinder {
+    index: usize,
+    name: DimVarName,
+}
+
+impl DimBinder {
+    /// Declaration position.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Declared spelling (display only).
+    #[must_use]
+    pub const fn name(&self) -> &DimVarName {
+        &self.name
+    }
+}
+
+impl fmt::Display for DimBinder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.name, f)
+    }
+}
+
+/// An index variable declared by a signature, identified by its position in
+/// [`FunctionSignature::index_vars`]. The name is carried for display only.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IndexBinder {
+    index: usize,
+    name: IndexVarName,
+}
+
+impl IndexBinder {
+    /// Declaration position.
+    #[must_use]
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Declared spelling (display only).
+    #[must_use]
+    pub const fn name(&self) -> &IndexVarName {
+        &self.name
+    }
+}
+
+impl fmt::Display for IndexBinder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.name, f)
+    }
 }
 
 /// A dimension monomial: a product of dimension-variable powers and a fixed
 /// dimension, e.g. `D1 * D2^2 * Length^-1`.
 ///
-/// The fixed factor reuses [`Dimension`], which is itself a product of base
-/// dimensions with rational exponents. `DimMonomial::fixed(Dimension::dimensionless())`
-/// with no variables is the dimensionless monomial.
+/// `V` is the variable reference: a [`DimVarName`] while a signature is being
+/// written, a [`DimBinder`] once it is validated. Variable factors are kept
+/// sorted, distinct, and non-zero by [`SparseMonomial`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DimMonomial {
-    /// Dimension-variable factors, in declaration order. No duplicate variables.
-    pub vars: Vec<DimVarPower>,
-    /// The concrete dimension factor. [`Dimension::dimensionless`] when absent.
-    pub fixed: Dimension,
+pub struct DimMonomial<V = DimBinder> {
+    vars: SparseMonomial<V, Rational>,
+    fixed: Dimension,
 }
 
-impl DimMonomial {
+/// A [`DimMonomial`] as written, with variables referenced by name.
+pub type NamedDimMonomial = DimMonomial<DimVarName>;
+
+impl<V> DimMonomial<V> {
     /// A monomial with no variable factors: just a concrete dimension.
     #[must_use]
     pub const fn fixed(dim: Dimension) -> Self {
         Self {
-            vars: Vec::new(),
+            vars: SparseMonomial::one(),
             fixed: dim,
         }
     }
 
     /// The dimensionless monomial (no variables, dimensionless fixed factor).
     #[must_use]
-    pub(crate) const fn dimensionless() -> Self {
+    pub const fn dimensionless() -> Self {
         Self::fixed(Dimension::dimensionless())
     }
 
-    /// A bare dimension variable: `var^1`.
+    /// The concrete dimension factor ([`Dimension::dimensionless`] when absent).
     #[must_use]
-    pub fn var(var: DimVarName) -> Self {
-        Self::var_pow(var, Rational::ONE)
+    pub const fn fixed_factor(&self) -> &Dimension {
+        &self.fixed
     }
 
-    /// A single dimension-variable power: `var^power`.
+    /// The variable factors, sorted by variable.
+    pub fn var_factors(&self) -> impl Iterator<Item = (&V, Rational)> {
+        self.vars.iter().map(|(var, &power)| (var, power))
+    }
+
+    /// Returns whether this monomial references no dimension variables.
     #[must_use]
-    fn var_pow(var: DimVarName, power: Rational) -> Self {
-        Self {
-            vars: vec![DimVarPower { var, power }],
-            fixed: Dimension::dimensionless(),
-        }
+    pub fn is_concrete(&self) -> bool {
+        self.vars.is_empty()
     }
 
     /// Returns the variable when this monomial is exactly one bare variable
     /// (`var^1` with a dimensionless fixed factor) — the only shape that can
     /// *bind* a dimension variable at a call site.
     #[must_use]
-    pub(crate) fn as_bare_var(&self) -> Option<&DimVarName> {
-        match self.vars.as_slice() {
-            [DimVarPower { var, power }]
-                if *power == Rational::ONE && self.fixed.is_dimensionless() =>
-            {
-                Some(var)
-            }
+    pub fn as_bare_var(&self) -> Option<&V> {
+        match self.vars.as_single() {
+            Some((var, &Rational::ONE)) if self.fixed.is_dimensionless() => Some(var),
             _ => None,
         }
     }
+}
 
-    /// Returns whether this monomial references no dimension variables.
+impl<V: Ord> DimMonomial<V> {
+    /// A monomial from explicitly written variable factors and a fixed factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MonomialFactorError`] when a variable repeats or carries a
+    /// zero exponent.
+    pub fn try_new(
+        vars: impl IntoIterator<Item = (V, Rational)>,
+        fixed: Dimension,
+    ) -> Result<Self, MonomialFactorError<V>> {
+        Ok(Self {
+            vars: SparseMonomial::try_from_factors(vars)?,
+            fixed,
+        })
+    }
+
+    /// A bare dimension variable: `var^1`.
     #[must_use]
-    pub const fn is_concrete(&self) -> bool {
-        self.vars.is_empty()
+    pub fn var(var: V) -> Self {
+        Self::var_pow(var, Rational::ONE)
     }
 
-    /// Iterate the dimension variables referenced by this monomial.
-    fn referenced_vars(&self) -> impl Iterator<Item = &DimVarName> {
-        self.vars.iter().map(|factor| &factor.var)
+    /// A single dimension-variable power: `var^power`.
+    #[must_use]
+    fn var_pow(var: V, power: Rational) -> Self {
+        Self {
+            vars: SparseMonomial::single(var, power),
+            fixed: Dimension::dimensionless(),
+        }
     }
+}
 
+impl DimMonomial {
     /// Compute the concrete dimension of this monomial under `lookup`, which
-    /// maps each referenced variable to its bound dimension.
+    /// maps each referenced binder to its bound dimension.
     ///
     /// # Errors
     ///
     /// Returns [`DimMonomialEvalError::UnboundVar`] when `lookup` has no
-    /// binding for a referenced variable, and
+    /// binding for a referenced binder, and
     /// [`DimMonomialEvalError::Overflow`] when exponent arithmetic overflows.
     pub(crate) fn eval<'a>(
         &self,
-        mut lookup: impl FnMut(&DimVarName) -> Option<&'a Dimension>,
+        mut lookup: impl FnMut(&DimBinder) -> Option<&'a Dimension>,
     ) -> Result<Dimension, DimMonomialEvalError> {
         let mut result = self.fixed.clone();
-        for factor in &self.vars {
-            let bound = lookup(&factor.var).ok_or_else(|| DimMonomialEvalError::UnboundVar {
-                var: factor.var.clone(),
-            })?;
-            let powered = bound.pow(factor.power)?;
+        for (var, power) in self.var_factors() {
+            let bound =
+                lookup(var).ok_or_else(|| DimMonomialEvalError::UnboundVar { var: var.clone() })?;
+            let powered = bound.pow(power)?;
             result = result.checked_mul(&powered)?;
         }
         Ok(result)
+    }
+}
+
+impl<V: fmt::Display> DimMonomial<V> {
+    /// Render as `.gcl` dimension-expression syntax (`D1 * D2^2 * Length`),
+    /// using `format_dim` for the fixed factor; `Dimensionless` when empty.
+    #[must_use]
+    pub fn format_with(&self, format_dim: &mut dyn FnMut(&Dimension) -> String) -> String {
+        let mut parts: Vec<String> = self
+            .var_factors()
+            .map(|(var, power)| {
+                if power == Rational::ONE {
+                    var.to_string()
+                } else {
+                    format!("{var}{}", power.fmt_exponent(ExponentStyle::Source))
+                }
+            })
+            .collect();
+        if !self.fixed.is_dimensionless() {
+            parts.push(format_dim(&self.fixed));
+        }
+        if parts.is_empty() {
+            non_empty_dimension(format_dim(&self.fixed))
+        } else {
+            parts.join(" * ")
+        }
+    }
+}
+
+fn non_empty_dimension(rendered: String) -> String {
+    if rendered.is_empty() {
+        "Dimensionless".to_string()
+    } else {
+        rendered
     }
 }
 
@@ -137,7 +252,7 @@ pub enum DimMonomialEvalError {
     #[error("dimension variable `{var}` is unbound")]
     UnboundVar {
         /// The unbound variable.
-        var: DimVarName,
+        var: DimBinder,
     },
     /// Exponent arithmetic overflowed.
     #[error(transparent)]
@@ -150,9 +265,9 @@ pub enum DimMonomialEvalError {
 /// `Bool[I]` and `Int[I]` retain their semantic kinds instead of being
 /// disguised as dimensionless quantities.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScalarValueKind {
+pub enum ScalarValueKind<V = DimBinder> {
     /// A quantity with the dimension given by the monomial.
-    Quantity(DimMonomial),
+    Quantity(DimMonomial<V>),
     /// A boolean value.
     Bool,
     /// An integer value.
@@ -165,9 +280,9 @@ pub enum ScalarValueKind {
 /// as separate arguments), so there is no struct variant here. Results may
 /// additionally be structs; see [`ResultKind`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParamKind {
+pub enum ParamKind<V = DimBinder, I = IndexBinder> {
     /// A standalone scalar value.
-    Scalar(ScalarValueKind),
+    Scalar(ScalarValueKind<V>),
     /// An indexed scalar collection over declared axis variables:
     /// `element[I, J]`.
     ///
@@ -177,11 +292,14 @@ pub enum ParamKind {
     /// extent.
     Indexed {
         /// The semantic scalar element kind.
-        element: ScalarValueKind,
+        element: ScalarValueKind<V>,
         /// Index variables naming the array's axes, in row-major order.
-        indexes: NonEmpty<IndexVarName>,
+        indexes: NonEmpty<I>,
     },
 }
+
+/// A [`ParamKind`] as written, with binders referenced by name.
+pub type NamedParamKind = ParamKind<DimVarName, IndexVarName>;
 
 /// The kind of a result value in a function signature.
 ///
@@ -189,15 +307,18 @@ pub enum ParamKind {
 /// structural [`StructShape`]; an extern declaration additionally binds that
 /// shape to a nominal record type, so its payload carries both.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResultKind<S = StructShape> {
+pub enum ResultKind<S = StructShape, V = DimBinder, I = IndexBinder> {
     /// A value of any kind a parameter can have.
-    Value(ParamKind),
+    Value(ParamKind<V, I>),
     /// A record value described by its flattened field shape.
     Struct(S),
 }
 
-impl<S> From<ParamKind> for ResultKind<S> {
-    fn from(kind: ParamKind) -> Self {
+/// A [`ResultKind`] as written, with binders referenced by name.
+pub type NamedResultKind<S = StructShape> = ResultKind<S, DimVarName, IndexVarName>;
+
+impl<S, V, I> From<ParamKind<V, I>> for ResultKind<S, V, I> {
+    fn from(kind: ParamKind<V, I>) -> Self {
         Self::Value(kind)
     }
 }
@@ -277,7 +398,7 @@ impl StructShape {
     }
 }
 
-impl ParamKind {
+impl<V, I> ParamKind<V, I> {
     /// A boolean scalar.
     #[must_use]
     pub const fn bool() -> Self {
@@ -292,7 +413,7 @@ impl ParamKind {
 
     /// A quantity scalar with the given dimension monomial.
     #[must_use]
-    pub const fn quantity_monomial(monomial: DimMonomial) -> Self {
+    pub const fn quantity_monomial(monomial: DimMonomial<V>) -> Self {
         Self::Scalar(ScalarValueKind::Quantity(monomial))
     }
 
@@ -311,23 +432,26 @@ impl ParamKind {
 
 /// A named parameter with its value-kind constraint.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FunctionParam {
+pub struct FunctionParam<V = DimBinder, I = IndexBinder> {
     /// Parameter name, for diagnostics, hover, and signature help.
     pub name: FnParamName,
     /// The value kind this parameter requires.
-    pub kind: ParamKind,
+    pub kind: ParamKind<V, I>,
 }
+
+/// A [`FunctionParam`] as written, with binders referenced by name.
+pub type NamedFunctionParam = FunctionParam<DimVarName, IndexVarName>;
 
 /// A typed, serializable function signature: declared dimension and index
 /// variables, named parameters, and the result kind.
 ///
-/// Construction goes through [`FunctionSignature::try_from_parts`], which enforces
-/// the invariants that make call-site checking decidable:
+/// Construction goes through [`FunctionSignature::try_from_parts`], which
+/// resolves binder names to positions and enforces the invariants that make
+/// call-site checking decidable:
 ///
 /// - Declared dimension variables are distinct; declared index variables are
 ///   distinct.
 /// - Parameter names are distinct.
-/// - Monomial factors carry no zero exponents and no duplicate variables.
 /// - Every referenced dimension variable is declared, and every declared
 ///   dimension variable has a *binding occurrence*: a parameter whose quantity
 ///   or array-element monomial is exactly that bare variable (`var^1`),
@@ -339,6 +463,9 @@ pub struct FunctionParam {
 ///   variable indexes at least one array parameter. A result array reuses an
 ///   index variables that parameters bind — output extents always come from
 ///   inputs (the dynamic-index fence stays closed).
+///
+/// Monomial factors carry no zero exponents and no duplicate variables by
+/// construction ([`DimMonomial::try_new`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature<S = StructShape> {
     dim_vars: Vec<DimVarName>,
@@ -357,10 +484,180 @@ impl FunctionSignature {
     pub fn try_new(
         dim_vars: Vec<DimVarName>,
         index_vars: Vec<IndexVarName>,
-        params: Vec<FunctionParam>,
-        result: ResultKind,
+        params: Vec<NamedFunctionParam>,
+        result: NamedResultKind,
     ) -> Result<Self, SignatureError> {
         Self::try_from_parts(dim_vars, index_vars, params, result)
+    }
+}
+
+/// Name-to-position resolution for one signature's declared binders.
+struct BinderScope<'a> {
+    dims: &'a [DimVarName],
+    indexes: &'a [IndexVarName],
+}
+
+impl BinderScope<'_> {
+    fn dim(&self, name: &DimVarName) -> Result<DimBinder, SignatureError> {
+        self.dims
+            .iter()
+            .position(|declared| declared == name)
+            .map(|index| DimBinder {
+                index,
+                name: name.clone(),
+            })
+            .ok_or_else(|| SignatureError::UndeclaredDimVar { var: name.clone() })
+    }
+
+    fn index(&self, name: &IndexVarName) -> Result<IndexBinder, SignatureError> {
+        self.indexes
+            .iter()
+            .position(|declared| declared == name)
+            .map(|index| IndexBinder {
+                index,
+                name: name.clone(),
+            })
+            .ok_or_else(|| SignatureError::UndeclaredIndexVar { var: name.clone() })
+    }
+
+    fn monomial(&self, monomial: &NamedDimMonomial) -> Result<DimMonomial, SignatureError> {
+        let vars = monomial
+            .var_factors()
+            .map(|(var, power)| Ok((self.dim(var)?, power)))
+            .collect::<Result<Vec<_>, SignatureError>>()?;
+        DimMonomial::try_new(vars, monomial.fixed.clone())
+            .map_err(|error| SignatureError::from(error.map_key(|var| var.name)))
+    }
+
+    fn scalar(
+        &self,
+        kind: &ScalarValueKind<DimVarName>,
+    ) -> Result<ScalarValueKind, SignatureError> {
+        Ok(match kind {
+            ScalarValueKind::Quantity(monomial) => {
+                ScalarValueKind::Quantity(self.monomial(monomial)?)
+            }
+            ScalarValueKind::Bool => ScalarValueKind::Bool,
+            ScalarValueKind::Int => ScalarValueKind::Int,
+        })
+    }
+
+    fn indexes(
+        &self,
+        indexes: &NonEmpty<IndexVarName>,
+    ) -> Result<NonEmpty<IndexBinder>, SignatureError> {
+        indexes.try_map_ref(|index| self.index(index))
+    }
+}
+
+/// Which declared binders have a binding occurrence so far, in parameter order.
+struct BindingState {
+    bound: Vec<bool>,
+    used_indexes: Vec<bool>,
+}
+
+impl BindingState {
+    fn is_bound(&self, var: &DimBinder) -> bool {
+        self.bound.get(var.index).copied().unwrap_or(false)
+    }
+
+    fn is_used(&self, index: &IndexBinder) -> bool {
+        self.used_indexes.get(index.index).copied().unwrap_or(false)
+    }
+
+    /// Resolve one parameter, recording its binding occurrences and rejecting
+    /// a compound use of a variable no earlier parameter binds.
+    fn param(
+        &mut self,
+        scope: &BinderScope<'_>,
+        param: NamedFunctionParam,
+    ) -> Result<FunctionParam, SignatureError> {
+        let kind = match &param.kind {
+            ParamKind::Scalar(scalar) => ParamKind::Scalar(scope.scalar(scalar)?),
+            ParamKind::Indexed { element, indexes } => {
+                let indexes = scope.indexes(indexes)?;
+                for index in &indexes {
+                    if let Some(used) = self.used_indexes.get_mut(index.index) {
+                        *used = true;
+                    }
+                }
+                ParamKind::Indexed {
+                    element: scope.scalar(element)?,
+                    indexes,
+                }
+            }
+        };
+        let (ParamKind::Scalar(scalar)
+        | ParamKind::Indexed {
+            element: scalar, ..
+        }) = &kind;
+        if let ScalarValueKind::Quantity(monomial) = scalar {
+            match monomial.as_bare_var() {
+                Some(var) => {
+                    if let Some(bound) = self.bound.get_mut(var.index) {
+                        *bound = true;
+                    }
+                }
+                None => {
+                    if let Some((var, _)) =
+                        monomial.var_factors().find(|(var, _)| !self.is_bound(var))
+                    {
+                        return Err(SignatureError::UseBeforeBinding {
+                            var: var.name.clone(),
+                            param: param.name,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(FunctionParam {
+            name: param.name,
+            kind,
+        })
+    }
+
+    /// Resolve the result kind, whose variables must all be bound by
+    /// parameters.
+    fn result<S>(
+        &self,
+        scope: &BinderScope<'_>,
+        result: NamedResultKind<S>,
+    ) -> Result<ResultKind<S>, SignatureError> {
+        let kind = match result {
+            ResultKind::Struct(payload) => return Ok(ResultKind::Struct(payload)),
+            ResultKind::Value(kind) => kind,
+        };
+        let (indexes, element) = match &kind {
+            ParamKind::Scalar(scalar) => (None, scope.scalar(scalar)?),
+            ParamKind::Indexed { element, indexes } => {
+                (Some(scope.indexes(indexes)?), scope.scalar(element)?)
+            }
+        };
+        if let Some(index) = indexes.iter().flatten().find(|index| !self.is_used(index)) {
+            return Err(SignatureError::UnboundResultIndexVar {
+                var: index.name.clone(),
+            });
+        }
+        if let ScalarValueKind::Quantity(monomial) = &element
+            && let Some((var, _)) = monomial.var_factors().find(|(var, _)| !self.is_bound(var))
+        {
+            return Err(SignatureError::UnboundResultVar {
+                var: var.name.clone(),
+            });
+        }
+        Ok(ResultKind::Value(match indexes {
+            None => ParamKind::Scalar(element),
+            Some(indexes) => ParamKind::Indexed { element, indexes },
+        }))
+    }
+}
+
+impl From<MonomialFactorError<DimVarName>> for SignatureError {
+    fn from(error: MonomialFactorError<DimVarName>) -> Self {
+        match error {
+            MonomialFactorError::ZeroExponent(var) => Self::ZeroExponent { var },
+            MonomialFactorError::DuplicateKey(var) => Self::DuplicateMonomialVar { var },
+        }
     }
 }
 
@@ -373,8 +670,8 @@ impl<S: StructResult> FunctionSignature<S> {
     pub fn try_from_parts(
         dim_vars: Vec<DimVarName>,
         index_vars: Vec<IndexVarName>,
-        params: Vec<FunctionParam>,
-        result: ResultKind<S>,
+        params: Vec<NamedFunctionParam>,
+        result: NamedResultKind<S>,
     ) -> Result<Self, SignatureError> {
         let mut declared: HashSet<&DimVarName> = HashSet::new();
         for var in &dim_vars {
@@ -390,83 +687,32 @@ impl<S: StructResult> FunctionSignature<S> {
         }
         validate_unique_param_names(&params)?;
 
-        let mut bound: HashSet<&DimVarName> = HashSet::new();
-        let mut used_indexes: HashSet<&IndexVarName> = HashSet::new();
-        for param in &params {
-            let scalar = match &param.kind {
-                ParamKind::Scalar(scalar) => scalar,
-                ParamKind::Indexed { element, indexes } => {
-                    for index in indexes {
-                        if !declared_indexes.contains(index) {
-                            return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
-                        }
-                        used_indexes.insert(index);
-                    }
-                    element
-                }
-            };
-            let ScalarValueKind::Quantity(monomial) = scalar else {
-                continue;
-            };
-            validate_monomial_factors(monomial)?;
-            if let Some(var) = monomial.as_bare_var() {
-                if !declared.contains(var) {
-                    return Err(SignatureError::UndeclaredDimVar { var: var.clone() });
-                }
-                bound.insert(var);
-                continue;
-            }
-            for var in monomial.referenced_vars() {
-                if !declared.contains(var) {
-                    return Err(SignatureError::UndeclaredDimVar { var: var.clone() });
-                }
-                if !bound.contains(var) {
-                    return Err(SignatureError::UseBeforeBinding {
-                        var: var.clone(),
-                        param: param.name.clone(),
-                    });
-                }
-            }
-        }
-
-        let result_monomial = match &result {
-            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => {
-                Some(monomial)
-            }
-            ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
-                for index in indexes {
-                    if !declared_indexes.contains(index) {
-                        return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
-                    }
-                    if !used_indexes.contains(index) {
-                        return Err(SignatureError::UnboundResultIndexVar { var: index.clone() });
-                    }
-                }
-                match element {
-                    ScalarValueKind::Quantity(monomial) => Some(monomial),
-                    ScalarValueKind::Bool | ScalarValueKind::Int => None,
-                }
-            }
-            // Bool, Int, and struct fields carry no dimension variables.
-            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool | ScalarValueKind::Int))
-            | ResultKind::Struct(_) => None,
+        let scope = BinderScope {
+            dims: &dim_vars,
+            indexes: &index_vars,
         };
-        if let Some(monomial) = result_monomial {
-            validate_monomial_factors(monomial)?;
-            for var in monomial.referenced_vars() {
-                if !declared.contains(var) {
-                    return Err(SignatureError::UndeclaredDimVar { var: var.clone() });
-                }
-                if !bound.contains(var) {
-                    return Err(SignatureError::UnboundResultVar { var: var.clone() });
-                }
-            }
-        }
+        let mut binding = BindingState {
+            bound: vec![false; dim_vars.len()],
+            used_indexes: vec![false; index_vars.len()],
+        };
+        let params = params
+            .into_iter()
+            .map(|param| binding.param(&scope, param))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = binding.result(&scope, result)?;
+        let BindingState {
+            bound,
+            used_indexes,
+        } = binding;
 
-        if let Some(var) = dim_vars.iter().find(|var| !bound.contains(var)) {
+        if let Some((var, _)) = dim_vars.iter().zip(&bound).find(|(_, bound)| !**bound) {
             return Err(SignatureError::DimVarNeverBound { var: var.clone() });
         }
-        if let Some(var) = index_vars.iter().find(|var| !used_indexes.contains(var)) {
+        if let Some((var, _)) = index_vars
+            .iter()
+            .zip(&used_indexes)
+            .find(|(_, used)| !**used)
+        {
             return Err(SignatureError::IndexVarNeverUsed { var: var.clone() });
         }
 
@@ -509,12 +755,26 @@ impl<S: StructResult> FunctionSignature<S> {
     }
 
     /// Render this signature as `<D1: Dim, I: Index>(name: kind, ...) -> kind`,
-    /// using `format_dim` to render concrete dimensions.
+    /// using `format_dim` to render concrete dimensions and spelling a struct
+    /// result as its field list.
     ///
     /// This is a display boundary (hover, signature help, diagnostics); the
     /// checker and evaluator pattern-match the typed parts instead.
     #[must_use]
     pub fn format_with(&self, mut format_dim: impl FnMut(&Dimension) -> String) -> String {
+        self.format_with_result(&mut format_dim, &mut |payload, format_dim| {
+            format_struct_shape(payload.shape(), format_dim)
+        })
+    }
+
+    /// Render like [`Self::format_with`], but spell a struct result with
+    /// `format_struct` (for example, as a nominal type name).
+    #[must_use]
+    pub fn format_with_result(
+        &self,
+        format_dim: &mut DimFormatter<'_>,
+        format_struct: &mut dyn FnMut(&S, &mut DimFormatter<'_>) -> String,
+    ) -> String {
         use std::fmt::Write as _;
 
         let mut out = String::new();
@@ -540,11 +800,14 @@ impl<S: StructResult> FunctionSignature<S> {
                 out,
                 "{}: {}",
                 param.name,
-                format_param_kind(&param.kind, &mut format_dim)
+                format_param_kind(&param.kind, format_dim)
             );
         }
         out.push_str(") -> ");
-        out.push_str(&format_result_kind(&self.result, &mut format_dim));
+        match &self.result {
+            ResultKind::Value(kind) => out.push_str(&format_param_kind(kind, format_dim)),
+            ResultKind::Struct(payload) => out.push_str(&format_struct(payload, format_dim)),
+        }
         out
     }
 }
@@ -552,6 +815,101 @@ impl<S: StructResult> FunctionSignature<S> {
 // ---------------------------------------------------------------------------
 // Structural equivalence
 // ---------------------------------------------------------------------------
+
+/// Binder positions renumbered by first occurrence across a signature's
+/// parameter list.
+///
+/// The use-before-binding invariant makes first occurrence well-defined and
+/// rename-invariant: a dimension variable's first appearance in parameter
+/// order is always its bare binding occurrence, and every declared index
+/// variable indexes some parameter.
+struct FirstOccurrence {
+    dims: Vec<Option<usize>>,
+    indexes: Vec<Option<usize>>,
+}
+
+impl FirstOccurrence {
+    fn of<S>(signature: &FunctionSignature<S>) -> Self {
+        let mut order = Self {
+            dims: vec![None; signature.dim_vars.len()],
+            indexes: vec![None; signature.index_vars.len()],
+        };
+        let mut next_dim = 0;
+        let mut next_index = 0;
+        for param in &signature.params {
+            let (element, indexes) = match &param.kind {
+                ParamKind::Scalar(scalar) => (scalar, None),
+                ParamKind::Indexed { element, indexes } => (element, Some(indexes)),
+            };
+            if let ScalarValueKind::Quantity(monomial) = element {
+                for (var, _) in monomial.var_factors() {
+                    number(&mut order.dims, var.index, &mut next_dim);
+                }
+            }
+            for index in indexes.into_iter().flatten() {
+                number(&mut order.indexes, index.index, &mut next_index);
+            }
+        }
+        order
+    }
+
+    fn monomial(&self, monomial: &DimMonomial) -> (Vec<(Option<usize>, Rational)>, Dimension) {
+        let mut vars: Vec<_> = monomial
+            .var_factors()
+            .map(|(var, power)| (self.dims.get(var.index).copied().flatten(), power))
+            .collect();
+        vars.sort_unstable_by_key(|(position, _)| *position);
+        (vars, monomial.fixed.clone())
+    }
+
+    fn scalar_equivalent(
+        &self,
+        kind: &ScalarValueKind,
+        other_order: &Self,
+        other: &ScalarValueKind,
+    ) -> bool {
+        match (kind, other) {
+            (ScalarValueKind::Quantity(left), ScalarValueKind::Quantity(right)) => {
+                self.monomial(left) == other_order.monomial(right)
+            }
+            (ScalarValueKind::Bool, ScalarValueKind::Bool)
+            | (ScalarValueKind::Int, ScalarValueKind::Int) => true,
+            _ => false,
+        }
+    }
+
+    fn param_equivalent(&self, kind: &ParamKind, other_order: &Self, other: &ParamKind) -> bool {
+        match (kind, other) {
+            (ParamKind::Scalar(left), ParamKind::Scalar(right)) => {
+                self.scalar_equivalent(left, other_order, right)
+            }
+            (
+                ParamKind::Indexed {
+                    element: left,
+                    indexes: left_indexes,
+                },
+                ParamKind::Indexed {
+                    element: right,
+                    indexes: right_indexes,
+                },
+            ) => {
+                self.scalar_equivalent(left, other_order, right)
+                    && left_indexes.len() == right_indexes.len()
+                    && left_indexes.iter().zip(right_indexes).all(|(left, right)| {
+                        self.indexes.get(left.index) == other_order.indexes.get(right.index)
+                    })
+            }
+            _ => false,
+        }
+    }
+}
+
+fn number(order: &mut [Option<usize>], binder: usize, next: &mut usize) {
+    if let Some(slot @ None) = order.get_mut(binder) {
+        *slot = Some(*next);
+        *next += 1;
+    }
+}
 
 impl<S: StructResult> FunctionSignature<S> {
     /// Whether `self` and `other` denote the same calling contract.
@@ -569,156 +927,30 @@ impl<S: StructResult> FunctionSignature<S> {
     /// (Phase B of #25).
     #[must_use]
     pub fn structurally_equivalent<T: StructResult>(&self, other: &FunctionSignature<T>) -> bool {
-        self.canonical_form() == other.canonical_form()
-    }
-
-    /// Rewrite this signature with dimension and index variables numbered by
-    /// first occurrence across the parameter list and monomial factors sorted
-    /// by that numbering.
-    ///
-    /// The use-before-binding invariant makes first occurrence well-defined
-    /// and rename-invariant: a dimension variable's first appearance in
-    /// parameter order is always its bare binding occurrence.
-    fn canonical_form(&self) -> CanonicalSignature {
-        let mut order = CanonicalOrder::default();
-        let params = self
-            .params
-            .iter()
-            .map(|param| canonical_param_kind(&param.kind, &mut order))
-            .collect();
-        let result = canonical_result_kind(&self.result, &mut order);
-        CanonicalSignature {
-            dim_var_count: self.dim_vars.len(),
-            index_var_count: self.index_vars.len(),
-            params,
-            result,
-        }
-    }
-}
-
-/// A [`FunctionSignature`] with dimension and index variables replaced by
-/// occurrence indices; equality on this form is structural equivalence.
-#[derive(PartialEq, Eq)]
-struct CanonicalSignature {
-    dim_var_count: usize,
-    index_var_count: usize,
-    params: Vec<CanonicalParamKind>,
-    result: CanonicalResultKind,
-}
-
-/// [`ParamKind`] in canonical form.
-#[derive(PartialEq, Eq)]
-enum CanonicalParamKind {
-    Scalar(CanonicalScalarValueKind),
-    Indexed {
-        element: CanonicalScalarValueKind,
-        indexes: Vec<usize>,
-    },
-}
-
-/// [`ResultKind`] in canonical form.
-#[derive(PartialEq, Eq)]
-enum CanonicalResultKind {
-    Value(CanonicalParamKind),
-    /// Struct shapes carry no variables; field names, order, and kinds are
-    /// the contract and compare verbatim.
-    Struct(StructShape),
-}
-
-/// [`ScalarValueKind`] in canonical form.
-#[derive(PartialEq, Eq)]
-enum CanonicalScalarValueKind {
-    Quantity(CanonicalMonomial),
-    Bool,
-    Int,
-}
-
-/// [`DimMonomial`] in canonical form: variable factors as
-/// `(occurrence index, power)` sorted by index.
-#[derive(PartialEq, Eq)]
-struct CanonicalMonomial {
-    vars: Vec<(usize, Rational)>,
-    fixed: Dimension,
-}
-
-/// First-occurrence numbering state shared across a signature's kinds.
-#[derive(Default)]
-struct CanonicalOrder<'a> {
-    dims: Vec<&'a DimVarName>,
-    indexes: Vec<&'a IndexVarName>,
-}
-
-fn canonical_param_kind<'a>(
-    kind: &'a ParamKind,
-    order: &mut CanonicalOrder<'a>,
-) -> CanonicalParamKind {
-    match kind {
-        ParamKind::Scalar(scalar) => {
-            CanonicalParamKind::Scalar(canonical_scalar_kind(scalar, order))
-        }
-        ParamKind::Indexed { element, indexes } => CanonicalParamKind::Indexed {
-            element: canonical_scalar_kind(element, order),
-            indexes: indexes
+        let order = FirstOccurrence::of(self);
+        let other_order = FirstOccurrence::of(other);
+        let result_equivalent = match (&self.result, &other.result) {
+            (ResultKind::Value(left), ResultKind::Value(right)) => {
+                order.param_equivalent(left, &other_order, right)
+            }
+            // Struct shapes carry no variables; field names, order, and
+            // kinds are the contract and compare verbatim.
+            (ResultKind::Struct(left), ResultKind::Struct(right)) => left.shape() == right.shape(),
+            _ => false,
+        };
+        self.dim_vars.len() == other.dim_vars.len()
+            && self.index_vars.len() == other.index_vars.len()
+            && self.params.len() == other.params.len()
+            && self
+                .params
                 .iter()
-                .map(|index| occurrence_index(&mut order.indexes, index))
-                .collect(),
-        },
+                .zip(&other.params)
+                .all(|(left, right)| order.param_equivalent(&left.kind, &other_order, &right.kind))
+            && result_equivalent
     }
 }
 
-fn canonical_result_kind<'a, S: StructResult>(
-    kind: &'a ResultKind<S>,
-    order: &mut CanonicalOrder<'a>,
-) -> CanonicalResultKind {
-    match kind {
-        ResultKind::Value(kind) => CanonicalResultKind::Value(canonical_param_kind(kind, order)),
-        ResultKind::Struct(payload) => CanonicalResultKind::Struct(payload.shape().clone()),
-    }
-}
-
-fn canonical_scalar_kind<'a>(
-    kind: &'a ScalarValueKind,
-    order: &mut CanonicalOrder<'a>,
-) -> CanonicalScalarValueKind {
-    match kind {
-        ScalarValueKind::Quantity(monomial) => {
-            CanonicalScalarValueKind::Quantity(canonical_monomial(monomial, order))
-        }
-        ScalarValueKind::Bool => CanonicalScalarValueKind::Bool,
-        ScalarValueKind::Int => CanonicalScalarValueKind::Int,
-    }
-}
-
-fn canonical_monomial<'a>(
-    monomial: &'a DimMonomial,
-    order: &mut CanonicalOrder<'a>,
-) -> CanonicalMonomial {
-    let mut vars: Vec<(usize, Rational)> = monomial
-        .vars
-        .iter()
-        .map(|factor| (occurrence_index(&mut order.dims, &factor.var), factor.power))
-        .collect();
-    vars.sort_unstable_by_key(|(index, _)| *index);
-    CanonicalMonomial {
-        vars,
-        fixed: monomial.fixed.clone(),
-    }
-}
-
-fn occurrence_index<'a, T: PartialEq>(order: &mut Vec<&'a T>, item: &'a T) -> usize {
-    order
-        .iter()
-        .position(|seen| *seen == item)
-        .unwrap_or_else(|| {
-            order.push(item);
-            order.len() - 1
-        })
-}
-
-fn format_param_kind(
-    kind: &ParamKind,
-    format_dim: &mut impl FnMut(&Dimension) -> String,
-) -> String {
+fn format_param_kind(kind: &ParamKind, format_dim: &mut dyn FnMut(&Dimension) -> String) -> String {
     match kind {
         ParamKind::Scalar(scalar) => format_scalar_value_kind(scalar, format_dim),
         ParamKind::Indexed { element, indexes } => {
@@ -735,103 +967,37 @@ fn format_param_kind(
     }
 }
 
-fn format_result_kind<S: StructResult>(
-    kind: &ResultKind<S>,
-    format_dim: &mut impl FnMut(&Dimension) -> String,
+fn format_struct_shape(
+    shape: &StructShape,
+    format_dim: &mut dyn FnMut(&Dimension) -> String,
 ) -> String {
-    match kind {
-        ResultKind::Value(kind) => format_param_kind(kind, format_dim),
-        ResultKind::Struct(payload) => {
-            let fields: Vec<String> = payload
-                .shape()
-                .fields()
-                .iter()
-                .map(|field| {
-                    let kind = match &field.kind {
-                        StructFieldKind::Bool => "Bool".to_string(),
-                        StructFieldKind::Int => "Int".to_string(),
-                        StructFieldKind::Quantity(dim) => {
-                            let rendered = format_dim(dim);
-                            if rendered.is_empty() {
-                                "Dimensionless".to_string()
-                            } else {
-                                rendered
-                            }
-                        }
-                    };
-                    format!("{}: {kind}", field.name)
-                })
-                .collect();
-            format!("{{ {} }}", fields.join(", "))
-        }
-    }
+    let fields: Vec<String> = shape
+        .fields()
+        .iter()
+        .map(|field| {
+            let kind = match &field.kind {
+                StructFieldKind::Bool => "Bool".to_string(),
+                StructFieldKind::Int => "Int".to_string(),
+                StructFieldKind::Quantity(dim) => non_empty_dimension(format_dim(dim)),
+            };
+            format!("{}: {kind}", field.name)
+        })
+        .collect();
+    format!("{{ {} }}", fields.join(", "))
 }
 
 fn format_scalar_value_kind(
     kind: &ScalarValueKind,
-    format_dim: &mut impl FnMut(&Dimension) -> String,
+    format_dim: &mut dyn FnMut(&Dimension) -> String,
 ) -> String {
     match kind {
-        ScalarValueKind::Quantity(monomial) => format_monomial(monomial, format_dim),
+        ScalarValueKind::Quantity(monomial) => monomial.format_with(format_dim),
         ScalarValueKind::Bool => "Bool".to_string(),
         ScalarValueKind::Int => "Int".to_string(),
     }
 }
 
-fn format_monomial(
-    monomial: &DimMonomial,
-    format_dim: &mut impl FnMut(&Dimension) -> String,
-) -> String {
-    let mut parts: Vec<String> = monomial
-        .vars
-        .iter()
-        .map(|factor| {
-            if factor.power == Rational::ONE {
-                factor.var.to_string()
-            } else {
-                format!(
-                    "{}{}",
-                    factor.var,
-                    factor
-                        .power
-                        .fmt_exponent(crate::ratio::ExponentStyle::Source)
-                )
-            }
-        })
-        .collect();
-    if !monomial.fixed.is_dimensionless() {
-        parts.push(format_dim(&monomial.fixed));
-    }
-    if parts.is_empty() {
-        let rendered = format_dim(&monomial.fixed);
-        if rendered.is_empty() {
-            "Dimensionless".to_string()
-        } else {
-            rendered
-        }
-    } else {
-        parts.join(" * ")
-    }
-}
-
-fn validate_monomial_factors(monomial: &DimMonomial) -> Result<(), SignatureError> {
-    let mut seen: HashSet<&DimVarName> = HashSet::new();
-    for factor in &monomial.vars {
-        if factor.power.is_zero() {
-            return Err(SignatureError::ZeroExponent {
-                var: factor.var.clone(),
-            });
-        }
-        if !seen.insert(&factor.var) {
-            return Err(SignatureError::DuplicateMonomialVar {
-                var: factor.var.clone(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_unique_param_names(params: &[FunctionParam]) -> Result<(), SignatureError> {
+fn validate_unique_param_names<V, I>(params: &[FunctionParam<V, I>]) -> Result<(), SignatureError> {
     let mut declared: HashMap<&FnParamName, usize> = HashMap::new();
     for (duplicate, param) in params.iter().enumerate() {
         if let Some(first) = declared.insert(&param.name, duplicate) {
@@ -949,14 +1115,14 @@ fn dim_var_d() -> DimVarName {
     DimVarName::expect_valid("D")
 }
 
-fn param(name: &str, kind: ParamKind) -> FunctionParam {
+fn param(name: &str, kind: NamedParamKind) -> NamedFunctionParam {
     FunctionParam {
         name: FnParamName::expect_valid(name),
         kind,
     }
 }
 
-const fn typed_param(name: FnParamName, kind: ParamKind) -> FunctionParam {
+const fn typed_param(name: FnParamName, kind: NamedParamKind) -> NamedFunctionParam {
     FunctionParam { name, kind }
 }
 
@@ -966,8 +1132,8 @@ const fn typed_param(name: FnParamName, kind: ParamKind) -> FunctionParam {
 )]
 fn expect_signature(
     dim_vars: Vec<DimVarName>,
-    params: Vec<FunctionParam>,
-    result: ParamKind,
+    params: Vec<NamedFunctionParam>,
+    result: NamedParamKind,
 ) -> FunctionSignature {
     FunctionSignature::try_new(dim_vars, Vec::new(), params, result.into())
         .expect("built-in signature shape must be valid")
@@ -1073,6 +1239,10 @@ mod tests {
     use super::*;
     use crate::dimension::BaseDimId;
 
+    // Tests write signatures by name, as builders do.
+    type ParamKind = super::NamedParamKind;
+    type ScalarValueKind = super::ScalarValueKind<DimVarName>;
+
     fn var(name: &str) -> DimVarName {
         DimVarName::expect_valid(name)
     }
@@ -1109,19 +1279,13 @@ mod tests {
                     ParamKind::quantity_monomial(DimMonomial::var(var("D2"))),
                 ),
             ],
-            ParamKind::quantity_monomial(DimMonomial {
-                vars: vec![
-                    DimVarPower {
-                        var: var("D1"),
-                        power: Rational::ONE,
-                    },
-                    DimVarPower {
-                        var: var("D2"),
-                        power: Rational::ONE,
-                    },
-                ],
-                fixed: Dimension::dimensionless(),
-            })
+            ParamKind::quantity_monomial(
+                DimMonomial::try_new(
+                    [(var("D1"), Rational::ONE), (var("D2"), Rational::ONE)],
+                    Dimension::dimensionless(),
+                )
+                .unwrap(),
+            )
             .into(),
         )
         .unwrap();
@@ -1129,14 +1293,37 @@ mod tests {
         let l = length();
         let t = time();
         let bindings = [(var("D1"), l.clone()), (var("D2"), t.clone())];
-        let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) = sig.result()
+        let ResultKind::Value(super::ParamKind::Scalar(super::ScalarValueKind::Quantity(result))) =
+            sig.result()
         else {
             panic!("expected quantity result");
         };
         let dim = result
-            .eval(|v| bindings.iter().find(|(bv, _)| bv == v).map(|(_, d)| d))
+            .eval(|v| {
+                bindings
+                    .iter()
+                    .find(|(bv, _)| bv == v.name())
+                    .map(|(_, d)| d)
+            })
             .unwrap();
         assert_eq!(dim, l.checked_mul(&t).unwrap());
+    }
+
+    #[test]
+    fn written_monomials_reject_zero_and_repeated_variables() {
+        assert_eq!(
+            DimMonomial::try_new([(var("D"), Rational::ZERO)], Dimension::dimensionless())
+                .map_err(SignatureError::from),
+            Err(SignatureError::ZeroExponent { var: var("D") })
+        );
+        assert_eq!(
+            DimMonomial::try_new(
+                [(var("D"), Rational::ONE), (var("D"), Rational::HALF)],
+                Dimension::dimensionless(),
+            )
+            .map_err(SignatureError::from),
+            Err(SignatureError::DuplicateMonomialVar { var: var("D") })
+        );
     }
 
     #[test]
@@ -1285,19 +1472,13 @@ mod tests {
     #[test]
     fn equivalence_ignores_monomial_factor_order_and_binder_order() {
         let product = |first: &str, second: &str| {
-            ParamKind::quantity_monomial(DimMonomial {
-                vars: vec![
-                    DimVarPower {
-                        var: var(first),
-                        power: Rational::ONE,
-                    },
-                    DimVarPower {
-                        var: var(second),
-                        power: Rational::ONE,
-                    },
-                ],
-                fixed: Dimension::dimensionless(),
-            })
+            ParamKind::quantity_monomial(
+                DimMonomial::try_new(
+                    [(var(first), Rational::ONE), (var(second), Rational::ONE)],
+                    Dimension::dimensionless(),
+                )
+                .unwrap(),
+            )
         };
         let a = sig(
             &["D1", "D2"],
@@ -1476,12 +1657,18 @@ mod tests {
             matrix("J", "I").into(),
         )
         .unwrap();
+        let ResultKind::Value(super::ParamKind::Indexed { indexes, .. }) = signature.result()
+        else {
+            panic!("expected an indexed result");
+        };
+        // Result axes resolve to the declared binders `J` (position 1) then
+        // `I` (position 0).
         assert_eq!(
-            signature.result(),
-            &ResultKind::Value(ParamKind::Indexed {
-                element: ScalarValueKind::Quantity(DimMonomial::var(var("D"))),
-                indexes: NonEmpty::try_from_vec(vec![ivar("J"), ivar("I")]).unwrap(),
-            })
+            indexes
+                .iter()
+                .map(|index| (index.index(), index.name().as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "J"), (0, "I")]
         );
     }
 

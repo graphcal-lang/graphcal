@@ -13,12 +13,11 @@ use miette::NamedSource;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::function_signature::{
-    DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind, ScalarValueKind,
-    StructResult,
+    DimBinder, DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind,
+    ScalarValueKind, StructResult,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
-use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnName;
 use crate::syntax::span::{Span, Spanned};
 
@@ -51,7 +50,7 @@ pub(super) fn infer_fn_dim(
         });
     }
 
-    let mut bindings: HashMap<DimVarName, Dimension> = HashMap::new();
+    let mut bindings: HashMap<DimBinder, Dimension> = HashMap::new();
 
     for (param, arg) in sig.params().iter().zip(args) {
         let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
@@ -100,7 +99,7 @@ pub(super) fn check_quantity_param<S: StructResult>(
     param_name: &crate::syntax::function_name::FnParamName,
     monomial: &DimMonomial,
     arg_dim: &Dimension,
-    bindings: &mut HashMap<DimVarName, Dimension>,
+    bindings: &mut HashMap<DimBinder, Dimension>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     arg_span: Span,
@@ -154,7 +153,7 @@ pub(super) fn check_quantity_param<S: StructResult>(
 pub(super) fn eval_result_monomial(
     fn_name: &str,
     result: &DimMonomial,
-    bindings: &HashMap<DimVarName, Dimension>,
+    bindings: &HashMap<DimBinder, Dimension>,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Dimension, GraphcalError> {
@@ -164,7 +163,7 @@ pub(super) fn eval_result_monomial(
 fn eval_monomial(
     fn_name: &str,
     monomial: &DimMonomial,
-    bindings: &HashMap<DimVarName, Dimension>,
+    bindings: &HashMap<DimBinder, Dimension>,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Dimension, GraphcalError> {
@@ -193,7 +192,7 @@ fn eval_monomial(
 /// variable, for "must have the same dimension as `x`" diagnostics.
 fn first_binding_param<'a, S: StructResult>(
     sig: &'a FunctionSignature<S>,
-    var: &DimVarName,
+    var: &DimBinder,
 ) -> Option<&'a str> {
     sig.params().iter().find_map(|p| match &p.kind {
         ParamKind::Scalar(ScalarValueKind::Quantity(monomial))
@@ -226,7 +225,15 @@ mod tests {
             .into_formatting();
         let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
         let argument_span = Span::new(7, 3);
-        let variable = DimVarName::expect_valid("D");
+        // A binder from a different signature: `signature` has no parameter
+        // binding it.
+        let foreign = FunctionSignature::passthrough("x");
+        let ParamKind::Scalar(ScalarValueKind::Quantity(foreign_monomial)) =
+            &foreign.params()[0].kind
+        else {
+            panic!("passthrough takes a quantity");
+        };
+        let variable = foreign_monomial.as_bare_var().unwrap().clone();
         let mut bindings = HashMap::from([(
             variable.clone(),
             Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length)),

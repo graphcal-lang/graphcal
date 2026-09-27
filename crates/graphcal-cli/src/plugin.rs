@@ -9,10 +9,9 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::dimension::{Dimension, Rational};
+use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::function_signature::{
-    DimMonomial, FunctionSignature, ParamKind, ResultKind, ScalarValueKind, StructFieldKind,
-    StructShape,
+    FunctionSignature, ParamKind, ResultKind, ScalarValueKind, StructFieldKind, StructShape,
 };
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
@@ -402,7 +401,7 @@ struct RenderableFunction<'a> {
 
 /// A function result; struct results always carry their generated record name.
 enum RenderableResult<'a> {
-    Value(&'a ParamKind),
+    Value,
     Struct {
         type_name: SourceIdentifier,
         shape: &'a StructShape,
@@ -416,7 +415,7 @@ impl<'a> RenderableResult<'a> {
         used_result_names: &mut HashSet<String>,
     ) -> Result<Self, ImportBlockRenderError> {
         match result {
-            ResultKind::Value(kind) => Ok(Self::Value(kind)),
+            ResultKind::Value(_) => Ok(Self::Value),
             ResultKind::Struct(shape) => Ok(Self::Struct {
                 type_name: allocate_result_type_name(function, used_result_names)?,
                 shape,
@@ -636,61 +635,14 @@ fn render_result_type_decl(type_name: &SourceIdentifier, shape: &StructShape) ->
 }
 
 fn render_declaration(function: &RenderableFunction<'_>) -> String {
-    use std::fmt::Write as _;
-
-    let signature = function.signature;
-    let mut out = format!("fn {}", function.name);
-    if !signature.dim_vars().is_empty() || !signature.index_vars().is_empty() {
-        let binders = signature
-            .dim_vars()
-            .iter()
-            .map(|variable| format!("{}: Dim", variable.as_str()))
-            .chain(
-                signature
-                    .index_vars()
-                    .iter()
-                    .map(|variable| format!("{}: Index", variable.as_str())),
-            )
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = write!(out, "<{binders}>");
-    }
-    let parameters = signature
-        .params()
-        .iter()
-        .map(|parameter| format!("{}: {}", parameter.name, render_param_kind(&parameter.kind)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let _ = write!(out, "({parameters}) -> ");
-    match &function.result {
-        RenderableResult::Value(kind) => out.push_str(&render_param_kind(kind)),
-        RenderableResult::Struct { type_name, .. } => out.push_str(type_name.as_str()),
-    }
-    out.push(';');
-    out
-}
-
-fn render_param_kind(kind: &ParamKind) -> String {
-    match kind {
-        ParamKind::Scalar(scalar) => render_scalar_value_kind(scalar),
-        ParamKind::Indexed { element, indexes } => format!(
-            "{}[{}]",
-            render_scalar_value_kind(element),
-            indexes
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
-
-fn render_scalar_value_kind(kind: &ScalarValueKind) -> String {
-    match kind {
-        ScalarValueKind::Bool => "Bool".to_string(),
-        ScalarValueKind::Int => "Int".to_string(),
-        ScalarValueKind::Quantity(monomial) => render_monomial(monomial),
-    }
+    let rendered = function
+        .signature
+        .format_with_result(&mut render_dimension, &mut |_, _| match &function.result {
+            RenderableResult::Struct { type_name, .. } => type_name.to_string(),
+            // A value result never reaches the struct renderer.
+            RenderableResult::Value => String::new(),
+        });
+    format!("fn {}{rendered};", function.name)
 }
 
 fn render_struct_field_kind(kind: &StructFieldKind) -> String {
@@ -701,32 +653,6 @@ fn render_struct_field_kind(kind: &StructFieldKind) -> String {
             "Dimensionless".to_string()
         }
         StructFieldKind::Quantity(dimension) => render_dimension(dimension),
-    }
-}
-
-fn render_monomial(monomial: &DimMonomial) -> String {
-    let mut parts = monomial
-        .vars
-        .iter()
-        .map(|factor| {
-            if factor.power == Rational::ONE {
-                factor.var.to_string()
-            } else {
-                format!(
-                    "{}{}",
-                    factor.var,
-                    factor.power.fmt_exponent(ExponentStyle::Source)
-                )
-            }
-        })
-        .collect::<Vec<_>>();
-    if !monomial.fixed.is_dimensionless() {
-        parts.push(render_dimension(&monomial.fixed));
-    }
-    if parts.is_empty() {
-        "Dimensionless".to_string()
-    } else {
-        parts.join(" * ")
     }
 }
 
@@ -986,13 +912,10 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
 fn render_quantity_result_dimension(
     monomial: &graphcal_compiler::function_signature::DimMonomial,
 ) -> Option<String> {
-    if !monomial.vars.is_empty() {
+    if !monomial.is_concrete() || monomial.fixed_factor().is_dimensionless() {
         return None;
     }
-    if monomial.fixed.is_dimensionless() {
-        return None;
-    }
-    Some(render_dimension(&monomial.fixed))
+    Some(render_dimension(monomial.fixed_factor()))
 }
 
 #[cfg(test)]
@@ -1361,7 +1284,7 @@ mod tests {
         }
     }
 
-    fn array_signature(element: ScalarValueKind) -> FunctionSignature {
+    fn array_signature(element: ScalarValueKind<DimVarName>) -> FunctionSignature {
         let index = IndexVarName::expect_valid("I");
         FunctionSignature::try_new(
             Vec::new(),
@@ -1498,5 +1421,29 @@ mod tests {
         for invalid in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             assert!(render_result(&quantity_result, &HostFnValue::F64(invalid)).is_err());
         }
+    }
+    #[test]
+    fn render_result_omits_dimension_for_dim_variable_results() {
+        // `D * Length` has a non-dimensionless fixed factor, but the call site
+        // decides `D`, so no fixed dimension may be printed.
+        let var = || DimVarName::expect_valid("D");
+        let length = prelude_base_dimension("Length").unwrap();
+        let signature = FunctionSignature::try_new(
+            vec![var()],
+            Vec::new(),
+            vec![FunctionParam {
+                name: FnParamName::expect_valid("x"),
+                kind: ParamKind::quantity_monomial(DimMonomial::var(var())),
+            }],
+            ParamKind::quantity_monomial(
+                DimMonomial::try_new([(var(), Rational::ONE)], length).unwrap(),
+            )
+            .into(),
+        )
+        .expect("valid signature");
+        assert_eq!(
+            render_result(&signature, &HostFnValue::F64(2.5)).unwrap(),
+            "2.5"
+        );
     }
 }

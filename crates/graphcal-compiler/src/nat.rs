@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use thiserror::Error;
 
+use crate::sparse_monomial::{MonomialExponent, SparseMonomial};
 use crate::syntax::type_name::GenericParamName;
 
 /// Arithmetic overflow while combining type-level Nat forms.
@@ -20,108 +21,85 @@ use crate::syntax::type_name::GenericParamName;
 #[error("type-level Nat arithmetic overflow (values are stored as `u64`)")]
 pub struct NatOverflowError;
 
+impl MonomialExponent for u64 {
+    type Error = NatOverflowError;
+
+    fn is_zero(self) -> bool {
+        self == 0
+    }
+
+    fn checked_add(self, rhs: Self) -> Result<Self, NatOverflowError> {
+        Self::checked_add(self, rhs).ok_or(NatOverflowError)
+    }
+
+    fn checked_mul(self, rhs: Self) -> Result<Self, NatOverflowError> {
+        Self::checked_mul(self, rhs).ok_or(NatOverflowError)
+    }
+}
+
 /// A monomial: product of variables raised to natural number exponents.
 ///
-/// Represented as a sorted map from variable name to exponent. The empty map
-/// represents the constant monomial (= 1).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Monomial(pub(crate) BTreeMap<GenericParamName, u64>);
+/// The unit monomial (no factors) is the constant monomial (= 1).
+pub(crate) type Monomial = SparseMonomial<GenericParamName, u64>;
 
-impl Monomial {
-    /// The constant monomial (empty product = 1).
-    #[must_use]
-    const fn constant() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    /// A single-variable monomial with exponent 1.
-    #[must_use]
-    fn var(name: GenericParamName) -> Self {
-        let mut m = BTreeMap::new();
-        m.insert(name, 1);
-        Self(m)
-    }
-
-    /// Returns `true` if this is the constant monomial (no variables).
-    #[must_use]
-    pub(crate) fn is_constant(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Multiply two monomials: add exponents of each variable.
-    ///
-    /// Returns an error if an exponent overflows.
-    fn mul(&self, other: &Self) -> Result<Self, NatOverflowError> {
-        let mut result = self.0.clone();
-        for (var, exp) in &other.0 {
-            let entry = result.entry(var.clone()).or_insert(0);
-            *entry = entry.checked_add(*exp).ok_or(NatOverflowError)?;
-        }
-        Ok(Self(result))
-    }
-
-    /// Evaluate the monomial given variable bindings.
-    ///
-    /// Returns `None` if any variable is unbound or arithmetic overflows.
-    #[must_use]
-    fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
-        let mut result: u64 = 1;
-        for (var, exp) in &self.0 {
-            let val = bindings.get(var)?;
-            result = result.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
-        }
-        Some(result)
-    }
-
-    /// Substitute bound variables, returning a new monomial with only unbound
-    /// variables and the multiplicative factor contributed by bound variables.
-    ///
-    /// Returns `None` if arithmetic overflows.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn substitute(
-        &self,
-        bindings: &HashMap<GenericParamName, u64>,
-    ) -> Option<(Self, u64)> {
-        let mut remaining = BTreeMap::new();
-        let mut factor: u64 = 1;
-        for (var, exp) in &self.0 {
-            if let Some(val) = bindings.get(var) {
-                factor = factor.checked_mul(val.checked_pow(u32::try_from(*exp).ok()?)?)?;
-            } else {
-                remaining.insert(var.clone(), *exp);
-            }
-        }
-        Some((Self(remaining), factor))
-    }
-
-    /// Format as a human-readable string, e.g. `""`, `"N"`, `"M * N"`, `"N^2"`.
-    #[must_use]
-    fn format(&self) -> String {
-        let mut parts = Vec::new();
-        for (var, exp) in &self.0 {
-            if *exp == 1 {
-                parts.push(var.to_string());
-            } else {
-                parts.push(format!("{var}^{exp}"));
-            }
-        }
-        parts.join(" * ")
-    }
+/// `var^exponent` evaluated under `binding`, failing on overflow.
+fn eval_factor<E: From<NatOverflowError>>(value: u64, exponent: u64) -> Result<u64, E> {
+    let exponent = u32::try_from(exponent).map_err(|_| E::from(NatOverflowError))?;
+    value
+        .checked_pow(exponent)
+        .ok_or_else(|| E::from(NatOverflowError))
 }
 
-impl PartialOrd for Monomial {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+/// Evaluate a monomial with a fallible variable lookup.
+fn evaluate_monomial<E: From<NatOverflowError>>(
+    monomial: &Monomial,
+    coefficient: u64,
+    binding: &mut impl FnMut(&GenericParamName) -> Result<u64, E>,
+) -> Result<u64, E> {
+    monomial
+        .iter()
+        .try_fold(coefficient, |product, (name, &exponent)| {
+            let factor = eval_factor::<E>(binding(name)?, exponent)?;
+            product
+                .checked_mul(factor)
+                .ok_or_else(|| E::from(NatOverflowError))
+        })
 }
 
-impl Ord for Monomial {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare by iterating entries in sorted order (BTreeMap guarantees this)
-        // without allocating temporary vectors for every polynomial map lookup.
-        self.0.iter().cmp(other.0.iter())
+/// Substitute bound variables, returning the monomial over the unbound
+/// variables and the multiplicative factor contributed by bound variables.
+///
+/// Returns `None` if arithmetic overflows.
+#[cfg(test)]
+pub(crate) fn substitute_monomial(
+    monomial: &Monomial,
+    bindings: &HashMap<GenericParamName, u64>,
+) -> Option<(Monomial, u64)> {
+    let mut remaining = Vec::new();
+    let mut factor: u64 = 1;
+    for (var, &exp) in monomial.iter() {
+        if let Some(&val) = bindings.get(var) {
+            factor = factor.checked_mul(eval_factor::<NatOverflowError>(val, exp).ok()?)?;
+        } else {
+            remaining.push((var.clone(), exp));
+        }
     }
+    Some((Monomial::try_from_factors(remaining).ok()?, factor))
+}
+
+/// Format a monomial, e.g. `""`, `"N"`, `"M * N"`, `"N^2"`.
+fn format_monomial(monomial: &Monomial) -> String {
+    monomial
+        .iter()
+        .map(|(var, &exp)| {
+            if exp == 1 {
+                var.to_string()
+            } else {
+                format!("{var}^{exp}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" * ")
 }
 
 /// A normalized polynomial form for Nat expressions.
@@ -141,7 +119,7 @@ impl NatPolyForm {
     pub(crate) fn from_constant(c: u64) -> Self {
         let mut terms = BTreeMap::new();
         if c != 0 {
-            terms.insert(Monomial::constant(), c);
+            terms.insert(Monomial::one(), c);
         }
         Self { terms }
     }
@@ -150,7 +128,7 @@ impl NatPolyForm {
     #[must_use]
     pub(crate) fn from_var(name: GenericParamName) -> Self {
         let mut terms = BTreeMap::new();
-        terms.insert(Monomial::var(name), 1);
+        terms.insert(Monomial::single(name, 1), 1);
         Self { terms }
     }
 
@@ -174,7 +152,7 @@ impl NatPolyForm {
         let mut terms: BTreeMap<Monomial, u64> = BTreeMap::new();
         for (m1, c1) in &self.terms {
             for (m2, c2) in &other.terms {
-                let mono = m1.mul(m2)?;
+                let mono = m1.try_mul(m2)?;
                 let term = c1.checked_mul(*c2).ok_or(NatOverflowError)?;
                 let entry = terms.entry(mono).or_insert(0);
                 *entry = entry.checked_add(term).ok_or(NatOverflowError)?;
@@ -195,7 +173,7 @@ impl NatPolyForm {
         self.terms
             .iter()
             .try_fold(Self::from_constant(0), |sum, (monomial, coefficient)| {
-                let term = monomial.0.iter().try_fold(
+                let term = monomial.iter().try_fold(
                     Self::from_constant(*coefficient),
                     |product, (variable, exponent)| {
                         let factor = bindings
@@ -228,7 +206,7 @@ impl NatPolyForm {
     /// Returns the constant term (coefficient of the empty monomial).
     #[must_use]
     pub(crate) fn constant(&self) -> u64 {
-        self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
+        self.terms.get(&Monomial::one()).copied().unwrap_or(0)
     }
 
     /// Return the concrete value when this normalized form has no variables.
@@ -240,7 +218,7 @@ impl NatPolyForm {
     /// Returns `true` if this form has no variables (is a constant).
     #[must_use]
     pub(crate) fn is_constant(&self) -> bool {
-        self.terms.iter().all(|(m, _)| m.is_constant())
+        self.terms.keys().all(Monomial::is_empty)
     }
 
     /// Evaluate to a concrete value given variable bindings.
@@ -248,11 +226,8 @@ impl NatPolyForm {
     /// Returns `None` if any variable is unbound or arithmetic overflows.
     #[must_use]
     pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
-        let mut result: u64 = 0;
-        for (mono, coeff) in &self.terms {
-            result = result.checked_add(coeff.checked_mul(mono.evaluate(bindings)?)?)?;
-        }
-        Some(result)
+        self.evaluate_with(|name| bindings.get(name).copied().ok_or(NatOverflowError))
+            .ok()
     }
 
     /// Evaluate with a lexical resolver supplied by the owning semantic layer.
@@ -263,22 +238,8 @@ impl NatPolyForm {
     ) -> Result<u64, E> {
         self.terms
             .iter()
-            .try_fold(0_u64, |sum, (monomial, coefficient)| {
-                let term =
-                    monomial
-                        .0
-                        .iter()
-                        .try_fold(*coefficient, |product, (name, exponent)| {
-                            let value = binding(name)?;
-                            let exponent =
-                                u32::try_from(*exponent).map_err(|_| E::from(NatOverflowError))?;
-                            let factor = value
-                                .checked_pow(exponent)
-                                .ok_or_else(|| E::from(NatOverflowError))?;
-                            product
-                                .checked_mul(factor)
-                                .ok_or_else(|| E::from(NatOverflowError))
-                        })?;
+            .try_fold(0_u64, |sum, (monomial, &coefficient)| {
+                let term = evaluate_monomial(monomial, coefficient, &mut binding)?;
                 sum.checked_add(term)
                     .ok_or_else(|| E::from(NatOverflowError))
             })
@@ -295,17 +256,17 @@ impl NatPolyForm {
         let mut parts = Vec::new();
         // Non-constant terms first (sorted by monomial), then constant.
         for (mono, coeff) in &self.terms {
-            if mono.is_constant() {
+            if mono.is_empty() {
                 continue;
             }
-            let mono_str = mono.format();
+            let mono_str = format_monomial(mono);
             if *coeff == 1 {
                 parts.push(mono_str);
             } else {
                 parts.push(format!("{coeff} * {mono_str}"));
             }
         }
-        if let Some(&c) = self.terms.get(&Monomial::constant())
+        if let Some(&c) = self.terms.get(&Monomial::one())
             && (c > 0 || parts.is_empty())
         {
             parts.push(c.to_string());
@@ -335,7 +296,7 @@ impl NatPolyForm {
     pub(crate) fn variables(&self) -> BTreeSet<GenericParamName> {
         self.terms
             .keys()
-            .flat_map(|mono| mono.0.keys().cloned())
+            .flat_map(|mono| mono.keys().cloned())
             .collect()
     }
 }

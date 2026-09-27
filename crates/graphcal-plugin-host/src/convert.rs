@@ -10,8 +10,9 @@
 
 use graphcal_compiler::dimension::{Dimension, Rational};
 use graphcal_compiler::function_signature::{
-    DimMonomial, DimVarPower, FunctionParam, FunctionSignature, ParamKind, ResultKind,
-    ScalarValueKind, SignatureError, StructFieldKind, StructShape, StructShapeField,
+    DimMonomial, FunctionParam, FunctionSignature, NamedDimMonomial, NamedParamKind,
+    NamedResultKind, ParamKind, ResultKind, ScalarValueKind, SignatureError, StructFieldKind,
+    StructShape, StructShapeField,
 };
 use graphcal_compiler::ratio::RatioError;
 use graphcal_compiler::registry::prelude::{PRELUDE_BASE_DIMENSION_NAMES, prelude_base_dimension};
@@ -105,7 +106,7 @@ fn convert_index_var(var: &str) -> Result<IndexVarName, ConvertErrorKind> {
     })
 }
 
-fn convert_param_kind(kind: &ManifestParamKind) -> Result<ParamKind, ConvertErrorKind> {
+fn convert_param_kind(kind: &ManifestParamKind) -> Result<NamedParamKind, ConvertErrorKind> {
     match kind {
         ManifestParamKind::Bool => Ok(ParamKind::bool()),
         ManifestParamKind::Int => Ok(ParamKind::int()),
@@ -116,7 +117,7 @@ fn convert_param_kind(kind: &ManifestParamKind) -> Result<ParamKind, ConvertErro
     }
 }
 
-fn convert_result_kind(kind: &ManifestResultKind) -> Result<ResultKind, ConvertErrorKind> {
+fn convert_result_kind(kind: &ManifestResultKind) -> Result<NamedResultKind, ConvertErrorKind> {
     match kind {
         ManifestResultKind::Bool => Ok(ParamKind::bool().into()),
         ManifestResultKind::Int => Ok(ParamKind::int().into()),
@@ -140,7 +141,7 @@ fn convert_result_kind(kind: &ManifestResultKind) -> Result<ResultKind, ConvertE
 fn convert_array(
     element: &ManifestArrayElementKind,
     indexes: &[String],
-) -> Result<ParamKind, ConvertErrorKind> {
+) -> Result<NamedParamKind, ConvertErrorKind> {
     let indexes = indexes
         .iter()
         .map(|index| convert_index_var(index))
@@ -170,22 +171,17 @@ fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, Conve
             // Wire validation already rejects dimension-variable factors in
             // struct fields, so the converted monomial is concrete.
             let monomial = convert_monomial(monomial)?;
-            StructFieldKind::Quantity(monomial.fixed)
+            StructFieldKind::Quantity(monomial.fixed_factor().clone())
         }
     };
     Ok(StructShapeField { name, kind })
 }
 
-fn convert_monomial(monomial: &ManifestMonomial) -> Result<DimMonomial, ConvertErrorKind> {
+fn convert_monomial(monomial: &ManifestMonomial) -> Result<NamedDimMonomial, ConvertErrorKind> {
     let vars = monomial
         .vars
         .iter()
-        .map(|factor| {
-            Ok(DimVarPower {
-                var: convert_dim_var(&factor.var)?,
-                power: convert_rational(factor.pow)?,
-            })
-        })
+        .map(|factor| Ok((convert_dim_var(&factor.var)?, convert_rational(factor.pow)?)))
         .collect::<Result<Vec<_>, ConvertErrorKind>>()?;
 
     let mut fixed = Dimension::dimensionless();
@@ -199,7 +195,8 @@ fn convert_monomial(monomial: &ManifestMonomial) -> Result<DimMonomial, ConvertE
         fixed = fixed.checked_mul(&powered)?;
     }
 
-    Ok(DimMonomial { vars, fixed })
+    DimMonomial::try_new(vars, fixed)
+        .map_err(|error| ConvertErrorKind::Signature(SignatureError::from(error)))
 }
 
 fn convert_rational(pow: ManifestRational) -> Result<Rational, ConvertErrorKind> {
