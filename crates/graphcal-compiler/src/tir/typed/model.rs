@@ -1919,7 +1919,6 @@ pub struct DagTIR {
     pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    pub(crate) instances: Vec<crate::ir::instance::InstanceRecord>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
     pub(crate) semantic_specialization: Option<crate::ir::instance::StaticSpecializationId>,
     pub(crate) runtime_owner_rebases: HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
@@ -2006,12 +2005,6 @@ impl DagTIR {
             .ok_or(crate::tir::expression_facts::ExpressionFactsError::WrongEnvironment)?;
         facts.validate_environment(self.dag_id(), self.body_revision())?;
         Ok(facts)
-    }
-
-    /// Explicit template-instance edges owned by this DAG.
-    #[must_use]
-    pub fn instances(&self) -> &[crate::ir::instance::InstanceRecord] {
-        &self.instances
     }
 
     /// Semantic include edges authored directly by this DAG.

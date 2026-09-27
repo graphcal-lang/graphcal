@@ -405,8 +405,6 @@ pub struct HirDag {
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,
-    /// Legacy instance records whose declarations were syntactically merged.
-    pub(crate) instances: Vec<InstanceRecord>,
     /// Semantic instance edges with importer-context value bindings.
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
 }
@@ -1049,7 +1047,6 @@ fn build_ir_from_resolved(
                 _ => None,
             })
             .collect(),
-        instances: Vec::new(),
         semantic_instances: Vec::new(),
     };
 
@@ -1100,8 +1097,6 @@ pub struct UnfrozenIR {
     /// Plugin-import declarations, awaiting signature resolution against the
     /// frozen registry in [`UnfrozenIR::freeze`].
     pub(super) plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
-    /// Legacy instance records whose declarations are syntactically merged.
-    pub(super) instances: Vec<InstanceRecord>,
     /// Semantic instance edges awaiting importer-context HIR lowering.
     pub(super) semantic_instances: Vec<UnfrozenSemanticInstance>,
 }

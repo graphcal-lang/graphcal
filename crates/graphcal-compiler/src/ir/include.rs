@@ -251,15 +251,14 @@ impl UnfrozenIR {
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
         let instance_templates = self
-            .instances
+            .semantic_instances
             .iter()
-            .map(|record| (record.id.owner().clone(), record.id.template().clone()))
-            .chain(self.semantic_instances.iter().map(|record| {
+            .map(|record| {
                 (
                     record.instance.id.owner().clone(),
                     record.instance.id.template().clone(),
                 )
-            }))
+            })
             .collect::<HashMap<_, _>>();
         let mut decl_bindings = HashMap::new();
         for (name, declaration_owner) in self
@@ -646,7 +645,6 @@ impl UnfrozenIR {
             dynamic_unit_scales,
             imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
-            instances: self.instances,
             semantic_instances,
         })
     }

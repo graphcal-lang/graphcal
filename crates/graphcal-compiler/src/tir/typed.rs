@@ -458,7 +458,6 @@ fn type_resolve_impl(
         ir.expected_fail,
         ir.dynamic_unit_scales,
         imported_bindings,
-        ir.instances,
         ir.semantic_instances,
         module_ctx,
         src,
@@ -613,7 +612,6 @@ fn type_resolve_single_impl(
         ir.expected_fail,
         ir.dynamic_unit_scales,
         imported_bindings,
-        ir.instances,
         ir.semantic_instances,
         module_ctx,
         src,
@@ -1785,7 +1783,6 @@ impl DagTIRSeed {
         expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-        instances: Vec<crate::ir::instance::InstanceRecord>,
         semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
@@ -1829,12 +1826,6 @@ impl DagTIRSeed {
             }
         }
 
-        let mut instances = instances;
-        instances.extend(
-            semantic_instances
-                .iter()
-                .map(|record| record.instance.clone()),
-        );
         let mut dag = DagTIR {
             dag_id: self.dag_id,
             body_revision: crate::body_revision::BodyRevision::fresh(),
@@ -1854,7 +1845,6 @@ impl DagTIRSeed {
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
             imported_bindings,
-            instances,
             semantic_instances,
             semantic_specialization: None,
             runtime_owner_rebases: HashMap::new(),

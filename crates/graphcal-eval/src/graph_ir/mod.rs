@@ -297,7 +297,11 @@ fn project_cluster_provenance(
         output_names.insert(dag_id, dag.projectable_outputs().clone());
     }
 
-    for record in local_dags.iter().flat_map(|dag| dag.instances()) {
+    for record in local_dags
+        .iter()
+        .flat_map(|dag| dag.semantic_instances())
+        .map(|record| &record.instance)
+    {
         let owner = record.id.owner().clone();
         let template = record.id.template().clone();
         let template_dag = tir.dag_registry().get(&template).ok_or_else(|| {
