@@ -7,6 +7,7 @@ use crate::exact_rational::ExactRational;
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
+use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
@@ -44,7 +45,7 @@ pub enum RawExprSugar {
 ///
 /// A plain path is a Term reference. `Index#Label` is represented separately,
 /// so HIR lowering never probes Static and Term to decide what a dot meant.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum UnresolvedRef {
     /// A bare Term name or a Term member selected after `::`.
     Path(IdentPath),
@@ -52,6 +53,7 @@ pub enum UnresolvedRef {
     IndexLabel {
         index: IdentPath,
         label: Spanned<IndexVariantName>,
+        #[fe(skip)]
         span: Span,
     },
 }
@@ -61,7 +63,7 @@ pub enum UnresolvedRef {
 /// Dotted namespace-owner segments and the member after `::` are separate
 /// fields. Consequently this type cannot encode the old ambiguous `a.b`
 /// convention.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
 pub struct IdentPath {
     owner: Option<NonEmpty<Ident>>,
     member: Ident,
@@ -280,7 +282,7 @@ impl UnresolvedRef {
 ///
 /// Unmarked means exactly a Term parameter. There is intentionally no `param`
 /// marker variant; Static inputs require their explicit marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FormatEquivalent)]
 pub enum InputBindingCategory {
     Unmarked,
     Type,
@@ -289,8 +291,9 @@ pub enum InputBindingCategory {
 }
 
 /// One categorized input binding in an `include` or direct DAG invocation.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct ParamBinding<P: Phase = Raw> {
     pub category: InputBindingCategory,
     /// Target name in the invoked DAG's selected namespace.
@@ -299,10 +302,11 @@ pub struct ParamBinding<P: Phase = Raw> {
     /// resolution never retries a different target namespace.
     pub value: Expr<P>,
     /// Span covering the marker (when present), name, and value.
+    #[fe(skip)]
     pub(crate) span: Span,
 }
 /// The kind of a domain constraint bound: `min` or `max`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum DomainBoundKind {
     Min,
     Max,
@@ -320,15 +324,18 @@ impl std::fmt::Display for DomainBoundKind {
 /// A domain constraint bound on a type expression: `min: expr` or `max: expr`.
 ///
 /// Used in `Type(min: 100 kg, max: 2000 kg)` to declare valid value ranges.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct DomainBound<P: Phase = Raw> {
     /// The bound kind (`min` or `max`).
     pub kind: DomainBoundKind,
     /// The span of the keyword (`min` or `max`).
+    #[fe(skip)]
     pub(crate) kind_span: Span,
     /// The bound value expression.
     pub value: Expr<P>,
+    #[fe(skip)]
     pub(crate) span: Span,
 }
 
@@ -338,7 +345,7 @@ pub struct DomainBound<P: Phase = Raw> {
 ///
 /// Shared by the AST and HIR so downstream phases dispatch on the typed kind
 /// rather than a source spelling.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum KeyFormKind {
     /// `key(Axis, spelling)` — static, compile-time membership-checked.
     Static,
@@ -370,12 +377,16 @@ impl KeyFormKind {
 /// In `Velocity[Maneuver]` or `Velocity[module.Maneuver]`, the index path is
 /// an [`IndexExpr::Name`]. Structural indexes use the explicit
 /// [`IndexExpr::Finite`] constructor, as in `Dimensionless[Fin(N)]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum IndexExpr {
     /// A named index or generic Index parameter path: `Maneuver`, `I`, `module.Maneuver`.
     Name(Spanned<NamePath>),
     /// The built-in finite structural-index constructor `Fin(N)`.
-    Finite { cardinality: NatExpr, span: Span },
+    Finite {
+        cardinality: NatExpr,
+        #[fe(skip)]
+        span: Span,
+    },
     /// A bare Nat written in an Index slot. Retained only so semantic lowering
     /// can issue the targeted `Fin(...)` migration diagnostic; it is never
     /// accepted as an index.
@@ -397,12 +408,14 @@ impl IndexExpr {
 /// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
 ///
 /// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct TypeExpr<P: Phase = Raw> {
     pub kind: TypeExprKind<P>,
     /// Optional domain constraints on the type.
     pub constraints: Vec<DomainBound<P>>,
+    #[fe(skip)]
     pub(crate) span: Span,
 }
 
@@ -425,8 +438,9 @@ impl<P: Phase> TypeExpr<P> {
 }
 
 /// The kind of a type expression.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub enum TypeExprKind<P: Phase = Raw> {
     /// `Dimensionless`
     Dimensionless,
@@ -485,14 +499,15 @@ pub enum TypeExprKind<P: Phase = Raw> {
 
 /// A dimension expression: product/quotient of dimension terms.
 /// E.g., `Length^3 / Time^2`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct DimExpr {
     pub terms: Vec<DimExprItem>,
+    #[fe(skip)]
     pub(crate) span: Span,
 }
 
 /// One term in a dimension expression with its combining operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct DimExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
@@ -500,11 +515,12 @@ pub struct DimExprItem {
 }
 
 /// A single dimension term: `ident_path` or `ident_path ^ INTEGER`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct DimTerm {
     pub name: Spanned<NamePath>,
     /// Source-written exponent; `None` preserves omission for formatting.
     pub power: Option<Rational>,
+    #[fe(skip)]
     pub span: Span,
 }
 
@@ -524,14 +540,15 @@ fn effective_power(source_power: Option<Rational>) -> Rational {
 
 /// A unit expression (for literals and conversion targets).
 /// E.g., `km`, `m/s^2`, `kg * m / s^2`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct UnitExpr {
     pub terms: Vec<UnitExprItem>,
+    #[fe(skip)]
     pub span: Span,
 }
 
 /// One term in a unit expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct UnitExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
@@ -549,7 +566,7 @@ impl UnitExprItem {
 }
 
 /// Multiply or divide operator used in dimension/unit expressions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum MulDivOp {
     Mul,
     Div,
@@ -725,8 +742,9 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
     }
 }
 
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub enum ExprKind<P: Phase = Raw> {
     /// Numeric literal: `1200.0`, `3.98e5`, `200_000.0`
     Number(f64),
@@ -885,12 +903,16 @@ pub enum ExprKind<P: Phase = Raw> {
 
 /// An index specification in a table literal's bracket list:
 /// `table[Phase, Fin(3)]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum TableIndexSpec {
     /// A named index: `Phase`, `Maneuver`, or `module.Maneuver`.
     Named(Spanned<NamePath>),
     /// An explicit finite structural index: `Fin(3)`.
-    Finite { cardinality: u64, span: Span },
+    Finite {
+        cardinality: u64,
+        #[fe(skip)]
+        span: Span,
+    },
 }
 
 /// Shared axes in a multi-declaration table prefix.
@@ -898,7 +920,7 @@ pub enum TableIndexSpec {
 /// The final axis has a distinct semantic role: it is the row axis. Any axes
 /// before it are slice axes. This is intentionally not modeled as a generic
 /// `NonEmpty<TableIndexSpec>` because the tail element is special.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct MultiDeclSharedAxes {
     slice_axes: Vec<TableIndexSpec>,
     row_axis: TableIndexSpec,
@@ -982,7 +1004,7 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 /// Plain map literals use named indexes. Tables over `Fin(N)` axes desugar to
 /// map entries with an explicitly typed structural key, so downstream passes
 /// never recover index structure from a fabricated name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
 pub enum MapEntryIndex {
     /// A declared named index.
     Named(NamePath),
@@ -1034,9 +1056,10 @@ impl TableIndexSpec {
 /// desugared key: once in `table[...]` and again in a qualified slice or
 /// heterogeneous header label. `additional_index_spans` preserves those
 /// source references for editor features without duplicating the key value.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct MapEntryKey {
     pub index: Spanned<MapEntryIndex>,
+    #[fe(skip)]
     pub additional_index_spans: Vec<Span>,
     pub variant: Spanned<IndexEntryKey>,
 }
@@ -1045,27 +1068,32 @@ pub struct MapEntryKey {
 ///
 /// Single-axis: `Maneuver#Departure: 2.46 km/s` (keys has 1 element)
 /// Multi-axis:  `(Phase#Launch, Maneuver#Departure): 2.46 km/s` (keys has 2+ elements)
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct MapEntry<P: Phase = Raw> {
     pub keys: NonEmpty<MapEntryKey>,
     pub value: Expr<P>,
 }
 
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: Fin(3)`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub struct ForBinding {
     pub var: Spanned<LocalName>,
     pub index: ForBindingIndex,
 }
 
 /// The index in a for binding: either a named index or `Fin(N)`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum ForBindingIndex {
     /// A named index: `for m: Maneuver { ... }` or `for m: module.Maneuver { ... }`.
     Named(Spanned<NamePath>),
     /// An explicit structural index: `for i: Fin(N) { ... }`.
-    Finite { cardinality: NatExpr, span: Span },
+    Finite {
+        cardinality: NatExpr,
+        #[fe(skip)]
+        span: Span,
+    },
 }
 
 /// A Nat expression (type-level natural number).
@@ -1073,16 +1101,16 @@ pub enum ForBindingIndex {
 /// Supports literals, variables, addition (Level 1), and multiplication (Level 2).
 /// Operator chains use flat, two-or-more operand lists so ordinary long source
 /// chains do not create recursively cloned, formatted, compared, or dropped trees.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum NatExpr {
     /// An integer literal, e.g., `3`
-    Literal(u64, Span),
+    Literal(u64, #[fe(skip)] Span),
     /// A variable (generic Nat parameter), e.g., `N`
     Var(Ident),
     /// Addition of two or more Nat expressions, e.g., `N + 1`, `M + N + 1`.
-    Add(AtLeastTwo<Self>, Span),
+    Add(AtLeastTwo<Self>, #[fe(skip)] Span),
     /// Multiplication of two or more Nat expressions, e.g., `N * 3`, `M * N * 2`.
-    Mul(AtLeastTwo<Self>, Span),
+    Mul(AtLeastTwo<Self>, #[fe(skip)] Span),
 }
 
 impl NatExpr {
@@ -1200,12 +1228,12 @@ mod nat_expr_display_tests {
 /// the referenced declaration's [`GenericConstraint`](super::GenericConstraint)
 /// is known. Keeping that ambiguity explicit prevents casing or spelling from
 /// leaking into semantic dispatch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum AmbiguousGenericArg {
     /// A bare type-level name.
     Name(Ident),
     /// A product of two or more ambiguous arguments.
-    Mul(AtLeastTwo<Self>, Span),
+    Mul(AtLeastTwo<Self>, #[fe(skip)] Span),
 }
 
 impl AmbiguousGenericArg {
@@ -1273,8 +1301,9 @@ impl std::fmt::Display for AmbiguousGenericArg {
 /// Arguments that are syntactically unambiguous retain their source category.
 /// Bare names and name-only products use [`Self::Ambiguous`] until HIR lowering
 /// can resolve them against the declaration's generic-parameter sort.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub enum GenericArg<P: Phase = Raw> {
     /// An unambiguously type-shaped expression, such as `D[I]` or `D / Time`.
     Type(TypeExpr<P>),
@@ -1300,8 +1329,9 @@ impl<P: Phase> GenericArg<P> {
 }
 
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub enum IndexArg<P: Phase = Raw> {
     /// Qualified variant: `Maneuver#Departure` or `module::Maneuver#Departure`
     Variant {
@@ -1315,19 +1345,22 @@ pub enum IndexArg<P: Phase = Raw> {
 }
 
 /// A field initializer in a constructor call.
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct FieldInit<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
     pub value: Expr<P>,
 }
 
 /// One arm of a `match` expression: `Impulsive(delta_v: dv) => expr`
-#[derive(Debug, Clone, PhaseLift)]
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
 pub struct MatchArm<P: Phase = Raw> {
     pub pattern: MatchPattern,
     pub body: Expr<P>,
+    #[fe(skip)]
     pub span: Span,
 }
 
@@ -1335,7 +1368,7 @@ pub struct MatchArm<P: Phase = Raw> {
 ///
 /// Bare unit patterns and explicitly parenthesized patterns remain distinct so
 /// semantic checking can reject `Ctor()` without conflating it with `Ctor`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum PatternBindings<B> {
     Bare,
     Parenthesized(Vec<B>),
@@ -1380,7 +1413,7 @@ impl<'a, B> IntoIterator for &'a PatternBindings<B> {
 }
 
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver#Departure`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum MatchPattern {
     /// Syntactic path pattern before semantic categorization.
     ///
@@ -1392,12 +1425,14 @@ pub enum MatchPattern {
     Path {
         path: IdentPath,
         bindings: PatternBindings<PatternBinding>,
+        #[fe(skip)]
         span: Span,
     },
     /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
     Constructor {
         name: Spanned<ConstructorName>,
         bindings: PatternBindings<PatternBinding>,
+        #[fe(skip)]
         span: Span,
     },
     /// Named-index label pattern: `Maneuver#Departure`.
@@ -1408,6 +1443,7 @@ pub enum MatchPattern {
     IndexLabel {
         index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
+        #[fe(skip)]
         span: Span,
     },
 }
@@ -1432,7 +1468,7 @@ impl MatchPattern {
 }
 
 /// A binding in a match pattern.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum PatternBinding {
     /// Bind a field to a variable: `message: msg`.
     Bind {
@@ -1442,6 +1478,7 @@ pub enum PatternBinding {
     /// Wildcard: `message: _`
     Wildcard {
         field: Spanned<FieldName>,
+        #[fe(skip)]
         span: Span,
     },
 }
@@ -1451,7 +1488,7 @@ pub enum PatternBinding {
 /// The parser records this before numeric literals lose their source spelling.
 /// HIR carries the classification unchanged so dimensional analysis and
 /// evaluation never reconstruct exact rationals from binary64 or source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum PowerExponent {
     /// Integer or parenthesized rational syntax such as `2`, `-2`, or `(3/2)`.
     Exact(ExactRational),
@@ -1462,7 +1499,7 @@ pub enum PowerExponent {
     Runtime,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum BinOp {
     Add,
     Sub,
@@ -1480,7 +1517,7 @@ pub enum BinOp {
     Or,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
 pub enum UnaryOp {
     Neg,
     Not,

@@ -3,9 +3,10 @@
 //! The expression and reference parameters keep syntax and resolved bodies in
 //! their own phases. An unfinished definition is deliberately not an expression.
 
+use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::span::Spanned;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FormatEquivalent)]
 pub enum NodeDefinition<E, R> {
     Formula(E),
     /// The marker span includes the braces, including an explicitly empty list.

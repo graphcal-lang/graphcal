@@ -6,9 +6,11 @@
 //! without any per-node decision — is generated here instead of being written
 //! (and reviewed) by hand. Each derive lives in its own module; a derive's
 //! attribute namespace is named after the derive (`#[phase_lift(..)]` for
-//! [`PhaseLift`]) so several derives can annotate the same AST type without
-//! ambiguity.
+//! [`PhaseLift`], `#[fe(..)]` for [`FormatEquivalent`]) so several derives can
+//! annotate the same AST type without ambiguity.
 
+mod common;
+mod format_equivalent;
 mod phase_lift;
 
 /// Derive `From<T<Source>> for T<Target>` for a phase-parameterized AST type.
@@ -61,6 +63,54 @@ mod phase_lift;
 pub fn derive_phase_lift(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     phase_lift::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derive the formatter's `FormatEquivalent` relation (structural equality
+/// modulo formatting) for an AST type.
+///
+/// Two values are equivalent when they are the same variant and every
+/// compared field is pairwise `FormatEquivalent`; fields marked
+/// `#[fe(skip)]` (source spans and other formatting-only data) are ignored.
+/// The generated impl destructures both operands exhaustively, so every
+/// field is either compared or explicitly skipped. A span field left
+/// unmarked is a compile error (`Span` does not implement the trait), not a
+/// silent span-sensitive comparison.
+///
+/// ```text
+/// #[derive(FormatEquivalent)]
+/// #[fe(phase = Raw)]
+/// pub struct TypeExpr<P: Phase = Raw> {
+///     pub kind: TypeExprKind<P>,          // compared
+///     pub constraints: Vec<DomainBound<P>>, // compared
+///     #[fe(skip)]
+///     pub span: Span,                     // ignored
+/// }
+/// ```
+///
+/// # Trait path
+///
+/// The generated code names the trait as `FormatEquivalent`, resolved at the
+/// derive site. The trait and this derive share one name in different
+/// namespaces, so the single `use ...::FormatEquivalent;` that brings the
+/// derive into scope also brings the trait; the derive is only usable where
+/// the trait is.
+///
+/// # Attributes
+///
+/// - Container: `#[fe(phase = <phase>)]` implements the trait only for the
+///   type instantiated at that phase (`impl FormatEquivalent for T<Raw>`).
+///   The type must have exactly one type parameter. Without it, the impl is
+///   generic and every type parameter is bounded by `FormatEquivalent`.
+/// - Field: `#[fe(skip)]` excludes the field from the comparison.
+///
+/// Types whose equivalence is not structural (multiset comparisons,
+/// stack-growth guards) keep a hand-written impl.
+#[proc_macro_derive(FormatEquivalent, attributes(fe))]
+pub fn derive_format_equivalent(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    format_equivalent::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

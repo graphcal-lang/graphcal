@@ -8,14 +8,15 @@ use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::{ToTokens, format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Data, DeriveInput, Field, Fields, GenericArgument, GenericParam, PathArguments,
-    Type, Variant,
+    Attribute, Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type, Variant,
 };
+
+use crate::common::{attrs_named, phase_param};
 
 const ATTR: &str = "phase_lift";
 
 pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
-    let phase = phase_param(input)?;
+    let phase = phase_param(input, "PhaseLift")?;
     let container = ContainerAttr::parse(input)?;
     let name = &input.ident;
     let source_ty = &container.from;
@@ -62,31 +63,8 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     })
 }
 
-/// The single type parameter that stands for the AST phase.
-fn phase_param(input: &DeriveInput) -> syn::Result<Ident> {
-    let mut type_params = Vec::new();
-    for param in &input.generics.params {
-        match param {
-            GenericParam::Type(param) => type_params.push(param.ident.clone()),
-            GenericParam::Lifetime(_) | GenericParam::Const(_) => {
-                return Err(syn::Error::new(
-                    param.span(),
-                    "`PhaseLift` supports only a single phase type parameter",
-                ));
-            }
-        }
-    }
-    match <[Ident; 1]>::try_from(type_params) {
-        Ok([phase]) => Ok(phase),
-        Err(_) => Err(syn::Error::new(
-            input.generics.span(),
-            "`PhaseLift` requires exactly one type parameter: the AST phase",
-        )),
-    }
-}
-
 fn phase_lift_attrs(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
-    attrs.iter().filter(|attr| attr.path().is_ident(ATTR))
+    attrs_named(attrs, ATTR)
 }
 
 /// `#[phase_lift(from = <source phase>, to = <target phase>)]`.

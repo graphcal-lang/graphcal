@@ -737,6 +737,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "format_equivalent"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "format_equivalent", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "function_name"]
 role = "contracts"
 
