@@ -521,14 +521,8 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
         panic!("conversion");
     };
     let context = |token| {
-        crate::eval_expr::EvalContext::provisional_constants(
-            &tir,
-            tir.root_dag_id(),
-            &src,
-            graphcal_compiler::registry::builtins::builtin_functions(),
-            token,
-        )
-        .unwrap()
+        crate::eval_expr::EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, token)
+            .unwrap()
     };
     let evidence = |unit| {
         PresentationInstance::Pending(Box::new(PendingDisplayUnit {
@@ -585,7 +579,6 @@ fn presentation_invariants_and_cancellation_are_never_notices() {
         &tir,
         tir.root_dag_id(),
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap();
@@ -602,7 +595,6 @@ fn presentation_invariants_and_cancellation_are_never_notices() {
         &tir,
         tir.root_dag_id(),
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         cancellation.token(),
     )
     .unwrap();

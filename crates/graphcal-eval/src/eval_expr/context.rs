@@ -7,7 +7,6 @@ use std::sync::Arc;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
@@ -43,7 +42,6 @@ enum Capabilities<'a> {
 pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
     pub(in crate::eval_expr) work_budget: WorkBudget,
-    pub builtin_fns: &'a BuiltinFunctions,
     pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     pub tir: &'a TIR,
@@ -82,13 +80,11 @@ impl<'a> EvalContext<'a> {
         tir: &'a TIR,
         dag: &'a DagTIR,
         src: &'a NamedSource<Arc<String>>,
-        builtin_fns: &'a BuiltinFunctions,
         cancellation: CancellationToken,
     ) -> EvalEnvironment<'a> {
         EvalEnvironment {
             cancellation,
             work_budget: WorkBudget::default(),
-            builtin_fns,
             registry: tir.registry(),
             src,
             tir,
@@ -107,7 +103,6 @@ impl<'a> EvalContext<'a> {
         tir: &'a TIR,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
-        builtin_fns: &'a BuiltinFunctions,
         cancellation: CancellationToken,
     ) -> Result<Self, GraphcalError> {
         let dag = tir.dag_registry().get(owner).ok_or_else(|| {
@@ -118,7 +113,7 @@ impl<'a> EvalContext<'a> {
             )
         })?;
         Ok(Self {
-            environment: Self::environment(tir, dag, src, builtin_fns, cancellation),
+            environment: Self::environment(tir, dag, src, cancellation),
             capabilities: Capabilities::ProvisionalConstants,
             independent_expressions: None,
         })
@@ -131,7 +126,6 @@ impl<'a> EvalContext<'a> {
         plan: &'a ExecPlan,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
-        builtin_fns: &'a BuiltinFunctions,
         host: &'a HostFunctionRegistry,
         cancellation: CancellationToken,
     ) -> Result<Self, GraphcalError> {
@@ -144,7 +138,7 @@ impl<'a> EvalContext<'a> {
             },
         )?;
         Ok(Self {
-            environment: Self::environment(tir, scope.dag(), src, builtin_fns, cancellation),
+            environment: Self::environment(tir, scope.dag(), src, cancellation),
             capabilities: Capabilities::Checked { plan, host },
             independent_expressions: None,
         })

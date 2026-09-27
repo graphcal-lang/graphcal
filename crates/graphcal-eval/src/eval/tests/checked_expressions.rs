@@ -40,7 +40,6 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
             &tir,
             tir.root_dag_id(),
             &src,
-            graphcal_compiler::registry::builtins::builtin_functions(),
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
         .unwrap()
@@ -96,7 +95,6 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
             &tir,
             tir.root_dag_id(),
             &src,
-            graphcal_compiler::registry::builtins::builtin_functions(),
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
         .unwrap();
@@ -192,7 +190,6 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
         &tir,
         tir.root_dag_id(),
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap();
@@ -260,7 +257,6 @@ node control: Dimensionless = probe::tick() + 1.0;
             &plan,
             dag.dag_id(),
             &src,
-            graphcal_compiler::registry::builtins::builtin_functions(),
             &host,
             cancellation.clone(),
         )

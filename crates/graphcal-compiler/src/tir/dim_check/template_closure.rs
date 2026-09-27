@@ -46,7 +46,6 @@ fn infer_operand(
         ctx.dag,
         ctx.tir,
         ctx.registry,
-        ctx.builtin_fns,
         ctx.src,
         ctx.cancellation,
         ctx.expression_facts.clone(),
@@ -95,7 +94,6 @@ fn check_expr(
         ctx.dag,
         ctx.tir,
         ctx.registry,
-        ctx.builtin_fns,
         ctx.src,
         ctx.cancellation,
     )?;
@@ -362,7 +360,6 @@ fn check_rigid_dimension_port(
         dag: rigid_dag,
         tir: &rigid_tir,
         registry: &rigid_tir.registry,
-        builtin_fns: ctx.builtin_fns,
         src: ctx.src,
     };
     check_rigid_value_bodies(&rigid_ctx, port)?;

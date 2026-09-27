@@ -9,8 +9,7 @@ use super::{
     Arc, AssertResult, CompileError, DeclName, DeclaredType, Error, EvalContext, EvalLoopResult,
     GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema,
     ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
-    Value, builtin_functions, index_def_for_ref, remap_include_debug_name,
-    run_eval_loop_with_bindings,
+    Value, index_def_for_ref, remap_include_debug_name, run_eval_loop_with_bindings,
 };
 
 /// Inclusive lower and upper bounds for one external input family.
@@ -272,7 +271,6 @@ impl PreparedProject {
             return Err(ModelExecutionError::PlanMismatch);
         }
 
-        let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let EvalLoopResult {
             values,
@@ -284,7 +282,6 @@ impl PreparedProject {
             &row.bindings,
             &self.tir,
             &self.source,
-            builtin_fns,
             &self.host_fns,
             &cancellation,
         )?;
@@ -298,7 +295,6 @@ impl PreparedProject {
             &self.plan,
             self.tir.root_dag_id(),
             &self.source,
-            builtin_fns,
             &self.host_fns,
             cancellation,
         )

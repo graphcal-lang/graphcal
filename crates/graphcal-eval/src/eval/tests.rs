@@ -364,12 +364,10 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     let tir = compile_to_tir(source, "capabilities.gcl").unwrap();
     let src = miette::NamedSource::new("capabilities.gcl", std::sync::Arc::new(source.to_string()));
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let builtin = graphcal_compiler::registry::builtins::builtin_functions();
     let provisional = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),
         &src,
-        builtin,
         cancellation.clone(),
     )
     .unwrap();
@@ -390,7 +388,6 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
         &plan,
         tir.root_dag_id(),
         &src,
-        builtin,
         &host,
         cancellation.clone(),
     )
@@ -412,7 +409,6 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
             &broken_plan,
             tir.root_dag_id(),
             &src,
-            builtin,
             &host,
             cancellation,
         )
@@ -453,7 +449,6 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
         &tir,
         tir.root_dag_id(),
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap();
@@ -518,7 +513,6 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
         &plan,
         tir.root_dag_id(),
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         &hosts,
         cancellation,
     )
@@ -599,7 +593,6 @@ fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
         &super::bindings::RuntimeParameterBindings::new(),
         &tir,
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         &crate::host_fns::HostFunctionRegistry::new(),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
@@ -717,7 +710,6 @@ fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
         &super::bindings::RuntimeParameterBindings::new(),
         &tir,
         &src,
-        graphcal_compiler::registry::builtins::builtin_functions(),
         &crate::host_fns::HostFunctionRegistry::new(),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
@@ -850,7 +842,6 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
             &super::bindings::RuntimeParameterBindings::new(),
             &tir,
             &src,
-            graphcal_compiler::registry::builtins::builtin_functions(),
             &crate::host_fns::HostFunctionRegistry::new(),
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
@@ -6004,13 +5995,11 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         },
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),
         src,
-        builtin_fns,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
@@ -6067,13 +6056,11 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         },
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),
         src,
-        builtin_fns,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
@@ -6941,13 +6928,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         },
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),
         src,
-        builtin_fns,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
@@ -7008,13 +6993,11 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             },
         ),
     )]);
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),
         src,
-        builtin_fns,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()

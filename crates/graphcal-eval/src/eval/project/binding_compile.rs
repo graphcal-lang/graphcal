@@ -13,7 +13,7 @@ use super::{
     ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
     ModelValueSchema, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
     PreludeTypeScope, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
-    RuntimeValueMap, Span, builtin_functions, parameter_domain,
+    RuntimeValueMap, Span, parameter_domain,
 };
 
 /// One checked browser-editor value. Containers carry stable schema-arena
@@ -741,14 +741,12 @@ impl PreparedProject {
     ) -> Result<crate::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
-        let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext::checked(
             &self.tir,
             &self.plan,
             self.tir.root_dag_id(),
             &self.source,
-            builtin_fns,
             &self.host_fns,
             cancellation,
         )?

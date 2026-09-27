@@ -716,7 +716,6 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_expression_facts_and_cancel
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     collector: ExpressionFactCollector,
@@ -740,7 +739,6 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_expression_facts_and_cancel
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )
 }
@@ -782,7 +780,6 @@ pub(in crate::tir::dim_check) fn collect_hir_type_definition_dependencies_with_c
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<Vec<TypeDefinitionDependency>, GraphcalError> {
@@ -798,7 +795,6 @@ pub(in crate::tir::dim_check) fn collect_hir_type_definition_dependencies_with_c
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     Ok(collector.snapshot())
@@ -816,7 +812,6 @@ fn infer_hir_type(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     local_types.checkpoint()?;
@@ -831,7 +826,6 @@ fn infer_hir_type(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )
     })
@@ -849,7 +843,6 @@ fn infer_hir_type_inner(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inferred = match expr.kind() {
@@ -938,7 +931,6 @@ fn infer_hir_type_inner(
                         dag,
                         tir,
                         registry,
-                        builtin_fns,
                         src,
                     )
                     .map(|_| ())
@@ -952,7 +944,6 @@ fn infer_hir_type_inner(
                 dag,
                 tir,
                 registry,
-                builtin_fns,
                 src,
             )?
         }
@@ -965,7 +956,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::IndexAccess { expr: inner, args } => infer_hir_index_access(
@@ -978,7 +968,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::If {
@@ -995,7 +984,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::UnaryOp { op, operand } => infer_hir_unary(
@@ -1007,7 +995,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::BinOp { op, lhs, rhs } => infer_hir_binop(
@@ -1021,7 +1008,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::Convert {
@@ -1036,7 +1022,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::DisplayTimezone {
@@ -1051,7 +1036,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::FieldAccess { expr: inner, field } => infer_hir_field_access(
@@ -1063,7 +1047,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::ConstructorCall {
@@ -1081,7 +1064,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::MapLiteral { entries } => infer_hir_map_literal(
@@ -1093,7 +1075,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::Scan {
@@ -1114,7 +1095,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::Unfold {
@@ -1134,7 +1114,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::KeyForm {
@@ -1154,7 +1133,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::Match { scrutinee, arms } => infer_hir_match(
@@ -1167,7 +1145,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
         hir::ExprKind::DagCall {
@@ -1187,7 +1164,6 @@ fn infer_hir_type_inner(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?,
     };
@@ -1353,10 +1329,6 @@ fn infer_hir_const_ref(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors syntax inference context"
-)]
 fn infer_arg(
     arg: &hir::Expr,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -1364,7 +1336,6 @@ fn infer_arg(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     infer_hir_type(
@@ -1375,7 +1346,6 @@ fn infer_arg(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )
 }
@@ -1390,7 +1360,6 @@ fn infer_hir_linear_algebra_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let name = function.builtin_name();
@@ -1405,18 +1374,7 @@ fn infer_hir_linear_algebra_call(
     }
     let argument_types = args
         .iter()
-        .map(|arg| {
-            infer_arg(
-                arg,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        })
+        .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
         .collect::<Result<Vec<_>, _>>()?;
 
     infer_linear_algebra_type(function, &argument_types, |index| {
@@ -1500,7 +1458,6 @@ fn infer_hir_fn_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
@@ -1516,7 +1473,6 @@ fn infer_hir_fn_call(
                 dag,
                 tir,
                 registry,
-                builtin_fns,
                 src,
             );
         }
@@ -1531,7 +1487,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
         BuiltinTypeRule::CollectionAggregation(kind) => {
@@ -1551,7 +1506,6 @@ fn infer_hir_fn_call(
                 dag,
                 tir,
                 registry,
-                builtin_fns,
                 src,
             )?;
             let InferredType::Indexed { element, index } = &arg_type else {
@@ -1637,7 +1591,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
         BuiltinTypeRule::TypeConversion(kind) => infer_hir_type_conversion(
@@ -1649,7 +1602,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
         BuiltinTypeRule::TimeScaleConversion(scale) => infer_hir_timescale_conversion(
@@ -1662,7 +1614,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
         BuiltinTypeRule::DatetimeConstructor(kind) => infer_hir_datetime_constructor(
@@ -1675,7 +1626,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
         BuiltinTypeRule::DatetimeExtract => infer_hir_datetime_unary(
@@ -1687,7 +1637,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
             InferredType::Int,
         ),
@@ -1708,7 +1657,6 @@ fn infer_hir_fn_call(
                 dag,
                 tir,
                 registry,
-                builtin_fns,
                 src,
             )?;
             match &arg_type {
@@ -1742,7 +1690,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
             InferredType::Quantity(Dimension::dimensionless()),
         ),
@@ -1755,7 +1702,6 @@ fn infer_hir_fn_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         ),
     }
@@ -1771,25 +1717,13 @@ fn infer_hir_complex_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use super::complex::ComplexTypeError;
 
     let inferred = args
         .iter()
-        .map(|arg| {
-            infer_arg(
-                arg,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )
-        })
+        .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
         .collect::<Result<Vec<_>, _>>()?;
     super::complex::infer(function, &inferred).map_err(|error| match error {
         ComplexTypeError::WrongArity { expected, got } => GraphcalError::WrongArity {
@@ -1871,7 +1805,6 @@ fn infer_extern_fn_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
@@ -1903,16 +1836,7 @@ fn infer_extern_fn_call(
     let mut index_bindings: HashMap<crate::function_signature::IndexBinder, IndexTypeRef> =
         HashMap::new();
     for (param, arg) in sig.params().iter().zip(args) {
-        let arg_type = infer_arg(
-            arg,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?;
+        let arg_type = infer_arg(arg, declared_types, local_types, dag, tir, registry, src)?;
         match &param.kind {
             ParamKind::Scalar(ScalarValueKind::Bool) => {
                 if !matches!(arg_type, InferredType::Bool) {
@@ -2110,10 +2034,9 @@ fn infer_hir_builtin_fn(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let Some(func) = builtin_fns.get(&name) else {
+    let Some(func) = crate::registry::builtins::builtin_functions().get(&name) else {
         return Err(GraphcalError::UnknownFunction {
             name: name.as_str().to_string(),
             src: src.clone(),
@@ -2132,16 +2055,7 @@ fn infer_hir_builtin_fn(
     let dimension_args = args
         .iter()
         .map(|arg| {
-            let inferred = infer_arg(
-                arg,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                builtin_fns,
-                src,
-            )?;
+            let inferred = infer_arg(arg, declared_types, local_types, dag, tir, registry, src)?;
             let dimension = expect_quantity(&inferred, registry, src, arg.span)?;
             Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
         })
@@ -2167,7 +2081,6 @@ fn infer_hir_type_conversion(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let expected_arity = 1;
@@ -2187,7 +2100,6 @@ fn infer_hir_type_conversion(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     match kind {
@@ -2294,7 +2206,6 @@ fn infer_hir_timescale_conversion(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
@@ -2313,7 +2224,6 @@ fn infer_hir_timescale_conversion(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if !matches!(arg_type, InferredType::Datetime(_)) {
@@ -2339,7 +2249,6 @@ fn infer_hir_datetime_constructor(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match kind {
@@ -2364,7 +2273,6 @@ fn infer_hir_datetime_constructor(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?;
                 return Err(GraphcalError::DimensionMismatch {
@@ -2383,7 +2291,6 @@ fn infer_hir_datetime_constructor(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?;
                 return Err(GraphcalError::DimensionMismatch {
@@ -2434,7 +2341,6 @@ fn infer_hir_datetime_constructor(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?;
                 return Err(GraphcalError::DimensionMismatch {
@@ -2467,7 +2373,6 @@ fn infer_hir_datetime_unary(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     result: InferredType,
 ) -> Result<InferredType, GraphcalError> {
@@ -2487,7 +2392,6 @@ fn infer_hir_datetime_unary(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if !matches!(arg_type, InferredType::Datetime(_)) {
@@ -2513,7 +2417,6 @@ fn infer_hir_if(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let infer = |expr: &hir::Expr| {
@@ -2525,7 +2428,6 @@ fn infer_hir_if(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )
     };
@@ -2560,7 +2462,6 @@ fn infer_hir_unary(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let operand_type = infer_hir_type(
@@ -2571,7 +2472,6 @@ fn infer_hir_unary(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     rules::unary_rule(
@@ -2625,7 +2525,6 @@ fn infer_hir_binop(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::desugar::desugared_ast::BinOp;
@@ -2637,7 +2536,6 @@ fn infer_hir_binop(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     let rhs_type = infer_hir_type(
@@ -2648,7 +2546,6 @@ fn infer_hir_binop(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
@@ -2745,7 +2642,6 @@ fn infer_hir_key_form(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::syntax::ast::KeyFormKind;
@@ -2758,7 +2654,6 @@ fn infer_hir_key_form(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     // Resolve the axis identity and, for Fin axes, its cardinality form.
@@ -2916,7 +2811,6 @@ fn infer_hir_for_comp(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let mut inner_locals = local_types.child(Vec::new());
@@ -2953,7 +2847,6 @@ fn infer_hir_for_comp(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     for binding in bindings.iter().rev() {
@@ -3051,7 +2944,6 @@ fn infer_hir_index_access(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let mut current = infer_hir_type(
@@ -3062,7 +2954,6 @@ fn infer_hir_index_access(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     for arg in args {
@@ -3154,7 +3045,6 @@ fn infer_hir_index_access(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?;
                 let index_form = finite_axis_form(
@@ -3306,7 +3196,6 @@ fn infer_hir_convert(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     reject_nested_conversion(inner, src)?;
@@ -3318,7 +3207,6 @@ fn infer_hir_convert(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     // `->` distributes element-wise over indexed values (#648 U1): the quantity
@@ -3362,7 +3250,6 @@ fn infer_hir_display_timezone(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     reject_nested_conversion(inner, src)?;
@@ -3374,7 +3261,6 @@ fn infer_hir_display_timezone(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if !matches!(&inner_type, InferredType::Datetime(_)) {
@@ -3678,7 +3564,6 @@ fn infer_hir_field_access(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_hir_type(
@@ -3689,7 +3574,6 @@ fn infer_hir_field_access(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     let InferredType::Struct(type_name, type_args) = &inner_type else {
@@ -3960,7 +3844,6 @@ fn infer_hir_constructor_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let target = dag
@@ -4080,7 +3963,6 @@ fn infer_hir_constructor_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?;
         let expected = resolved_field_type(
@@ -4349,7 +4231,6 @@ fn infer_hir_map_literal(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     for entry in entries {
@@ -4541,7 +4422,6 @@ fn infer_hir_map_literal(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if let InferredType::Indexed { index, .. } = &first_type {
@@ -4564,7 +4444,6 @@ fn infer_hir_map_literal(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?;
         if entry_type != first_type {
@@ -4599,7 +4478,6 @@ fn infer_hir_scan(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let source_type = infer_hir_type(
@@ -4610,7 +4488,6 @@ fn infer_hir_scan(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     let source_rank = source_type.indexed_rank();
@@ -4636,7 +4513,6 @@ fn infer_hir_scan(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     let scan_locals =
@@ -4649,7 +4525,6 @@ fn infer_hir_scan(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if body_type != accumulator_type {
@@ -4681,7 +4556,6 @@ fn infer_hir_unfold(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let init_type = infer_hir_type(
@@ -4692,7 +4566,6 @@ fn infer_hir_unfold(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     let index = IndexTypeRef::from_resolved(axis.value.clone());
@@ -4733,7 +4606,6 @@ fn infer_hir_unfold(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     if body_type != init_type {
@@ -4798,7 +4670,6 @@ fn infer_hir_match(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let scrutinee_type = infer_hir_type(
@@ -4809,7 +4680,6 @@ fn infer_hir_match(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     )?;
     match &scrutinee_type {
@@ -4895,7 +4765,6 @@ fn infer_hir_match(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?);
             }
@@ -5038,7 +4907,6 @@ fn infer_hir_match(
                     dag,
                     tir,
                     registry,
-                    builtin_fns,
                     src,
                 )?);
             }
@@ -5296,7 +5164,6 @@ fn infer_hir_dag_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let display_path = target.value.to_string();
@@ -5379,7 +5246,6 @@ fn infer_hir_dag_call(
             dag,
             tir,
             registry,
-            builtin_fns,
             src,
         )?;
         let expected =

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
@@ -39,17 +38,10 @@ pub(super) fn resolve_domain_constraints_for_dag(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
-    let ctx = EvalContext::provisional_constants(
-        tir,
-        dag.dag_id(),
-        src,
-        builtin_fns,
-        cancellation.clone(),
-    )?
-    .with_roots(&visible_const_values, None);
+    let ctx = EvalContext::provisional_constants(tir, dag.dag_id(), src, cancellation.clone())?
+        .with_roots(&visible_const_values, None);
     let mut constraints = HashMap::new();
     let decl_iter = dag
         .consts()
@@ -425,7 +417,6 @@ struct FieldConstraintResolutionContext<'a> {
     tir: &'a TIR,
     const_scopes: &'a HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>>,
     all_const_values: &'a RuntimeValueMap,
-    builtin_fns: &'a graphcal_compiler::registry::builtins::BuiltinFunctions,
     fallback_src: &'a NamedSource<Arc<String>>,
     cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
 }
@@ -498,7 +489,6 @@ fn resolve_application_field_constraints(
         ctx.tir,
         dag.dag_id(),
         owner_src,
-        ctx.builtin_fns,
         ctx.cancellation.clone(),
     )?
     .with_roots(&visible_const_values, None);
@@ -589,12 +579,10 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<DagFieldConstraints, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_fns = builtin_functions();
     let context = FieldConstraintResolutionContext {
         tir,
         const_scopes,
         all_const_values,
-        builtin_fns,
         fallback_src: src,
         cancellation,
     };

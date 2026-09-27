@@ -23,7 +23,6 @@ use crate::presentation_evidence::{
 };
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::plot_shape::PlotLeafKind;
-use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 
@@ -176,7 +175,6 @@ pub(super) fn run_eval_loop_with_bindings(
     bindings: &super::bindings::RuntimeParameterBindings,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    builtin_fns: &BuiltinFunctions,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
@@ -204,7 +202,6 @@ pub(super) fn run_eval_loop_with_bindings(
             plan,
             entry.scope.dag().dag_id(),
             entry.scope.facts().source(),
-            builtin_fns,
             host_fns,
             cancellation.clone(),
         )?
@@ -248,22 +245,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_fns = builtin_functions();
 
     let EvalLoopResult {
         unfinished_calls,
         values,
         presentation_instances,
         errors,
-    } = run_eval_loop_with_bindings(
-        plan,
-        bindings,
-        tir,
-        src,
-        builtin_fns,
-        host_fns,
-        cancellation,
-    )?;
+    } = run_eval_loop_with_bindings(plan, bindings, tir, src, host_fns, cancellation)?;
 
     cancellation.checkpoint()?;
     let ctx = EvalContext::checked(
@@ -271,7 +259,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         plan,
         tir.root_dag_id(),
         src,
-        builtin_fns,
         host_fns,
         cancellation.clone(),
     )?

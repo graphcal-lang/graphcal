@@ -11,7 +11,6 @@ use graphcal_compiler::hir::{
     ExprKind as HirExprKind, ExprLoweringContext, GenericScope, PreludeTypeScope,
 };
 use graphcal_compiler::ir::static_interface::StaticInputKind;
-use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;

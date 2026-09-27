@@ -1698,8 +1698,7 @@ fn eval_hir_builtin_fn(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let builtin = ctx
-        .builtin_fns
+    let builtin = graphcal_compiler::registry::builtins::builtin_functions()
         .get(&name)
         .ok_or_else(|| ctx.eval_error(format!("unknown function `{name}`"), expr.span))?;
     let arg_values: Vec<f64> = args
