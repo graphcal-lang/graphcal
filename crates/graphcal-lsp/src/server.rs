@@ -2006,14 +2006,16 @@ fn format_value_inline_with_budget(
             .format_display(Some(symbols))
             .unwrap_or_else(|error| format!("ERROR: {error}")),
         Value::Struct {
-            type_name, fields, ..
+            constructor,
+            fields,
+            ..
         } => {
             if fields.is_empty() {
-                return type_name.as_str().to_string();
+                return constructor.as_str().to_string();
             }
             let entries: Vec<(&str, &Value)> =
                 fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
-            format_parenthesized_entries(type_name.as_str(), &entries, symbols, max_len)
+            format_parenthesized_entries(constructor.as_str(), &entries, symbols, max_len)
         }
         Value::Indexed { entries, .. } => {
             if entries.is_empty() {
@@ -3318,7 +3320,9 @@ mod tests {
     }
 
     fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {
-        Value::struct_with_owner(test_owner(), type_name, fields)
+        let constructor =
+            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(type_name.as_str());
+        Value::struct_with_owner(test_owner(), type_name, constructor, fields)
     }
 
     fn test_indexed(index_name: IndexName, entries: IndexMap<IndexVariantName, Value>) -> Value {

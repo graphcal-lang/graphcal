@@ -9,13 +9,13 @@ use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 /// The kind of a declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,8 +139,12 @@ pub enum Value {
         variant: IndexVariantName,
     },
     Struct {
-        /// The concrete type/constructor display leaf plus canonical owning struct identity when available.
+        /// Canonical owner-qualified nominal type identity.
         type_name: StructTypeRef,
+        /// Constructor member identity within `type_name`; also the rendered value leaf.
+        constructor: ConstructorName,
+        /// Concrete generic arguments of the nominal type (part of value identity).
+        generic_args: Vec<DeclaredGenericArg>,
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
@@ -211,14 +215,20 @@ impl PartialEq for Value {
             (
                 Self::Struct {
                     type_name: l_type,
+                    constructor: l_ctor,
+                    generic_args: l_args,
                     fields: l_fields,
                 },
                 Self::Struct {
                     type_name: r_type,
+                    constructor: r_ctor,
+                    generic_args: r_args,
                     fields: r_fields,
                 },
             ) => {
-                struct_value_type_refs_equal(l_type, r_type)
+                l_type.matches_ref(r_type)
+                    && l_ctor == r_ctor
+                    && l_args == r_args
                     && value_field_maps_equal(l_fields, r_fields)
             }
             (
@@ -250,10 +260,6 @@ impl PartialEq for Value {
             _ => false,
         }
     }
-}
-
-fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
-    lhs.matches_ref(rhs)
 }
 
 fn value_field_maps_equal(
@@ -300,15 +306,18 @@ impl Value {
         }
     }
 
-    /// Construct a struct value after resolving the struct leaf into an owner.
+    /// Construct a non-generic struct value after resolving the struct leaf into an owner.
     #[must_use]
     pub fn struct_with_owner(
         owner: DagId,
         type_name: StructTypeName,
+        constructor: ConstructorName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
         Self::Struct {
             type_name: StructTypeRef::with_owner(owner, type_name),
+            constructor,
+            generic_args: Vec::new(),
             fields,
         }
     }
@@ -356,7 +365,7 @@ impl Value {
                 index_name,
                 variant,
             } => variant.qualified_by(&index_name.display_name()).to_string(),
-            Self::Struct { type_name, .. } => format!("struct `{type_name}`"),
+            Self::Struct { constructor, .. } => format!("struct `{constructor}`"),
             Self::Indexed { index_name, .. } => format!("indexed `{index_name}[...]`"),
             Self::Datetime { .. } => "Datetime".to_string(),
         }
@@ -478,7 +487,7 @@ impl Value {
                 index_name,
                 variant,
             } => variant.qualified_by(&index_name.display_name()).to_string(),
-            Self::Struct { type_name, .. } => type_name.as_str().to_string(),
+            Self::Struct { constructor, .. } => constructor.as_str().to_string(),
             Self::Datetime {
                 epoch,
                 display_tz,
@@ -1197,5 +1206,45 @@ mod tests {
         let value = quantity(Dimension::base(dim_id("Mass")), None);
 
         assert_eq!(value.display_label(&symbols()), None);
+    }
+
+    fn struct_value(
+        constructor: &str,
+        generic_args: Vec<DeclaredGenericArg>,
+        fields: IndexMap<FieldName, Value>,
+    ) -> Value {
+        let owner = DagId::root_in_package("test", "main");
+        Value::Struct {
+            type_name: StructTypeRef::with_owner(owner, StructTypeName::expect_valid("Mode")),
+            constructor: ConstructorName::expect_valid(constructor),
+            generic_args,
+            fields,
+        }
+    }
+
+    #[test]
+    fn struct_equality_distinguishes_constructors_of_the_same_type() {
+        let coast = struct_value("Coast", Vec::new(), IndexMap::new());
+        let burn = struct_value("Burn", Vec::new(), IndexMap::new());
+
+        assert_eq!(coast, struct_value("Coast", Vec::new(), IndexMap::new()));
+        assert_ne!(coast, burn);
+    }
+
+    #[test]
+    fn struct_equality_distinguishes_generic_arguments() {
+        let fields = IndexMap::from([(FieldName::expect_valid("v"), Value::Int(1))]);
+        let length = struct_value(
+            "Mode",
+            vec![DeclaredGenericArg::Dim(Dimension::base(dim_id("Length")))],
+            fields.clone(),
+        );
+        let time = struct_value(
+            "Mode",
+            vec![DeclaredGenericArg::Dim(Dimension::base(dim_id("Time")))],
+            fields,
+        );
+
+        assert_ne!(length, time);
     }
 }
