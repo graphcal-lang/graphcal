@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
-use crate::dimension::{BaseDimId, Dimension, RationalError};
+use crate::dimension::{BaseDimId, Dimension};
+use crate::ratio::RatioError;
 use crate::registry::dimension_registry::{
     DimensionResolveError, DimensionScope, assert_base_dim_names_cover,
     format_dimension_preferring_alias_after_validation,
@@ -558,7 +559,7 @@ impl RegistryBuilder {
     ///
     /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
     /// dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RationalError> {
+    pub fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
         self.dimension_scope().resolve_dim_expr(expr)
     }
 
@@ -575,10 +576,7 @@ impl RegistryBuilder {
     ///
     /// Returns `Ok(None)` if the type references unknown dimensions, and
     /// `Err` if dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_type_expr(
-        &self,
-        type_expr: &TypeExpr,
-    ) -> Result<Option<Dimension>, RationalError> {
+    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
         self.dimension_scope().resolve_type_expr(type_expr)
     }
 

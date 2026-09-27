@@ -10,6 +10,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
+use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -621,7 +622,7 @@ pub(super) fn default_unit_label(
     let mut first = true;
 
     for (id, &exp) in dimension.iter() {
-        if exp.num() <= 0 {
+        if !exp.is_positive() {
             continue;
         }
         if !first {
@@ -632,7 +633,7 @@ pub(super) fn default_unit_label(
     }
 
     for (id, &exp) in dimension.iter() {
-        if exp.num() >= 0 {
+        if !exp.is_negative() {
             continue;
         }
         if first {
@@ -640,10 +641,7 @@ pub(super) fn default_unit_label(
             first = false;
         } else {
             result.push('/');
-            let Ok(positive_exp) = exp.checked_neg() else {
-                return None;
-            };
-            push_unit_factor(&mut result, id, positive_exp, symbols)?;
+            push_unit_factor(&mut result, id, -exp, symbols)?;
         }
     }
 
@@ -659,8 +657,7 @@ fn push_unit_factor(
     let symbol = symbols.get(id)?;
     result.push_str(symbol);
     if exp != Rational::ONE {
-        result.push('^');
-        result.push_str(&exp.to_string());
+        result.push_str(&exp.fmt_exponent(ExponentStyle::Compact).to_string());
     }
     Some(())
 }

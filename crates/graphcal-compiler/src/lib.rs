@@ -32,6 +32,7 @@ pub mod plot_props;
 pub mod plot_shape;
 pub mod plot_visibility;
 pub mod plugin_identity;
+pub mod ratio;
 pub mod registry;
 pub mod source_id;
 pub(crate) mod source_line;

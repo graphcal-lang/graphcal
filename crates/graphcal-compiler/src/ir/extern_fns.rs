@@ -586,7 +586,7 @@ fn resolve_extern_dim_monomial(
         {
             let power = match item.op {
                 MulDivOp::Mul => power,
-                MulDivOp::Div => power.checked_neg().map_err(|_| overflow(term.span))?,
+                MulDivOp::Div => -power,
             };
             vars.push(DimVarPower {
                 var: var.clone(),

@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
-use crate::dimension::{Dimension, Rational, RationalError};
+use crate::dimension::{Dimension, Rational};
+use crate::ratio::RatioError;
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::index_name::IndexVarName;
@@ -140,7 +141,7 @@ pub enum DimMonomialEvalError {
     },
     /// Exponent arithmetic overflowed.
     #[error(transparent)]
-    Overflow(#[from] RationalError),
+    Overflow(#[from] RatioError),
 }
 
 /// One scalar value kind supported by a function signature.
@@ -791,7 +792,9 @@ fn format_monomial(
                 format!(
                     "{}{}",
                     factor.var,
-                    crate::registry::format::format_exponent(factor.power)
+                    factor
+                        .power
+                        .fmt_exponent(crate::ratio::ExponentStyle::Source)
                 )
             }
         })

@@ -5,162 +5,10 @@ use std::fmt;
 
 use thiserror::Error;
 
-use crate::exact_rational::ExactRational;
+use crate::ratio::{ExponentStyle, Ratio, RatioError};
 
-/// A rational number for dimension exponents (e.g., 1/2 for sqrt).
-///
-/// Always stored in reduced form with `den > 0`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Rational {
-    num: i32,
-    den: i32,
-}
-
-impl fmt::Debug for Rational {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-impl fmt::Display for Rational {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.den == 1 {
-            write!(f, "{}", self.num)
-        } else {
-            write!(f, "{}/{}", self.num, self.den)
-        }
-    }
-}
-
-impl From<i32> for Rational {
-    fn from(value: i32) -> Self {
-        Self { num: value, den: 1 }
-    }
-}
-
-impl TryFrom<ExactRational> for Rational {
-    type Error = RationalError;
-
-    fn try_from(value: ExactRational) -> Result<Self, Self::Error> {
-        Self::try_new_i64(value.numerator(), value.denominator())
-    }
-}
-
-impl Rational {
-    pub(crate) const ZERO: Self = Self { num: 0, den: 1 };
-    pub const ONE: Self = Self { num: 1, den: 1 };
-    /// `1/2` — used for square-root exponents.
-    pub const HALF: Self = Self { num: 1, den: 2 };
-    /// `1/3` — used for cube-root exponents.
-    pub(crate) const THIRD: Self = Self { num: 1, den: 3 };
-
-    /// Try to create a new rational number, automatically reduced.
-    ///
-    /// Returns `Err` if `den` is zero.
-    pub fn try_new(num: i32, den: i32) -> Result<Self, RationalError> {
-        Self::try_new_i64(i64::from(num), i64::from(den))
-    }
-
-    /// Normalize `num / den` in `i64` with GCD reduction, then narrow back to `i32`.
-    ///
-    /// Returns `Err(RationalError::Overflow)` if the reduced result does not fit
-    /// in `i32`, and `Err(RationalError::ZeroDenominator)` if `den` is zero.
-    fn try_new_i64(num: i64, den: i64) -> Result<Self, RationalError> {
-        if den == 0 {
-            return Err(RationalError::ZeroDenominator);
-        }
-        if num == 0 {
-            return Ok(Self::ZERO);
-        }
-        let g = gcd64(num.unsigned_abs(), den.unsigned_abs()).cast_signed();
-        let (mut n, mut d) = (num / g, den / g);
-        if d < 0 {
-            n = n.checked_neg().ok_or(RationalError::Overflow)?;
-            d = d.checked_neg().ok_or(RationalError::Overflow)?;
-        }
-        let num = i32::try_from(n).map_err(|_| RationalError::Overflow)?;
-        let den = i32::try_from(d).map_err(|_| RationalError::Overflow)?;
-        Ok(Self { num, den })
-    }
-
-    /// Returns the numerator.
-    #[must_use]
-    pub const fn num(self) -> i32 {
-        self.num
-    }
-
-    /// Returns the denominator (always positive).
-    #[must_use]
-    pub const fn den(self) -> i32 {
-        self.den
-    }
-
-    #[must_use]
-    pub(crate) const fn is_zero(self) -> bool {
-        self.num == 0
-    }
-
-    #[must_use]
-    pub const fn is_integer(self) -> bool {
-        self.den == 1
-    }
-
-    /// Negate this rational exponent, returning an error if the numerator overflows.
-    pub const fn checked_neg(self) -> Result<Self, RationalError> {
-        let Some(num) = self.num.checked_neg() else {
-            return Err(RationalError::Overflow);
-        };
-        Ok(Self { num, den: self.den })
-    }
-}
-
-/// Error from `Rational` construction or arithmetic.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum RationalError {
-    /// The denominator was zero.
-    #[error("denominator must not be zero")]
-    ZeroDenominator,
-    /// The reduced numerator or denominator did not fit in `i32`.
-    ///
-    /// Dimension exponents are stored as `i32`; an operation produced a
-    /// reduced value outside that range.
-    #[error("dimension exponent overflowed i32")]
-    Overflow,
-}
-
-impl std::ops::Add for Rational {
-    type Output = Result<Self, RationalError>;
-    fn add(self, rhs: Self) -> Self::Output {
-        // Widen to i64 to avoid intermediate overflow
-        let num =
-            i64::from(self.num) * i64::from(rhs.den) + i64::from(rhs.num) * i64::from(self.den);
-        let den = i64::from(self.den) * i64::from(rhs.den);
-        Self::try_new_i64(num, den)
-    }
-}
-
-impl std::ops::Sub for Rational {
-    type Output = Result<Self, RationalError>;
-    fn sub(self, rhs: Self) -> Self::Output {
-        let num =
-            i64::from(self.num) * i64::from(rhs.den) - i64::from(rhs.num) * i64::from(self.den);
-        let den = i64::from(self.den) * i64::from(rhs.den);
-        Self::try_new_i64(num, den)
-    }
-}
-
-impl std::ops::Mul for Rational {
-    type Output = Result<Self, RationalError>;
-    fn mul(self, rhs: Self) -> Self::Output {
-        let num = i64::from(self.num) * i64::from(rhs.num);
-        let den = i64::from(self.den) * i64::from(rhs.den);
-        Self::try_new_i64(num, den)
-    }
-}
-
-fn gcd64(a: u64, b: u64) -> u64 {
-    if b == 0 { a } else { gcd64(b, a % b) }
-}
+/// A dimension exponent (e.g., `1/2` for sqrt), in the symmetric `i32` range.
+pub type Rational = Ratio<i32>;
 
 macro_rules! define_prelude_base_dimensions {
     (@unit $_variant:ident) => { () };
@@ -360,11 +208,11 @@ impl Dimension {
 
     /// Raise a dimension to a power (multiply all exponents).
     ///
-    /// Integer exponents are accepted directly and converted to [`Rational`].
+    /// Small integer literals (`i16`) are accepted directly and converted to [`Rational`].
     ///
-    /// Returns `Err(RationalError::Overflow)` if any exponent multiplication
-    /// produces a reduced value outside the `i32` range.
-    pub fn pow(&self, exp: impl Into<Rational>) -> Result<Self, RationalError> {
+    /// Returns `Err(RatioError::Overflow)` if any exponent multiplication
+    /// produces a reduced value outside the symmetric `i32` range.
+    pub fn pow(&self, exp: impl Into<Rational>) -> Result<Self, RatioError> {
         let exp = exp.into();
         if exp.is_zero() {
             return Ok(Self::dimensionless());
@@ -414,7 +262,7 @@ impl Dimension {
 
         // Positive exponents (numerator)
         for (id, &exp) in &self.exponents {
-            if exp.num() <= 0 {
+            if !exp.is_positive() {
                 continue;
             }
             if !first {
@@ -426,7 +274,7 @@ impl Dimension {
 
         // Negative exponents (denominator)
         for (id, &exp) in &self.exponents {
-            if exp.num() >= 0 {
+            if !exp.is_negative() {
                 continue;
             }
             let name = registered_base_dim_name(names, id)?;
@@ -436,7 +284,7 @@ impl Dimension {
                 first = false;
             } else {
                 out.push_str(div_sep);
-                push_dim_factor_magnitude(&mut out, name, exp);
+                push_dim_factor(&mut out, name, -exp);
             }
         }
 
@@ -457,23 +305,7 @@ fn registered_base_dim_name<'a>(
 fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
     out.push_str(name);
     if exp != Rational::ONE {
-        out.push('^');
-        out.push_str(&exp.to_string());
-    }
-}
-
-/// Render the positive magnitude of a known-negative exponent without
-/// constructing a positive [`Rational`] that may be unrepresentable (`i32::MIN`).
-fn push_dim_factor_magnitude(out: &mut String, name: &str, exp: Rational) {
-    out.push_str(name);
-    let magnitude = exp.num().unsigned_abs();
-    if magnitude != 1 || exp.den() != 1 {
-        out.push('^');
-        out.push_str(&magnitude.to_string());
-        if exp.den() != 1 {
-            out.push('/');
-            out.push_str(&exp.den().to_string());
-        }
+        out.push_str(&exp.fmt_exponent(ExponentStyle::Compact).to_string());
     }
 }
 
@@ -495,17 +327,17 @@ enum CombineOp {
 
 impl Dimension {
     /// Multiply two dimensions, returning an error if exponent arithmetic overflows.
-    pub fn checked_mul(self, other: &Self) -> Result<Self, RationalError> {
+    pub fn checked_mul(self, other: &Self) -> Result<Self, RatioError> {
         self.combine(other, CombineOp::Add)
     }
 
     /// Divide two dimensions, returning an error if exponent arithmetic overflows.
-    pub fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
+    pub fn checked_div(self, other: &Self) -> Result<Self, RatioError> {
         self.combine(other, CombineOp::Sub)
     }
 
     /// Combine two dimensions by adding or subtracting exponents.
-    fn combine(self, other: &Self, op: CombineOp) -> Result<Self, RationalError> {
+    fn combine(self, other: &Self, op: CombineOp) -> Result<Self, RatioError> {
         let mut exponents = self.exponents;
         for (id, exp) in &other.exponents {
             let entry = exponents.entry(id.clone()).or_insert(Rational::ZERO);
@@ -522,7 +354,7 @@ impl Dimension {
 }
 
 impl std::ops::Mul for Dimension {
-    type Output = Result<Self, RationalError>;
+    type Output = Result<Self, RatioError>;
     /// Multiply two dimensions (add exponents).
     fn mul(self, other: Self) -> Self::Output {
         self.checked_mul(&other)
@@ -530,7 +362,7 @@ impl std::ops::Mul for Dimension {
 }
 
 impl std::ops::Div for Dimension {
-    type Output = Result<Self, RationalError>;
+    type Output = Result<Self, RatioError>;
     /// Divide two dimensions (subtract exponents).
     fn div(self, other: Self) -> Self::Output {
         self.checked_div(&other)
@@ -538,14 +370,14 @@ impl std::ops::Div for Dimension {
 }
 
 impl std::ops::Mul for &Dimension {
-    type Output = Result<Dimension, RationalError>;
+    type Output = Result<Dimension, RatioError>;
     fn mul(self, other: Self) -> Self::Output {
         self.clone().checked_mul(other)
     }
 }
 
 impl std::ops::Div for &Dimension {
-    type Output = Result<Dimension, RationalError>;
+    type Output = Result<Dimension, RatioError>;
     fn div(self, other: Self) -> Self::Output {
         self.clone().checked_div(other)
     }
@@ -554,12 +386,6 @@ impl std::ops::Div for &Dimension {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Test helper: build a `Rational` from integer literals, panicking on
-    /// zero denominator. Tests are the only place panicking is acceptable.
-    fn r(num: i32, den: i32) -> Rational {
-        Rational::try_new(num, den).expect("non-zero denominator")
-    }
 
     // Helper: well-known base dimension IDs matching prelude dimensions.
     fn length() -> BaseDimId {
@@ -599,51 +425,6 @@ mod tests {
         }
         assert_eq!(PreludeBaseDimension::parse("length"), None);
         assert_eq!(PreludeBaseDimension::parse("Velocity"), None);
-    }
-
-    #[test]
-    fn rational_creation_and_reduction() {
-        assert_eq!(r(2, 4), r(1, 2));
-        assert_eq!(r(-3, 6), r(-1, 2));
-        assert_eq!(r(6, -4), r(-3, 2));
-        assert_eq!(r(0, 5), Rational::ZERO);
-    }
-
-    #[test]
-    fn rational_arithmetic() {
-        let half = r(1, 2);
-        let third = r(1, 3);
-
-        // 1/2 + 1/3 = 5/6
-        let sum = (half + third).unwrap();
-        assert_eq!(sum, r(5, 6));
-
-        // 1/2 - 1/3 = 1/6
-        let diff = (half - third).unwrap();
-        assert_eq!(diff, r(1, 6));
-
-        // 1/2 * 1/3 = 1/6
-        let prod = (half * third).unwrap();
-        assert_eq!(prod, r(1, 6));
-
-        // -1/2
-        assert_eq!(half.checked_neg().unwrap(), r(-1, 2));
-    }
-
-    #[test]
-    fn rational_negation_reports_min_i32_overflow() {
-        let min = Rational {
-            num: i32::MIN,
-            den: 1,
-        };
-        assert_eq!(min.checked_neg(), Err(RationalError::Overflow));
-    }
-
-    #[test]
-    fn rational_from_i32() {
-        assert_eq!(Rational::from(3), r(3, 1));
-        assert_eq!(Rational::from(0), Rational::ZERO);
-        assert_eq!(Rational::from(-2), r(-2, 1));
     }
 
     #[test]
@@ -789,17 +570,17 @@ mod tests {
     }
 
     #[test]
-    fn dimension_display_preserves_min_i32_denominator_magnitude() {
+    fn dimension_display_renders_extreme_denominator_magnitude() {
         let dimension = Dimension {
             exponents: BTreeMap::from([
-                (length(), Rational::from(i32::MIN)),
+                (length(), Rational::integer(-i32::MAX).unwrap()),
                 (mass(), Rational::ONE),
             ]),
         };
 
         assert_eq!(
             dimension.try_format_with(&test_names()).unwrap(),
-            "Mass / Length^2147483648"
+            "Mass / Length^2147483647"
         );
     }
 
@@ -883,56 +664,6 @@ mod tests {
         }
 
         proptest! {
-            // --- Rational invariants ---
-
-            #[test]
-            fn rational_always_reduced(n in -100i32..=100, d in -100i32..=100) {
-                prop_assume!(d != 0);
-                let r = Rational::try_new(n, d).expect("d != 0 by prop_assume");
-                // den is always positive
-                prop_assert!(r.den() > 0, "den must be positive, got {}", r.den());
-                // gcd(|num|, den) == 1 (reduced form)
-                if r.num() != 0 {
-                    let g = gcd64(
-                        u64::from(r.num().unsigned_abs()),
-                        u64::from(r.den().unsigned_abs()),
-                    );
-                    prop_assert_eq!(g, 1, "not reduced: {}/{}", r.num(), r.den());
-                } else {
-                    prop_assert_eq!(r.den(), 1, "zero should have den=1, got {}", r.den());
-                }
-            }
-
-            #[test]
-            fn rational_add_commutative(a in arb_rational(), b in arb_rational()) {
-                prop_assert_eq!((a + b).unwrap(), (b + a).unwrap());
-            }
-
-            #[test]
-            fn rational_mul_commutative(a in arb_rational(), b in arb_rational()) {
-                prop_assert_eq!((a * b).unwrap(), (b * a).unwrap());
-            }
-
-            #[test]
-            fn rational_additive_identity(a in arb_rational()) {
-                prop_assert_eq!((a + Rational::ZERO).unwrap(), a);
-            }
-
-            #[test]
-            fn rational_multiplicative_identity(a in arb_rational()) {
-                prop_assert_eq!((a * Rational::ONE).unwrap(), a);
-            }
-
-            #[test]
-            fn rational_additive_inverse(a in arb_rational()) {
-                prop_assert_eq!((a + a.checked_neg().unwrap()).unwrap(), Rational::ZERO);
-            }
-
-            #[test]
-            fn rational_sub_self_is_zero(a in arb_rational()) {
-                prop_assert_eq!((a - a).unwrap(), Rational::ZERO);
-            }
-
             // --- Dimension invariants ---
 
             #[test]
@@ -957,7 +688,7 @@ mod tests {
             }
 
             #[test]
-            fn dimension_pow_accepts_integer_exponents(a in arb_dimension(), n in -3i32..=3) {
+            fn dimension_pow_accepts_integer_exponents(a in arb_dimension(), n in -3i16..=3) {
                 prop_assert_eq!(a.pow(n).unwrap(), a.pow(Rational::from(n)).unwrap());
             }
 

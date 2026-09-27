@@ -1,5 +1,6 @@
 use crate::dag_id::DagId;
-use crate::dimension::{Dimension, PreludeBaseDimension, RationalError};
+use crate::dimension::{Dimension, PreludeBaseDimension};
+use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, UnitName};
 
 use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
@@ -89,7 +90,7 @@ struct BaseDimIds {
 }
 
 /// Load all built-in dimensions and units into the registry builder.
-pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RationalError> {
+pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RatioError> {
     let ids = load_base_dimensions(builder);
     load_derived_dimensions(builder, &ids)?;
     load_base_units(builder, &ids);
@@ -157,7 +158,7 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
     }
 }
 
-fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
+fn load_derived_dimensions(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RatioError> {
     let velocity = (&ids.length / &ids.time)?;
     let time_squared = ids.time.pow(2)?;
     let acceleration = (&ids.length / &time_squared)?;
@@ -229,7 +230,7 @@ fn load_base_units(r: &mut RegistryBuilder, ids: &BaseDimIds) {
     );
 }
 
-fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RationalError> {
+fn load_derived_units(r: &mut RegistryBuilder, ids: &BaseDimIds) -> Result<(), RatioError> {
     let mass_length = (&ids.mass * &ids.length)?;
     let time_squared = ids.time.pow(2)?;
     let force = (mass_length / time_squared)?;

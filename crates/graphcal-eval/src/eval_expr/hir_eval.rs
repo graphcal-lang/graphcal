@@ -592,7 +592,7 @@ fn eval_hir_power(
                     span,
                 ));
             }
-            super::arithmetic::eval_int_binop(op, base, exact.numerator(), ctx, span)
+            super::arithmetic::eval_int_binop(op, base, exact.num(), ctx, span)
                 .map(RuntimeValue::Int)
         }
         (RuntimeValue::Int(base), _) => {

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
-use crate::dimension::{Dimension, Rational, RationalError};
+use crate::dimension::{Dimension, Rational};
+use crate::ratio::RatioError;
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::UnitRef;
 
@@ -131,11 +132,11 @@ pub enum UnitResolveError {
         reason: PositiveFiniteScaleError,
     },
     /// Dimension exponent arithmetic overflowed.
-    Overflow(RationalError),
+    Overflow(RatioError),
 }
 
-impl From<RationalError> for UnitResolveError {
-    fn from(err: RationalError) -> Self {
+impl From<RatioError> for UnitResolveError {
+    fn from(err: RatioError) -> Self {
         Self::Overflow(err)
     }
 }

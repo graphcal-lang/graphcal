@@ -408,6 +408,14 @@ impl Parser<'_> {
     ///
     /// Zero exponents (including `0/n`) are rejected (#648 N3): a zero power
     /// erases its term, so it is never meaningful.
+    fn integer_exponent(&self, value: i32, span: Span) -> Result<Rational, ParseError> {
+        Rational::integer(value).map_err(|_| ParseError::InvalidNumber {
+            reason: "exponent is out of range".to_string(),
+            src: self.named_source(),
+            span: span.into(),
+        })
+    }
+
     fn parse_exponent_value(&mut self) -> Result<(Rational, Span), ParseError> {
         let (value, span) = if self.lexer.peek() == Some(&Token::LParen) {
             self.lexer.next_token();
@@ -423,13 +431,16 @@ impl Parser<'_> {
                     span: den_span.into(),
                 })?
             } else {
-                Rational::from(num)
+                self.integer_exponent(num, num_span)?
             };
             let (_, rparen_span) = self.expect(Token::RParen)?;
             (value, num_span.merge(rparen_span))
         } else {
             let (neg, value, span) = self.parse_integer_literal()?;
-            (Rational::from(if neg { -value } else { value }), span)
+            (
+                self.integer_exponent(if neg { -value } else { value }, span)?,
+                span,
+            )
         };
         if value.is_zero() {
             return Err(ParseError::ZeroExponent {

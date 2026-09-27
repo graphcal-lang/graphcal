@@ -7,10 +7,11 @@ use thiserror::Error;
 use crate::assertion_expectation::ExpectedFail;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::MulDivOp;
-use crate::dimension::{Dimension, Rational, RationalError};
+use crate::dimension::{Dimension, Rational};
 use crate::hir;
 use crate::hir::{NominalConstructor, NominalTypeDef};
 use crate::nat::NatPolyForm;
+use crate::ratio::RatioError;
 use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
@@ -249,7 +250,7 @@ impl ResolvedDimTerm {
         } else {
             format!(
                 "{prefix}{name}{}",
-                crate::registry::format::format_exponent(power)
+                power.fmt_exponent(crate::ratio::ExponentStyle::Source)
             )
         }
     }
@@ -367,7 +368,7 @@ pub struct ProjectTypeStore {
 pub enum PreludeProjectTypeStoreError {
     /// Built-in dimension exponent arithmetic failed.
     #[error(transparent)]
-    Rational(#[from] RationalError),
+    Rational(#[from] RatioError),
     /// The prelude registry violated a registry construction invariant.
     #[error(transparent)]
     RegistryBuild(#[from] RegistryBuildError),
