@@ -1,6 +1,5 @@
 mod aggregations;
 mod arithmetic;
-mod builtin_call;
 mod complex;
 mod context;
 mod conversions;

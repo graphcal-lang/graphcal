@@ -1163,7 +1163,9 @@ impl FunctionSignature {
         )
     }
 
-    /// Single free param `D`, result is `D`.
+    /// Single free param `D`, result is `D` (a test fixture: no built-in has
+    /// this shape since `abs` is typed by its complex overload rule).
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn passthrough(name: &str) -> Self {
         let d = dim_var_d();

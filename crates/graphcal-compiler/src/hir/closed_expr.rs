@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use thiserror::Error;
 
-use crate::builtin::BuiltinFnName;
+use crate::builtin::{BuiltinFn, ComplexFn, DatetimeFn};
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{CheckedExpr, ConstRef, Expr, ExprKind, visit_expr};
 use crate::syntax::ast::UnaryOp;
@@ -85,8 +85,11 @@ const fn validate_literal_node(expr: &Expr) -> Result<(), ClosedExpressionError>
         }
         ExprKind::FnCall { callee, .. }
             if matches!(
-                callee.value.builtin_name(),
-                Some(BuiltinFnName::Complex | BuiltinFnName::Datetime | BuiltinFnName::Epoch)
+                callee.value.builtin(),
+                Some(
+                    BuiltinFn::Complex(ComplexFn::Rectangular)
+                        | BuiltinFn::Datetime(DatetimeFn::Constructor(_))
+                )
             ) =>
         {
             Ok(())

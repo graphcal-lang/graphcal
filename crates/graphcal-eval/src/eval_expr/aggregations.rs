@@ -1,4 +1,4 @@
-use graphcal_compiler::builtin::{BuiltinFnName, KeyAggregation, ValueAggregation};
+use graphcal_compiler::builtin::{AggregationFn, KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -14,7 +14,7 @@ pub(super) enum AggregationError {
     #[error(
         "{function}() received an empty completed Indexed value, violating the non-empty invariant"
     )]
-    EmptyInput { function: BuiltinFnName },
+    EmptyInput { function: AggregationFn },
     /// Rank checking should prevent `count()` from seeing nested indexed entries.
     #[error("count() received a multi-axis Indexed value after rank-one type checking")]
     MultiAxisCount,
@@ -47,7 +47,7 @@ pub(super) fn aggregate_indexed_values(
 ) -> Result<RuntimeValue, AggregationError> {
     if entries.is_empty() {
         return Err(AggregationError::EmptyInput {
-            function: kind.builtin_name(),
+            function: kind.into(),
         });
     }
 
@@ -83,7 +83,7 @@ pub(super) fn extremum_entry_key(
 ) -> Result<IndexEntryKey, AggregationError> {
     if entries.is_empty() {
         return Err(AggregationError::EmptyInput {
-            function: kind.builtin_name(),
+            function: kind.into(),
         });
     }
     let context = match kind {
@@ -105,7 +105,7 @@ pub(super) fn extremum_entry_key(
     match best {
         Some((key, _)) => Ok(key.clone()),
         None => Err(AggregationError::EmptyInput {
-            function: kind.builtin_name(),
+            function: kind.into(),
         }),
     }
 }
@@ -219,7 +219,7 @@ mod tests {
             assert!(matches!(
                 &error,
                 AggregationError::EmptyInput { function: found }
-                    if *found == function.builtin_name()
+                    if *found == AggregationFn::from(function)
             ));
             assert!(error.is_internal_invariant());
         }

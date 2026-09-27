@@ -38,13 +38,13 @@ use crate::workspace_revision::{
     AnalysisFreshness, AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity,
     DocumentRevision, RevisionClock, RevisionExhausted, current_revisions,
 };
-use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
+use graphcal_compiler::builtin::{BuiltinEntry, BuiltinFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{
     DimMonomial, FunctionSignature, ParamKind, ResultKind,
 };
-use graphcal_compiler::registry::builtins::builtin_functions;
+use graphcal_compiler::registry::builtins::scalar_function;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::NameAtom;
@@ -1802,62 +1802,30 @@ fn build_extern_fn_signatures(
 pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
-        for (name, function) in builtin_functions() {
-            let (params, ret) =
-                builtin_signature_parts(function.signature()).unwrap_or_else(|err| {
-                    (
-                        vec![format!("<invalid builtin signature: {err}>")],
-                        "<invalid>".to_string(),
-                    )
-                });
-            let params_str = params.join(", ");
-            let label = format!("fn {name}({params_str}) -> {ret}");
-            sigs.insert(
-                name.to_string(),
-                FnSignatureInfo {
-                    label,
-                    parameters: params,
+        for function in BuiltinFn::all() {
+            let info = match function.entry() {
+                BuiltinEntry::Kernel(scalar) => {
+                    let (params, ret) =
+                        builtin_signature_parts(scalar_function(scalar).signature())
+                            .unwrap_or_else(|err| {
+                                (
+                                    vec![format!("<invalid builtin signature: {err}>")],
+                                    "<invalid>".to_string(),
+                                )
+                            });
+                    let params_str = params.join(", ");
+                    FnSignatureInfo {
+                        label: format!("fn {function}({params_str}) -> {ret}"),
+                        parameters: params,
+                    }
+                }
+                BuiltinEntry::Signature(signature) => FnSignatureInfo {
+                    label: signature.label(function.as_str()),
+                    parameters: signature.parameter_labels().collect(),
                 },
-            );
-        }
-        for function in ComplexFn::ALL {
-            sigs.insert(
-                function.builtin_name().as_str().to_string(),
-                FnSignatureInfo {
-                    label: function.signature().to_string(),
-                    parameters: function
-                        .parameter_labels()
-                        .iter()
-                        .map(|parameter| (*parameter).to_string())
-                        .collect(),
-                },
-            );
-        }
-        for function in AggregationFn::ALL {
-            sigs.insert(
-                function.builtin_name().as_str().to_string(),
-                FnSignatureInfo {
-                    label: function.signature().to_string(),
-                    parameters: function
-                        .parameter_labels()
-                        .iter()
-                        .map(|parameter| (*parameter).to_string())
-                        .collect(),
-                },
-            );
-        }
-        for function in LinearAlgebraFn::ALL {
-            sigs.insert(
-                function.builtin_name().as_str().to_string(),
-                FnSignatureInfo {
-                    label: function.signature().to_string(),
-                    parameters: function
-                        .parameter_labels()
-                        .iter()
-                        .map(|parameter| (*parameter).to_string())
-                        .collect(),
-                },
-            );
+                BuiltinEntry::Bespoke(_) => continue,
+            };
+            sigs.insert(function.as_str().to_string(), info);
         }
         sigs
     });
@@ -3267,6 +3235,40 @@ mod tests {
                 .get("rss")
                 .map(|signature| signature.label.as_str()),
             Some("fn rss<D: Dim, I: Index>(values: D[I]) -> D")
+        );
+    }
+
+    #[test]
+    fn signature_help_covers_exactly_the_documented_builtins() {
+        let signatures = build_fn_signatures();
+        let documented = BuiltinFn::all()
+            .filter(|function| function.entry().documented_arity().is_some())
+            .map(BuiltinFn::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let keys = signatures
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys, documented);
+        for function in BuiltinFn::all() {
+            let Some(arity) = function.entry().documented_arity() else {
+                continue;
+            };
+            assert_eq!(
+                signatures[function.as_str()].parameters.len(),
+                arity,
+                "`{function}`"
+            );
+        }
+        assert!(!signatures.contains_key("datetime"));
+        assert!(!signatures.contains_key("to_float"));
+        let label = |name: &str| signatures[name].label.as_str();
+        assert_eq!(label("sqrt"), "fn sqrt(x: D) -> D^(1/2)");
+        assert_eq!(label("atan2"), "fn atan2(y: D, x: D) -> Angle");
+        assert_eq!(label("abs"), "fn abs<D: Dim>(x: D | Complex<D>) -> D");
+        assert_eq!(
+            label("cross"),
+            "fn cross<D1: Dim, D2: Dim, I: Index>(a: D1[I], b: D2[I]) -> (D1 * D2)[I] where |I| = 3"
         );
     }
 

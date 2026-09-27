@@ -6,7 +6,7 @@
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinConst, BuiltinFnName};
+use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::registry::prelude::{
     PRELUDE_BUILTIN_TYPE_NAMES, prelude_dimension_names, prelude_unit_names,
 };
@@ -40,7 +40,7 @@ pub enum ReservedName {
     TimeScale(TimeScale),
     StaticFormer,
     BuiltinConstant(BuiltinConst),
-    BuiltinFunction(BuiltinFnName),
+    BuiltinFunction(BuiltinFn),
     ContextualCallable,
 }
 
@@ -92,7 +92,7 @@ pub fn validate_reserved_name(
         }
         ReservedNameNamespace::Term => BuiltinConst::parse(name.as_str())
             .map(ReservedName::BuiltinConstant)
-            .or_else(|| BuiltinFnName::parse(name.as_str()).map(ReservedName::BuiltinFunction))
+            .or_else(|| BuiltinFn::parse(name.as_str()).map(ReservedName::BuiltinFunction))
             .or_else(|| {
                 matches!(
                     name.as_str(),
@@ -146,7 +146,7 @@ mod tests {
             let atom = NameAtom::parse(constant.as_str()).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Term, &atom).is_err());
         }
-        for function in BuiltinFnName::ALL {
+        for function in BuiltinFn::all() {
             let atom = NameAtom::parse(function.to_string()).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Term, &atom).is_err());
         }

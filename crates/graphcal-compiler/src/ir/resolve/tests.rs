@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtin::{BuiltinConst, BuiltinFnName};
+use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;
@@ -199,7 +199,7 @@ fn resolve_rejects_every_builtin_term_spelling_for_constructors() {
     for name in BuiltinConst::ALL
         .iter()
         .map(|name| name.as_str())
-        .chain(BuiltinFnName::ALL.iter().map(|name| name.as_str()))
+        .chain(BuiltinFn::all().map(BuiltinFn::as_str))
         .chain(contextual)
     {
         for declaration in [

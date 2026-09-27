@@ -25,7 +25,10 @@ use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinApplication, BuiltinConst, BuiltinFnName, ScaleFreeBuiltin};
+use crate::builtin::{
+    BuiltinApplication, BuiltinConst, BuiltinFn, ComplexFn, DatetimeConstructorFn, DatetimeFn,
+    ScaleFreeBuiltin,
+};
 use crate::dag_id::DagId;
 use crate::datetime_literal::{
     CivilDateTimeLiteral, DatetimeLiteralExpectation, OffsetDateTimeLiteral,
@@ -1158,7 +1161,7 @@ pub enum ConstRef {
 /// [`FunctionRef::Epoch`] only once its time-scale argument is lowered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnappliedFunctionRef {
-    Builtin(BuiltinFnName),
+    Builtin(BuiltinFn),
     /// An externally-provided function declared by an `import plugin` block.
     External(ExternFnRef),
 }
@@ -1194,10 +1197,10 @@ enum ResolvedCallable {
 impl FunctionRef {
     /// Return the built-in identity represented by this reference.
     #[must_use]
-    pub const fn builtin_name(&self) -> Option<BuiltinFnName> {
+    pub const fn builtin(&self) -> Option<BuiltinFn> {
         match self {
-            Self::Builtin(builtin) => Some(builtin.name()),
-            Self::Epoch { .. } => Some(BuiltinFnName::Epoch),
+            Self::Builtin(builtin) => Some(builtin.function()),
+            Self::Epoch { .. } => Some(BuiltinFn::EPOCH),
             Self::External(_) => None,
         }
     }
@@ -1420,11 +1423,28 @@ pub enum PatternBinding {
     },
 }
 
-/// Returns `true` when a custom type-inference rule, rather than the ordinary
-/// built-in signature registry, owns arity validation.
-const fn builtin_has_type_checker_arity(name: BuiltinFnName) -> bool {
-    name.linear_algebra().is_some() || name.aggregation().is_some()
+/// Arity that HIR lowering validates before lowering the arguments.
+///
+/// Scalar kernels, and the real overloads `abs`/`exp` that share their early
+/// check, are validated here. Every other built-in reports its arity from its
+/// type rule, after argument inference.
+const fn lowering_arity(function: BuiltinFn) -> Option<usize> {
+    match function {
+        BuiltinFn::Scalar(function) => Some(function.arity()),
+        BuiltinFn::Complex(function @ (ComplexFn::Absolute | ComplexFn::Exponential)) => {
+            Some(function.arity())
+        }
+        BuiltinFn::Complex(_)
+        | BuiltinFn::Aggregation(_)
+        | BuiltinFn::LinearAlgebra(_)
+        | BuiltinFn::Datetime(_)
+        | BuiltinFn::Conversion(_) => None,
+    }
 }
+
+/// `datetime(...)`, whose string arguments lower to datetime and timezone literals.
+const DATETIME: BuiltinFn =
+    BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Datetime));
 
 struct ExprLowerer<'a> {
     ctx: ExprLoweringContext<'a>,
@@ -2444,7 +2464,7 @@ impl<'a> ExprLowerer<'a> {
     ) -> Result<Vec<Expr>, ExprLowerError> {
         match (function_ref, args) {
             (FunctionRef::Builtin(builtin), [datetime, time_zone])
-                if builtin.name() == BuiltinFnName::Datetime =>
+                if builtin.function() == DATETIME =>
             {
                 self.lower_zoned_datetime_args(datetime, time_zone)
             }
@@ -2458,7 +2478,7 @@ impl<'a> ExprLowerer<'a> {
                             0,
                             1,
                             ast::ExprKind::StringLiteral(source),
-                        ) if builtin.name() == BuiltinFnName::Datetime => {
+                        ) if builtin.function() == DATETIME => {
                             Self::lower_offset_datetime_literal(source, arg.span)
                         }
                         (
@@ -2614,27 +2634,24 @@ impl<'a> ExprLowerer<'a> {
             })
     }
 
-    /// Validate a built-in call's argument count against the registry's
-    /// arity table. Custom built-ins and externs defer shape checks to their
-    /// typed rules.
+    /// Validate a built-in call's argument count when lowering owns the check
+    /// (see [`lowering_arity`]). Other built-ins and externs defer shape
+    /// checks to their typed rules.
     fn check_function_arity(
         function_ref: &FunctionRef,
         got: usize,
         span: Span,
     ) -> Result<(), ExprLowerError> {
-        let Some(builtin) = function_ref.builtin_name() else {
+        let Some(builtin) = function_ref.builtin() else {
             return Ok(());
         };
-        if builtin_has_type_checker_arity(builtin) {
-            return Ok(());
-        }
-        let Some(function) = crate::registry::builtins::builtin_functions().get(&builtin) else {
+        let Some(expected) = lowering_arity(builtin) else {
             return Ok(());
         };
-        if got != function.arity() {
+        if got != expected {
             return Err(ExprLowerError::WrongArity {
                 name: crate::syntax::function_name::FnName::expect_valid(builtin.as_str()),
-                expected: function.arity(),
+                expected,
                 got,
                 span,
             });
@@ -2661,7 +2678,7 @@ impl<'a> ExprLowerer<'a> {
         callee: &crate::syntax::ast::IdentPath,
     ) -> Result<UnappliedFunctionRef, ExprLowerError> {
         if let Some(ident) = callee.as_bare() {
-            return BuiltinFnName::parse(ident.name.as_str())
+            return BuiltinFn::parse(ident.name.as_str())
                 .map(UnappliedFunctionRef::Builtin)
                 .ok_or_else(|| ExprLowerError::UnknownFunction {
                     path: callee.display_path(),
@@ -3037,6 +3054,20 @@ mod tests {
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
         crate::syntax::desugar::desugar_multi_decls_in_file(raw)
+    }
+
+    #[test]
+    fn lowering_checks_arity_of_scalar_kernels_and_real_overloads_only() {
+        for function in BuiltinFn::all() {
+            let expected = match function {
+                BuiltinFn::Scalar(scalar) => Some(scalar.arity()),
+                BuiltinFn::Complex(ComplexFn::Absolute | ComplexFn::Exponential) => Some(1),
+                _ => None,
+            };
+            assert_eq!(lowering_arity(function), expected, "`{function}`");
+        }
+        assert_eq!(lowering_arity(BuiltinFn::parse("clamp").unwrap()), Some(3));
+        assert_eq!(lowering_arity(BuiltinFn::parse("complex").unwrap()), None);
     }
 
     #[test]

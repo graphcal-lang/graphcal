@@ -23,8 +23,7 @@ use graphcal_compiler::syntax::type_name::{
     ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
 };
 
-use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
-use graphcal_compiler::registry::builtins::builtin_functions;
+use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::registry::format::format_unit_terms_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{FormattingRegistry, IndexKind, UnitScale};
@@ -357,14 +356,14 @@ impl<'a> HirRefCollector<'a> {
                         Self::reference(
                             table,
                             callee.span,
-                            SymbolKey::BuiltinFunction(builtin.name()),
+                            SymbolKey::BuiltinFunction(builtin.function()),
                         );
                     }
                     hir::FunctionRef::Epoch { scale } => {
                         Self::reference(
                             table,
                             callee.span,
-                            SymbolKey::BuiltinFunction(BuiltinFnName::Epoch),
+                            SymbolKey::BuiltinFunction(BuiltinFn::EPOCH),
                         );
                         Self::reference(table, scale.span, SymbolKey::TimeScale(scale.value));
                     }
@@ -1544,29 +1543,16 @@ fn register_builtins(table: &mut SymbolTable) {
         );
     }
 
-    let registry_functions = builtin_functions();
-    for name in BuiltinFnName::ALL {
-        let spelling = name.as_str();
-        let detail = registry_functions.get(name).map_or_else(
-            || match (name.complex(), name.aggregation(), name.linear_algebra()) {
-                (Some(function), None, None) => {
-                    format!("builtin, arity {}", function.arity())
-                }
-                (None, Some(function), None) => {
-                    format!("builtin, arity {}", function.arity())
-                }
-                (None, None, Some(function)) => {
-                    format!("builtin, arity {}", function.arity())
-                }
-                _ => "builtin".to_string(),
-            },
-            |function| format!("builtin, arity {}", function.arity()),
+    for function in BuiltinFn::all() {
+        let detail = function.entry().documented_arity().map_or_else(
+            || "builtin".to_string(),
+            |arity| format!("builtin, arity {arity}"),
         );
         table.insert_definition(
-            SymbolKey::BuiltinFunction(*name),
+            SymbolKey::BuiltinFunction(function),
             DefinitionInfo {
                 doc: None,
-                name: spelling.to_string(),
+                name: function.as_str().to_string(),
                 category: SymbolCategory::BuiltinFn,
                 name_span: Span::new(0, 0),
                 decl_span: Span::new(0, 0),
@@ -2731,6 +2717,39 @@ mod tests {
         table
             .find_reference_at(offset)
             .and_then(|reference| table.resolve_local_target(&reference.target))
+    }
+
+    #[test]
+    fn builtin_function_details_show_documented_arities() {
+        let mut table = SymbolTable::default();
+        register_builtins(&mut table);
+        assert!(table.definition_conflicts().is_empty());
+        let detail = |name: &str| {
+            let key = definition_key(&table, SymbolCategory::BuiltinFn, name);
+            table.definitions.get(&key).unwrap().detail.clone()
+        };
+        for (name, expected) in [
+            ("sqrt", "builtin, arity 1"),
+            ("clamp", "builtin, arity 3"),
+            ("abs", "builtin, arity 1"),
+            ("polar", "builtin, arity 2"),
+            ("count", "builtin, arity 1"),
+            ("solve", "builtin, arity 2"),
+            ("datetime", "builtin"),
+            ("epoch", "builtin"),
+            ("to_utc", "builtin"),
+            ("coord", "builtin"),
+        ] {
+            assert_eq!(detail(name).as_deref(), Some(expected), "`{name}`");
+        }
+        assert_eq!(
+            table
+                .definitions
+                .iter()
+                .filter(|(key, _)| matches!(key, SymbolKey::BuiltinFunction(_)))
+                .count(),
+            BuiltinFn::all().count()
+        );
     }
 
     #[test]
