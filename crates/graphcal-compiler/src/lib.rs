@@ -27,6 +27,7 @@ pub mod node_definition;
 pub mod node_unavailable;
 pub mod plot_props;
 pub mod plot_shape;
+pub mod plot_visibility;
 pub mod plugin_identity;
 pub mod registry;
 pub(crate) mod source_line;

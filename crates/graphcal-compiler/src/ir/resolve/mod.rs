@@ -16,7 +16,7 @@ use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBind
 use super::static_interface::{Requirement, StaticInputKind as NominalKind};
 
 use crate::assertion_expectation::ExpectedFail;
-use crate::declaration_category::DeclCategory;
+use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,
 };
@@ -584,9 +584,9 @@ fn collect_local_declarations(
 
         // Track source order and assert names
         let category = match &decl.kind {
-            DeclKind::Param(_) => DeclCategory::Param,
-            DeclKind::ConstNode(_) => DeclCategory::Const,
-            DeclKind::Node(_) => DeclCategory::Node,
+            DeclKind::Param(_) => DeclCategory::Value(ValueDeclCategory::Param),
+            DeclKind::ConstNode(_) => DeclCategory::Value(ValueDeclCategory::Const),
+            DeclKind::Node(_) => DeclCategory::Value(ValueDeclCategory::Node),
             DeclKind::Assert(_) => {
                 assert_names.insert(name.clone());
                 DeclCategory::Assert

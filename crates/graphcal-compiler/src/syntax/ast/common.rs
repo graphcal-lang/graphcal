@@ -64,7 +64,7 @@ impl Visibility {
 }
 
 /// Visibility and bindability annotation for declaration kinds that support `pub(bind)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BindableVisibility {
     Private,
     Public,

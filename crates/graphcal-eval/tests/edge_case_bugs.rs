@@ -25,13 +25,12 @@ use proptest::prelude::*;
 
 /// Find the SI value of a named quantity declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
-    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
+    if let Some((_, val)) = result.consts().find(|(n, _)| n.to_string() == name) {
         return val.as_ref().unwrap().si_value().unwrap();
     }
     result
-        .params
-        .iter()
-        .chain(result.nodes.iter())
+        .params()
+        .chain(result.nodes())
         .find(|(n, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
@@ -44,7 +43,7 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
 /// Find the Int value of a named declaration.
 fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
@@ -60,7 +59,7 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
 /// Find a named entry as a Value.
 fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
@@ -73,7 +72,7 @@ fn find_entry(result: &EvalResult, name: &str) -> Value {
 /// Check if a named node has an error.
 fn has_node_error(result: &EvalResult, name: &str) -> bool {
     result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .is_some_and(|(_, r, _)| r.is_err())
@@ -82,7 +81,7 @@ fn has_node_error(result: &EvalResult, name: &str) -> bool {
 /// Get the node error message for a named node.
 fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
     result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .and_then(|(_, r, _)| match r {
@@ -691,7 +690,7 @@ node eq: Bool = @x == 0.3;
 "#;
     let result = compile_and_eval(source).unwrap();
     let val = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "eq")
         .unwrap()

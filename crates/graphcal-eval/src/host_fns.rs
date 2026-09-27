@@ -616,8 +616,7 @@ node bad_record: QuantityResult = test::non_finite_record();
             .unwrap();
         let outcome = |name: &str| {
             result
-                .nodes
-                .iter()
+                .nodes()
                 .find(|(candidate, _)| candidate.to_string() == name)
                 .unwrap_or_else(|| panic!("{name} node should exist"))
                 .1
@@ -677,8 +676,7 @@ node invalid_record: IntResult = test::fractional_record();
 
         for name in ["invalid_scalar", "invalid_record"] {
             let error = result
-                .nodes
-                .iter()
+                .nodes()
                 .find(|(candidate, _)| candidate.to_string() == name)
                 .unwrap_or_else(|| panic!("{name} node should exist"))
                 .1

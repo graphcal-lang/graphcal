@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::builtin::BuiltinFnName;
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
-use crate::hir::expr::{CheckedExpr, ConstRef, Expr, ExprKind, FunctionRef, visit_expr};
+use crate::hir::expr::{CheckedExpr, ConstRef, Expr, ExprKind, visit_expr};
 use crate::syntax::ast::UnaryOp;
 
 /// An input literal whose complete tree excludes value references and authored computations.
@@ -85,9 +85,8 @@ const fn validate_literal_node(expr: &Expr) -> Result<(), ClosedExpressionError>
         }
         ExprKind::FnCall { callee, .. }
             if matches!(
-                callee.value,
-                FunctionRef::Builtin(BuiltinFnName::Complex | BuiltinFnName::Datetime)
-                    | FunctionRef::Epoch { .. }
+                callee.value.builtin_name(),
+                Some(BuiltinFnName::Complex | BuiltinFnName::Datetime | BuiltinFnName::Epoch)
             ) =>
         {
             Ok(())

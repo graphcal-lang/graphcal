@@ -284,12 +284,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         .source_order
         .iter()
         .chain(ctx.imported_source_order.iter())
-        .filter(|(_, category)| {
-            matches!(
-                category,
-                DeclCategory::Const | DeclCategory::Param | DeclCategory::Node
-            )
-        })
+        .filter(|(_, category)| matches!(category, DeclCategory::Value(_)))
         .map(|(name, _)| name.clone())
         .chain(
             ctx.include_instances
@@ -857,8 +852,7 @@ fn resolve_projection_expected_fail(
             match parsed {
                 ExpectedFail::All => Ok(ExpectedFail::All),
                 ExpectedFail::Variants(keys) => keys
-                    .into_iter()
-                    .map(|key| {
+                    .try_map(|key| {
                         key.into_iter()
                             .map(|part| match part {
                                 ExpectedFailKeyPart::Named {
@@ -879,7 +873,6 @@ fn resolve_projection_expected_fail(
                             })
                             .collect::<Result<Vec<_>, CompileError>>()
                     })
-                    .collect::<Result<Vec<_>, CompileError>>()
                     .map(ExpectedFail::Variants),
             }
         })
@@ -910,9 +903,7 @@ fn semantic_value_bindings(
         .filter(|(_, category)| {
             matches!(
                 category,
-                graphcal_compiler::declaration_category::DeclCategory::Const
-                    | graphcal_compiler::declaration_category::DeclCategory::Param
-                    | graphcal_compiler::declaration_category::DeclCategory::Node
+                graphcal_compiler::declaration_category::DeclCategory::Value(_)
             )
         })
         .map(|(name, _)| {
@@ -1205,7 +1196,7 @@ fn semantic_plot_projections(
                 .map(|target| InstancePlotProjection {
                     target,
                     exposed_name: ScopedName::local(requested.alias.clone()),
-                    hidden: requested.hidden,
+                    visibility: requested.visibility,
                 })
                 .ok_or_else(|| {
                     CompileError::Eval(GraphcalError::internal_error(

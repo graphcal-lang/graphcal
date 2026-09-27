@@ -119,7 +119,7 @@ pub enum ExpressionOperation {
     Local(crate::hir::expr::LocalId),
     Binary(crate::syntax::ast::BinOp),
     Unary(crate::syntax::ast::UnaryOp),
-    BuiltinCall(crate::builtin::BuiltinFnName),
+    BuiltinCall(crate::builtin::ScaleFreeBuiltin),
     EpochCall(crate::registry::time_scale::TimeScale),
     HostCall(crate::plugin_identity::ExternFnKey),
     Conditional,

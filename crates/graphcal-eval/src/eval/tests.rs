@@ -21,14 +21,13 @@ fn scoped_name(name: &str) -> ScopedName {
 /// Find the SI value of a named quantity declaration.
 fn find_value(result: &EvalResult, name: &str) -> f64 {
     // Check consts first
-    if let Some((_, val)) = result.consts.iter().find(|(n, _)| n.to_string() == name) {
+    if let Some((_, val)) = result.consts().find(|(n, _)| n.to_string() == name) {
         return val.as_ref().unwrap().si_value().unwrap();
     }
     // Check params and nodes (wrapped in Result)
     result
-        .params
-        .iter()
-        .chain(result.nodes.iter())
+        .params()
+        .chain(result.nodes())
         .find(|(n, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
         .1
@@ -330,9 +329,8 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
     let result = prepared.evaluate(&row).unwrap();
     assert_quantity_value(&result, "measured", 1000.0);
     let (_, value) = result
-        .nodes
-        .iter()
-        .find(|(name, _)| *name == scoped_name("measured"))
+        .nodes()
+        .find(|(name, _)| **name == scoped_name("measured"))
         .unwrap();
     let Value::Quantity { display_unit, .. } = value.as_ref().unwrap() else {
         panic!("expected quantity");
@@ -2109,9 +2107,8 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
     assert_quantity_value(&result, "second_measurement", 2.0);
     for (name, expected_scale) in [("low", 1.0), ("high", 2.0)] {
         let value = result
-            .nodes
-            .iter()
-            .find(|(key, _)| key == &scoped_name(name))
+            .nodes()
+            .find(|(key, _)| *key == &scoped_name(name))
             .unwrap()
             .1
             .as_ref()
@@ -2612,8 +2609,7 @@ fn eval_complex_milestone() {
     let result = compile_and_eval(source).unwrap();
     let find = |name: &str| {
         result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(candidate, _)| candidate.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
@@ -2745,8 +2741,7 @@ fn explicit_for_compares_indexed_values_element_wise() {
     .unwrap();
     let node = |name: &str| {
         result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
@@ -2847,8 +2842,7 @@ fn inline_dag_call_with_failing_assert_fails_calling_node() {
     .unwrap();
     let node_result = |name: &str| {
         result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
@@ -2906,13 +2900,13 @@ fn inline_dag_call_respects_expected_fail() {
 
     let result = compile_and_eval(&source_template("3.0")).unwrap();
     assert!(
-        result.nodes[0].1.is_ok(),
+        result.nodes().next().unwrap().1.is_ok(),
         "expected failure occurred → no error: {:?}",
-        result.nodes[0].1
+        result.nodes().next().unwrap().1
     );
 
     let result = compile_and_eval(&source_template("-3.0")).unwrap();
-    match &result.nodes[0].1 {
+    match &result.nodes().next().unwrap().1 {
         Err(NodeUnavailable::EvalFailed { message }) => {
             assert!(
                 message.contains("assertion passed but was marked #[expected_fail]"),
@@ -3105,17 +3099,21 @@ fn eval_result_source_order() {
         "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;\nnode y: Dimensionless = @z * 2.0;",
     )
     .unwrap();
-    assert_eq!(result.params[0].0.to_string(), "b");
-    assert_eq!(result.params[1].0.to_string(), "a");
-    assert_eq!(result.nodes[0].0.to_string(), "z");
-    assert_eq!(result.nodes[1].0.to_string(), "y");
+    assert_eq!(result.params().next().unwrap().0.to_string(), "b");
+    assert_eq!(result.params().nth(1).unwrap().0.to_string(), "a");
+    assert_eq!(result.nodes().next().unwrap().0.to_string(), "z");
+    assert_eq!(result.nodes().nth(1).unwrap().0.to_string(), "y");
 }
 
 #[test]
 fn eval_result_all_field_source_order() {
     let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
     let result = compile_and_eval(source).unwrap();
-    let names: Vec<String> = result.all.iter().map(|(n, _, _)| n.to_string()).collect();
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|(n, _, _)| n.to_string())
+        .collect();
     assert_eq!(
         names,
         vec![
@@ -3128,9 +3126,18 @@ fn eval_result_all_field_source_order() {
             "delta_v"
         ]
     );
-    assert_eq!(result.all[0].2, DeclType::Param);
-    assert_eq!(result.all[3].2, DeclType::Const);
-    assert_eq!(result.all[4].2, DeclType::Node);
+    assert_eq!(
+        result.entries[0].2,
+        graphcal_compiler::declaration_category::ValueDeclCategory::Param
+    );
+    assert_eq!(
+        result.entries[3].2,
+        graphcal_compiler::declaration_category::ValueDeclCategory::Const
+    );
+    assert_eq!(
+        result.entries[4].2,
+        graphcal_compiler::declaration_category::ValueDeclCategory::Node
+    );
 }
 
 #[test]
@@ -3182,8 +3189,7 @@ fn eval_orbital_milestone() {
 
     // Check display units
     let speed_kmh = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "speed_kmh")
         .unwrap();
     let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
@@ -3240,7 +3246,7 @@ fn eval_generics_milestone() {
 /// Helper: find a named value and return it (for indexed value tests).
 fn find_entry(result: &EvalResult, name: &str) -> Value {
     result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
@@ -4263,7 +4269,7 @@ fn prepared_project_binds_coordinate_and_finite_keys() {
         )
         .unwrap();
     let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
-    assert!(result.params.iter().all(|(_, value)| value.is_ok()));
+    assert!(result.params().all(|(_, value)| value.is_ok()));
 }
 
 #[test]
@@ -4527,7 +4533,7 @@ fn required_param_with_override_succeeds() {
 fn assert_node_error(source: &str, node_name: &str, needle: &str) {
     let result = compile_and_eval(source).unwrap();
     let (_, node_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` not found"));
@@ -4613,8 +4619,7 @@ fn eval_error_does_not_block_independent_nodes() {
     // bad should have an error
     assert!(
         result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == "bad")
             .unwrap()
             .1
@@ -4634,8 +4639,7 @@ fn eval_error_propagates_to_dependents() {
     .unwrap();
     // bad fails with EvalFailed
     let bad_result = &result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "bad")
         .unwrap()
         .1;
@@ -4645,8 +4649,7 @@ fn eval_error_propagates_to_dependents() {
     ));
     // downstream fails with DependencyFailed
     let ds_result = &result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "downstream")
         .unwrap()
         .1;
@@ -4677,7 +4680,7 @@ fn eval_has_errors_false_when_all_ok() {
 /// Helper: find a named Int value.
 fn find_int_value(result: &EvalResult, name: &str) -> i64 {
     let val = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
@@ -4693,7 +4696,7 @@ fn find_int_value(result: &EvalResult, name: &str) -> i64 {
 /// Helper: find a named Bool value.
 fn find_bool_value(result: &EvalResult, name: &str) -> bool {
     let val = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == name)
         .unwrap_or_else(|| panic!("value `{name}` not found"))
@@ -5194,7 +5197,7 @@ fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
     assert!((find_value(&result, "combined") - 13.0).abs() < f64::EPSILON);
 
     let internal_input_owners = result
-        .all
+        .entries
         .iter()
         .filter(|(name, _, _)| name.member().as_str() == "input" && name.is_qualified())
         .map(|(name, _, _)| name.qualifier().to_vec())
@@ -5298,8 +5301,7 @@ fn project_import_preserves_structural_finite_index_identity() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let copied = result
-        .consts
-        .iter()
+        .consts()
         .find(|(name, _)| name.to_string() == "copied")
         .and_then(|(_, value)| value.as_ref().ok())
         .expect("copied imported finite-indexed value");
@@ -5695,8 +5697,7 @@ fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units
     let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
     assert!(
         result
-            .nodes
-            .iter()
+            .nodes()
             .any(|(name, value)| name.member().as_str() == "accepted"
                 && matches!(value, Ok(Value::Bool(true))))
     );
@@ -5888,8 +5889,7 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
 
     let owner_of_struct = |name: &str| {
         let value = result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
@@ -6086,8 +6086,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let a_ok = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "a_ok")
         .expect("node a_ok")
         .1
@@ -6097,8 +6096,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
         "a_ok should satisfy a::Item's constraint: {a_ok:?}"
     );
     let b_bad = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "b_bad")
         .expect("node b_bad")
         .1
@@ -6223,8 +6221,7 @@ param value: Matrix<2, 3> = Matrix<2, 3>(
 
     let result = compile_and_eval(source).unwrap();
     let value = result
-        .params
-        .iter()
+        .params()
         .find(|(name, _)| name.to_string() == "value")
         .expect("value param")
         .1
@@ -6369,8 +6366,7 @@ param y: Dimensionless[Fin(2)]
     let result = compile_and_eval(source).unwrap();
     for name in ["x", "y"] {
         let value = result
-            .params
-            .iter()
+            .params()
             .find(|(candidate, _)| candidate.to_string() == name)
             .and_then(|(_, value)| value.as_ref().ok())
             .expect("finite multi-decl param");
@@ -6824,8 +6820,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
 
     let owner_of_indexed = |name: &str| {
         let value = result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("node `{name}` not found"))
             .1
@@ -6860,8 +6855,7 @@ fn eval_unfold_uses_resolved_explicit_range_index_owner_with_same_leaf_indexes()
     let a_owner = loaded_file_dag_id(&project, "a.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let value = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "y")
         .expect("node y")
         .1
@@ -7039,7 +7033,7 @@ mod prop {
                 "param x: Dimensionless = {a:e};\nparam y: Dimensionless = {b:e};\nnode z: Dimensionless = @x / @y;"
             );
             let r = compile_and_eval(&source).unwrap();
-            let z_result = &r.all.iter()
+            let z_result = &r.entries.iter()
                 .find(|(n, _, _)| n.to_string() == "z")
                 .unwrap().1;
             match z_result {
@@ -8551,7 +8545,10 @@ fn eval_overrides_reject_included_implementation_params() {
     match result {
         Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
             name,
-            actual_kind: graphcal_compiler::declaration_category::DeclCategory::Node,
+            actual_kind:
+                graphcal_compiler::declaration_category::DeclCategory::Value(
+                    graphcal_compiler::declaration_category::ValueDeclCategory::Node,
+                ),
         })) => {
             assert!(name.as_str() == "a_shared" || name.as_str() == "b_shared");
         }
@@ -8631,8 +8628,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
     let result = compile_and_eval(source).unwrap();
     // distances is indexed, look it up by cell.
     let distances_entry = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "distances")
         .expect("distances node")
         .1
@@ -8677,8 +8673,7 @@ node effective: Length[Source, Region] = for s: Source, r: Region {
 ";
     let result = compile_and_eval(source).unwrap();
     let entry = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(n, _)| n.to_string() == "effective")
         .expect("effective node")
         .1
@@ -8843,8 +8838,7 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
 
     let indexed_owner = |name: &str| {
         let value = result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap_or_else(|| panic!("value `{name}` not found"))
             .1
@@ -8916,7 +8910,7 @@ param converted_bound: Datetime<TT>(
 
     for name in ["utc", "tt_at_min", "tt_at_max", "converted_bound"] {
         let (_, value, _) = result
-            .all
+            .entries
             .iter()
             .find(|(candidate, _, _)| candidate.to_string() == name)
             .unwrap_or_else(|| panic!("{name} not found"));
@@ -8946,7 +8940,7 @@ fn every_supported_datetime_scale_accepts_matching_domain_bounds() {
     for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
         let name = scale.to_string().to_ascii_lowercase();
         let (_, value, _) = result
-            .all
+            .entries
             .iter()
             .find(|(candidate, _, _)| candidate.to_string() == name)
             .unwrap_or_else(|| panic!("{name} not found"));
@@ -8970,7 +8964,7 @@ param schedule: Datetime(
     )
     .unwrap();
     let (_, schedule, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "schedule")
         .expect("schedule not found");
@@ -8998,7 +8992,7 @@ node BAD: EventSpec = EventSpec(at: epoch<TT>("2025-01-01T00:00:00"));
     )
     .unwrap();
     let (_, bad, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "BAD")
         .expect("BAD not found");
@@ -9047,7 +9041,7 @@ node BAD: Schedule = Schedule(events: {
     )
     .unwrap();
     let (_, bad, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "BAD")
         .expect("BAD not found");
@@ -9100,8 +9094,7 @@ fn struct_field_within_bounds_passes() {
     let source = include_str!("../../../../tests/fixtures/valid/domain_field_within_bounds.gcl");
     let result = compile_and_eval(source).unwrap();
     let (_, val) = result
-        .consts
-        .iter()
+        .consts()
         .find(|(n, _)| n.to_string() == "SAT")
         .expect("SAT not found");
     matches!(val.as_ref().unwrap(), Value::Struct { .. });
@@ -9136,7 +9129,7 @@ node SAT: Spec = Spec(mass: @x);
 ";
     let result = compile_and_eval(source).unwrap();
     let (_, sat_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "SAT")
         .expect("SAT not found");
@@ -9161,7 +9154,7 @@ node R: Result = Burn(dv: 50.0 km/s);
 ";
     let result = compile_and_eval(source).unwrap();
     let (_, r_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "R")
         .expect("R not found");
@@ -9200,7 +9193,7 @@ node bad: Length = Box<Length>(x: 0.1 m).x;
     )
     .unwrap();
     let (_, bad, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "bad")
         .expect("bad not found");
@@ -9220,7 +9213,7 @@ node good: Box<Length> = Box<Length>(x: 1.0 m);
     )
     .unwrap();
     let (_, good, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "good")
         .expect("good not found");
@@ -9252,7 +9245,7 @@ node good: T<2> = T<2>(x: 1);
     )
     .unwrap();
     let (_, good, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "good")
         .expect("good not found");
@@ -9273,14 +9266,14 @@ node bad_three: AtLeastCardinality<3> = AtLeastCardinality<3>(x: 2);
     .unwrap();
 
     let (_, two, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "two")
         .expect("two not found");
     assert!(two.is_ok(), "two failed: {two:?}");
 
     let (_, bad_three, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "bad_three")
         .expect("bad_three not found");
@@ -9302,7 +9295,7 @@ node good: T<2> = T<2>(x: 1);
     )
     .unwrap();
     let (_, good, _) = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "good")
         .expect("good not found");
@@ -9375,7 +9368,7 @@ include bumper(v: @speed)::{ out as doubled };
 ";
     let result = compile_and_eval(source).unwrap();
     let (_, v_result, _) = result
-        .all
+        .entries
         .iter()
         .find(|(n, _, _)| n.to_string() == "bumper::v")
         .expect("bumper::v not found");
@@ -9490,8 +9483,7 @@ fn public_value_equality_distinguishes_constructor_and_generic_args() {
     .unwrap();
     let node = |name: &str| {
         result
-            .nodes
-            .iter()
+            .nodes()
             .find(|(n, _)| n.to_string() == name)
             .unwrap()
             .1

@@ -121,17 +121,17 @@ fn compare_results(original: &EvalResult, permuted: &EvalResult) -> Result<(), S
     let mut diffs = String::new();
 
     // `all` subsumes consts/params/nodes and additionally carries each
-    // declaration's `DeclType`, so a value silently changing category is
+    // declaration's `ValueDeclCategory`, so a value silently changing category is
     // caught too.
     compare_keyed(
         &mut diffs,
         "declaration",
         original
-            .all
+            .entries
             .iter()
             .map(|(name, value, decl_type)| (name.to_string(), format!("{decl_type:?} {value:?}"))),
         permuted
-            .all
+            .entries
             .iter()
             .map(|(name, value, decl_type)| (name.to_string(), format!("{decl_type:?} {value:?}"))),
     );
@@ -139,9 +139,17 @@ fn compare_results(original: &EvalResult, permuted: &EvalResult) -> Result<(), S
     // Per-bucket counts, so a declaration moving between buckets is reported
     // even if `all` somehow agrees.
     for (bucket, orig_len, perm_len) in [
-        ("const", original.consts.len(), permuted.consts.len()),
-        ("param", original.params.len(), permuted.params.len()),
-        ("node", original.nodes.len(), permuted.nodes.len()),
+        (
+            "const",
+            original.consts().count(),
+            permuted.consts().count(),
+        ),
+        (
+            "param",
+            original.params().count(),
+            permuted.params().count(),
+        ),
+        ("node", original.nodes().count(), permuted.nodes().count()),
     ] {
         if orig_len != perm_len {
             let _ = writeln!(diffs, "  {bucket} count: {orig_len} vs {perm_len}");

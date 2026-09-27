@@ -99,7 +99,7 @@ pub struct InstanceAssertionProjection {
 pub struct InstancePlotProjection {
     pub target: ResolvedDeclName,
     pub exposed_name: ScopedName,
-    pub hidden: bool,
+    pub visibility: crate::plot_visibility::PlotVisibility,
 }
 
 /// One semantic include edge after importer-context value expressions are lowered.

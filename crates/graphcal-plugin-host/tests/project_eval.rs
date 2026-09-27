@@ -135,7 +135,7 @@ fn eval_project_with_plugin(
 
 fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
     result
-        .all
+        .entries
         .iter()
         .find(|(decl_name, _, _)| decl_name.to_string() == name)
         .unwrap_or_else(|| panic!("declaration `{name}` not found"))
@@ -459,7 +459,7 @@ node dependent: Dimensionless = @bad + 1.0;
         eval_project_with_plugin(dir.path(), source, Some(("plugins/inv.wasm", bytes))).unwrap();
 
     let bad = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "bad")
         .unwrap();
@@ -473,7 +473,7 @@ node dependent: Dimensionless = @bad + 1.0;
     assert!((good.si_value().unwrap() - 0.25).abs() < 1e-12);
 
     let dependent = result
-        .all
+        .entries
         .iter()
         .find(|(name, _, _)| name.to_string() == "dependent")
         .unwrap();

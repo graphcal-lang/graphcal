@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::builtin::{AggregationFn, BuiltinFnName};
+use crate::builtin::{AggregationFn, BuiltinFnName, ValueAggregation};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::expression_id::ExprId;
@@ -22,7 +22,8 @@ use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{FormattingRegistry, TypeGenericConstraint};
+use crate::registry::types::FormattingRegistry;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
@@ -1503,7 +1504,7 @@ fn infer_hir_fn_call(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
-        FunctionRef::Builtin(name) => (*name, None),
+        FunctionRef::Builtin(builtin) => (builtin.name(), None),
         FunctionRef::Epoch { scale } => (BuiltinFnName::Epoch, Some(scale.value)),
         FunctionRef::External(ext) => {
             return infer_extern_fn_call(
@@ -1571,10 +1572,10 @@ fn infer_hir_fn_call(
                     span: args[0].span.into(),
                 });
             }
-            if kind == AggregationFn::Count {
+            if kind == AggregationFn::Value(ValueAggregation::Count) {
                 return Ok(InferredType::Int);
             }
-            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
+            if matches!(kind, AggregationFn::Key(_)) {
                 // The extremum's identity: a key of the reduced axis. The
                 // element-type requirement below still applies, so check it
                 // before returning.
@@ -1604,7 +1605,9 @@ fn infer_hir_fn_call(
                     span: args[0].span.into(),
                 });
             };
-            if kind != AggregationFn::Product || dimension.is_dimensionless() {
+            if kind != AggregationFn::Value(ValueAggregation::Product)
+                || dimension.is_dimensionless()
+            {
                 return Ok(InferredType::Quantity(dimension));
             }
             let cardinality =
@@ -1874,7 +1877,7 @@ fn infer_extern_fn_call(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::function_signature::{ScalarValueKind, ValueKind};
+    use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
     use super::super::builtins::{check_quantity_param, eval_result_monomial};
 
@@ -1914,7 +1917,7 @@ fn infer_extern_fn_call(
             src,
         )?;
         match &param.kind {
-            ValueKind::Scalar(ScalarValueKind::Bool) => {
+            ParamKind::Scalar(ScalarValueKind::Bool) => {
                 if !matches!(arg_type, InferredType::Bool) {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Bool".to_string(),
@@ -1925,7 +1928,7 @@ fn infer_extern_fn_call(
                     });
                 }
             }
-            ValueKind::Scalar(ScalarValueKind::Int) => {
+            ParamKind::Scalar(ScalarValueKind::Int) => {
                 if arg_type != InferredType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
@@ -1936,7 +1939,7 @@ fn infer_extern_fn_call(
                     });
                 }
             }
-            ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
+            ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
                 let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
                 check_quantity_param(
                     &display_name,
@@ -1950,17 +1953,7 @@ fn infer_extern_fn_call(
                     arg.span,
                 )?;
             }
-            ValueKind::Struct(_) => {
-                // FunctionSignature::try_new rejects struct parameters.
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "extern function `{display_name}` carries a struct parameter past signature validation"
-                    ),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            }
-            ValueKind::Indexed { element, indexes } => {
+            ParamKind::Indexed { element, indexes } => {
                 let mut current = &arg_type;
                 let mut arg_indexes = Vec::with_capacity(indexes.len());
                 for _ in indexes {
@@ -2068,13 +2061,13 @@ fn infer_extern_fn_call(
     }
 
     match sig.result() {
-        ValueKind::Scalar(ScalarValueKind::Bool) => Ok(InferredType::Bool),
-        ValueKind::Scalar(ScalarValueKind::Int) => Ok(InferredType::Int),
-        ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(InferredType::Bool),
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(InferredType::Int),
+        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => {
             eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
                 .map(InferredType::Quantity)
         }
-        ValueKind::Indexed { element, indexes } => {
+        ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
             let leaf = match element {
                 ScalarValueKind::Quantity(monomial) => {
                     eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
@@ -2101,24 +2094,12 @@ fn infer_extern_fn_call(
                 })
             })
         }
-        ValueKind::Struct(_) => {
-            // The nominal identity lives on the entry (the shape in the
-            // signature is the manifest-facing contract); extern struct
-            // returns are non-generic records, so the argument list is empty.
-            let Some(result_struct) = &function.result_struct else {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "extern function `{display_name}` declares a struct result without a resolved record type"
-                    ),
-                    src: src.clone(),
-                    span: callee_span.into(),
-                });
-            };
-            Ok(InferredType::Struct(
-                StructTypeRef::from_resolved(result_struct.resolved.clone()),
-                Vec::new(),
-            ))
-        }
+        // Extern struct returns are non-generic records, so the argument
+        // list is empty.
+        ResultKind::Struct(result_struct) => Ok(InferredType::Struct(
+            StructTypeRef::from_resolved(result_struct.resolved.clone()),
+            Vec::new(),
+        )),
     }
 }
 
@@ -3445,13 +3426,13 @@ fn generic_substitution_prefix(
     let mut subs = GenericSubstitutions::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint() {
-            TypeGenericConstraint::Dim => match arg {
+            GenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
                     subs.dims.insert(param.name().clone(), dim.clone());
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Index => match arg {
+            GenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
                     subs.indexes.insert(param.name().clone(), index.clone());
                 }
@@ -3465,7 +3446,7 @@ fn generic_substitution_prefix(
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Nat => match arg {
+            GenericConstraint::Nat => match arg {
                 InferredGenericArg::Nat(form) if form.is_constant() => {
                     subs.nats.insert(param.name().clone(), form.constant());
                 }
@@ -3479,7 +3460,7 @@ fn generic_substitution_prefix(
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Type => match arg {
+            GenericConstraint::Type => match arg {
                 InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
                     subs.types.insert(param.name().clone(), type_expr.clone());
                 }
@@ -4176,10 +4157,10 @@ fn resolve_applied_generic_args(
         let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src)?;
         let matches_sort = matches!(
             (param.constraint(), &inferred),
-            (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))
-                | (TypeGenericConstraint::Index, InferredGenericArg::Index(_))
-                | (TypeGenericConstraint::Nat, InferredGenericArg::Nat(_))
-                | (TypeGenericConstraint::Type, InferredGenericArg::Type(_))
+            (GenericConstraint::Dim, InferredGenericArg::Dim(_))
+                | (GenericConstraint::Index, InferredGenericArg::Index(_))
+                | (GenericConstraint::Nat, InferredGenericArg::Nat(_))
+                | (GenericConstraint::Type, InferredGenericArg::Type(_))
         );
         if !matches_sort {
             return Err(generic_arg_internal_sort_error(param, src, arg.span()));

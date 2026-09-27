@@ -15,10 +15,10 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::error::GraphcalError;
 use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
 use crate::registry::type_def::{
-    StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind,
-    TypeGenericConstraint, TypeGenericParam,
+    StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind, TypeGenericParam,
 };
 use crate::registry::types::Registry;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{
@@ -117,7 +117,7 @@ pub enum NominalTypeKind {
 #[derive(Debug, Clone)]
 pub struct NominalGenericParam {
     id: GenericParamId,
-    constraint: TypeGenericConstraint,
+    constraint: GenericConstraint,
     default: Option<GenericArg>,
     span: Span,
 }
@@ -126,7 +126,7 @@ impl NominalGenericParam {
     #[must_use]
     pub(crate) const fn new(
         id: GenericParamId,
-        constraint: TypeGenericConstraint,
+        constraint: GenericConstraint,
         default: Option<GenericArg>,
         span: Span,
     ) -> Self {
@@ -150,7 +150,7 @@ impl NominalGenericParam {
     }
 
     #[must_use]
-    pub const fn constraint(&self) -> TypeGenericConstraint {
+    pub const fn constraint(&self) -> GenericConstraint {
         self.constraint
     }
 
@@ -492,7 +492,7 @@ fn lower_generic_params(
         ),
         |(mut lowered, mut scope), param| {
             ctx.cancellation.checkpoint()?;
-            let constraint = generic_constraint_for_hir(param.constraint);
+            let constraint = param.constraint;
             let id = super::GenericParamId::new(generic_owner.clone(), param.name.clone());
             let default = lower_generic_default(param, identity, &scope, ctx)?;
             lowered.push(NominalGenericParam::new(
@@ -552,7 +552,7 @@ fn lower_generic_default(
                 .with_prelude(&prelude);
             super::lower::lower_generic_arg_for_constraint(
                 default,
-                generic_constraint_for_hir(param.constraint),
+                param.constraint,
                 &param.name,
                 type_ctx,
             )
@@ -604,17 +604,6 @@ fn lower_nominal_field(
             span: field.type_ann().span,
         },
     ))
-}
-
-const fn generic_constraint_for_hir(
-    constraint: TypeGenericConstraint,
-) -> crate::syntax::ast::GenericConstraint {
-    match constraint {
-        TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
-        TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
-        TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
-        TypeGenericConstraint::Type => crate::syntax::ast::GenericConstraint::Type,
-    }
 }
 
 fn invariant_error(message: String, src: &NamedSource<Arc<String>>, span: Span) -> GraphcalError {

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::{
@@ -41,9 +42,7 @@ use super::model_schema::{
     ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
     ModelValueSchema, index_def_for_ref,
 };
-use super::output::{
-    apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
-};
+use super::output::{apply_include_debug_names, remap_include_debug_name};
 
 #[path = "binding_compile.rs"]
 mod binding_compile;
@@ -255,10 +254,7 @@ struct ImportedConstantOutput {
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     include_debug_names: IncludeDebugNameMap,
-    imported_source_order: Vec<(
-        ScopedName,
-        graphcal_compiler::declaration_category::DeclCategory,
-    )>,
+    imported_source_order: Vec<(ScopedName, DeclCategory)>,
     imported_values: HashMap<ScopedName, ImportedConstantOutput>,
 }
 
@@ -494,10 +490,7 @@ impl PreparedProject {
         apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
         let assertions = eval_result.assertions;
 
-        let mut consts = Vec::new();
-        let mut params = Vec::new();
-        let mut nodes = Vec::new();
-        let mut all = Vec::new();
+        let mut entries = Vec::new();
         let mut seen = HashSet::new();
 
         for (name, category) in &self.output_assembly.imported_source_order {
@@ -505,7 +498,7 @@ impl PreparedProject {
             if !seen.insert(name.clone()) {
                 continue;
             }
-            let Some(decl_type) = output_decl_type(*category) else {
+            let DeclCategory::Value(decl_type) = *category else {
                 continue;
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
@@ -535,26 +528,14 @@ impl PreparedProject {
                             detail,
                         }
                     }));
-                push_output_value(
-                    (name.clone(), Ok(value), decl_type),
-                    &mut consts,
-                    &mut params,
-                    &mut nodes,
-                    &mut all,
-                );
+                entries.push((name.clone(), Ok(value), decl_type));
             }
         }
 
-        consts.extend(eval_result.consts);
-        params.extend(eval_result.params);
-        nodes.extend(eval_result.nodes);
-        all.extend(eval_result.all);
+        entries.extend(eval_result.entries);
         Ok(EvalResult {
             unfinished_calls: eval_result.unfinished_calls,
-            consts,
-            params,
-            nodes,
-            all,
+            entries,
             output_surface: self.output_assembly.output_surface.clone(),
             assertions,
             plots: eval_result.plots,

@@ -19,6 +19,7 @@ use graphcal_compiler::ir::static_dependencies::{
 use graphcal_compiler::ir::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid, static_interface,
 };
+use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
@@ -408,16 +409,16 @@ fn include_surface_outputs(
     )
 }
 
-/// Validate an include/import item's attributes and return whether it carries
-/// `#[hidden]` (#847). Per-item attributes are intentionally limited:
+/// Validate an include/import item's attributes and return the plot visibility
+/// implied by `#[hidden]` (#847). Per-item attributes are intentionally limited:
 /// `#[hidden]` is plot-only, and `#[expected_fail]` is assertion-only.
 fn validate_include_item_attributes(
     import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
     is_plot: bool,
     is_assert: bool,
     file_src: &NamedSource<Arc<String>>,
-) -> Result<bool, CompileError> {
-    let mut hidden = false;
+) -> Result<PlotVisibility, CompileError> {
+    let mut visibility = PlotVisibility::Standalone;
     let producer = match (is_plot, is_assert) {
         (true, _) => Some(DeclarationKind::Plot),
         (false, true) => Some(DeclarationKind::Assert),
@@ -448,7 +449,7 @@ fn validate_include_item_attributes(
                         span: attr.span.into(),
                     }));
                 }
-                hidden = true;
+                visibility = PlotVisibility::CompositionOnly;
             }
             AttributeName::ExpectedFail => {}
             AttributeName::Assumes => {
@@ -466,7 +467,7 @@ fn validate_include_item_attributes(
             }
         }
     }
-    Ok(hidden)
+    Ok(visibility)
 }
 
 fn exported_bindings(
@@ -1144,7 +1145,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 if is_graph_value {
                     validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
                 }
-                let hidden =
+                let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     // The requested plot merges into the root namespace under
@@ -1153,7 +1154,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                         original,
                         graphcal_compiler::ir::lower::RequestedPlot {
                             alias: local.clone(),
-                            hidden,
+                            visibility,
                         },
                     );
                     ctx.imported_names
@@ -1437,14 +1438,14 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                 if is_graph_value {
                     validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
                 }
-                let hidden =
+                let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     requested_plots.insert(
                         original,
                         graphcal_compiler::ir::lower::RequestedPlot {
                             alias: local.clone(),
-                            hidden,
+                            visibility,
                         },
                     );
                     ctx.imported_names
@@ -1914,7 +1915,10 @@ fn import_selective_resolved_item(
     let scoped = ScopedName::local(local_name.clone());
     imported_names.const_names.push((scoped.clone(), span));
     if let Some(source_order) = imported_source_order {
-        source_order.push((scoped.clone(), DeclCategory::Const));
+        source_order.push((
+            scoped.clone(),
+            DeclCategory::Value(ValueDeclCategory::Const),
+        ));
     }
     insert_imported_binding(
         imported_bindings,
@@ -1950,7 +1954,10 @@ fn import_module_values_from_resolver(
             .const_names
             .push((scoped.clone(), import_span));
         if let Some(source_order) = imported_source_order.as_deref_mut() {
-            source_order.push((scoped.clone(), DeclCategory::Const));
+            source_order.push((
+                scoped.clone(),
+                DeclCategory::Value(ValueDeclCategory::Const),
+            ));
         }
         insert_imported_binding(
             imported_bindings,

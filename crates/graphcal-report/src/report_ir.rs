@@ -8,7 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use graphcal_eval::eval::{AssertResult, DeclType, EvalOutputView, EvalResult};
+use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_eval::eval::{AssertResult, EvalOutputView, EvalResult};
 use thiserror::Error;
 
 use crate::value_display::{ValueBody, project_value_body};
@@ -38,7 +39,7 @@ pub struct ReportDocument {
 /// One evaluated declaration card.
 pub struct ValueCard {
     pub name: String,
-    pub(crate) kind: DeclType,
+    pub(crate) kind: ValueDeclCategory,
     /// Caption from the declaration's `///` doc block.
     pub doc: Option<String>,
     pub(crate) body: CardBody,
@@ -175,8 +176,8 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
             body,
         };
         match kind {
-            DeclType::Param => params.push(card),
-            DeclType::Const | DeclType::Node => values.push(card),
+            ValueDeclCategory::Param => params.push(card),
+            ValueDeclCategory::Const | ValueDeclCategory::Node => values.push(card),
         }
     }
 

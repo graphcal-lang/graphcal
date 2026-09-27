@@ -29,10 +29,10 @@ pub use project::{
 
 pub use runtime::RuntimeEvaluation;
 pub use types::{
-    AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayProjectionError,
-    DisplayUnit, DisplayValueError, EvalOutputView, EvalResult, FigureSpec, LayerSpec,
-    MarkProperty, NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec, Value,
-    ValueError, datetime_literal, format_epoch_with_tz, quantity_display_value,
+    AssertResult, AxisMeta, CompileError, CompositionProperty, DisplayProjectionError, DisplayUnit,
+    DisplayValueError, EvalOutputView, EvalResult, FigureSpec, LayerSpec, MarkProperty,
+    NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec, Value, ValueError,
+    datetime_literal, format_epoch_with_tz, quantity_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

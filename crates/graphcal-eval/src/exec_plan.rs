@@ -98,8 +98,10 @@ pub fn combined_runtime_order_for(
                 .filter(|(_, category)| {
                     matches!(
                         category,
-                        graphcal_compiler::declaration_category::DeclCategory::Param
-                            | graphcal_compiler::declaration_category::DeclCategory::Node
+                        graphcal_compiler::declaration_category::DeclCategory::Value(
+                            graphcal_compiler::declaration_category::ValueDeclCategory::Param
+                                | graphcal_compiler::declaration_category::ValueDeclCategory::Node
+                        )
                     )
                 })
                 .map(|(name, _)| {
@@ -436,7 +438,7 @@ fn validate_execution_facts(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
-    use graphcal_compiler::declaration_category::DeclCategory;
+    use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 
     for dag in tir.dag_registry().values() {
         cancellation.checkpoint()?;
@@ -475,7 +477,12 @@ fn validate_execution_facts(
         let expected = dag
             .source_order()
             .iter()
-            .filter(|(_, category)| matches!(category, DeclCategory::Param | DeclCategory::Node))
+            .filter(|(_, category)| {
+                matches!(
+                    category,
+                    DeclCategory::Value(ValueDeclCategory::Param | ValueDeclCategory::Node)
+                )
+            })
             .map(|(name, _)| {
                 dag.require_bound_decl_identity(name, facts.source(), DiagnosticAnchor::WholeFile)
             })

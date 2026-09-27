@@ -21,7 +21,7 @@ use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure, PresentationInstance,
     PresentationInstanceMap,
 };
-use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::DeclaredType;
@@ -30,7 +30,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use super::display::attach_presentation;
 use super::public_projection::EvaluatedValue;
 use super::types::{
-    AssertResult, AxisMeta, DeclType, EvalResult, NodeUnavailable, PlotFieldValue, PlotSpec, Value,
+    AssertResult, AxisMeta, EvalResult, NodeUnavailable, PlotFieldValue, PlotSpec, Value,
 };
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
@@ -71,15 +71,11 @@ enum OutputExposure {
 #[derive(Default)]
 struct RuntimeResultValueAssembly {
     identities: HashMap<ScopedName, ResolvedDeclName>,
-    all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
-    output_surface: std::collections::HashSet<ScopedName>,
-}
-
-struct AssembledRuntimeResultValues {
-    consts: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    params: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    nodes: Vec<(ScopedName, Result<Value, NodeUnavailable>)>,
-    all: Vec<(ScopedName, Result<Value, NodeUnavailable>, DeclType)>,
+    entries: Vec<(
+        ScopedName,
+        Result<Value, NodeUnavailable>,
+        ValueDeclCategory,
+    )>,
     output_surface: std::collections::HashSet<ScopedName>,
 }
 
@@ -89,7 +85,7 @@ impl RuntimeResultValueAssembly {
         key: ResolvedDeclName,
         name: ScopedName,
         result: Result<Value, NodeUnavailable>,
-        decl_type: DeclType,
+        decl_type: ValueDeclCategory,
         exposure: OutputExposure,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
@@ -110,25 +106,8 @@ impl RuntimeResultValueAssembly {
             None => {}
         }
         self.identities.insert(name.clone(), key);
-        self.all.push((name, result, decl_type));
+        self.entries.push((name, result, decl_type));
         Ok(())
-    }
-
-    fn finish(self) -> AssembledRuntimeResultValues {
-        let category = |expected| {
-            self.all
-                .iter()
-                .filter(|(_, _, decl_type)| *decl_type == expected)
-                .map(|(name, result, _)| (name.clone(), result.clone()))
-                .collect()
-        };
-        AssembledRuntimeResultValues {
-            consts: category(DeclType::Const),
-            params: category(DeclType::Param),
-            nodes: category(DeclType::Node),
-            all: self.all,
-            output_surface: self.output_surface,
-        }
     }
 }
 
@@ -356,9 +335,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let mut result_values = RuntimeResultValueAssembly::default();
     for (name, category) in tir.root().source_order() {
         let decl_type = match category {
-            DeclCategory::Const => DeclType::Const,
-            DeclCategory::Param => DeclType::Param,
-            DeclCategory::Node => DeclType::Node,
+            DeclCategory::Value(decl_type) => *decl_type,
             DeclCategory::Assert
             | DeclCategory::Plot
             | DeclCategory::Figure
@@ -366,7 +343,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
         let key = local_key(name)?;
         let value = match decl_type {
-            DeclType::Const => plan.root.const_values.get(&key).map_or_else(
+            ValueDeclCategory::Const => plan.root.const_values.get(&key).map_or_else(
                 || {
                     Err(GraphcalError::internal_error(
                         format!("checked source-order constant `{key}` has no runtime value"),
@@ -376,7 +353,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 },
                 |runtime| make_value(name, runtime),
             )?,
-            DeclType::Param | DeclType::Node => make_result(name)?,
+            ValueDeclCategory::Param | ValueDeclCategory::Node => make_result(name)?,
         };
         result_values.insert(
             key,
@@ -437,9 +414,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .find_map(|(name, category)| {
                     (instance_dag.bound_decl_identity(name) == Some(&declaration)).then_some(
                         match category {
-                            DeclCategory::Const => Some(DeclType::Const),
-                            DeclCategory::Param => Some(DeclType::Param),
-                            DeclCategory::Node => Some(DeclType::Node),
+                            DeclCategory::Value(decl_type) => Some(*decl_type),
                             DeclCategory::Assert
                             | DeclCategory::Plot
                             | DeclCategory::Figure
@@ -485,9 +460,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         }
         for (name, category) in instance_dag.source_order() {
             let decl_type = match category {
-                DeclCategory::Const => DeclType::Const,
-                DeclCategory::Param => DeclType::Param,
-                DeclCategory::Node => DeclType::Node,
+                DeclCategory::Value(decl_type) => *decl_type,
                 DeclCategory::Assert
                 | DeclCategory::Plot
                 | DeclCategory::Figure
@@ -535,13 +508,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         }
     }
     cancellation.checkpoint()?;
-    let AssembledRuntimeResultValues {
-        consts,
-        params,
-        nodes,
-        all,
+    let RuntimeResultValueAssembly {
+        entries,
         output_surface,
-    } = result_values.finish();
+        identities: _,
+    } = result_values;
 
     let assertions = evaluate_assertions(tir, plan, src, &ctx, &values, &errors)?;
     cancellation.checkpoint()?;
@@ -618,7 +589,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             ) {
                 Ok(mut plot) => {
                     plot.name = projection.exposed_name.clone();
-                    plot.displayed = !projection.hidden;
+                    plot.visibility = projection.visibility;
                     plots.push(plot);
                 }
                 Err(PlotEvaluationError::Unavailable(reason)) => {
@@ -781,10 +752,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     );
     let result = EvalResult {
         unfinished_calls: unfinished_calls.into_inner().into_iter().collect(),
-        consts,
-        params,
-        nodes,
-        all,
+        entries,
         output_surface,
         assertions,
         plots,
@@ -1211,7 +1179,7 @@ fn evaluate_plot(
         presentation_diagnostics,
         mark_properties,
         properties,
-        displayed: entry.displayed,
+        visibility: entry.visibility,
     })
 }
 

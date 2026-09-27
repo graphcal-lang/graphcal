@@ -13,7 +13,8 @@ use miette::NamedSource;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::function_signature::{
-    DimMonomial, DimMonomialEvalError, FunctionSignature, ScalarValueKind, ValueKind,
+    DimMonomial, DimMonomialEvalError, FunctionSignature, ParamKind, ResultKind, ScalarValueKind,
+    StructResult,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
@@ -53,7 +54,7 @@ pub(super) fn infer_fn_dim(
     let mut bindings: HashMap<DimVarName, Dimension> = HashMap::new();
 
     for (param, arg) in sig.params().iter().zip(args) {
-        let ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
+        let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
             return Err(GraphcalError::internal_error(
                 format!(
                     "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
@@ -76,7 +77,8 @@ pub(super) fn infer_fn_dim(
         )?;
     }
 
-    let ValueKind::Scalar(ScalarValueKind::Quantity(result)) = sig.result() else {
+    let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) = sig.result()
+    else {
         return Err(GraphcalError::internal_error(
             format!(
                 "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
@@ -92,9 +94,9 @@ pub(super) fn infer_fn_dim(
 /// comparing dimension variables as required. Shared by built-in and extern
 /// call checking.
 #[expect(clippy::too_many_arguments, reason = "signature-walk context")]
-pub(super) fn check_quantity_param(
+pub(super) fn check_quantity_param<S: StructResult>(
     fn_name: &str,
-    sig: &FunctionSignature,
+    sig: &FunctionSignature<S>,
     param_name: &crate::syntax::function_name::FnParamName,
     monomial: &DimMonomial,
     arg_dim: &Dimension,
@@ -189,9 +191,12 @@ fn eval_monomial(
 
 /// Find the display name of the first parameter that binds `var` as a bare
 /// variable, for "must have the same dimension as `x`" diagnostics.
-fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Option<&'a str> {
+fn first_binding_param<'a, S: StructResult>(
+    sig: &'a FunctionSignature<S>,
+    var: &DimVarName,
+) -> Option<&'a str> {
     sig.params().iter().find_map(|p| match &p.kind {
-        ValueKind::Scalar(ScalarValueKind::Quantity(monomial))
+        ParamKind::Scalar(ScalarValueKind::Quantity(monomial))
             if monomial.as_bare_var() == Some(var) =>
         {
             Some(p.name.as_str())

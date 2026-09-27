@@ -41,7 +41,9 @@ use crate::workspace_revision::{
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
+use graphcal_compiler::function_signature::{
+    DimMonomial, FunctionSignature, ParamKind, ResultKind,
+};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -1706,9 +1708,7 @@ fn build_extern_fn_signatures(
     tir: &graphcal_compiler::tir::typed::TIR,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
-    use graphcal_compiler::function_signature::{
-        ScalarValueKind as ExternScalarValueKind, ValueKind as ExternValueKind,
-    };
+    use graphcal_compiler::function_signature::ScalarValueKind as ExternScalarValueKind;
 
     let mut sigs = HashMap::new();
     for function in tir.extern_functions().values() {
@@ -1739,9 +1739,9 @@ fn build_extern_fn_signatures(
             ExternScalarValueKind::Int => "Int".to_string(),
             ExternScalarValueKind::Quantity(monomial) => format_monomial(monomial),
         };
-        let format_kind = |kind: &ExternValueKind| match kind {
-            ExternValueKind::Scalar(scalar) => format_scalar(scalar),
-            ExternValueKind::Indexed { element, indexes } => {
+        let format_kind = |kind: &ParamKind| match kind {
+            ParamKind::Scalar(scalar) => format_scalar(scalar),
+            ParamKind::Indexed { element, indexes } => {
                 let indexes = indexes
                     .iter()
                     .map(ToString::to_string)
@@ -1749,11 +1749,12 @@ fn build_extern_fn_signatures(
                     .join(", ");
                 format!("{}[{indexes}]", format_scalar(element))
             }
-            ExternValueKind::Struct(_) => function
-                .result_struct
-                .as_ref()
-                .map_or_else(|| "{ … }".to_string(), |s| s.resolved.as_str().to_string()),
         };
+        let format_result =
+            |kind: &ResultKind<graphcal_compiler::ir::lower::ExternStructResult>| match kind {
+                ResultKind::Value(kind) => format_kind(kind),
+                ResultKind::Struct(result_struct) => result_struct.resolved.as_str().to_string(),
+            };
         let parameters: Vec<String> = function
             .signature
             .params()
@@ -1784,7 +1785,7 @@ fn build_extern_fn_signatures(
         let label = format!(
             "fn {qualified}{binders}({}) -> {}",
             parameters.join(", "),
-            format_kind(function.signature.result())
+            format_result(function.signature.result())
         );
         sigs.insert(qualified, FnSignatureInfo { label, parameters });
     }
@@ -1898,15 +1899,20 @@ fn builtin_signature_parts(
     let params: Vec<String> = sig
         .params()
         .iter()
-        .map(|p| Ok(format!("{}: {}", p.name, value_kind_display(&p.kind)?)))
+        .map(|p| Ok(format!("{}: {}", p.name, param_kind_display(&p.kind)?)))
         .collect::<std::result::Result<_, String>>()?;
 
-    let ret = value_kind_display(sig.result())?;
+    let ret = match sig.result() {
+        ResultKind::Value(kind) => param_kind_display(kind)?,
+        // Builtins never declare struct results; extern hovers render the
+        // nominal type through their own path above.
+        ResultKind::Struct(_) => return Err("struct results are extern-only".to_string()),
+    };
 
     Ok((params, ret))
 }
 
-fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
+fn param_kind_display(kind: &ParamKind) -> std::result::Result<String, String> {
     use graphcal_compiler::function_signature::ScalarValueKind;
 
     let scalar_display = |scalar: &ScalarValueKind| match scalar {
@@ -1915,8 +1921,8 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
         ScalarValueKind::Quantity(monomial) => monomial_display(monomial),
     };
     match kind {
-        ValueKind::Scalar(scalar) => scalar_display(scalar),
-        ValueKind::Indexed { element, indexes } => {
+        ParamKind::Scalar(scalar) => scalar_display(scalar),
+        ParamKind::Indexed { element, indexes } => {
             let indexes = indexes
                 .iter()
                 .map(ToString::to_string)
@@ -1924,9 +1930,6 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
                 .join(", ");
             Ok(format!("{}[{indexes}]", scalar_display(element)?))
         }
-        // Builtins never declare struct results; extern hovers render the
-        // nominal type through their own path above.
-        ValueKind::Struct(_) => Err("struct results are extern-only".to_string()),
     }
 }
 
@@ -1957,7 +1960,7 @@ fn format_eval_values(
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<ScopedName, String>, Cancelled> {
     let mut map = HashMap::new();
-    for (name, value_result, _decl_type) in &result.all {
+    for (name, value_result, _decl_type) in &result.entries {
         cancellation.checkpoint()?;
         let formatted = match value_result {
             Ok(value) => format_value_inline(value, &result.base_dim_symbols),
@@ -3144,9 +3147,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::dimension::Dimension;
-    use graphcal_compiler::function_signature::{
-        FunctionParam, ScalarValueKind, ValueKind as SignatureValueKind,
-    };
+    use graphcal_compiler::function_signature::{FunctionParam, ScalarValueKind};
     use graphcal_compiler::syntax::function_name::FnParamName;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVarName, IndexVariantName};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -3176,11 +3177,11 @@ mod tests {
             (ScalarValueKind::Bool, "Bool[I]"),
             (ScalarValueKind::Int, "Int[I]"),
         ] {
-            let kind = SignatureValueKind::Indexed {
+            let kind = ParamKind::Indexed {
                 element: element.clone(),
                 indexes: NonEmpty::singleton(index.clone()),
             };
-            assert_eq!(value_kind_display(&kind).unwrap(), expected);
+            assert_eq!(param_kind_display(&kind).unwrap(), expected);
             let signature = FunctionSignature::try_new(
                 Vec::new(),
                 vec![index.clone()],
@@ -3188,7 +3189,7 @@ mod tests {
                     name: FnParamName::expect_valid("values"),
                     kind: kind.clone(),
                 }],
-                kind,
+                kind.into(),
             )
             .unwrap();
             assert!(signature.format_with(|_| String::new()).contains(expected));

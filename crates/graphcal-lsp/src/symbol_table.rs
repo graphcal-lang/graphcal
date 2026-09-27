@@ -354,7 +354,11 @@ impl<'a> HirRefCollector<'a> {
             hir::ExprKind::FnCall { callee, args } => {
                 match &callee.value {
                     hir::FunctionRef::Builtin(builtin) => {
-                        Self::reference(table, callee.span, SymbolKey::BuiltinFunction(*builtin));
+                        Self::reference(
+                            table,
+                            callee.span,
+                            SymbolKey::BuiltinFunction(builtin.name()),
+                        );
                     }
                     hir::FunctionRef::Epoch { scale } => {
                         Self::reference(

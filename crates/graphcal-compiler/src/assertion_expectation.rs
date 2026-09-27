@@ -6,6 +6,7 @@
 use crate::dag_id::DagId;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 
 /// One axis segment in a per-variant assertion expectation.
@@ -111,7 +112,7 @@ pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedFail<I = IndexTypeRef> {
     All,
-    Variants(Vec<ExpectedFailKey<I>>),
+    Variants(NonEmpty<ExpectedFailKey<I>>),
 }
 
 #[cfg(test)]

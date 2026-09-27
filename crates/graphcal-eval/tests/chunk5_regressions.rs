@@ -9,8 +9,7 @@ use graphcal_io::RealFileSystem;
 
 fn assert_node_failed(result: &EvalResult, name: &str) {
     let value = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(candidate, _)| candidate.to_string() == name);
     let Some((_, value)) = value else {
         assert!(value.is_some(), "node `{name}` is missing");
@@ -182,7 +181,7 @@ plot p = { mark: point, encode: { x: 1.0e300 m -> tiny } };
     )
     .unwrap();
 
-    let value = result.nodes[0].1.as_ref().unwrap();
+    let value = result.nodes().next().unwrap().1.as_ref().unwrap();
     assert_eq!(value.si_value().unwrap().to_bits(), 1.0e300_f64.to_bits());
     assert!(matches!(
         value,
@@ -220,8 +219,7 @@ node average: Dimensionless = mean(@values);
     )
     .unwrap();
     let (_, average) = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "average")
         .unwrap();
     let average = average.as_ref().unwrap().si_value().unwrap();
@@ -367,8 +365,7 @@ node matrix_product: Dimensionless[Fin(216), Fin(216)] = matmul(@lhs, @rhs);
     .unwrap();
 
     let (_, matrix_product) = result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(name, _)| name.to_string() == "matrix_product")
         .unwrap();
     let error = matrix_product.as_ref().unwrap_err().to_string();
@@ -401,8 +398,7 @@ fn successful_node<'a>(
     name: &str,
 ) -> Result<&'a graphcal_eval::eval::Value, String> {
     result
-        .nodes
-        .iter()
+        .nodes()
         .find(|(candidate, _)| candidate.to_string() == name)
         .ok_or_else(|| format!("node `{name}` is missing"))?
         .1

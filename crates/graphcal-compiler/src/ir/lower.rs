@@ -19,6 +19,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
+use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
@@ -242,8 +243,8 @@ pub struct PlotEntry {
     /// Strictly lowered semantic body.
     pub body: LoweredPlotBody,
     /// Whether this plot renders standalone when its file is the entry
-    /// point. `true` unless the declaration carries `#[hidden]` (#847).
-    pub displayed: bool,
+    /// point; `#[hidden]` makes it composition-only (#847).
+    pub visibility: PlotVisibility,
 }
 
 /// A plot alias brought into this DAG by an include brace list (#847).
@@ -293,8 +294,8 @@ pub(super) struct UnfrozenDynamicUnitScaleEntry {
 pub struct RequestedPlot {
     /// The local alias the plot enters the root namespace under.
     pub alias: DeclName,
-    /// Whether the include item carried `#[hidden]` (composition-only).
-    pub hidden: bool,
+    /// Composition-only when the include item carried `#[hidden]`.
+    pub visibility: PlotVisibility,
 }
 
 /// A figure declaration with lowered fields.
@@ -326,7 +327,7 @@ pub struct UnfrozenPlotEntry {
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
     /// Whether this plot renders standalone (no `#[hidden]`).
-    pub(super) displayed: bool,
+    pub(super) visibility: PlotVisibility,
 }
 
 /// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -974,13 +975,17 @@ fn build_ir_from_resolved(
             .plots
             .into_iter()
             .map(|entry| {
-                let displayed = !resolved.hidden_plots.contains(entry.name.as_str());
+                let visibility = if resolved.hidden_plots.contains(entry.name.as_str()) {
+                    PlotVisibility::CompositionOnly
+                } else {
+                    PlotVisibility::Standalone
+                };
                 UnfrozenPlotEntry {
                     name: ScopedName::from(entry.name),
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
-                    displayed,
+                    visibility,
                 }
             })
             .collect(),
@@ -1320,6 +1325,31 @@ mod tests {
             err,
             GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Bar"
         ));
+    }
+
+    #[test]
+    fn extern_struct_results_merge_only_for_the_same_record_type() {
+        let declarations = |second_result: &str| {
+            format!(
+                "type Bounds {{ Bounds(lo: Length, hi: Length), }}\n\
+                 type Range {{ Range(lo: Length, hi: Length), }}\n\
+                 import plugin \"graphcal:demo\" as a {{ fn bounds(x: Length) -> Bounds; }}\n\
+                 import plugin \"graphcal:demo\" as b {{ fn bounds(y: Length) -> {second_result}; }}\n"
+            )
+        };
+
+        let merged = parse_and_lower(&declarations("Bounds")).unwrap();
+        assert_eq!(merged.extern_functions().len(), 1);
+
+        let err = parse_and_lower(&declarations("Range")).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                GraphcalError::InvalidExternSignature { message, .. }
+                    if message.contains("different result type")
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

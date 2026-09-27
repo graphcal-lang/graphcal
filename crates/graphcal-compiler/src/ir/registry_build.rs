@@ -1018,7 +1018,7 @@ fn register_type_decl(
         .iter()
         .map(|g| types::TypeGenericParam {
             name: g.name.value.clone(),
-            constraint: g.constraint.into(),
+            constraint: g.constraint,
             default: g.default.clone(),
             span: g.name.span,
         })

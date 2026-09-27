@@ -18,7 +18,7 @@ pub mod dot;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::declaration_category::DeclCategory;
+use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
 use thiserror::Error;
@@ -340,9 +340,9 @@ fn project_dag_nodes(
         .iter()
         .filter_map(|(name, category)| {
             let kind = match category {
-                DeclCategory::Const => GraphNodeKind::Const,
-                DeclCategory::Param => GraphNodeKind::Param,
-                DeclCategory::Node => GraphNodeKind::Node,
+                DeclCategory::Value(ValueDeclCategory::Const) => GraphNodeKind::Const,
+                DeclCategory::Value(ValueDeclCategory::Param) => GraphNodeKind::Param,
+                DeclCategory::Value(ValueDeclCategory::Node) => GraphNodeKind::Node,
                 DeclCategory::Assert
                 | DeclCategory::Plot
                 | DeclCategory::Figure

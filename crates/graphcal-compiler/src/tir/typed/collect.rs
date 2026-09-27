@@ -315,8 +315,7 @@ pub(super) fn resolve_expected_fail_keys(
                 ExpectedFail::All => ExpectedFail::All,
                 ExpectedFail::Variants(keys) => {
                     let resolved_keys = keys
-                        .into_iter()
-                        .map(|key| {
+                        .try_map(|key| {
                             key.into_iter()
                                 .map(|part| match part {
                                     crate::assertion_expectation::ExpectedFailKeyPart::Named {
@@ -349,8 +348,7 @@ pub(super) fn resolve_expected_fail_keys(
                                     ),
                                 })
                                 .collect::<Result<_, GraphcalError>>()
-                        })
-                        .collect::<Result<_, GraphcalError>>()?;
+                        })?;
                     ExpectedFail::Variants(resolved_keys)
                 }
             };

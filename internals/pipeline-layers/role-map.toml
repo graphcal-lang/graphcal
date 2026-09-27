@@ -402,6 +402,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["plot_visibility"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["registry"]
 role = "facade"
 

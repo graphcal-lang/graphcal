@@ -92,7 +92,7 @@ pub fn eval_result_to_diagnostics(
     let lines = LineIndex::new(source);
     // Node/param evaluation errors
     let mut diagnostics: Vec<Diagnostic> = result
-        .all
+        .entries
         .iter()
         .filter_map(|(name, r, _)| match r {
             Err(err) => {

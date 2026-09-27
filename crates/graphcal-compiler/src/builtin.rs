@@ -168,9 +168,59 @@ define_builtin_names! {
     }
 }
 
+/// How a built-in function name is applied at a call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinApplication {
+    /// A built-in callable without static generic arguments.
+    ScaleFree(ScaleFreeBuiltin),
+    /// `epoch<S>`, which requires a static time-scale argument.
+    Epoch,
+}
+
+impl BuiltinFnName {
+    /// Classify how this built-in is applied at a call site.
+    #[must_use]
+    pub const fn application(self) -> BuiltinApplication {
+        match self {
+            Self::Epoch => BuiltinApplication::Epoch,
+            name => BuiltinApplication::ScaleFree(ScaleFreeBuiltin(name)),
+        }
+    }
+}
+
+/// A built-in function other than `epoch<S>`.
+///
+/// Only [`BuiltinFnName::application`] constructs this, so a scale-free
+/// built-in reference can never stand for `epoch` without its time scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScaleFreeBuiltin(BuiltinFnName);
+
+impl ScaleFreeBuiltin {
+    /// Canonical built-in function identity.
+    #[must_use]
+    pub const fn name(self) -> BuiltinFnName {
+        self.0
+    }
+}
+
+impl std::fmt::Display for ScaleFreeBuiltin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 /// Built-in reductions over rank-one indexed collections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AggregationFn {
+    /// Reductions that produce a value from the collection's elements.
+    Value(ValueAggregation),
+    /// Reductions that produce a key of the reduced axis.
+    Key(KeyAggregation),
+}
+
+/// Built-in reductions that combine indexed elements into one value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueAggregation {
     Sum,
     Product,
     Minimum,
@@ -178,6 +228,11 @@ pub enum AggregationFn {
     Mean,
     RootSumSquare,
     Count,
+}
+
+/// Built-in reductions that select the key of an extremum element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyAggregation {
     Argmin,
     Argmax,
 }
@@ -185,30 +240,23 @@ pub enum AggregationFn {
 impl AggregationFn {
     /// Every aggregation, for routing and signature-display tests.
     pub const ALL: &'static [Self] = &[
-        Self::Sum,
-        Self::Product,
-        Self::Minimum,
-        Self::Maximum,
-        Self::Mean,
-        Self::RootSumSquare,
-        Self::Count,
-        Self::Argmin,
-        Self::Argmax,
+        Self::Value(ValueAggregation::Sum),
+        Self::Value(ValueAggregation::Product),
+        Self::Value(ValueAggregation::Minimum),
+        Self::Value(ValueAggregation::Maximum),
+        Self::Value(ValueAggregation::Mean),
+        Self::Value(ValueAggregation::RootSumSquare),
+        Self::Value(ValueAggregation::Count),
+        Self::Key(KeyAggregation::Argmin),
+        Self::Key(KeyAggregation::Argmax),
     ];
 
     /// Canonical built-in function identity.
     #[must_use]
     pub const fn builtin_name(self) -> BuiltinFnName {
         match self {
-            Self::Sum => BuiltinFnName::Sum,
-            Self::Product => BuiltinFnName::Product,
-            Self::Minimum => BuiltinFnName::Minimum,
-            Self::Maximum => BuiltinFnName::Maximum,
-            Self::Mean => BuiltinFnName::Mean,
-            Self::RootSumSquare => BuiltinFnName::Rss,
-            Self::Count => BuiltinFnName::Count,
-            Self::Argmin => BuiltinFnName::Argmin,
-            Self::Argmax => BuiltinFnName::Argmax,
+            Self::Value(function) => function.builtin_name(),
+            Self::Key(function) => function.builtin_name(),
         }
     }
 
@@ -222,15 +270,16 @@ impl AggregationFn {
     #[must_use]
     pub const fn parameter_labels(self) -> &'static [&'static str] {
         match self {
-            Self::Count => &["values: T[I]"],
-            Self::Sum
-            | Self::Product
-            | Self::Minimum
-            | Self::Maximum
-            | Self::Mean
-            | Self::RootSumSquare
-            | Self::Argmin
-            | Self::Argmax => &["values: D[I]"],
+            Self::Value(ValueAggregation::Count) => &["values: T[I]"],
+            Self::Value(
+                ValueAggregation::Sum
+                | ValueAggregation::Product
+                | ValueAggregation::Minimum
+                | ValueAggregation::Maximum
+                | ValueAggregation::Mean
+                | ValueAggregation::RootSumSquare,
+            )
+            | Self::Key(_) => &["values: D[I]"],
         }
     }
 
@@ -238,15 +287,56 @@ impl AggregationFn {
     #[must_use]
     pub const fn signature(self) -> &'static str {
         match self {
-            Self::Sum => "fn sum<D: Dim, I: Index>(values: D[I]) -> D",
-            Self::Product => "fn product<D: Dim, I: Index>(values: D[I]) -> D^|I|",
-            Self::Minimum => "fn minimum<D: Dim, I: Index>(values: D[I]) -> D",
-            Self::Maximum => "fn maximum<D: Dim, I: Index>(values: D[I]) -> D",
-            Self::Mean => "fn mean<D: Dim, I: Index>(values: D[I]) -> D",
-            Self::RootSumSquare => "fn rss<D: Dim, I: Index>(values: D[I]) -> D",
-            Self::Count => "fn count<T: Type, I: Index>(values: T[I]) -> Int",
-            Self::Argmin => "fn argmin<D: Dim, I: Index>(values: D[I]) -> Key<I>",
-            Self::Argmax => "fn argmax<D: Dim, I: Index>(values: D[I]) -> Key<I>",
+            Self::Value(ValueAggregation::Sum) => "fn sum<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Value(ValueAggregation::Product) => {
+                "fn product<D: Dim, I: Index>(values: D[I]) -> D^|I|"
+            }
+            Self::Value(ValueAggregation::Minimum) => {
+                "fn minimum<D: Dim, I: Index>(values: D[I]) -> D"
+            }
+            Self::Value(ValueAggregation::Maximum) => {
+                "fn maximum<D: Dim, I: Index>(values: D[I]) -> D"
+            }
+            Self::Value(ValueAggregation::Mean) => "fn mean<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Value(ValueAggregation::RootSumSquare) => {
+                "fn rss<D: Dim, I: Index>(values: D[I]) -> D"
+            }
+            Self::Value(ValueAggregation::Count) => {
+                "fn count<T: Type, I: Index>(values: T[I]) -> Int"
+            }
+            Self::Key(KeyAggregation::Argmin) => {
+                "fn argmin<D: Dim, I: Index>(values: D[I]) -> Key<I>"
+            }
+            Self::Key(KeyAggregation::Argmax) => {
+                "fn argmax<D: Dim, I: Index>(values: D[I]) -> Key<I>"
+            }
+        }
+    }
+}
+
+impl ValueAggregation {
+    /// Canonical built-in function identity.
+    #[must_use]
+    pub const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Sum => BuiltinFnName::Sum,
+            Self::Product => BuiltinFnName::Product,
+            Self::Minimum => BuiltinFnName::Minimum,
+            Self::Maximum => BuiltinFnName::Maximum,
+            Self::Mean => BuiltinFnName::Mean,
+            Self::RootSumSquare => BuiltinFnName::Rss,
+            Self::Count => BuiltinFnName::Count,
+        }
+    }
+}
+
+impl KeyAggregation {
+    /// Canonical built-in function identity.
+    #[must_use]
+    pub const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Argmin => BuiltinFnName::Argmin,
+            Self::Argmax => BuiltinFnName::Argmax,
         }
     }
 }
@@ -459,15 +549,15 @@ impl BuiltinFnName {
     #[must_use]
     pub const fn aggregation(self) -> Option<AggregationFn> {
         match self {
-            Self::Sum => Some(AggregationFn::Sum),
-            Self::Product => Some(AggregationFn::Product),
-            Self::Minimum => Some(AggregationFn::Minimum),
-            Self::Maximum => Some(AggregationFn::Maximum),
-            Self::Mean => Some(AggregationFn::Mean),
-            Self::Rss => Some(AggregationFn::RootSumSquare),
-            Self::Count => Some(AggregationFn::Count),
-            Self::Argmin => Some(AggregationFn::Argmin),
-            Self::Argmax => Some(AggregationFn::Argmax),
+            Self::Sum => Some(AggregationFn::Value(ValueAggregation::Sum)),
+            Self::Product => Some(AggregationFn::Value(ValueAggregation::Product)),
+            Self::Minimum => Some(AggregationFn::Value(ValueAggregation::Minimum)),
+            Self::Maximum => Some(AggregationFn::Value(ValueAggregation::Maximum)),
+            Self::Mean => Some(AggregationFn::Value(ValueAggregation::Mean)),
+            Self::Rss => Some(AggregationFn::Value(ValueAggregation::RootSumSquare)),
+            Self::Count => Some(AggregationFn::Value(ValueAggregation::Count)),
+            Self::Argmin => Some(AggregationFn::Key(KeyAggregation::Argmin)),
+            Self::Argmax => Some(AggregationFn::Key(KeyAggregation::Argmax)),
             _ => None,
         }
     }

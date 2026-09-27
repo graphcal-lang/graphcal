@@ -4,6 +4,7 @@ use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
 use crate::desugar::desugared_ast::AttributeArg;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::{ParsedExpectedFail, ParsedExpectedFailKey};
+use crate::syntax::non_empty::NonEmpty;
 use miette::NamedSource;
 
 /// Parse `#[expected_fail]` attribute arguments into an [`ExpectedFail`] value.
@@ -16,10 +17,6 @@ pub fn parse_expected_fail_args(
     args: &[AttributeArg],
     src: &NamedSource<Arc<String>>,
 ) -> Result<ParsedExpectedFail, GraphcalError> {
-    if args.is_empty() {
-        return Ok(ExpectedFail::All);
-    }
-
     let keys: Vec<ParsedExpectedFailKey> = args
         .iter()
         .map(|arg| match arg {
@@ -82,5 +79,5 @@ pub fn parse_expected_fail_args(
         })
         .collect::<Result<_, _>>()?;
 
-    Ok(ExpectedFail::Variants(keys))
+    Ok(NonEmpty::try_from_vec(keys).map_or(ExpectedFail::All, ExpectedFail::Variants))
 }

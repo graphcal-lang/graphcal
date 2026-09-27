@@ -9,7 +9,7 @@ use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
 use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::TypeGenericConstraint;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_resolve::ModuleResolveError;
@@ -745,18 +745,18 @@ fn resolve_hir_generic_arg_for_param(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedGenericArg, GraphcalError> {
     match (param.constraint(), arg) {
-        (TypeGenericConstraint::Dim, hir::GenericArg::Dim(dim)) => {
+        (GenericConstraint::Dim, hir::GenericArg::Dim(dim)) => {
             resolve_hir_dim_arg(dim, ctx).map(ResolvedGenericArg::Dim)
         }
-        (TypeGenericConstraint::Index, hir::GenericArg::Index(index)) => {
+        (GenericConstraint::Index, hir::GenericArg::Index(index)) => {
             resolve_hir_index_ref(index, ctx).map(ResolvedGenericArg::Index)
         }
-        (TypeGenericConstraint::Nat, hir::GenericArg::Nat(nat)) => Ok(ResolvedGenericArg::Nat(
+        (GenericConstraint::Nat, hir::GenericArg::Nat(nat)) => Ok(ResolvedGenericArg::Nat(
             normalize_hir_nat_expr(nat)
                 .map_err(|err| nat_overflow_error(err, ctx.src, nat.span()))?,
             nat.span(),
         )),
-        (TypeGenericConstraint::Type, hir::GenericArg::Type(type_expr)) => {
+        (GenericConstraint::Type, hir::GenericArg::Type(type_expr)) => {
             resolve_hir_type_expr_inner(type_expr, ctx).map(ResolvedGenericArg::Type)
         }
         _ => Err(internal_error(

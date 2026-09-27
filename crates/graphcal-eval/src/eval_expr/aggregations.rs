@@ -1,4 +1,4 @@
-use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
+use graphcal_compiler::builtin::{BuiltinFnName, KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -18,10 +18,6 @@ pub(super) enum AggregationError {
     /// Rank checking should prevent `count()` from seeing nested indexed entries.
     #[error("count() received a multi-axis Indexed value after rank-one type checking")]
     MultiAxisCount,
-    /// `argmin`/`argmax` construct axis keys and are routed through the
-    /// extremum-key evaluation, never through the value-only kernel.
-    #[error("{function}() must be evaluated through extremum-key routing")]
-    ExtremumRouting { function: BuiltinFnName },
     /// A runtime cardinality could not be represented by Graphcal's `Int` type.
     #[error("count() cardinality {count} cannot be represented as Int")]
     CountOutOfRange { count: usize },
@@ -39,17 +35,14 @@ impl AggregationError {
     pub(super) const fn is_internal_invariant(&self) -> bool {
         matches!(
             self,
-            Self::EmptyInput { .. }
-                | Self::MultiAxisCount
-                | Self::CountOutOfRange { .. }
-                | Self::ExtremumRouting { .. }
+            Self::EmptyInput { .. } | Self::MultiAxisCount | Self::CountOutOfRange { .. }
         )
     }
 }
 
 /// Evaluate an aggregation function over indexed entries.
 pub(super) fn aggregate_indexed_values(
-    kind: AggregationFn,
+    kind: ValueAggregation,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<RuntimeValue, AggregationError> {
     if entries.is_empty() {
@@ -59,18 +52,15 @@ pub(super) fn aggregate_indexed_values(
     }
 
     match kind {
-        AggregationFn::Sum => aggregate_sum(entries).and_then(runtime_quantity),
-        AggregationFn::Product => aggregate_product(entries).and_then(runtime_quantity),
-        AggregationFn::Minimum => aggregate_minimum(entries).and_then(runtime_quantity),
-        AggregationFn::Maximum => aggregate_maximum(entries).and_then(runtime_quantity),
-        AggregationFn::Mean => aggregate_mean(entries).and_then(runtime_quantity),
-        AggregationFn::RootSumSquare => {
+        ValueAggregation::Sum => aggregate_sum(entries).and_then(runtime_quantity),
+        ValueAggregation::Product => aggregate_product(entries).and_then(runtime_quantity),
+        ValueAggregation::Minimum => aggregate_minimum(entries).and_then(runtime_quantity),
+        ValueAggregation::Maximum => aggregate_maximum(entries).and_then(runtime_quantity),
+        ValueAggregation::Mean => aggregate_mean(entries).and_then(runtime_quantity),
+        ValueAggregation::RootSumSquare => {
             aggregate_root_sum_square(entries).and_then(runtime_quantity)
         }
-        AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Int),
-        AggregationFn::Argmin | AggregationFn::Argmax => Err(AggregationError::ExtremumRouting {
-            function: kind.builtin_name(),
-        }),
+        ValueAggregation::Count => aggregate_count(entries).map(RuntimeValue::Int),
     }
 }
 
@@ -88,7 +78,7 @@ fn runtime_quantity(value: f64) -> Result<RuntimeValue, AggregationError> {
 /// Entry key of the extremum element, resolving ties to the first entry in
 /// index order (entries iterate in canonical index order).
 pub(super) fn extremum_entry_key(
-    kind: AggregationFn,
+    kind: KeyAggregation,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<IndexEntryKey, AggregationError> {
     if entries.is_empty() {
@@ -97,21 +87,16 @@ pub(super) fn extremum_entry_key(
         });
     }
     let context = match kind {
-        AggregationFn::Argmin => "argmin element",
-        AggregationFn::Argmax => "argmax element",
-        _ => {
-            return Err(AggregationError::ExtremumRouting {
-                function: kind.builtin_name(),
-            });
-        }
+        KeyAggregation::Argmin => "argmin element",
+        KeyAggregation::Argmax => "argmax element",
     };
     let mut best: Option<(&IndexEntryKey, f64)> = None;
     for (key, value) in entries {
         let quantity = quantity_entry(value, context)?;
         let better = match (&best, kind) {
             (None, _) => true,
-            (Some((_, incumbent)), AggregationFn::Argmax) => quantity > *incumbent,
-            (Some((_, incumbent)), _) => quantity < *incumbent,
+            (Some((_, incumbent)), KeyAggregation::Argmax) => quantity > *incumbent,
+            (Some((_, incumbent)), KeyAggregation::Argmin) => quantity < *incumbent,
         };
         if better {
             best = Some((key, quantity));
@@ -222,13 +207,13 @@ mod tests {
     fn every_aggregation_rejects_empty_completed_indexed_values_as_internal() {
         let entries = IndexMap::new();
         for function in [
-            AggregationFn::Sum,
-            AggregationFn::Product,
-            AggregationFn::Minimum,
-            AggregationFn::Maximum,
-            AggregationFn::Mean,
-            AggregationFn::RootSumSquare,
-            AggregationFn::Count,
+            ValueAggregation::Sum,
+            ValueAggregation::Product,
+            ValueAggregation::Minimum,
+            ValueAggregation::Maximum,
+            ValueAggregation::Mean,
+            ValueAggregation::RootSumSquare,
+            ValueAggregation::Count,
         ] {
             let error = aggregate_indexed_values(function, &entries).unwrap_err();
             assert!(matches!(
@@ -253,11 +238,11 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            aggregate_indexed_values(AggregationFn::Product, &entries),
+            aggregate_indexed_values(ValueAggregation::Product, &entries),
             Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 12.0_f64.to_bits()
         ));
         assert!(matches!(
-            aggregate_indexed_values(AggregationFn::RootSumSquare, &entries),
+            aggregate_indexed_values(ValueAggregation::RootSumSquare, &entries),
             Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 5.0_f64.to_bits()
         ));
 
@@ -272,7 +257,7 @@ mod tests {
             ),
         ]);
         let RuntimeValue::Quantity(rss) =
-            aggregate_indexed_values(AggregationFn::RootSumSquare, &large).unwrap()
+            aggregate_indexed_values(ValueAggregation::RootSumSquare, &large).unwrap()
         else {
             panic!("rss must return a quantity");
         };
@@ -289,7 +274,7 @@ mod tests {
             ),
         ]);
         let RuntimeValue::Quantity(small_rss) =
-            aggregate_indexed_values(AggregationFn::RootSumSquare, &small).unwrap()
+            aggregate_indexed_values(ValueAggregation::RootSumSquare, &small).unwrap()
         else {
             panic!("rss must return a quantity");
         };
@@ -306,7 +291,7 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            aggregate_indexed_values(AggregationFn::Product, &overflowing_product),
+            aggregate_indexed_values(ValueAggregation::Product, &overflowing_product),
             Err(AggregationError::Quantity(
                 numeric::QuantityValidationError::InfiniteResult { .. }
             ))
@@ -326,7 +311,7 @@ mod tests {
             ),
         ]);
         let RuntimeValue::Quantity(mean) =
-            aggregate_indexed_values(AggregationFn::Mean, &entries).unwrap()
+            aggregate_indexed_values(ValueAggregation::Mean, &entries).unwrap()
         else {
             panic!("mean must return a quantity");
         };
@@ -340,7 +325,7 @@ mod tests {
             (IndexEntryKey::position(1), RuntimeValue::Bool(true)),
         ]);
         assert!(matches!(
-            aggregate_indexed_values(AggregationFn::Count, &entries),
+            aggregate_indexed_values(ValueAggregation::Count, &entries),
             Ok(RuntimeValue::Int(2))
         ));
     }
@@ -358,7 +343,7 @@ mod tests {
             )]),
         };
         let entries = IndexMap::from([(IndexEntryKey::position(0), inner)]);
-        let error = aggregate_indexed_values(AggregationFn::Count, &entries).unwrap_err();
+        let error = aggregate_indexed_values(ValueAggregation::Count, &entries).unwrap_err();
         assert!(matches!(&error, AggregationError::MultiAxisCount));
         assert!(error.is_internal_invariant());
     }

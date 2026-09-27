@@ -215,6 +215,17 @@ impl<T> NonEmpty<T> {
         }
     }
 
+    /// Fallibly map owned items while preserving non-emptiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by `f`.
+    pub fn try_map<U, E>(self, f: impl FnMut(T) -> Result<U, E>) -> Result<NonEmpty<U>, E> {
+        Ok(NonEmpty {
+            items: self.items.into_iter().map(f).collect::<Result<_, _>>()?,
+        })
+    }
+
     /// Fallibly map borrowed items while preserving non-emptiness.
     ///
     /// # Errors
