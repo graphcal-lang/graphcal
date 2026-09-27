@@ -1,3 +1,5 @@
+use graphcal_ast_derive::PhaseLift;
+
 use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
 };
@@ -12,7 +14,7 @@ use crate::syntax::module_name::{
     IncludeInstanceId, IncludeInstanceScope, ModuleAliasName, ScopedName,
 };
 use crate::syntax::names::NamePath;
-use crate::syntax::phase::{Phase, Raw};
+use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
@@ -164,7 +166,8 @@ impl<P: Phase> DeclKind<P> {
 ///
 /// The body must evaluate to `Bool`. No type annotation (it's always Bool).
 /// Assert declarations are leaf nodes — they are evaluated after the entire graph.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct AssertDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
@@ -172,7 +175,8 @@ pub struct AssertDecl<P: Phase = Raw> {
 }
 
 /// The body of an assert declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum AssertBody<P: Phase = Raw> {
     /// Plain boolean expression: `assert name = expr;`
     Expr(Expr<P>),
@@ -242,7 +246,8 @@ impl std::fmt::Display for EncodingChannel {
 }
 
 /// The mark specification in a plot declaration: `mark: point` or `mark: line { stroke_width: 2.0 }`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct MarkSpec<P: Phase = Raw> {
     pub mark_type: MarkType,
     pub(crate) mark_type_span: Span,
@@ -253,7 +258,8 @@ pub struct MarkSpec<P: Phase = Raw> {
 /// An encoding channel mapping in a plot declaration.
 ///
 /// Example: `x: for m: OpMode { @total_power[m] }`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct Encoding<P: Phase = Raw> {
     pub channel: EncodingChannel,
     pub(crate) channel_span: Span,
@@ -264,7 +270,8 @@ pub struct Encoding<P: Phase = Raw> {
 /// A named field in a plot or figure declaration body.
 ///
 /// Example: `title: "My Chart"`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct PlotField<P: Phase = Raw> {
     /// The field name (e.g., "title", "width", "height").
     pub name: Spanned<PlotPropertyName>,
@@ -277,7 +284,8 @@ pub struct PlotField<P: Phase = Raw> {
 ///
 /// Plots are leaf declarations that depend on params/nodes via `@`-references.
 /// They produce a plot specification, not a runtime `Value`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct PlotDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
@@ -290,7 +298,8 @@ pub struct PlotDecl<P: Phase = Raw> {
 ///
 /// Figures group multiple plot declarations into a single combined chart
 /// with subplots. Like plots, they are leaf declarations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct FigureDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
@@ -307,7 +316,8 @@ pub struct FigureDecl<P: Phase = Raw> {
 /// Unlike `figure` (which tiles plots side-by-side), `layer` overlays
 /// them on the same coordinate space. In Vega-Lite this maps to the
 /// `"layer"` composition operator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct LayerDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
@@ -347,7 +357,8 @@ pub struct ImportDecl {
 /// qualified (`fluids::density(...)`), mirroring module-import explicitness.
 /// The path string carries no filesystem semantics in Phase A; it identifies
 /// the plugin in the embedder's host function registry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct PluginImportDecl<P: Phase = Raw> {
     /// The verbatim plugin path string.
     pub path: Spanned<crate::syntax::plugin::PluginPath>,
@@ -359,7 +370,8 @@ pub struct PluginImportDecl<P: Phase = Raw> {
 
 /// One extern function signature inside an `import plugin` block:
 /// `fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I];`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct ExternFnDecl<P: Phase = Raw> {
     /// The function name.
     pub name: Spanned<crate::syntax::function_name::FnName>,
@@ -408,7 +420,8 @@ impl ExternGenericBinder {
 }
 
 /// One named parameter in an extern function signature: `p: Pressure`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct ExternFnParam<P: Phase = Raw> {
     /// The parameter name.
     pub name: Spanned<crate::syntax::function_name::FnParamName>,
@@ -423,7 +436,8 @@ pub struct ExternFnParam<P: Phase = Raw> {
 /// `include nasa.rocket.compute_thrust(args) as ct;` — explicit instance alias.
 /// `include nasa.rocket.compute_thrust(args)::{thrust};` — exposes selected
 /// outputs as nodes in the including DAG.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct IncludeDecl<P: Phase = Raw> {
     pub path: ModulePath,
     pub param_bindings: Vec<ParamBinding<P>>,
@@ -465,7 +479,8 @@ pub struct DagDecl<P: Phase = Raw> {
     /// Span covering the entire `dag name { ... }` block.
     pub span: Span,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct ParamDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
@@ -946,7 +961,8 @@ param b: Bool[I, J]
 }
 
 /// Shared shape for value declarations with an expression body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct ValueDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
@@ -955,11 +971,13 @@ pub struct ValueDecl<P: Phase = Raw> {
 }
 
 /// Runtime node declaration, with either a formula or an unfinished body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct NodeDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
+    #[phase_lift(map = map_formula)]
     pub definition:
         crate::node_definition::NodeDefinition<Expr<P>, crate::syntax::module_name::ScopedName>,
 }
@@ -1008,7 +1026,8 @@ impl UnitConstness {
 
 /// Unit declaration: `const unit km: Length = 1000 m;`, `unit EUR: Money = (@rate) USD;`,
 /// or `base unit bit: Information;`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
     pub constness: UnitConstness,
@@ -1021,7 +1040,8 @@ pub struct UnitDecl<P: Phase = Raw> {
 }
 
 /// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct UnitDef<P: Phase = Raw> {
     pub scale_expr: Expr<P>,
     pub unit_expr: UnitExpr,
@@ -1036,7 +1056,8 @@ pub struct UnitDef<P: Phase = Raw> {
 /// - Tagged union: `type Maneuver { Impulsive(delta_v: Velocity), Coast }`
 /// - Record-shaped type: `type Position { Position(x: Length, y: Length) }`,
 ///   a single-variant union whose constructor name matches the type name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct TypeDecl<P: Phase = Raw> {
     pub visibility: BindableVisibility,
     pub name: Spanned<StructTypeName>,
@@ -1045,7 +1066,8 @@ pub struct TypeDecl<P: Phase = Raw> {
 }
 
 /// Body of a `type` declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum TypeDeclBody<P: Phase = Raw> {
     /// Required type with no body: `type T;`.
     Required,
@@ -1059,7 +1081,8 @@ pub enum TypeDeclBody<P: Phase = Raw> {
 /// - Unit: `Coast` — `payload` is `None`.
 /// - Record payload: `Impulsive(delta_v: Velocity)` — `payload` is
 ///   `Some(vec![…])`. Constructor payloads use parentheses exclusively.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct UnionMember<P: Phase = Raw> {
     /// The constructor's name. Lives in the constructor namespace —
     /// distinct from the type namespace.
@@ -1070,14 +1093,16 @@ pub struct UnionMember<P: Phase = Raw> {
 }
 
 /// A field in a variant or struct type declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct FieldDecl<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
     pub type_ann: TypeExpr<P>,
 }
 
 /// The kind of an index declaration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum IndexDeclKind<P: Phase = Raw> {
     /// Named variants: `{ Departure, Correction, Insertion }`
     Named {
@@ -1117,7 +1142,8 @@ impl<P: Phase> IndexDeclKind<P> {
 
 /// Index declaration: `index Maneuver = { Departure, Correction, Insertion };`
 /// or `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct IndexDecl<P: Phase = Raw> {
     pub visibility: BindableVisibility,
     pub name: Spanned<IndexName>,
@@ -1125,7 +1151,8 @@ pub struct IndexDecl<P: Phase = Raw> {
 }
 
 /// A generic parameter: `D: Dim`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct GenericParam<P: Phase = Raw> {
     pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,

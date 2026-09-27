@@ -14,6 +14,7 @@ categories.workspace = true
 test-cancellation = []
 
 [dependencies]
+graphcal-ast-derive.workspace = true
 hifitime.workspace = true
 indexmap.workspace = true
 jiff = { workspace = true, features = ["tzdb-bundle-always"] }

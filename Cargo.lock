@@ -1905,9 +1905,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-ast-derive"
+version = "0.0.1-alpha.31"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "graphcal-compiler"
 version = "0.0.1-alpha.31"
 dependencies = [
+ "graphcal-ast-derive",
  "hifitime",
  "indexmap",
  "insta",

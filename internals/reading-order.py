@@ -39,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 READING_GUIDE = Path(__file__).resolve().parent / "codebase-reading-guide.md"
 CRATE_ORDER = [
+    "graphcal-ast-derive",
     "graphcal-compiler",
     "graphcal-io",
     "graphcal-package",
