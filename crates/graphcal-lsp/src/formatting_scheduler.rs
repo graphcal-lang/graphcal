@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken};
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::loader::LoaderArtifactByteLimits;
 use tokio::sync::Semaphore;
 use tower_lsp::lsp_types::TextEdit;
@@ -16,7 +17,7 @@ use crate::formatting::format_document_with_cancellation;
 const MAX_CONCURRENT_FORMATS: NonZeroUsize = NonZeroUsize::MIN;
 const FORMATTING_TIMEOUT: Duration = Duration::from_secs(10);
 
-type FormattingJobResult = Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>>;
+type FormattingJobResult = Result<Option<Vec<TextEdit>>, Outcome<Box<graphcal_fmt::FormatError>>>;
 
 #[derive(Debug, Clone, Copy)]
 struct FormattingPolicy {
@@ -124,10 +125,8 @@ impl FormattingScheduler {
             });
             match task.await {
                 Ok(Ok(edits)) => Ok(edits),
-                Ok(Err(error)) if matches!(*error, graphcal_fmt::FormatError::Cancelled(_)) => {
-                    Err(FormattingTaskError::Cancelled)
-                }
-                Ok(Err(error)) => Err(FormattingTaskError::Formatter(error)),
+                Ok(Err(Outcome::Cancelled)) => Err(FormattingTaskError::Cancelled),
+                Ok(Err(Outcome::Failed(error))) => Err(FormattingTaskError::Formatter(error)),
                 Err(error) => Err(FormattingTaskError::WorkerPanicked(error.to_string())),
             }
         };

@@ -11,9 +11,11 @@
 
 mod format;
 
-use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
+use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::syntax::ast::{File, FormatEquivalent};
-use graphcal_compiler::syntax::parser::{ParseError, ParseOperationError, Parser};
+use graphcal_compiler::syntax::comments::SourceMetadata;
+use graphcal_compiler::syntax::parser::{ParseError, Parser};
 
 /// Default line width for formatting.
 const LINE_WIDTH: usize = 100;
@@ -34,9 +36,6 @@ const DOC_STACK_SIZE: usize = 64 * 1024 * 1024;
 /// specifically instead of conflating them into a single "parse error".
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
-    /// Formatting was cooperatively cancelled by the embedding shell.
-    #[error(transparent)]
-    Cancelled(#[from] Cancelled),
     /// The source failed to parse.
     #[error(transparent)]
     Parse(#[from] ParseError),
@@ -74,7 +73,6 @@ pub enum FormatError {
 /// # Errors
 ///
 /// Returns [`FormatError::Parse`] if `source` cannot be parsed,
-/// [`FormatError::Cancelled`] if an embedding shell cancels the operation,
 /// [`FormatError::Render`] if rendering the formatted document fails,
 /// or [`FormatError::Utf8`] if the rendered bytes are not valid UTF-8.
 ///
@@ -83,70 +81,84 @@ pub enum FormatError {
 /// fails to parse, or [`FormatError::AstChanged`] if it parses into a different
 /// tree — both indicate a formatter bug, never invalid input.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
-    format_source_with_cancellation(source, &CancellationToken::unbounded())
+    let mut parser = Parser::new(source);
+    let file = parser.parse_file()?;
+    let metadata = parser.into_source_metadata();
+    let mut result = render_document(&file, source, &metadata)?;
+    strip_trailing_horizontal_whitespace(&mut result);
+    ensure_trailing_newline(&mut result);
+    let reparsed = Parser::new(&result)
+        .parse_file()
+        .map_err(FormatError::Reparse)?;
+    ensure_ast_preserved(&file, &reparsed)?;
+    Ok(result)
 }
 
 /// Format source while observing cooperative cancellation between each major
 /// parse, document, render, normalization, and verification phase.
 ///
 /// A cancelled operation never returns partially formatted text.
+///
+/// # Errors
+///
+/// Returns [`Outcome::Cancelled`] if an embedding shell cancels the operation,
+/// and otherwise [`Outcome::Failed`] with the same [`FormatError`]s as
+/// [`format_source`].
 pub fn format_source_with_cancellation(
     source: &str,
     cancellation: &CancellationToken,
-) -> Result<String, FormatError> {
+) -> Result<String, Outcome<FormatError>> {
     cancellation.checkpoint()?;
     let mut parser = Parser::new(source);
-    let file = match parser.parse_file_with_cancellation(cancellation) {
-        Ok(file) => file,
-        Err(ParseOperationError::Cancelled(error)) => return Err(error.into()),
-        Err(ParseOperationError::Parse(error)) => return Err(error.into()),
-    };
+    let file = parser
+        .parse_file_with_cancellation(cancellation)
+        .map_err(|outcome| outcome.map_failed(FormatError::Parse))?;
     let metadata = parser.into_source_metadata();
     cancellation.checkpoint()?;
+    let mut result = render_document(&file, source, &metadata).map_err(Outcome::Failed)?;
+    cancellation.checkpoint()?;
+    strip_trailing_horizontal_whitespace(&mut result);
+    cancellation.checkpoint()?;
+    ensure_trailing_newline(&mut result);
+    let reparsed = Parser::new(&result)
+        .parse_file_with_cancellation(cancellation)
+        .map_err(|outcome| outcome.map_failed(FormatError::Reparse))?;
+    ensure_ast_preserved(&file, &reparsed).map_err(Outcome::Failed)?;
+    Ok(result)
+}
 
+/// Build, render, and decode the pretty-print document for `file`.
+fn render_document(
+    file: &File,
+    source: &str,
+    metadata: &SourceMetadata,
+) -> Result<String, FormatError> {
     // Build, render, AND drop the document inside the grown segment: the
     // drop is the deepest recursion (see `DOC_STACK_SIZE`).
     let output = stacker::grow(DOC_STACK_SIZE, || -> Result<Vec<u8>, std::io::Error> {
-        let doc = format::format_file(&file, source, &metadata);
+        let doc = format::format_file(file, source, metadata);
         let mut output = Vec::new();
         doc.render(LINE_WIDTH, &mut output)?;
         Ok(output)
     })?;
-    cancellation.checkpoint()?;
-    let mut result = String::from_utf8(output)?;
+    Ok(String::from_utf8(output)?)
+}
 
-    strip_trailing_horizontal_whitespace(&mut result);
-    cancellation.checkpoint()?;
-
-    // Ensure trailing newline
+fn ensure_trailing_newline(result: &mut String) {
     if !result.ends_with('\n') {
         result.push('\n');
     }
-
-    verify_ast_preserved(&file, &result, cancellation)?;
-
-    Ok(result)
 }
 
 /// Confirm that formatting changed only layout, not the program.
 ///
-/// Re-parses the formatted output and checks it yields the same AST as the
-/// input, ignoring source spans (see
+/// Compares the re-parsed formatted output with the input AST, ignoring
+/// source spans (see
 /// [`FormatEquivalent`](graphcal_compiler::syntax::ast::FormatEquivalent)).
 /// Any divergence is a formatter bug, reported as a [`FormatError`] rather than
 /// silently returning text whose meaning may differ from the source.
-fn verify_ast_preserved(
-    original: &File,
-    formatted: &str,
-    cancellation: &CancellationToken,
-) -> Result<(), FormatError> {
-    let mut parser = Parser::new(formatted);
-    let reparsed = match parser.parse_file_with_cancellation(cancellation) {
-        Ok(file) => file,
-        Err(ParseOperationError::Cancelled(error)) => return Err(error.into()),
-        Err(ParseOperationError::Parse(error)) => return Err(FormatError::Reparse(error)),
-    };
-    if original.format_equivalent(&reparsed) {
+fn ensure_ast_preserved(original: &File, reparsed: &File) -> Result<(), FormatError> {
+    if original.format_equivalent(reparsed) {
         Ok(())
     } else {
         Err(FormatError::AstChanged)
@@ -180,7 +192,7 @@ mod tests {
 
         assert!(matches!(
             format_source_with_cancellation("node x: Dimensionless = 1.0;\n", &source.token()),
-            Err(FormatError::Cancelled(_))
+            Err(Outcome::Cancelled)
         ));
     }
 }
