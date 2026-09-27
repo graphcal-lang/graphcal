@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+use graphcal_ast_derive::PhaseLift;
+
 use crate::dimension::Rational;
 use crate::exact_rational::ExactRational;
 use crate::syntax::ast::common::{Ident, ModulePath};
@@ -10,7 +12,7 @@ use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
-use crate::syntax::phase::{Phase, Raw};
+use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::ContextualKeyword;
 use crate::syntax::type_name::{ConstructorName, FieldName};
@@ -287,7 +289,8 @@ pub enum InputBindingCategory {
 }
 
 /// One categorized input binding in an `include` or direct DAG invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct ParamBinding<P: Phase = Raw> {
     pub category: InputBindingCategory,
     /// Target name in the invoked DAG's selected namespace.
@@ -317,7 +320,8 @@ impl std::fmt::Display for DomainBoundKind {
 /// A domain constraint bound on a type expression: `min: expr` or `max: expr`.
 ///
 /// Used in `Type(min: 100 kg, max: 2000 kg)` to declare valid value ranges.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct DomainBound<P: Phase = Raw> {
     /// The bound kind (`min` or `max`).
     pub kind: DomainBoundKind,
@@ -393,7 +397,8 @@ impl IndexExpr {
 /// E.g., `Length`, `Dimensionless`, `Length^3 / Time^2`
 ///
 /// Optionally carries domain constraints: `Mass(min: 100 kg, max: 2000 kg)`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct TypeExpr<P: Phase = Raw> {
     pub kind: TypeExprKind<P>,
     /// Optional domain constraints on the type.
@@ -420,7 +425,8 @@ impl<P: Phase> TypeExpr<P> {
 }
 
 /// The kind of a type expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum TypeExprKind<P: Phase = Raw> {
     /// `Dimensionless`
     Dimensionless,
@@ -434,7 +440,10 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// scale. Kept separate from [`Self::TypeApplication`] so downstream
     /// resolution dispatches on the variant rather than string-matching the
     /// built-in name.
-    DatetimeApplication { type_args: NonEmpty<TypeExpr<P>> },
+    DatetimeApplication {
+        #[phase_lift(map)]
+        type_args: NonEmpty<TypeExpr<P>>,
+    },
     /// `Complex<D>` — built-in complex quantity type parameterized by a dimension.
     ///
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
@@ -469,6 +478,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// parameter constraints are known.
     TypeApplication {
         name: Spanned<NamePath>,
+        #[phase_lift(map)]
         generic_args: NonEmpty<GenericArg<P>>,
     },
 }
@@ -715,7 +725,8 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum ExprKind<P: Phase = Raw> {
     /// Numeric literal: `1200.0`, `3.98e5`, `200_000.0`
     Number(f64),
@@ -791,6 +802,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Index access: `@delta_v[m]`, `@delta_v[Maneuver#Departure]`, `@P[a, b]`
     IndexAccess {
         expr: Box<Expr<P>>,
+        #[phase_lift(map)]
         args: NonEmpty<IndexArg<P>>,
     },
     /// Scan: `scan(source, init, |acc, item| body)`
@@ -864,7 +876,10 @@ pub enum ExprKind<P: Phase = Raw> {
     /// In [`Raw`], this is [`crate::syntax::ast::RawExprSugar`] and carries
     /// surface forms like `TableLiteral` that are eliminated by the desugar
     /// pass. In `Desugared`, the payload is [`core::convert::Infallible`] —
-    /// the variant is statically unreachable.
+    /// the variant is statically unreachable. Lifting to `Desugared` lowers
+    /// the payload through `From<RawExprSugar> for ExprKind<Desugared>`
+    /// (see [`crate::desugar::convert`]).
+    #[phase_lift(from_payload)]
     Sugar(P::ExprSugar),
 }
 
@@ -1030,7 +1045,8 @@ pub struct MapEntryKey {
 ///
 /// Single-axis: `Maneuver#Departure: 2.46 km/s` (keys has 1 element)
 /// Multi-axis:  `(Phase#Launch, Maneuver#Departure): 2.46 km/s` (keys has 2+ elements)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct MapEntry<P: Phase = Raw> {
     pub keys: NonEmpty<MapEntryKey>,
     pub value: Expr<P>,
@@ -1257,7 +1273,8 @@ impl std::fmt::Display for AmbiguousGenericArg {
 /// Arguments that are syntactically unambiguous retain their source category.
 /// Bare names and name-only products use [`Self::Ambiguous`] until HIR lowering
 /// can resolve them against the declaration's generic-parameter sort.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum GenericArg<P: Phase = Raw> {
     /// An unambiguously type-shaped expression, such as `D[I]` or `D / Time`.
     Type(TypeExpr<P>),
@@ -1283,7 +1300,8 @@ impl<P: Phase> GenericArg<P> {
 }
 
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub enum IndexArg<P: Phase = Raw> {
     /// Qualified variant: `Maneuver#Departure` or `module::Maneuver#Departure`
     Variant {
@@ -1297,14 +1315,16 @@ pub enum IndexArg<P: Phase = Raw> {
 }
 
 /// A field initializer in a constructor call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct FieldInit<P: Phase = Raw> {
     pub name: Spanned<FieldName>,
     pub value: Expr<P>,
 }
 
 /// One arm of a `match` expression: `Impulsive(delta_v: dv) => expr`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PhaseLift)]
+#[phase_lift(from = Raw, to = Desugared)]
 pub struct MatchArm<P: Phase = Raw> {
     pub pattern: MatchPattern,
     pub body: Expr<P>,
