@@ -14,7 +14,7 @@ runs:
         version=$(cargo metadata --locked --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
         echo "version=$version" >> "$GITHUB_OUTPUT"
 
-    - uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
+    - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
       with:
         tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
 
