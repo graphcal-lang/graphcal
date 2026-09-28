@@ -3282,7 +3282,11 @@ impl ModuleResolver {
                 // source DAG declarations, and therefore carry no visibility.
                 return Ok(());
             };
-            let Some(symbol) = parent_symbols.decls.get(child.name()) else {
+            let Some(symbol) = child
+                .leaf()
+                .spelling()
+                .and_then(|name| parent_symbols.decls.get(name))
+            else {
                 // Synthetic include namespaces have a semantic parent but no
                 // source `dag` declaration on that edge.
                 return Ok(());
@@ -3294,7 +3298,7 @@ impl ModuleResolver {
                 return Err(ModuleResolveError::PrivateName {
                     owner: parent,
                     namespace: "dag",
-                    name: child.name().to_string(),
+                    name: child.leaf().to_string(),
                 });
             }
             child = parent;
@@ -4649,7 +4653,7 @@ mod tests {
     fn selective_include_rejects_dag_projection_at_selector() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
-        let instance_id = main_id.instance_child("projection");
+        let instance_id = main_id.named_instance_child("projection");
         let lib = desugared_source("pub dag child { pub node output: Dimensionless = 1.0; }");
         let main = desugared_source("include lib()::{ child };");
         let (include_path, include_kind) = first_include(&main);
@@ -4684,7 +4688,7 @@ mod tests {
     fn selective_include_constructor_keeps_source_canonical_identity() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
-        let instance_id = main_id.instance_child("projection");
+        let instance_id = main_id.named_instance_child("projection");
         let lib = desugared_source("pub type Choice { Pick }");
         let main = desugared_source("include lib()::{ Pick as Selected };");
         let include = main
@@ -4724,7 +4728,7 @@ mod tests {
     fn selective_include_rejects_constructor_when_owner_type_is_rebound() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
-        let instance_id = main_id.instance_child("projection");
+        let instance_id = main_id.named_instance_child("projection");
         let lib = desugared_source("pub(bind) type Choice { Pick }");
         let main = desugared_source(
             "type Replacement { Replacement }
@@ -5114,7 +5118,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "app");
         let defaults_id =
             DagId::from_relative_path("test", std::path::Path::new("app/defaults.gcl")).unwrap();
-        let instance_id = main_id.instance_child("configured");
+        let instance_id = main_id.named_instance_child("configured");
         let defaults = desugared_source("pub node result: Dimensionless = 1.0;");
         let main = desugared_source("include app.defaults() as configured;");
         let (include_path, include_kind) = first_include(&main);

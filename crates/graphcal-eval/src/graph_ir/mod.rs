@@ -556,8 +556,14 @@ node tripled_result: Velocity = @tripled::result;
             .collect();
 
         assert_eq!(instance_clusters.len(), 2);
-        assert_eq!(instance_clusters[0].dag_id.name(), "doubled");
-        assert_eq!(instance_clusters[1].dag_id.name(), "tripled");
+        assert_eq!(
+            instance_clusters[0].dag_id.leaf().spelling(),
+            Some("doubled")
+        );
+        assert_eq!(
+            instance_clusters[1].dag_id.leaf().spelling(),
+            Some("tripled")
+        );
         assert!(instance_clusters.iter().all(|cluster| {
             matches!(
                 &cluster.kind,

@@ -16,7 +16,7 @@ use crate::registry::types::{self, Registry};
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::names::{NameAtom, NamespacePath};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
@@ -173,31 +173,44 @@ impl UnfrozenIR {
     }
 
     /// Expose public runtime units through one semantic instance namespace.
+    ///
+    /// Only a source-visible alias makes `alias.unit` spellable; an anonymous
+    /// selective include exposes its units solely through projection aliases
+    /// (see [`Self::add_dynamic_unit_projection_alias`]).
     pub fn add_semantic_dynamic_unit_bindings<'a>(
         &mut self,
         units: impl IntoIterator<Item = &'a UnitName>,
-        prefix: &ModuleAliasName,
+        scope: &ScopeSegment,
         instance_owner: &crate::dag_id::DagId,
     ) {
+        let Some(alias) = scope.alias() else {
+            return;
+        };
         self.unit_bindings.extend(units.into_iter().map(|unit| {
             (
-                UnitRef::qualified(NamespacePath::root(prefix.atom().clone()), unit.clone()),
+                UnitRef::qualified(NamespacePath::root(alias.atom().clone()), unit.clone()),
                 ResolvedUnitName::from_def(instance_owner.clone(), unit.clone()),
             )
         }));
     }
 
-    /// Add a local alias for a dynamic unit already exposed under an include prefix.
+    /// Add a local alias for a dynamic unit exposed by a recorded semantic
+    /// instance. Units the instance does not expose are ignored.
     pub fn add_dynamic_unit_projection_alias(
         &mut self,
-        prefix: &ModuleAliasName,
+        instance_owner: &crate::dag_id::DagId,
         source: &UnitName,
         alias: UnitName,
     ) {
-        let prefixed =
-            UnitRef::qualified(NamespacePath::root(prefix.atom().clone()), source.clone());
-        if let Some(target) = self.unit_bindings.get(&prefixed).cloned() {
-            self.unit_bindings.insert(UnitRef::local(alias), target);
+        let exposes_unit = self.semantic_instances.iter().any(|record| {
+            record.instance.id.owner() == instance_owner
+                && record.runtime_unit_names.contains(source)
+        });
+        if exposes_unit {
+            self.unit_bindings.insert(
+                UnitRef::local(alias),
+                ResolvedUnitName::from_def(instance_owner.clone(), source.clone()),
+            );
         }
     }
 
@@ -282,7 +295,7 @@ impl UnfrozenIR {
             decl_bindings.insert(name.clone(), canonical);
         }
         for record in &self.semantic_instances {
-            let scope = ModuleAliasName::expect_valid(record.instance.id.owner().name());
+            let scope = ScopeSegment::from_nested_dag_segment(record.instance.id.owner().leaf());
             for target in record.instance.bindings.value_ports.values() {
                 let name = ScopedName::qualified(scope.clone(), target.to_unowned_def_name());
                 if decl_bindings.insert(name.clone(), target.clone()).is_some() {

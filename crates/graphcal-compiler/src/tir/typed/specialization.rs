@@ -620,7 +620,7 @@ fn rebase_nested_instance(
     let template_nested_owner = nested.instance.id.owner().clone();
     let nested_owner = match template_nested_owner.rebase_descendant(template_owner, owner) {
         DescendantRebase::Rebased(rebased) => rebased,
-        DescendantRebase::OutsideSubtree => owner.instance_child(template_nested_owner.name()),
+        DescendantRebase::OutsideSubtree => owner.instance_child_like(template_nested_owner.leaf()),
     };
     runtime_owner_rebases.insert(template_nested_owner, nested_owner.clone());
     compose_index_targets(

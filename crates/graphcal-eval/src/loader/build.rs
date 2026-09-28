@@ -812,7 +812,7 @@ mod tests {
             .root()
             .inline_dags
             .iter()
-            .find(|dag| dag.dag_id.name() == "b")
+            .find(|dag| dag.dag_id.leaf().spelling() == Some("b"))
             .unwrap();
         assert!(
             b.resolved_imports

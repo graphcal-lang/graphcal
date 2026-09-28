@@ -14,11 +14,9 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
-use graphcal_compiler::syntax::phase::Phase;
 use graphcal_compiler::syntax::plugin::PluginPath;
 #[cfg(test)]
 use graphcal_io::hash_source_tree;
@@ -1507,8 +1505,6 @@ fn add_include_instance_modules(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let instance_scope = include_instance_scope(include);
-        let prefix = instance_scope.merge_scope_name();
         let Some(target) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
@@ -1517,7 +1513,7 @@ fn add_include_instance_modules(
         let Some(target_decls) = module_declarations(target.target(), project) else {
             continue;
         };
-        let instance = owner.instance_child(prefix.as_str());
+        let instance = include.instance_scope().instance_of(owner);
         resolver.add_module(instance.clone(), target_decls)?;
         add_nested_include_instance_modules(resolver, target.target(), &instance, project)?;
     }
@@ -1541,13 +1537,12 @@ fn inherit_include_instance_scopes(
         let DeclKind::Include(include) = &declaration.kind else {
             continue;
         };
-        let instance_scope = include_instance_scope(include);
         let Some(source) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
             continue;
         };
-        let instance = owner.instance_child(instance_scope.merge_scope_name().as_str());
+        let instance = include.instance_scope().instance_of(owner);
         resolver.inherit_module_scope(source.target(), &instance)?;
         inherit_nested_include_instance_scopes(resolver, source.target(), &instance, project)?;
     }
@@ -1571,11 +1566,10 @@ fn nested_include_instances(
                 let DeclKind::Include(include) = &declaration.kind else {
                     return None;
                 };
-                let instance_scope = include_instance_scope(include);
                 let source = resolved_module_target_from(source, &include.path, project)?;
                 Some(NestedIncludeInstance {
                     source,
-                    instance: instance.instance_child(instance_scope.merge_scope_name().as_str()),
+                    instance: include.instance_scope().instance_of(instance),
                 })
             })
             .collect()
@@ -1647,10 +1641,6 @@ fn resolved_module_target_from(
     Some(resolved.target().clone())
 }
 
-fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> IncludeInstanceScope {
-    include.instance_scope()
-}
-
 fn module_declarations<'a>(
     target: &DagId,
     project: &'a LoadedProject,
@@ -1685,9 +1675,7 @@ fn register_module_imports(
                     .map(|target| target.target().clone())
                     .or_else(|| resolver.resolve_module_path(owner, &include.path).ok());
                 if resolved_edge.is_some() {
-                    let instance_scope = include_instance_scope(include);
-                    let prefix = instance_scope.merge_scope_name();
-                    let target = owner.instance_child(prefix.as_str());
+                    let target = include.instance_scope().instance_of(owner);
                     resolver.register_include(owner, &include.path, &include.kind, &target)?;
                 }
                 resolver.apply_include_static_projection_bindings(
@@ -3323,7 +3311,7 @@ dag calc {
         let loaded_dag = root_file
             .inline_dags
             .iter()
-            .find(|dag| dag.dag_id.name() == "calc")
+            .find(|dag| dag.dag_id.leaf().spelling() == Some("calc"))
             .expect("inline DAG should be lifted");
 
         assert!(

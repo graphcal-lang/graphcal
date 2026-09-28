@@ -1,6 +1,6 @@
 //! Presentation-only assembly for evaluated project outputs.
 
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
 
 use crate::eval::types::EvalResult;
 use crate::project_compiler::IncludeDebugNameMap;
@@ -9,14 +9,14 @@ pub(super) fn remap_include_debug_name(
     name: &ScopedName,
     aliases: &IncludeDebugNameMap,
 ) -> ScopedName {
-    let Some((first, rest)) = name.qualifier().split_first() else {
+    let Some((ScopeSegment::IncludeInstance(first), rest)) = name.qualifier().split_first() else {
         return name.clone();
     };
     let Some(display) = aliases.get(first) else {
         return name.clone();
     };
     ScopedName::qualified_path(
-        std::iter::once(display.clone()).chain(rest.iter().cloned()),
+        std::iter::once(ScopeSegment::Named(display.clone())).chain(rest.iter().cloned()),
         name.member().clone(),
     )
 }

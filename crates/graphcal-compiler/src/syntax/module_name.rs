@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::dag_id::{DagId, DagSegment, IncludeInstanceId};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::{NameAtom, NameAtomError, NameDef, NameNamespace, NamePath};
-use crate::syntax::span::Span;
 
 /// Module alias namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -18,56 +18,122 @@ impl NameNamespace for ModuleAliasNameNamespace {
 /// `"constants"`, `"std"`).
 pub type ModuleAliasName = NameDef<ModuleAliasNameNamespace>;
 
-/// Opaque owner-local identity of a selective include instance.
+/// One qualifier segment of a [`ScopedName`], and the namespace assigned to
+/// one included DAG instance.
 ///
-/// A selective include introduces declaration aliases but no source-visible
-/// module alias. Compiler lowering still needs a private namespace for the
-/// included implementation, so its source occurrence is represented directly
-/// instead of overloading the target module's leaf name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IncludeInstanceId {
-    source_offset: usize,
-}
-
-impl IncludeInstanceId {
-    /// Identify the include occurrence at `path_span` within its owning DAG.
-    #[must_use]
-    pub const fn at(path_span: Span) -> Self {
-        Self {
-            source_offset: path_span.offset(),
-        }
-    }
-
-    /// Render this opaque identity into the flat IR's qualifier namespace.
-    ///
-    /// `NameAtom` intentionally permits generated resolver names beyond the
-    /// source identifier grammar. The angle-bracket spelling cannot collide
-    /// with a source module alias and is never parsed to recover the offset;
-    /// [`IncludeInstanceId`] remains the authoritative representation.
-    #[must_use]
-    pub fn synthetic_scope_name(self) -> ModuleAliasName {
-        ModuleAliasName::expect_valid(format!("<include@{}>", self.source_offset))
-    }
-}
-
-/// Namespace assigned to one included DAG instance.
-///
-/// Module-form includes use a source-visible alias. Selective includes use an
-/// opaque private identity because their brace form introduces no module alias.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum IncludeInstanceScope {
+/// Source-visible qualifiers (import aliases, module-form include aliases, and
+/// inline DAG names) are [`Self::Named`]. A selective include introduces no
+/// module alias, so its private namespace is the opaque
+/// [`Self::IncludeInstance`] identity; it can never be spelled in source.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum ScopeSegment {
+    /// A source-visible module alias.
     Named(ModuleAliasName),
-    Anonymous(IncludeInstanceId),
+    /// The private namespace of an anonymous selective include instance.
+    IncludeInstance(IncludeInstanceId),
 }
 
-impl IncludeInstanceScope {
-    /// Name used at the boundary to the compiler's flat merged IR.
+impl ScopeSegment {
+    /// The source-visible alias, or `None` for an anonymous include instance.
     #[must_use]
-    pub fn merge_scope_name(&self) -> ModuleAliasName {
+    pub const fn alias(&self) -> Option<&ModuleAliasName> {
         match self {
-            Self::Named(alias) => alias.clone(),
-            Self::Anonymous(id) => id.synthetic_scope_name(),
+            Self::Named(alias) => Some(alias),
+            Self::IncludeInstance(_) => None,
         }
+    }
+
+    /// The concrete include instance this namespace denotes under `owner`.
+    #[must_use]
+    pub fn instance_of(&self, owner: &DagId) -> DagId {
+        match self {
+            Self::Named(alias) => owner.named_instance_child(alias.as_str()),
+            Self::IncludeInstance(id) => owner.include_instance_child(*id),
+        }
+    }
+
+    /// Qualifier segment that names a [`DagSegment`] below some owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NameAtomError`] when a spelled segment is not a valid name
+    /// atom (only file-path components can be).
+    pub fn try_from_dag_segment(segment: &DagSegment) -> Result<Self, NameAtomError> {
+        match segment {
+            DagSegment::SourceModule(name) | DagSegment::NamedInstance(name) => {
+                ModuleAliasName::try_new(name.as_ref()).map(Self::Named)
+            }
+            DagSegment::IncludeInstance(id) => Ok(Self::IncludeInstance(*id)),
+        }
+    }
+
+    /// Qualifier segment for a DAG segment below a file root, whose spelled
+    /// segments are inline DAG names or include aliases and therefore valid
+    /// name atoms.
+    #[must_use]
+    pub fn from_nested_dag_segment(segment: &DagSegment) -> Self {
+        match segment {
+            DagSegment::SourceModule(name) | DagSegment::NamedInstance(name) => {
+                Self::Named(ModuleAliasName::expect_valid(name.as_ref()))
+            }
+            DagSegment::IncludeInstance(id) => Self::IncludeInstance(*id),
+        }
+    }
+
+    /// Rendered text, used only to keep [`ScopedName`]'s established ordering.
+    fn rendered(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Named(alias) => std::borrow::Cow::Borrowed(alias.as_str()),
+            Self::IncludeInstance(id) => std::borrow::Cow::Owned(id.to_string()),
+        }
+    }
+}
+
+impl From<ModuleAliasName> for ScopeSegment {
+    fn from(alias: ModuleAliasName) -> Self {
+        Self::Named(alias)
+    }
+}
+
+impl std::fmt::Display for ScopeSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(alias) => std::fmt::Display::fmt(alias, f),
+            Self::IncludeInstance(id) => std::fmt::Display::fmt(id, f),
+        }
+    }
+}
+
+impl std::fmt::Debug for ScopeSegment {
+    /// Debug views show every qualifier as one quoted spelling.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(alias) => std::fmt::Debug::fmt(alias, f),
+            Self::IncludeInstance(id) => std::fmt::Debug::fmt(&id.to_string(), f),
+        }
+    }
+}
+
+impl Ord for ScopeSegment {
+    /// Order by rendered text, then named before anonymous.
+    ///
+    /// This is the order qualifiers had while anonymous include namespaces
+    /// were rendered alias spellings, so sorted outputs stay unchanged.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rendered()
+            .cmp(&other.rendered())
+            .then_with(|| match (self, other) {
+                (Self::Named(_), Self::IncludeInstance(_)) => std::cmp::Ordering::Less,
+                (Self::IncludeInstance(_), Self::Named(_)) => std::cmp::Ordering::Greater,
+                (Self::Named(left), Self::Named(right)) => left.cmp(right),
+                (Self::IncludeInstance(left), Self::IncludeInstance(right)) => left.cmp(right),
+            })
+    }
+}
+
+impl PartialOrd for ScopeSegment {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -101,7 +167,7 @@ pub enum ScopedNameParseError {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ScopedName {
     /// Module/path segments that qualify `member`. Empty for a local name.
-    qualifier: Arc<[ModuleAliasName]>,
+    qualifier: Arc<[ScopeSegment]>,
     /// The declaration/member name inside the qualifier scope.
     member: Arc<DeclName>,
 }
@@ -111,25 +177,25 @@ impl ScopedName {
     #[must_use]
     pub fn local(member: DeclName) -> Self {
         Self {
-            qualifier: Arc::from([] as [ModuleAliasName; 0]),
+            qualifier: Arc::from([] as [ScopeSegment; 0]),
             member: Arc::new(member),
         }
     }
 
     /// Create a name qualified by one already-validated module segment.
     #[must_use]
-    pub fn qualified(module: ModuleAliasName, member: DeclName) -> Self {
+    pub fn qualified(module: impl Into<ScopeSegment>, member: DeclName) -> Self {
         Self::qualified_path([module], member)
     }
 
     /// Create a name qualified by an arbitrary-depth validated module path.
     #[must_use]
     pub fn qualified_path(
-        qualifier: impl IntoIterator<Item = ModuleAliasName>,
+        qualifier: impl IntoIterator<Item = impl Into<ScopeSegment>>,
         member: DeclName,
     ) -> Self {
         Self {
-            qualifier: qualifier.into_iter().collect(),
+            qualifier: qualifier.into_iter().map(Into::into).collect(),
             member: Arc::new(member),
         }
     }
@@ -193,17 +259,26 @@ impl ScopedName {
 
     /// Returns the qualifier path segments. Empty means this name is local.
     #[must_use]
-    pub fn qualifier(&self) -> &[ModuleAliasName] {
+    pub fn qualifier(&self) -> &[ScopeSegment] {
         &self.qualifier
     }
 
     /// Convert this semantic name to a validated syntactic path.
+    ///
+    /// Returns `None` when a qualifier segment is an anonymous include
+    /// instance: such a namespace has no source spelling, so no source path
+    /// (and no module-resolver lookup) can denote it.
     #[must_use]
-    pub fn to_name_path(&self) -> NamePath {
-        NamePath::qualified_path(
-            self.qualifier.iter().map(|segment| segment.atom().clone()),
+    pub fn to_name_path(&self) -> Option<NamePath> {
+        let qualifier = self
+            .qualifier
+            .iter()
+            .map(|segment| segment.alias().map(|alias| alias.atom().clone()))
+            .collect::<Option<Vec<_>>>()?;
+        Some(NamePath::qualified_path(
+            qualifier,
             self.member.atom().clone(),
-        )
+        ))
     }
 
     /// Returns whether this is a qualified name.
@@ -311,7 +386,7 @@ mod tests {
         assert_eq!(
             name.qualifier()
                 .iter()
-                .map(ModuleAliasName::as_str)
+                .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             ["module"]
         );
@@ -325,7 +400,7 @@ mod tests {
         assert_eq!(
             name.qualifier()
                 .iter()
-                .map(ModuleAliasName::as_str)
+                .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             ["helpers", "math"]
         );
@@ -363,13 +438,64 @@ mod tests {
     }
 
     #[test]
-    fn selective_include_instance_ids_have_distinct_synthetic_scope_names() {
-        let first = IncludeInstanceId::at(Span::new(10, 5));
-        let second = IncludeInstanceId::at(Span::new(20, 5));
+    fn anonymous_include_scopes_are_typed_qualifier_segments() {
+        let first = ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(10));
+        let second = ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(20));
+        let spelled = ScopeSegment::Named(module("<include@10>"));
 
         assert_ne!(first, second);
-        assert_ne!(first.synthetic_scope_name(), second.synthetic_scope_name());
-        assert_eq!(first.synthetic_scope_name().as_str(), "<include@10>");
+        assert_eq!(first.alias(), None);
+        assert_eq!(first.to_string(), "<include@10>");
+        assert_eq!(format!("{first:?}"), "\"<include@10>\"");
+        // A named alias with the same rendering is a different namespace.
+        assert_ne!(first, spelled);
+        assert_eq!(spelled.cmp(&first), std::cmp::Ordering::Less);
+
+        let name = ScopedName::qualified(first, member("x"));
+        assert_eq!(name.to_string(), "<include@10>::x");
+        assert_eq!(name.to_name_path(), None);
+        assert_ne!(name, ScopedName::qualified(spelled, member("x")));
+    }
+
+    #[test]
+    fn scope_segments_map_to_instance_dag_ids() {
+        let owner = DagId::root_in_package("test", "main");
+        let id = IncludeInstanceId::at_source_offset(7);
+
+        assert_eq!(
+            ScopeSegment::Named(module("inst")).instance_of(&owner),
+            owner.named_instance_child("inst")
+        );
+        assert_eq!(
+            ScopeSegment::IncludeInstance(id).instance_of(&owner),
+            owner.include_instance_child(id)
+        );
+        for segment in owner
+            .named_instance_child("inst")
+            .include_instance_child(id)
+            .child("inner")
+            .segments()
+            .iter()
+            .skip(1)
+        {
+            let scope = ScopeSegment::from_nested_dag_segment(segment);
+            assert_eq!(scope.to_string(), segment.to_string());
+            assert_eq!(ScopeSegment::try_from_dag_segment(segment), Ok(scope));
+        }
+        assert!(
+            ScopeSegment::try_from_dag_segment(&DagSegment::SourceModule("a.b".into())).is_err()
+        );
+    }
+
+    #[test]
+    fn scope_segments_order_by_rendered_text() {
+        let anonymous = ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(63));
+        let later = ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(100));
+        let named = ScopeSegment::Named(module("alpha"));
+
+        assert!(later < anonymous);
+        assert!(anonymous < named);
+        assert!(ScopeSegment::Named(module("a")) < named);
     }
 
     #[test]

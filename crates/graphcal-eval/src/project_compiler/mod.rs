@@ -22,7 +22,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::DimName;
 use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 

@@ -1,5 +1,6 @@
 use graphcal_ast_derive::PhaseLift;
 
+use crate::dag_id::IncludeInstanceId;
 use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
 };
@@ -11,9 +12,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
-use crate::syntax::module_name::{
-    IncludeInstanceId, IncludeInstanceScope, ModuleAliasName, ScopedName,
-};
+use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
@@ -484,18 +483,25 @@ impl<P: Phase> IncludeDecl<P> {
     /// Only module-form includes introduce a source-visible alias. Selective
     /// includes receive an opaque occurrence identity for internal lowering.
     #[must_use]
-    pub fn instance_scope(&self) -> IncludeInstanceScope {
+    pub fn instance_scope(&self) -> ScopeSegment {
         match &self.kind {
             ImportKind::Module { alias } => {
-                IncludeInstanceScope::Named(alias.as_ref().map_or_else(
-                    || ModuleAliasName::from_atom(self.path.leaf().name.clone()),
-                    |alias| alias.value.clone(),
-                ))
+                ScopeSegment::Named(self.module_form_alias(alias.as_ref()))
             }
-            ImportKind::Selective(_) => {
-                IncludeInstanceScope::Anonymous(IncludeInstanceId::at(self.path.span()))
-            }
+            ImportKind::Selective(_) => ScopeSegment::IncludeInstance(
+                IncludeInstanceId::at_source_offset(self.path.span().offset()),
+            ),
         }
+    }
+
+    /// The instance alias of a module-form include whose explicit `as` alias
+    /// (if any) is `alias`: the explicit alias, else the DAG's leaf name.
+    #[must_use]
+    pub fn module_form_alias(&self, alias: Option<&Spanned<ModuleAliasName>>) -> ModuleAliasName {
+        alias.map_or_else(
+            || ModuleAliasName::from_atom(self.path.leaf().name.clone()),
+            |alias| alias.value.clone(),
+        )
     }
 }
 

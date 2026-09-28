@@ -8,7 +8,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
-use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
@@ -54,7 +54,7 @@ fn root_instance_name(
         .segments()
         .iter()
         .skip(root.segments().len())
-        .map(|segment| ModuleAliasName::expect_valid(segment.as_ref().to_owned()));
+        .map(ScopeSegment::from_nested_dag_segment);
     ScopedName::qualified_path(
         parent_path.chain(exposed.qualifier().iter().cloned()),
         exposed.member().clone(),
@@ -479,9 +479,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .get(&record.debug_scope)
                 .is_some_and(|count| *count > 1)
             {
-                ModuleAliasName::expect_valid(record.instance.id.owner().name())
+                ScopeSegment::from_nested_dag_segment(record.instance.id.owner().leaf())
             } else {
-                record.debug_scope.clone()
+                ScopeSegment::Named(record.debug_scope.clone())
             };
             let debug_name = ScopedName::qualified(debug_scope, name.member().clone());
             result_values.insert(

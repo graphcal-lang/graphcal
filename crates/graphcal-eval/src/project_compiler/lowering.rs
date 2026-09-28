@@ -207,28 +207,26 @@ pub(super) fn validate_imported_runtime_units(
 }
 
 fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
-    let mut leaf_counts: HashMap<ModuleAliasName, usize> = HashMap::new();
-    ctx.include_instances
-        .iter()
-        .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
-        .for_each(|include| {
-            leaf_counts
-                .entry(include.debug_scope.clone())
-                .and_modify(|count| *count = count.saturating_add(1))
-                .or_insert(1);
-        });
+    let anonymous_includes = || {
+        ctx.include_instances
+            .iter()
+            .filter_map(|include| match include.instance_scope {
+                ScopeSegment::IncludeInstance(id) => Some((id, &include.debug_scope)),
+                ScopeSegment::Named(_) => None,
+            })
+    };
+    let mut leaf_counts: HashMap<&ModuleAliasName, usize> = HashMap::new();
+    anonymous_includes().for_each(|(_, debug_scope)| {
+        leaf_counts
+            .entry(debug_scope)
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+    });
 
-    ctx.include_instances
-        .iter()
-        .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
-        .filter(|include| leaf_counts.get(&include.debug_scope) == Some(&1))
-        .filter(|include| !ctx.module_map.contains_key(&include.debug_scope))
-        .map(|include| {
-            (
-                include.instance_scope.merge_scope_name(),
-                include.debug_scope.clone(),
-            )
-        })
+    anonymous_includes()
+        .filter(|(_, debug_scope)| leaf_counts.get(debug_scope) == Some(&1))
+        .filter(|(_, debug_scope)| !ctx.module_map.contains_key(*debug_scope))
+        .map(|(id, debug_scope)| (id, debug_scope.clone()))
         .collect()
 }
 
@@ -748,7 +746,7 @@ fn process_dag_body_include_declarations<'a>(
             &imports::InlineDagIncludeTarget {
                 dag_def: target_dag.declaration(target_file),
                 dag_id: target.target(),
-                dag_name: target.target().name(),
+                dag_name: target_dag.declaration(target_file).name.value.as_str(),
                 parent_dag_id: target_file_id,
             },
             include_decl,
@@ -1152,10 +1150,7 @@ fn semantic_assertion_projections(
             .into_iter()
             .map(|name| InstanceAssertionProjection {
                 target: ResolvedDeclName::from_def(request.template.dag_id.clone(), name.clone()),
-                exposed_name: ScopedName::qualified(
-                    request.instance_scope.merge_scope_name(),
-                    name,
-                ),
+                exposed_name: ScopedName::qualified(request.instance_scope.clone(), name),
                 expected_fail: None,
             })
             .collect()),
@@ -1199,8 +1194,7 @@ fn record_semantic_instance(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     let template_id = &request.template.dag_id;
-    let instance_owner =
-        importer.instance_child(request.instance_scope.merge_scope_name().atom().as_str());
+    let instance_owner = request.instance_scope.instance_of(importer);
     let value_bindings = semantic_value_bindings(request, template, &instance_owner);
     let static_bindings =
         semantic_static_bindings(request, template, importer, module_resolver, src)?;
@@ -1230,7 +1224,7 @@ fn record_semantic_instance(
     let plot_projections = semantic_plot_projections(request, template, src)?;
     unfrozen.add_semantic_dynamic_unit_bindings(
         &request.runtime_unit_names,
-        &request.instance_scope.merge_scope_name(),
+        &request.instance_scope,
         &instance_owner,
     );
     unfrozen.record_semantic_instance(
@@ -1301,7 +1295,6 @@ fn elaborate_include_instances(
     let importer_local_type_names = collect_local_type_names(importer_ast);
     for instance in include_instances {
         cancellation.checkpoint()?;
-        let merge_prefix = instance.instance_scope.merge_scope_name();
         // ---- 1. Resolve and assemble source body -----------------------------
         let (template, dep_resolution_owner, body_decls_for_aliases) = if let Some(template) =
             module_templates.get(&instance.template.dag_id)
@@ -1609,7 +1602,7 @@ fn elaborate_include_instances(
         // ---- 6. Add selective aliases -------------------------------------
         for projection in &instance.unit_projection_aliases {
             unfrozen.add_dynamic_unit_projection_alias(
-                &merge_prefix,
+                &instance.instance_scope.instance_of(importer_dag_id),
                 &projection.source,
                 projection.alias.clone(),
             );
@@ -1619,7 +1612,7 @@ fn elaborate_include_instances(
                 &selective_alias_declarations,
                 selective,
                 &instance.pub_reexport_items,
-                &merge_prefix,
+                &instance.instance_scope,
                 &AliasResolutionOwners {
                     r#type: &dep_resolution_owner,
                     body: importer_dag_id,
@@ -1842,7 +1835,7 @@ struct AliasResolutionOwners<'a> {
     body: &'a graphcal_compiler::dag_id::DagId,
 }
 
-/// Add `local_name = @prefix::orig_name` aliases (const or graph) for each
+/// Add `local_name = @scope::orig_name` aliases (const or graph) for each
 /// selected item.
 ///
 /// The alias keeps the template declaration's annotation, resolved in the
@@ -1857,7 +1850,7 @@ fn add_selective_aliases_inner(
     declarations: &HashMap<DeclName, graphcal_compiler::ir::lower::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
     public_originals: &HashSet<DeclName>,
-    prefix: &ModuleAliasName,
+    prefix: &ScopeSegment,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
@@ -1875,27 +1868,13 @@ fn add_selective_aliases_inner(
         };
         let type_ann = declaration.type_ann.clone();
 
-        let alias_kind = if declaration.is_const {
-            // A const alias body is a reference path to the prefixed target;
-            // HIR lowering resolves it against the merged entries.
-            ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
-                graphcal_compiler::syntax::ast::IdentPath::new(
-                    graphcal_compiler::syntax::non_empty::NonEmpty::new(
-                        graphcal_compiler::syntax::ast::Ident {
-                            name: prefix.atom().clone(),
-                            span: import_span,
-                        },
-                        vec![graphcal_compiler::syntax::ast::Ident {
-                            name: orig_name.atom().clone(),
-                            span: import_span,
-                        }],
-                    ),
-                ),
-            ))
-        } else {
-            ExprKind::GraphRef(Spanned::new(target.clone(), import_span))
-        };
-        let alias_expr = Expr::new(alias_kind, import_span);
+        // Const and graph aliases share one typed graph reference; HIR
+        // lowering binds it through the instance's merged entries, and a const
+        // target keeps the alias const-evaluable.
+        let alias_expr = Expr::new(
+            ExprKind::GraphRef(Spanned::new(target, import_span)),
+            import_span,
+        );
 
         if public_originals.contains(orig_name) {
             unfrozen.export_term_alias(local_name.clone());
