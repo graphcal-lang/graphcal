@@ -40,9 +40,10 @@ function = "<impl fmt::Debug for Rational>::fmt"
 genre = "FnValue"
 replacement = "Ok(Default::default())"
 span = { start = { line = 1, column = 9 }, end = { line = 1, column = 35 } }
-status = "excluded"
+status = "obsolete"
 review = "reviewed"
 rationale = "Debug renderers are excluded because they are not semantic runtime behavior."
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-compiler/src/dimension.rs"
@@ -105,10 +106,10 @@ function = "Rational::try_new_i64"
 genre = "BinaryOperator"
 replacement = "<="
 span = { start = { line = 13, column = 14 }, end = { line = 13, column = 15 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Exact algebra behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-compiler/src/exact_rational.rs"
@@ -116,10 +117,10 @@ function = "ExactRational::try_new_i128"
 genre = "BinaryOperator"
 replacement = "<="
 span = { start = { line = 16, column = 32 }, end = { line = 16, column = 33 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "The denominator is proven nonzero before normalization, so the boundary comparisons are equivalent."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-compiler/src/nat.rs"
@@ -127,10 +128,10 @@ function = "<impl PartialOrd for Monomial>::partial_cmp"
 genre = "FnValue"
 replacement = "None"
 span = { start = { line = 1, column = 9 }, end = { line = 1, column = 30 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Exact algebra behavior needs stronger direct assertions."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-compiler/src/nat.rs"
