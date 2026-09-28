@@ -18,52 +18,62 @@ use super::context::ExprLoweringContext;
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
 use super::resolve::{ResolvedCallable, spanned};
+use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_strict, into_strict};
 use crate::hir::expr::{
     AssertBody, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, FieldInit, ForBinding,
     ForBindingIndex, IndexArg, IndexVariantRef, MapEntry, MapEntryKey, MatchArm, MatchPattern,
     ParamBinding, PatternBinding, UnfoldRecurrence,
 };
-use crate::hir::expr::{CheckedAssertBody, CheckedExpr};
+use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Strict};
 use crate::hir::lower::{lower_generic_args, lower_nat_expr};
 
-/// Lower a syntax expression into HIR, accumulating diagnostics.
+/// Lower a syntax expression into tolerant HIR.
 ///
-/// References that cannot be resolved become [`ExprKind::Error`] nodes and
-/// their diagnostics are returned alongside the lowered tree, so consumers
-/// that must keep working on incomplete code (the LSP) still get a tree with
-/// spans for every position that did resolve.
+/// References that cannot be resolved become [`ExprKind::Error`] nodes that
+/// carry their diagnostic (see [`Expr::diagnostics`]), so consumers that must
+/// keep working on incomplete code (the LSP) still get a tree with spans for
+/// every position that did resolve.
 #[must_use]
-pub fn lower_expr_tolerant(
-    expr: &ast::Expr,
-    ctx: ExprLoweringContext<'_>,
-) -> (Expr, Vec<ExprLowerError>) {
-    let mut lowerer = ExprLowerer::new(ctx);
-    let hir_expr = lowerer.lower_expr(expr);
-    (hir_expr, lowerer.diagnostics)
+pub fn lower_expr_tolerant(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Expr<Tolerant> {
+    ExprLowerer::new(ctx).lower_expr(expr)
 }
 
-/// Lower a syntax expression into HIR, rejecting unresolved references.
+/// Lower a syntax expression into strict HIR, rejecting unresolved references.
 ///
-/// This is the batch-pipeline boundary: the lowered tree is guaranteed to
-/// contain no [`ExprKind::Error`] node.
+/// The tree is [`Strict`], so it cannot contain an error node, but it is not
+/// yet a finished body: callers that splice lowered subtrees into a larger
+/// synthesized tree finish the result themselves.
 ///
 /// # Errors
 ///
-/// Returns the first [`ExprLowerError`] if any expression-level reference
-/// cannot be resolved to a canonical module identity or lexical local binding.
+/// Returns the first [`ExprLowerError`] in source order if any
+/// expression-level reference cannot be resolved to a canonical module
+/// identity or lexical local binding.
+pub fn lower_expr_draft(
+    expr: &ast::Expr,
+    ctx: ExprLoweringContext<'_>,
+) -> Result<Expr<Strict>, ExprLowerError> {
+    into_strict(lower_expr_tolerant(expr, ctx))
+}
+
+/// Lower a syntax expression into a finished strict HIR body.
+///
+/// This is the batch-pipeline boundary.
+///
+/// # Errors
+///
+/// Returns the first [`ExprLowerError`] in source order if any
+/// expression-level reference cannot be resolved, or if the body cannot be
+/// assigned occurrence identities.
 pub fn lower_expr(
     expr: &ast::Expr,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<CheckedExpr, ExprLowerError> {
-    let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
-    if diagnostics.is_empty() {
-        CheckedExpr::finish(lowered).map_err(|source| ExprLowerError::ExpressionIdentity {
-            source,
-            span: expr.span,
-        })
-    } else {
-        Err(diagnostics.swap_remove(0))
-    }
+    let lowered = lower_expr_draft(expr, ctx)?;
+    CheckedExpr::finish(lowered).map_err(|source| ExprLowerError::ExpressionIdentity {
+        source,
+        span: expr.span,
+    })
 }
 
 /// Resolve a declaration reference without constructing an expression.
@@ -74,63 +84,46 @@ pub fn lower_graph_reference(
     ExprLowerer::new(ctx).resolve_graph_ref(reference)
 }
 
-/// Lower a syntax assertion body into HIR, accumulating diagnostics.
+/// Lower a syntax assertion body into tolerant HIR.
 ///
 /// Each assertion body owns an independent lexical local-id space. Assertion
 /// expressions cannot share locals across the `actual`/`expected`/`tolerance`
 /// slots of a tolerance assertion, so each slot is lowered with a fresh lowerer.
-#[must_use]
 fn lower_assert_body_tolerant(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
-) -> (AssertBody, Vec<ExprLowerError>) {
+) -> AssertBody<Tolerant> {
     match body {
-        ast::AssertBody::Expr(expr) => {
-            let (lowered, diagnostics) = lower_expr_tolerant(expr, ctx);
-            (AssertBody::Expr(Box::new(lowered)), diagnostics)
-        }
+        ast::AssertBody::Expr(expr) => AssertBody::Expr(Box::new(lower_expr_tolerant(expr, ctx))),
         ast::AssertBody::Tolerance {
             actual,
             expected,
             tolerance,
-        } => {
-            let (actual, mut diagnostics) = lower_expr_tolerant(actual, ctx);
-            let (expected, expected_diags) = lower_expr_tolerant(expected, ctx);
-            let (tolerance, tolerance_diags) = lower_expr_tolerant(tolerance, ctx);
-            diagnostics.extend(expected_diags);
-            diagnostics.extend(tolerance_diags);
-            (
-                AssertBody::Tolerance {
-                    actual: Box::new(actual),
-                    expected: Box::new(expected),
-                    tolerance: Box::new(tolerance),
-                },
-                diagnostics,
-            )
-        }
+        } => AssertBody::Tolerance {
+            actual: Box::new(lower_expr_tolerant(actual, ctx)),
+            expected: Box::new(lower_expr_tolerant(expected, ctx)),
+            tolerance: Box::new(lower_expr_tolerant(tolerance, ctx)),
+        },
     }
 }
 
-/// Lower a syntax assertion body into HIR, rejecting unresolved references.
+/// Lower a syntax assertion body into strict HIR, rejecting unresolved references.
 ///
 /// # Errors
 ///
-/// Returns the first [`ExprLowerError`] if any reference cannot be resolved.
+/// Returns the first [`ExprLowerError`] in operand and source order if any
+/// reference cannot be resolved.
 pub fn lower_assert_body(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<CheckedAssertBody, ExprLowerError> {
-    let (lowered, mut diagnostics) = lower_assert_body_tolerant(body, ctx);
-    if diagnostics.is_empty() {
-        let span = match &lowered {
-            AssertBody::Expr(expr) => expr.span,
-            AssertBody::Tolerance { actual, .. } => actual.span,
-        };
-        CheckedAssertBody::finish(lowered)
-            .map_err(|source| ExprLowerError::ExpressionIdentity { source, span })
-    } else {
-        Err(diagnostics.swap_remove(0))
-    }
+    let lowered = assert_body_into_strict(lower_assert_body_tolerant(body, ctx))?;
+    let span = match &lowered {
+        AssertBody::Expr(expr) => expr.span,
+        AssertBody::Tolerance { actual, .. } => actual.span,
+    };
+    CheckedAssertBody::finish(lowered)
+        .map_err(|source| ExprLowerError::ExpressionIdentity { source, span })
 }
 
 fn static_binding_value_path(
@@ -157,8 +150,7 @@ impl ExprLowerer<'_> {
     /// independently lowerable descendant expression. Any tentative child
     /// lowering performed before the parent failed is rolled back first, so
     /// diagnostics and lexical IDs are emitted exactly once.
-    pub(super) fn lower_expr(&mut self, expr: &ast::Expr) -> Expr {
-        let diagnostics_checkpoint = self.diagnostics.len();
+    pub(super) fn lower_expr(&mut self, expr: &ast::Expr) -> Expr<Tolerant> {
         let next_local_checkpoint = self.next_local;
         let scope_depth_checkpoint = self.local_scopes.len();
 
@@ -167,12 +159,13 @@ impl ExprLowerer<'_> {
         crate::stack::with_stack_growth(|| match self.lower_expr_inner(expr) {
             Ok(lowered) => lowered,
             Err(err) => {
-                self.diagnostics.truncate(diagnostics_checkpoint);
                 self.next_local = next_local_checkpoint;
                 self.local_scopes.truncate(scope_depth_checkpoint);
-                self.diagnostics.push(err);
                 let children = self.lower_error_children(expr);
-                Expr::new(ExprKind::Error { children }, expr.span)
+                Expr::new(
+                    ExprKind::Error(LoweringFailure::new(err, children)),
+                    expr.span,
+                )
             }
         })
     }
@@ -182,7 +175,7 @@ impl ExprLowerer<'_> {
     /// Binder metadata is intentionally ignored: when a `for`, `scan`,
     /// `unfold`, or match pattern fails, its lexical bindings were never
     /// established, so retaining a body must not fabricate those locals.
-    pub(super) fn lower_error_children(&mut self, expr: &ast::Expr) -> Vec<Expr> {
+    pub(super) fn lower_error_children(&mut self, expr: &ast::Expr) -> Vec<Expr<Tolerant>> {
         let children: Vec<&ast::Expr> = match &expr.kind {
             ast::ExprKind::Number(_)
             | ast::ExprKind::Integer(_)
@@ -237,7 +230,10 @@ impl ExprLowerer<'_> {
     }
 
     #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind lowering")]
-    pub(super) fn lower_expr_inner(&mut self, expr: &ast::Expr) -> Result<Expr, ExprLowerError> {
+    pub(super) fn lower_expr_inner(
+        &mut self,
+        expr: &ast::Expr,
+    ) -> Result<Expr<Tolerant>, ExprLowerError> {
         let kind = match &expr.kind {
             ast::ExprKind::Number(value) => ExprKind::Number(*value),
             ast::ExprKind::Integer(value) => ExprKind::Integer(*value),
@@ -531,7 +527,7 @@ impl ExprLowerer<'_> {
         Ok(Expr::new(kind, expr.span))
     }
 
-    pub(super) fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit {
+    pub(super) fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit<Tolerant> {
         FieldInit {
             name: field.name.clone(),
             value: self.lower_expr(&field.value),
@@ -542,7 +538,7 @@ impl ExprLowerer<'_> {
         &mut self,
         target: &DagId,
         bindings: &[ast::ParamBinding],
-    ) -> Result<(Vec<ParamBinding>, DagCallStaticBindings), ExprLowerError> {
+    ) -> Result<(Vec<ParamBinding<Tolerant>>, DagCallStaticBindings), ExprLowerError> {
         let mut params = Vec::new();
         let mut static_bindings = DagCallStaticBindings::default();
         for binding in bindings {
@@ -642,7 +638,7 @@ impl ExprLowerer<'_> {
         &mut self,
         target: &DagId,
         binding: &ast::ParamBinding,
-    ) -> Result<ParamBinding, ExprLowerError> {
+    ) -> Result<ParamBinding<Tolerant>, ExprLowerError> {
         let path = NamePath::local(binding.name.name.atom().clone());
         let target_name = self
             .ctx
@@ -663,7 +659,7 @@ impl ExprLowerer<'_> {
         &mut self,
         entry: &ast::MapEntry,
         map_span: Span,
-    ) -> Result<MapEntry, ExprLowerError> {
+    ) -> Result<MapEntry<Tolerant>, ExprLowerError> {
         let keys = entry
             .keys
             .iter()
@@ -753,7 +749,7 @@ impl ExprLowerer<'_> {
     pub(super) fn lower_index_arg(
         &mut self,
         arg: &ast::IndexArg,
-    ) -> Result<IndexArg, ExprLowerError> {
+    ) -> Result<IndexArg<Tolerant>, ExprLowerError> {
         match arg {
             ast::IndexArg::Variant { index, variant } => {
                 let resolved = self.resolve_index_variant_parts(
@@ -780,7 +776,7 @@ impl ExprLowerer<'_> {
     pub(super) fn lower_match_arm(
         &mut self,
         arm: &ast::MatchArm,
-    ) -> Result<MatchArm, ExprLowerError> {
+    ) -> Result<MatchArm<Tolerant>, ExprLowerError> {
         let pattern = self.lower_match_pattern(&arm.pattern)?;
         self.push_scope(pattern.bound_locals())?;
         let body = self.lower_expr(&arm.body);

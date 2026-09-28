@@ -111,11 +111,7 @@ fn eval_hir_expr_inner(
     // Reject missing, contextual, or deferred facts before any operand work.
     ctx.expression_fact(expr)?;
     match expr.kind() {
-        // Error nodes exist only in tolerant lowering for IDE consumers; the
-        // batch pipeline rejects them before evaluation.
-        hir::ExprKind::Error { .. } => {
-            Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
-        }
+        hir::ExprKind::Error(no_error) => no_error.absurd(),
         hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx)
             .map(EvaluatedRuntimeValue::plain),
         hir::ExprKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(*n))),

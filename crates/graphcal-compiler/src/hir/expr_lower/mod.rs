@@ -6,12 +6,13 @@
 //! resolver. Source paths (`NamePath` / `IdentPath` / `ScopedName`) are
 //! consumed at this boundary.
 //!
-//! Lowering is diagnostic-accumulating: a reference that cannot be resolved
-//! becomes an explicit [`ExprKind::Error`](crate::hir::expr::ExprKind::Error)
-//! node and its diagnostic is recorded, so IDE consumers can keep working on
-//! incomplete code. The strict entry points ([`lower::lower_expr`],
-//! [`lower::lower_assert_body`]) reject any tree that contains an error node,
-//! so the batch pipeline never sees one.
+//! Lowering is diagnostic-accumulating: the walk produces
+//! [`Tolerant`](tolerant::Tolerant) HIR, where a reference that cannot be
+//! resolved becomes an explicit error node carrying its diagnostic, so IDE
+//! consumers can keep working on incomplete code. The strict entry points
+//! ([`lower::lower_expr`], [`lower::lower_assert_body`]) refine that tree
+//! into [`Strict`](crate::hir::expr::Strict) HIR, which cannot represent an
+//! error node, so the batch pipeline never sees one.
 //!
 //! - [`lower`]: entry points and the structural lowering walk.
 //! - [`context`]: the inputs that scope one lowering run.
@@ -19,6 +20,7 @@
 //! - `lowerer`: lowerer state and lexical scopes.
 //! - `resolve`: value-position name resolution.
 //! - `call`: function-call application and datetime literals.
+//! - [`tolerant`]: the tolerant completeness and its refinement to strict HIR.
 
 mod call;
 pub mod context;
@@ -28,3 +30,4 @@ mod lowerer;
 mod resolve;
 #[cfg(test)]
 mod tests;
+pub mod tolerant;

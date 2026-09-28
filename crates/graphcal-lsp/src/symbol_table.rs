@@ -189,11 +189,11 @@ impl<'a> HirRefCollector<'a> {
             &self.time_zones,
         )
         .with_prelude(&prelude);
-        let (lowered, diagnostics) = hir::lower_expr_tolerant(expr, ctx);
+        let lowered = hir::lower_expr_tolerant(expr, ctx);
         self.locals.clear();
         self.body_span = expr.span;
         self.walk(&lowered, table);
-        for diagnostic in &diagnostics {
+        for diagnostic in lowered.diagnostics() {
             Self::record_unresolved(diagnostic, table);
         }
     }
@@ -300,7 +300,7 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn walk(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
+    fn walk(&mut self, expr: &hir::Expr<hir::Tolerant>, table: &mut SymbolTable) {
         graphcal_compiler::stack::with_stack_growth(|| self.walk_inner(expr, table));
     }
 
@@ -308,10 +308,10 @@ impl<'a> HirRefCollector<'a> {
         clippy::too_many_lines,
         reason = "reference extraction handles every HIR ExprKind variant"
     )]
-    fn walk_inner(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
+    fn walk_inner(&mut self, expr: &hir::Expr<hir::Tolerant>, table: &mut SymbolTable) {
         match expr.kind() {
-            hir::ExprKind::Error { children } => {
-                for child in children {
+            hir::ExprKind::Error(failure) => {
+                for child in failure.children() {
                     self.walk(child, table);
                 }
             }

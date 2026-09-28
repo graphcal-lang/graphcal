@@ -19,6 +19,7 @@ use crate::syntax::span::{Span, Spanned};
 
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
+use super::tolerant::Tolerant;
 use crate::hir::expr::{
     ConstRef, ExprKind, ExternFnRef, ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef,
     UnappliedFunctionRef,
@@ -127,7 +128,7 @@ impl<'a> ExprLowerer<'a> {
     pub(super) fn lower_unresolved_path(
         &self,
         path: &IdentPath,
-    ) -> Result<ExprKind, ExprLowerError> {
+    ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
         path.as_bare().map_or_else(
             || self.lower_dotted_path_ref(path),
             |ident| self.lower_bare_name_ref(ident),
@@ -146,7 +147,10 @@ impl<'a> ExprLowerer<'a> {
     /// A time-scale spelling participates only after Term lookup fails, to
     /// produce a targeted wrong-namespace diagnostic rather than resolving a
     /// Static atom into the expression HIR.
-    pub(super) fn lower_bare_name_ref(&self, ident: &Ident) -> Result<ExprKind, ExprLowerError> {
+    pub(super) fn lower_bare_name_ref(
+        &self,
+        ident: &Ident,
+    ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
         let span = ident.span;
         if let Ok(local) = self.lookup_local(&LocalName::classify(ident.name.atom().clone()), span)
         {
@@ -212,7 +216,7 @@ impl<'a> ExprLowerer<'a> {
     pub(super) fn lower_dotted_path_ref(
         &self,
         path: &IdentPath,
-    ) -> Result<ExprKind, ExprLowerError> {
+    ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
         let span = path.span();
         let scoped = ScopedName::classify_path(&path.to_name_path());
         self.lower_const_ref(&scoped, span)
@@ -301,7 +305,7 @@ impl<'a> ExprLowerer<'a> {
     pub(super) fn lower_graph_ref(
         &self,
         name: &Spanned<ScopedName>,
-    ) -> Result<ExprKind, ExprLowerError> {
+    ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
         self.resolve_graph_ref(name).map(ExprKind::GraphRef)
     }
 

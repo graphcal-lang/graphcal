@@ -433,8 +433,8 @@ fn check_ineffective_conversions_inner(
             }
             Ok(())
         }
-        ExprKind::Error { .. }
-        | ExprKind::Number(_)
+        ExprKind::Error(no_error) => no_error.absurd(),
+        ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)

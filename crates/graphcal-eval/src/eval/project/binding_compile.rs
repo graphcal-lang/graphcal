@@ -727,13 +727,12 @@ impl PreparedProject {
             &self.tir.registry().time_zones,
         )
         .with_prelude(&prelude);
-        let (hir, diagnostics) = graphcal_compiler::hir::lower_expr_tolerant(expr, context);
-        if let Some(error) = diagnostics.first() {
-            return Err(CompileError::Eval(
-                graphcal_compiler::hir::expr_lower_error_to_graphcal(error, &self.source),
-            ));
-        }
-        Ok(hir)
+        graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
+            CompileError::Eval(graphcal_compiler::hir::expr_lower_error_to_graphcal(
+                &error,
+                &self.source,
+            ))
+        })
     }
 
     fn binding_internal_error(&self, message: &str, span: Span) -> CompileError {

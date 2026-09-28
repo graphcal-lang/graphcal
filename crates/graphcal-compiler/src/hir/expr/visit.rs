@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use crate::dag_id::DagId;
 use crate::syntax::span::{Span, Spanned};
 
+use super::completeness::Completeness;
 use super::model::{ConstRef, Expr, ExprKind, ExternFnRef, FunctionRef, IndexArg};
 
 /// Canonical declaration dependencies observed in one HIR expression tree.
@@ -19,13 +20,13 @@ pub struct ExprDependencies {
 
 /// Collect canonical declaration dependencies from an already-lowered HIR expression.
 #[must_use]
-pub fn collect_expr_dependencies(expr: &Expr) -> ExprDependencies {
+pub fn collect_expr_dependencies<C: Completeness>(expr: &Expr<C>) -> ExprDependencies {
     let mut deps = ExprDependencies::default();
     collect_expr_dependencies_into(expr, &mut deps);
     deps
 }
 
-fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
+fn collect_expr_dependencies_into<C: Completeness>(expr: &Expr<C>, deps: &mut ExprDependencies) {
     visit_expr(expr, &mut |node| match node.kind() {
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
@@ -42,9 +43,9 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
 
 /// One exhaustive child inventory serves both inspection and construction-time walks.
 macro_rules! expression_children {
-    ($kind:expr, $iter:ident, $visitor:ident, [$($borrow:tt)*]) => {
+    ($kind:expr, $iter:ident, $error_children:ident, $visitor:ident, [$($borrow:tt)*]) => {
         match $kind {
-            ExprKind::Error { children } => children.$iter().for_each(&mut *$visitor),
+            ExprKind::Error(error) => C::$error_children(error).$iter().for_each(&mut *$visitor),
             ExprKind::Number(_) | ExprKind::Integer(_) | ExprKind::Bool(_)
             | ExprKind::StringLiteral(_) | ExprKind::OffsetDateTimeLiteral(_)
             | ExprKind::CivilDateTimeLiteral(_) | ExprKind::ZonedDateTimeLiteral(_)
@@ -75,16 +76,22 @@ macro_rules! expression_children {
 }
 
 /// Visit immediate expression children, in structural order.
-pub fn visit_expr_children<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
-    expression_children!(expr.kind(), iter, visitor, [&]);
+pub fn visit_expr_children<'a, C: Completeness>(
+    expr: &'a Expr<C>,
+    visitor: &mut dyn FnMut(&'a Expr<C>),
+) {
+    expression_children!(expr.kind(), iter, error_children, visitor, [&]);
 }
 
-pub(super) fn visit_expr_children_mut(expr: &mut Expr, visitor: &mut impl FnMut(&mut Expr)) {
-    expression_children!(&mut *expr.kind, iter_mut, visitor, [&mut]);
+pub(super) fn visit_expr_children_mut<C: Completeness>(
+    expr: &mut Expr<C>,
+    visitor: &mut impl FnMut(&mut Expr<C>),
+) {
+    expression_children!(&mut *expr.kind, iter_mut, error_children_mut, visitor, [&mut]);
 }
 
 /// Visit all expression occurrences in pre-order. This does not model evaluation order.
-pub fn visit_expr<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+pub fn visit_expr<'a, C: Completeness>(expr: &'a Expr<C>, visitor: &mut dyn FnMut(&'a Expr<C>)) {
     crate::stack::with_stack_growth(|| {
         visitor(expr);
         visit_expr_children(expr, &mut |child| visit_expr(child, visitor));
@@ -93,7 +100,10 @@ pub fn visit_expr<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
 
 /// Visit descendants before their parent, so dependency facts can be composed
 /// in one pass without cloning an intermediate occurrence-ID ordering.
-pub fn visit_expr_postorder<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr)) {
+pub fn visit_expr_postorder<'a, C: Completeness>(
+    expr: &'a Expr<C>,
+    visitor: &mut dyn FnMut(&'a Expr<C>),
+) {
     crate::stack::with_stack_growth(|| {
         visit_expr_children(expr, &mut |child| visit_expr_postorder(child, visitor));
         visitor(expr);
@@ -102,7 +112,7 @@ pub fn visit_expr_postorder<'a>(expr: &'a Expr, visitor: &mut dyn FnMut(&'a Expr
 
 /// Return the first DAG call in an HIR expression, if any.
 #[must_use]
-pub fn find_dag_call(expr: &Expr) -> Option<(DagId, Span)> {
+pub fn find_dag_call<C: Completeness>(expr: &Expr<C>) -> Option<(DagId, Span)> {
     let mut found = None;
     visit_expr(expr, &mut |candidate| {
         if found.is_none()
@@ -120,7 +130,7 @@ pub fn find_dag_call(expr: &Expr) -> Option<(DagId, Span)> {
 /// host function registry (const expressions, domain bounds, dynamic unit
 /// scales) use this to reject them with a spanned diagnostic.
 #[must_use]
-pub fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
+pub fn find_extern_call<C: Completeness>(expr: &Expr<C>) -> Option<(&ExternFnRef, Span)> {
     let mut found = None;
     visit_expr(expr, &mut |candidate| {
         if found.is_none()

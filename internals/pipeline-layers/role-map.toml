@@ -367,12 +367,27 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "expr", "completeness"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "completeness", "sealed"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr", "local_env"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["hir", "expr", "model"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "refine"]
 role = "contracts"
 
 [[module]]
@@ -418,6 +433,11 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["hir", "expr_lower", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "tolerant"]
 role = "checking"
 
 [[module]]

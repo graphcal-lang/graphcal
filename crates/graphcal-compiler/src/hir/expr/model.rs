@@ -21,6 +21,8 @@ use crate::syntax::type_name::FieldName;
 
 use crate::hir::types::{GenericArg, NatExpr};
 
+use super::completeness::{Completeness, Strict};
+
 /// Stable lexical identity for a local expression binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub(in crate::hir) u32);
@@ -50,10 +52,10 @@ pub struct LocalDef {
 /// expr.kind = ExprKind::Bool(false);
 /// ```
 #[derive(Debug)]
-pub struct Expr {
+pub struct Expr<C: Completeness = Strict> {
     // Keep the identity/span handle small: the heterogeneous operation payload
     // must not be copied through every lowering and checking return value.
-    pub(super) kind: Box<ExprKind>,
+    pub(super) kind: Box<ExprKind<C>>,
     pub span: Span,
     pub(super) id: Option<crate::expression_id::ExprId>,
 }
@@ -62,8 +64,8 @@ pub struct Expr {
 // once per tree level without any stack-growth guard, so cloning a long
 // left-nested operator chain overflows the stack. Routing each level
 // through `with_stack_growth` lets the stack grow on demand (the derived
-// `ExprKind` clone calls back into this impl through `Box<Expr>`).
-impl Clone for Expr {
+// `ExprKind` clone calls back into this impl through `Box<Expr<C>>`).
+impl<C: Completeness> Clone for Expr<C> {
     fn clone(&self) -> Self {
         crate::stack::with_stack_growth(|| Self {
             kind: self.kind.clone(),
@@ -73,9 +75,9 @@ impl Clone for Expr {
     }
 }
 
-impl Expr {
+impl<C: Completeness> Expr<C> {
     #[must_use]
-    pub fn new(kind: ExprKind, span: Span) -> Self {
+    pub fn new(kind: ExprKind<C>, span: Span) -> Self {
         Self {
             kind: Box::new(kind),
             span,
@@ -85,13 +87,13 @@ impl Expr {
 
     /// Inspect semantics without allowing an identity-bearing clone to be rewritten.
     #[must_use]
-    pub const fn kind(&self) -> &ExprKind {
+    pub const fn kind(&self) -> &ExprKind<C> {
         &self.kind
     }
 
     /// Consume the node for reconstruction. `Expr::new` starts without an identity.
     #[must_use]
-    pub fn into_kind(self) -> ExprKind {
+    pub fn into_kind(self) -> ExprKind<C> {
         *self.kind
     }
 
@@ -201,17 +203,14 @@ pub struct ResolvedUnitExpr {
 
 /// Resolved expression shape.
 #[derive(Debug, Clone)]
-pub enum ExprKind {
+pub enum ExprKind<C: Completeness = Strict> {
     /// A reference that failed to resolve.
     ///
-    /// Produced only by tolerant lowering; the diagnostic for the failure is
-    /// reported alongside the lowered tree. Independently lowerable descendant
-    /// expressions are retained for IDE references and additional diagnostics.
-    /// The strict entry points reject trees containing this node, so the batch
-    /// pipeline never observes it.
-    Error {
-        children: Vec<Expr>,
-    },
+    /// Representable only in tolerant trees, where the payload carries the
+    /// diagnostic and every independently lowerable descendant expression for
+    /// IDE references and additional diagnostics. In a [`Strict`] tree the
+    /// payload is the uninhabited [`NoErrorNode`](super::NoErrorNode).
+    Error(C::Error),
     Number(f64),
     Integer(i64),
     Bool(bool),
@@ -230,65 +229,65 @@ pub enum ExprKind {
     LocalRef(Spanned<LocalId>),
     BinOp {
         op: ast::BinOp,
-        lhs: Box<Expr>,
-        rhs: Box<Expr>,
+        lhs: Box<Expr<C>>,
+        rhs: Box<Expr<C>>,
     },
     UnaryOp {
         op: ast::UnaryOp,
-        operand: Box<Expr>,
+        operand: Box<Expr<C>>,
     },
     FnCall {
         callee: Spanned<FunctionRef>,
-        args: Vec<Expr>,
+        args: Vec<Expr<C>>,
     },
     If {
-        condition: Box<Expr>,
-        then_branch: Box<Expr>,
-        else_branch: Box<Expr>,
+        condition: Box<Expr<C>>,
+        then_branch: Box<Expr<C>>,
+        else_branch: Box<Expr<C>>,
     },
     QuantityLiteral {
         value: f64,
         unit: ResolvedUnitExpr,
     },
     Convert {
-        expr: Box<Expr>,
+        expr: Box<Expr<C>>,
         target: ResolvedUnitExpr,
     },
     DisplayTimezone {
-        expr: Box<Expr>,
+        expr: Box<Expr<C>>,
         timezone: IanaTimeZoneId,
     },
     FieldAccess {
-        expr: Box<Expr>,
+        expr: Box<Expr<C>>,
         field: Spanned<FieldName>,
     },
     ConstructorCall {
         callee: Spanned<ResolvedConstructorName>,
         generic_args: Vec<GenericArg>,
-        fields: Vec<FieldInit>,
+        fields: Vec<FieldInit<C>>,
     },
     MapLiteral {
-        entries: Vec<MapEntry>,
+        entries: Vec<MapEntry<C>>,
     },
     ForComp {
         bindings: Vec<ForBinding>,
-        body: Box<Expr>,
+        body: Box<Expr<C>>,
     },
     IndexAccess {
-        expr: Box<Expr>,
-        args: NonEmpty<IndexArg>,
+        expr: Box<Expr<C>>,
+        args: NonEmpty<IndexArg<C>>,
     },
     Scan {
-        source: Box<Expr>,
-        init: Box<Expr>,
+        source: Box<Expr<C>>,
+        init: Box<Expr<C>>,
         acc: LocalDef,
         val: LocalDef,
-        body: Box<Expr>,
+        body: Box<Expr<C>>,
     },
     Unfold {
         recurrence: Box<UnfoldRecurrence>,
-        init: Box<Expr>,
-        body: Box<Expr>,
+        init: Box<Expr<C>>,
+        body: Box<Expr<C>>,
     },
     /// A key introduction form over a resolved axis:
     /// `key(Axis, spelling)`, `fin_key(Fin(N), e)`, or a coordinate search.
@@ -296,16 +295,16 @@ pub enum ExprKind {
         kind: crate::syntax::ast::KeyFormKind,
         axis: ForBindingIndex,
         axis_span: Span,
-        arg: Box<Expr>,
+        arg: Box<Expr<C>>,
     },
     Match {
-        scrutinee: Box<Expr>,
-        arms: Vec<MatchArm>,
+        scrutinee: Box<Expr<C>>,
+        arms: Vec<MatchArm<C>>,
     },
     VariantLiteral(IndexVariantRef),
     DagCall {
         target: Spanned<DagId>,
-        args: Vec<ParamBinding>,
+        args: Vec<ParamBinding<C>>,
         static_bindings: DagCallStaticBindings,
         output: Spanned<ResolvedDeclName>,
     },
@@ -452,19 +451,19 @@ impl std::fmt::Display for ExternFnRef {
 
 /// A lowered assertion body.
 #[derive(Debug, Clone)]
-pub enum AssertBody {
-    Expr(Box<Expr>),
+pub enum AssertBody<C: Completeness = Strict> {
+    Expr(Box<Expr<C>>),
     Tolerance {
-        actual: Box<Expr>,
-        expected: Box<Expr>,
-        tolerance: Box<Expr>,
+        actual: Box<Expr<C>>,
+        expected: Box<Expr<C>>,
+        tolerance: Box<Expr<C>>,
     },
 }
 
-impl AssertBody {
+impl<C: Completeness> AssertBody<C> {
     /// Assertion operands have independent lexical scopes but one source revision.
-    pub fn expressions(&self) -> impl Iterator<Item = &Expr> {
-        let operands: [Option<&Expr>; 3] = match self {
+    pub fn expressions(&self) -> impl Iterator<Item = &Expr<C>> {
+        let operands: [Option<&Expr<C>>; 3] = match self {
             Self::Expr(expr) => [Some(expr), None, None],
             Self::Tolerance {
                 actual,
@@ -475,8 +474,8 @@ impl AssertBody {
         operands.into_iter().flatten()
     }
 
-    pub(super) fn expressions_mut(&mut self) -> impl Iterator<Item = &mut Expr> {
-        let operands: [Option<&mut Expr>; 3] = match self {
+    pub(super) fn expressions_mut(&mut self) -> impl Iterator<Item = &mut Expr<C>> {
+        let operands: [Option<&mut Expr<C>>; 3] = match self {
             Self::Expr(expr) => [Some(expr), None, None],
             Self::Tolerance {
                 actual,
@@ -490,16 +489,16 @@ impl AssertBody {
 
 /// Field initializer after expression lowering.
 #[derive(Debug, Clone)]
-pub struct FieldInit {
+pub struct FieldInit<C: Completeness = Strict> {
     pub name: Spanned<FieldName>,
-    pub value: Expr,
+    pub value: Expr<C>,
 }
 
 /// A named param binding in a DAG call expression.
 #[derive(Debug, Clone)]
-pub struct ParamBinding {
+pub struct ParamBinding<C: Completeness = Strict> {
     pub target: Spanned<ResolvedDeclName>,
-    pub value: Expr,
+    pub value: Expr<C>,
 }
 
 /// Canonical Static substitutions supplied by one direct DAG call.
@@ -519,9 +518,9 @@ pub enum DagCallIndexBinding {
 
 /// A resolved map literal entry.
 #[derive(Debug, Clone)]
-pub struct MapEntry {
+pub struct MapEntry<C: Completeness = Strict> {
     pub keys: NonEmpty<MapEntryKey>,
-    pub value: Expr,
+    pub value: Expr<C>,
 }
 
 /// A single resolved map key.
@@ -547,17 +546,17 @@ pub enum ForBindingIndex {
 
 /// A resolved index-access argument.
 #[derive(Debug, Clone)]
-pub enum IndexArg {
+pub enum IndexArg<C: Completeness = Strict> {
     Variant(IndexVariantRef),
     Var(Spanned<LocalId>),
-    Expr(Box<Expr>),
+    Expr(Box<Expr<C>>),
 }
 
 /// One lowered match arm.
 #[derive(Debug, Clone)]
-pub struct MatchArm {
+pub struct MatchArm<C: Completeness = Strict> {
     pub pattern: MatchPattern,
-    pub body: Expr,
+    pub body: Expr<C>,
     pub span: Span,
 }
 

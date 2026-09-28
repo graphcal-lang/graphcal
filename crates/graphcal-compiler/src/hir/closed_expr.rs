@@ -24,8 +24,6 @@ pub enum ClosedExpressionError {
     NonFiniteNumber,
     #[error("quantity values must be finite")]
     NonFiniteQuantity,
-    #[error("an unresolved expression is not allowed")]
-    Unresolved,
     #[error("references, computations, and control-flow expressions are not allowed")]
     NotLiteral,
     #[error(transparent)]
@@ -94,7 +92,7 @@ const fn validate_literal_node(expr: &Expr) -> Result<(), ClosedExpressionError>
         {
             Ok(())
         }
-        ExprKind::Error { .. } => Err(ClosedExpressionError::Unresolved),
+        ExprKind::Error(no_error) => no_error.absurd(),
         ExprKind::StringLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
