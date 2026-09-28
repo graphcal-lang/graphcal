@@ -17,7 +17,7 @@ use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::names::{NameDef, NameNamespace, NamespacePath};
+use crate::syntax::names::{NameDef, NameNamespace};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::SourceIdentifier;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
@@ -189,7 +189,10 @@ impl UnfrozenIR {
         };
         self.unit_bindings.extend(units.into_iter().map(|unit| {
             (
-                UnitRef::qualified(NamespacePath::root(alias.atom().clone()), unit.clone()),
+                UnitRef::qualified(
+                    crate::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
+                    unit.clone(),
+                ),
                 ResolvedUnitName::from_def(instance_owner.clone(), unit.clone()),
             )
         }));

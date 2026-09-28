@@ -2214,10 +2214,9 @@ fn resolve_selective_binding(
 ) -> Option<VisibleBinding> {
     use graphcal_compiler::syntax::ast::ImportItemNamespace;
     use graphcal_compiler::syntax::names::NamePath;
-    use graphcal_compiler::syntax::non_empty::NonEmpty;
 
     let local = item.local_name_atom().clone();
-    let path = NamePath::new(NonEmpty::new(local.clone(), Vec::new()));
+    let path = NamePath::local(local.clone());
     let target = match item.namespace {
         ImportItemNamespace::Term => match resolver.resolve_decl_path(owner, &path) {
             Ok(declaration) => SymbolKey::Declaration(declaration),

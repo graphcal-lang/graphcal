@@ -379,7 +379,7 @@ impl<'a> ExprLoweringContext<'a> {
         self.unit_registry?.get_unit(reference)?;
         Some(ResolvedUnitName::from_def(
             self.owner.clone(),
-            reference.name().clone(),
+            reference.leaf().clone(),
         ))
     }
 }
@@ -2701,7 +2701,7 @@ impl<'a> ExprLowerer<'a> {
         // `alias::name(...)`: an extern call when `alias` is a plugin alias in
         // scope. Extern functions are only callable in this qualified form.
         if let Some((qualifiers, leaf)) = callee.qualifier_and_leaf()
-            && let [qualifier] = qualifiers
+            && let [qualifier] = qualifiers.as_slice()
             && let Some(target) = self.ctx.resolver.plugin_alias(
                 self.ctx.owner,
                 &crate::syntax::module_name::ModuleAliasName::classify(

@@ -4,7 +4,6 @@ use crate::syntax::ast::{
     GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
     TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
-use crate::syntax::dimension::UnitRef;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -582,7 +581,7 @@ impl Parser<'_> {
             let path = self.parse_ident_path()?;
             let start_span = path.span();
             let mut end_span = path.leaf().span;
-            let name = Spanned::new(UnitRef::from_name_path(path.to_name_path()), start_span);
+            let name = Spanned::new(path.to_name_path().classify_leaf(), start_span);
             let power = self.parse_term_power(&mut end_span)?;
             Ok((
                 vec![UnitExprItem {

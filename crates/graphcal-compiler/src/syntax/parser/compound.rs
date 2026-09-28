@@ -456,7 +456,7 @@ node x: Dimensionless = match @r {
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
-                    assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "module");
+                    assert_eq!(callee.owner().unwrap()[0].name.as_str(), "module");
                     assert_eq!(callee.leaf().name.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 1);
                 }
@@ -824,7 +824,7 @@ node x: Dimensionless = match @r {
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
                         panic!("expected syntactic path pattern");
                     };
-                    assert_eq!(path.len(), 2);
+                    assert_eq!(path.qualifier().len(), 1);
                     assert_eq!(bindings.len(), 1);
                 }
                 other => panic!("expected Match, got {other:?}"),

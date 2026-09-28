@@ -25,8 +25,9 @@
 //! - <code>[ResolvedName]&lt;Ns&gt;</code> is a reference that has passed module-aware
 //!   resolution. It stores the canonical owning [`DagId`](crate::dag_id::DagId)
 //!   plus the leaf [`NameAtom`], rather than preserving source qualifier text.
-//! - [`NamePath`] is a syntactic non-empty dotted path with no semantic
-//!   namespace assigned to any segment. Keep unresolved reference positions as a
+//! - <code>[Qualified]&lt;Seg, Leaf&gt;</code> is the single source-path shape
+//!   `leaf` / `seg.seg::leaf`. [`NamePath`] is its span-less,
+//!   namespace-neutral instance. Keep unresolved reference positions as a
 //!   `NamePath` (or [`IdentPath`](crate::syntax::ast::IdentPath) when segment
 //!   spans matter) until resolution can produce a domain-specific resolved type.
 //!
@@ -35,6 +36,8 @@
 //! preserve and pattern-match the typed parts.
 
 use std::marker::PhantomData;
+
+use crate::syntax::non_empty::NonEmpty;
 
 /// Error returned when constructing a [`NameAtom`] from invalid text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -316,242 +319,187 @@ impl<Ns: NameNamespace> std::fmt::Display for ResolvedName<Ns> {
     }
 }
 
-/// A syntactic dotted path whose segments all denote DAG/module namespaces.
+/// A leaf name selected locally or after a dotted owner path and `::`.
 ///
-/// Dots have exactly this role before a `::` member boundary. Keeping the path
-/// separate from the selected name in [`NamePath`] prevents a module member
-/// from being mistaken for another dotted namespace segment.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NamespacePath {
-    segments: crate::syntax::non_empty::NonEmpty<NameAtom>,
-}
-
-impl NamespacePath {
-    /// Construct a namespace path from already-validated atoms.
-    #[must_use]
-    pub const fn new(segments: crate::syntax::non_empty::NonEmpty<NameAtom>) -> Self {
-        Self { segments }
-    }
-
-    /// Construct a one-segment namespace path.
-    #[must_use]
-    pub fn root(atom: NameAtom) -> Self {
-        Self::new(crate::syntax::non_empty::NonEmpty::singleton(atom))
-    }
-
-    /// Borrow the namespace segments in source order.
-    #[must_use]
-    pub fn segments(&self) -> &[NameAtom] {
-        self.segments.as_slice()
-    }
-
-    /// Consume the namespace segments.
-    #[must_use]
-    pub fn into_segments(self) -> crate::syntax::non_empty::NonEmpty<NameAtom> {
-        self.segments
-    }
-
-    /// Human-readable dotted namespace path for source boundaries.
-    #[must_use]
-    pub fn display_path(&self) -> String {
-        self.segments
-            .iter()
-            .map(NameAtom::as_str)
-            .collect::<Vec<_>>()
-            .join(".")
-    }
-}
-
-impl std::fmt::Display for NamespacePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.display_path())
-    }
-}
-
-/// A source-visible name selected either locally or after a `::` boundary.
+/// This is the one source-path shape of the language: `leaf` or
+/// `seg.seg::leaf`. Dots separate owner segments and exactly one `::`
+/// separates the owner from the selected leaf, so the owner is either absent
+/// or non-empty and the two parts can never be confused. Consumers pick the
+/// segment and leaf types for their phase and namespace:
 ///
-/// `NamePath` deliberately cannot represent an all-dot member path. A local
-/// name has no owner; a member name preserves its dotted namespace owner and
-/// its non-DAG member as distinct typed fields.
+/// - [`NamePath`] (`Qualified<NameAtom, NameAtom>`) is span-less and
+///   namespace-neutral;
+/// - [`IdentPath`](crate::syntax::ast::IdentPath) keeps per-segment spans;
+/// - [`UnitRef`](crate::syntax::dimension::UnitRef) and
+///   [`DimRef`](crate::syntax::dimension::DimRef) classify the leaf;
+/// - [`ScopedName`](crate::syntax::module_name::ScopedName) classifies both
+///   the owner segments (module aliases) and the leaf (a declaration).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NamePath {
-    owner: Option<NamespacePath>,
-    name: NameAtom,
+pub struct Qualified<Seg, Leaf> {
+    owner: Option<NonEmpty<Seg>>,
+    leaf: Leaf,
 }
 
-impl NamePath {
-    /// Construct a path from a legacy segment sequence at typed construction
-    /// boundaries. One segment is local; two or more use the final segment as
-    /// the member after `::`.
+impl<Seg, Leaf> Qualified<Seg, Leaf> {
+    /// Construct a local name with no `::` boundary.
     #[must_use]
-    pub fn new(segments: crate::syntax::non_empty::NonEmpty<NameAtom>) -> Self {
-        let (name, owner) = segments.into_last_and_init();
-        Self {
-            owner: crate::syntax::non_empty::NonEmpty::try_from_vec(owner)
-                .ok()
-                .map(NamespacePath::new),
-            name,
-        }
+    pub const fn local(leaf: Leaf) -> Self {
+        Self { owner: None, leaf }
     }
 
-    /// Construct a one-segment local name.
+    /// Construct a leaf selected after a non-empty dotted owner and `::`.
     #[must_use]
-    pub const fn local(name: NameAtom) -> Self {
-        Self { owner: None, name }
-    }
-
-    /// Construct a member selected from a dotted namespace path by `::`.
-    #[must_use]
-    pub const fn member(owner: NamespacePath, name: NameAtom) -> Self {
+    #[expect(
+        clippy::self_named_constructors,
+        reason = "`local` / `qualified` name the two path shapes symmetrically"
+    )]
+    pub const fn qualified(owner: NonEmpty<Seg>, leaf: Leaf) -> Self {
         Self {
             owner: Some(owner),
-            name,
+            leaf,
         }
     }
 
-    /// Construct a member from owner atoms plus its leaf name.
-    ///
-    /// An empty owner produces a local name; this keeps typed IR boundary
-    /// conversions straightforward without fabricating an empty namespace.
+    /// Construct from an optional owner (local when `None`).
     #[must_use]
-    pub(crate) fn qualified_path(
-        owner: impl IntoIterator<Item = NameAtom>,
-        name: NameAtom,
-    ) -> Self {
-        match crate::syntax::non_empty::NonEmpty::try_from_vec(owner.into_iter().collect()) {
-            Ok(owner) => Self::member(NamespacePath::new(owner), name),
-            Err(_) => Self::local(name),
-        }
+    pub const fn from_parts(owner: Option<NonEmpty<Seg>>, leaf: Leaf) -> Self {
+        Self { owner, leaf }
     }
 
-    /// The dotted namespace owner before `::`, when this is a member name.
+    /// The dotted owner before `::`, when this is a qualified name.
     #[must_use]
-    pub const fn owner(&self) -> Option<&NamespacePath> {
+    pub const fn owner(&self) -> Option<&NonEmpty<Seg>> {
         self.owner.as_ref()
     }
 
-    /// Consume this reference into its structured owner and selected name.
+    /// The owner segments before `::`; empty for a local name.
     #[must_use]
-    pub fn into_parts(self) -> (Option<NamespacePath>, NameAtom) {
-        (self.owner, self.name)
+    pub fn qualifier(&self) -> &[Seg] {
+        self.owner.as_ref().map_or(&[], NonEmpty::as_slice)
     }
 
-    /// Consume and return all segments, omitting punctuation at this explicit
-    /// compatibility boundary.
+    /// The selected local or member leaf.
     #[must_use]
-    pub fn into_segments(self) -> crate::syntax::non_empty::NonEmpty<NameAtom> {
-        match self.owner {
-            Some(owner) => {
-                let mut segments = owner.into_segments();
-                segments.push(self.name);
-                segments
-            }
-            None => crate::syntax::non_empty::NonEmpty::singleton(self.name),
-        }
+    pub const fn leaf(&self) -> &Leaf {
+        &self.leaf
     }
 
-    /// Number of source name segments. Always at least one.
+    /// The leaf only when this is a local name.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub const fn as_bare(&self) -> Option<&Leaf> {
         match &self.owner {
-            Some(owner) => owner.segments.len() + 1,
-            None => 1,
-        }
-    }
-
-    /// Returns `false`; provided for sequence-like APIs.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    /// Returns whether this is a local name with no `::` boundary.
-    #[must_use]
-    pub(crate) const fn is_bare(&self) -> bool {
-        self.owner.is_none()
-    }
-
-    /// Returns the selected local/member name.
-    #[must_use]
-    pub const fn leaf(&self) -> &NameAtom {
-        &self.name
-    }
-
-    /// Returns the selected name only when this is local.
-    #[must_use]
-    pub const fn as_bare(&self) -> Option<&NameAtom> {
-        match &self.owner {
-            None => Some(&self.name),
+            None => Some(&self.leaf),
             Some(_) => None,
         }
     }
 
-    /// Split the structured owner and selected name at a compatibility
-    /// boundary. The owner slice is empty for local names.
+    /// The owner and leaf only when this is a qualified name.
     #[must_use]
-    pub(crate) fn split_last(&self) -> (&[NameAtom], &NameAtom) {
-        (
-            self.owner
-                .as_ref()
-                .map_or(&[] as &[NameAtom], NamespacePath::segments),
-            &self.name,
-        )
+    pub const fn qualifier_and_leaf(&self) -> Option<(&NonEmpty<Seg>, &Leaf)> {
+        match &self.owner {
+            Some(owner) => Some((owner, &self.leaf)),
+            None => None,
+        }
     }
 
-    /// Returns the owner segments before `::`. Empty for local names.
-    #[cfg(test)]
+    /// Returns whether this name crosses a `::` boundary.
     #[must_use]
-    fn qualifier_segments(&self) -> &[NameAtom] {
-        self.split_last().0
+    pub const fn is_qualified(&self) -> bool {
+        self.owner.is_some()
     }
 
-    /// Returns owner segments and selected name only for a member path.
+    /// Consume into the optional owner and the leaf.
     #[must_use]
-    pub fn qualifier_and_leaf(&self) -> Option<(&[NameAtom], &NameAtom)> {
-        self.owner
-            .as_ref()
-            .map(|owner| (owner.segments(), &self.name))
+    pub fn into_parts(self) -> (Option<NonEmpty<Seg>>, Leaf) {
+        (self.owner, self.leaf)
     }
 
-    /// Construct a local name from external text.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NameAtomError`] when the string is empty or contains source
-    /// punctuation.
-    fn try_local(s: impl Into<String>) -> Result<Self, NameAtomError> {
-        NameAtom::parse(s).map(Self::local)
+    /// Transform segments and leaf while preserving the path shape.
+    #[must_use]
+    pub fn map<S, L>(
+        self,
+        segment: impl FnMut(Seg) -> S,
+        leaf: impl FnOnce(Leaf) -> L,
+    ) -> Qualified<S, L> {
+        Qualified {
+            owner: self.owner.map(|owner| owner.map(segment)),
+            leaf: leaf(self.leaf),
+        }
     }
 
+    /// Transform borrowed segments and leaf while preserving the path shape.
+    #[must_use]
+    pub fn map_ref<S, L>(
+        &self,
+        segment: impl FnMut(&Seg) -> S,
+        leaf: impl FnOnce(&Leaf) -> L,
+    ) -> Qualified<S, L> {
+        Qualified {
+            owner: self.owner.as_ref().map(|owner| owner.map_ref(segment)),
+            leaf: leaf(&self.leaf),
+        }
+    }
+}
+
+impl<Seg, Leaf> From<Leaf> for Qualified<Seg, Leaf> {
+    fn from(leaf: Leaf) -> Self {
+        Self::local(leaf)
+    }
+}
+
+impl<Seg: std::fmt::Display, Leaf: std::fmt::Display> std::fmt::Display for Qualified<Seg, Leaf> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(owner) = &self.owner {
+            for (index, segment) in owner.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(".")?;
+                }
+                write!(f, "{segment}")?;
+            }
+            f.write_str("::")?;
+        }
+        write!(f, "{}", self.leaf)
+    }
+}
+
+/// A span-less, namespace-neutral source path (`leaf` or `a.b::leaf`).
+///
+/// Keep unresolved reference positions as a `NamePath` until module-aware
+/// resolution can produce a domain-specific resolved type.
+pub type NamePath = Qualified<NameAtom, NameAtom>;
+
+impl NamePath {
     /// Construct a local name from trusted leaf text, panicking if invalid.
     #[expect(
         clippy::panic,
         reason = "trusted constructor centralizes explicit panic policy"
     )]
     pub(crate) fn expect_local(s: impl Into<String>) -> Self {
-        Self::try_local(s)
-            .unwrap_or_else(|err| panic!("trusted NamePath leaf must be valid: {err}"))
+        NameAtom::parse(s).map_or_else(
+            |err| panic!("trusted NamePath leaf must be valid: {err}"),
+            Self::local,
+        )
+    }
+
+    /// Classify the leaf into a namespace while keeping the owner neutral.
+    #[must_use]
+    pub fn classify_leaf<Ns: NameNamespace>(self) -> Qualified<NameAtom, NameDef<Ns>> {
+        self.map(|segment| segment, NameDef::classify)
     }
 
     /// Human-readable source spelling for diagnostics and formatting.
     #[must_use]
     pub fn display_path(&self) -> String {
-        self.owner.as_ref().map_or_else(
-            || self.name.to_string(),
-            |owner| format!("{owner}::{}", self.name),
-        )
+        self.to_string()
     }
 }
 
-impl From<NameAtom> for NamePath {
-    fn from(atom: NameAtom) -> Self {
-        Self::local(atom)
-    }
-}
-
-impl std::fmt::Display for NamePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.display_path())
+impl<Ns: NameNamespace> Qualified<NameAtom, NameDef<Ns>> {
+    /// Drop the leaf's namespace to obtain the neutral path consumed by the
+    /// resolver.
+    #[must_use]
+    pub fn to_name_path(&self) -> NamePath {
+        self.map_ref(Clone::clone, |leaf| leaf.atom().clone())
     }
 }
 
@@ -647,29 +595,53 @@ mod tests {
         assert!(a < b);
     }
 
-    #[test]
-    fn name_path_try_local_rejects_dotted_paths() {
-        assert_eq!(
-            NamePath::try_local("module.Value").unwrap_err(),
-            NameAtomError::ContainsDot
-        );
+    fn atom(s: &str) -> NameAtom {
+        NameAtom::parse(s).unwrap()
     }
 
     #[test]
-    fn name_path_preserves_qualifier_and_leaf() {
-        let path = NamePath::qualified_path(
-            [NameAtom::parse("module").unwrap()],
-            NameAtom::parse("Index").unwrap(),
-        );
-        assert_eq!(path.display_path(), "module::Index");
+    fn qualified_path_preserves_owner_and_leaf() {
+        let path = NamePath::qualified(NonEmpty::new(atom("a"), vec![atom("b")]), atom("Index"));
+        assert_eq!(path.display_path(), "a.b::Index");
         assert_eq!(path.leaf().as_str(), "Index");
+        assert!(path.is_qualified());
+        assert_eq!(path.as_bare(), None);
         assert_eq!(
-            path.qualifier_segments()
+            path.qualifier()
                 .iter()
                 .map(NameAtom::as_str)
                 .collect::<Vec<_>>(),
-            ["module"]
+            ["a", "b"]
         );
+        let (owner, leaf) = path.qualifier_and_leaf().unwrap();
+        assert_eq!(owner.len(), 2);
+        assert_eq!(leaf.as_str(), "Index");
+    }
+
+    #[test]
+    fn local_path_has_no_owner() {
+        let path = NamePath::local(atom("x"));
+        assert_eq!(path.to_string(), "x");
+        assert!(!path.is_qualified());
+        assert!(path.qualifier().is_empty());
+        assert_eq!(path.as_bare().map(NameAtom::as_str), Some("x"));
+        assert!(path.qualifier_and_leaf().is_none());
+        assert_eq!(NamePath::from(atom("x")), path);
+        assert_eq!(NamePath::from_parts(None, atom("x")), path);
+    }
+
+    #[test]
+    fn qualified_map_and_classify_keep_shape() {
+        let path = NamePath::qualified(NonEmpty::singleton(atom("m")), atom("x"));
+        let classified = path.clone().classify_leaf::<TestDeclNamespace>();
+        assert_eq!(classified.leaf(), &TestDeclName::expect_valid("x"));
+        assert_eq!(classified.to_name_path(), path);
+        let lengths = path.map_ref(|segment| segment.as_str().len(), |leaf| leaf.as_str().len());
+        assert_eq!(lengths.qualifier(), &[1]);
+        assert_eq!(*lengths.leaf(), 1);
+        let (owner, leaf) = path.into_parts();
+        assert_eq!(owner.map(|owner| owner.len()), Some(1));
+        assert_eq!(leaf.as_str(), "x");
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::NamePath;
+use crate::syntax::names::{NamePath, Qualified};
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
@@ -61,173 +61,33 @@ pub enum UnresolvedRef {
 /// A span-aware local/member name in expression position.
 ///
 /// Dotted namespace-owner segments and the member after `::` are separate
-/// fields. Consequently this type cannot encode the old ambiguous `a.b`
-/// convention.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
-pub struct IdentPath {
-    owner: Option<NonEmpty<Ident>>,
-    member: Ident,
-}
+/// fields of [`Qualified`]. Consequently this type cannot encode the old
+/// ambiguous `a.b` convention.
+pub type IdentPath = Qualified<Ident, Ident>;
 
 impl IdentPath {
-    /// Construct from a segment sequence at typed construction boundaries. One
-    /// segment is local; two or more treat the final segment as the member.
-    #[must_use]
-    pub fn new(segments: NonEmpty<Ident>) -> Self {
-        let (member, owner) = segments.into_last_and_init();
-        Self {
-            owner: NonEmpty::try_from_vec(owner).ok(),
-            member,
-        }
-    }
-
-    /// Construct a one-segment local name.
-    #[must_use]
-    pub const fn bare(member: Ident) -> Self {
-        Self {
-            owner: None,
-            member,
-        }
-    }
-
-    /// Construct a member selected after a dotted namespace owner and `::`.
-    #[must_use]
-    pub const fn member(owner: NonEmpty<Ident>, member: Ident) -> Self {
-        Self {
-            owner: Some(owner),
-            member,
-        }
-    }
-
-    /// Dotted namespace-owner segments before `::`.
-    #[must_use]
-    pub fn owner_segments(&self) -> Option<&[Ident]> {
-        self.owner.as_ref().map(NonEmpty::as_slice)
-    }
-
-    /// Consume and return all identifier segments, dropping punctuation only
-    /// at this explicit compatibility boundary.
-    #[must_use]
-    pub fn into_segments(self) -> NonEmpty<Ident> {
-        match self.owner {
-            Some(mut owner) => {
-                owner.push(self.member);
-                owner
-            }
-            None => NonEmpty::singleton(self.member),
-        }
-    }
-
-    /// Consume and return all identifier segments.
-    #[must_use]
-    pub fn into_vec(self) -> Vec<Ident> {
-        self.into_segments().into_vec()
-    }
-
-    /// Number of source name segments. Always at least one.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        match &self.owner {
-            Some(owner) => owner.len() + 1,
-            None => 1,
-        }
-    }
-
-    /// Returns `false`; provided for sequence-like APIs.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    /// Returns whether this is a local name with no member boundary.
-    #[must_use]
-    const fn is_bare(&self) -> bool {
-        self.owner.is_none()
-    }
-
     /// Source span covering the namespace owner, `::`, and selected member.
     #[must_use]
     pub(crate) fn span(&self) -> Span {
-        self.owner.as_ref().map_or(self.member.span, |owner| {
-            owner.first().span.merge(self.member.span)
-        })
+        let leaf = self.leaf().span;
+        self.owner()
+            .map_or(leaf, |owner| owner.first().span.merge(leaf))
     }
 
     /// Drop per-segment spans while preserving the `::` boundary.
     #[must_use]
-    pub(crate) fn to_name_path(&self) -> crate::syntax::names::NamePath {
-        self.owner.as_ref().map_or_else(
-            || NamePath::local(self.member.name.atom().clone()),
-            |owner| {
-                NamePath::member(
-                    crate::syntax::names::NamespacePath::new(
-                        owner.clone().map(|ident| ident.name.into_atom()),
-                    ),
-                    self.member.name.atom().clone(),
-                )
-            },
+    pub(crate) fn to_name_path(&self) -> NamePath {
+        self.map_ref(
+            |ident| ident.name.atom().clone(),
+            |ident| ident.name.atom().clone(),
         )
-    }
-
-    /// Selected local/member identifier.
-    #[must_use]
-    pub const fn leaf(&self) -> &Ident {
-        &self.member
-    }
-
-    /// Split owner segments and selected member at a compatibility boundary.
-    #[must_use]
-    pub(crate) fn split_last(&self) -> (&[Ident], &Ident) {
-        (
-            self.owner
-                .as_ref()
-                .map_or(&[] as &[Ident], NonEmpty::as_slice),
-            &self.member,
-        )
-    }
-
-    /// Owner segments before `::`. Empty for local names.
-    #[must_use]
-    pub fn qualifier_segments(&self) -> &[Ident] {
-        self.split_last().0
-    }
-
-    /// Owner segments and selected member only for a member path.
-    #[must_use]
-    pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
-        self.owner
-            .as_ref()
-            .map(|owner| (owner.as_slice(), &self.member))
-    }
-
-    /// Selected identifier only when this is a local path.
-    #[must_use]
-    pub const fn as_bare(&self) -> Option<&Ident> {
-        match &self.owner {
-            None => Some(&self.member),
-            Some(_) => None,
-        }
     }
 
     /// Consume this path and return its identifier when local.
     pub(crate) fn into_bare(self) -> Result<Ident, Self> {
-        if self.is_bare() {
-            Ok(self.member)
-        } else {
-            Err(self)
-        }
-    }
-
-    /// Convert this spanned syntax path into a span-less [`NamePath`].
-    #[must_use]
-    fn into_name_path(self) -> NamePath {
-        let member = self.member.name;
-        match self.owner {
-            Some(owner) => NamePath::member(
-                crate::syntax::names::NamespacePath::new(owner.map(|ident| ident.name.into_atom())),
-                member.into_atom(),
-            ),
-            None => NamePath::local(member.into_atom()),
+        match self.into_parts() {
+            (None, leaf) => Ok(leaf),
+            (Some(owner), leaf) => Err(Self::qualified(owner, leaf)),
         }
     }
 
@@ -235,38 +95,19 @@ impl IdentPath {
     #[must_use]
     pub(crate) fn into_spanned_name_path(self) -> Spanned<NamePath> {
         let span = self.span();
-        Spanned::new(self.into_name_path(), span)
+        Spanned::new(
+            self.map(
+                |ident| ident.name.into_atom(),
+                |ident| ident.name.into_atom(),
+            ),
+            span,
+        )
     }
 
     /// Human-readable source spelling for diagnostics and formatting.
     #[must_use]
     pub fn display_path(&self) -> String {
-        self.owner.as_ref().map_or_else(
-            || self.member.name.to_string(),
-            |owner| {
-                format!(
-                    "{}::{}",
-                    owner
-                        .iter()
-                        .map(|segment| segment.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("."),
-                    self.member.name
-                )
-            },
-        )
-    }
-}
-
-impl From<Ident> for IdentPath {
-    fn from(ident: Ident) -> Self {
-        Self::bare(ident)
-    }
-}
-
-impl std::fmt::Display for IdentPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.display_path())
+        self.to_string()
     }
 }
 

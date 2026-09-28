@@ -1206,10 +1206,12 @@ mod tests {
                     assert_eq!(target.terms.len(), 1);
                     let unit_ref = &target.terms[0].name.value;
                     assert_eq!(
-                        unit_ref.qualifier().map(ToString::to_string).as_deref(),
-                        Some("u")
+                        unit_ref
+                            .owner()
+                            .map(|owner| owner.iter().map(ToString::to_string).collect::<Vec<_>>()),
+                        Some(vec!["u".to_string()])
                     );
-                    assert_eq!(unit_ref.name().as_str(), "mile");
+                    assert_eq!(unit_ref.leaf().as_str(), "mile");
                 }
                 _ => panic!("expected Convert"),
             },
@@ -1388,7 +1390,7 @@ mod tests {
     fn parse_qualified_function_call_preserves_callee_path() {
         let expr = parse_node_expr("module::sqrt(@x)");
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
-            assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "module");
+            assert_eq!(callee.owner().unwrap()[0].name.as_str(), "module");
             assert_eq!(callee.leaf().name.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
         } else {
@@ -1970,7 +1972,7 @@ mod tests {
         match &node.definition.formula().unwrap().kind {
             ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
                 assert_eq!(
-                    path.owner_segments()
+                    path.owner()
                         .unwrap()
                         .iter()
                         .map(|segment| segment.name.as_str())

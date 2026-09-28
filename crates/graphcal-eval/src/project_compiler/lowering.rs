@@ -116,10 +116,12 @@ fn validate_direct_dag_calls(
 }
 
 fn imported_module_target(
-    owner: &graphcal_compiler::syntax::names::NamespacePath,
+    owner: &graphcal_compiler::syntax::non_empty::NonEmpty<
+        graphcal_compiler::syntax::names::NameAtom,
+    >,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
 ) -> Option<graphcal_compiler::dag_id::DagId> {
-    let (root, children) = owner.segments().split_first()?;
+    let (root, children) = (owner.first(), &owner.as_slice()[1..]);
     let alias = ModuleAliasName::classify(root.clone());
     let binding = module_map.get(&alias)?;
     if binding.role != graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
@@ -135,7 +137,9 @@ fn imported_module_target(
 }
 
 fn is_imported_dynamic_unit_during_lowering(
-    alias: &graphcal_compiler::syntax::names::NamespacePath,
+    alias: &graphcal_compiler::syntax::non_empty::NonEmpty<
+        graphcal_compiler::syntax::names::NameAtom,
+    >,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
@@ -154,10 +158,10 @@ fn remap_imported_dynamic_unit_error(
 ) -> GraphcalError {
     match error {
         GraphcalError::UnknownUnit { name, src, span }
-            if name.qualifier().is_some_and(|alias| {
+            if name.owner().is_some_and(|alias| {
                 is_imported_dynamic_unit_during_lowering(
                     alias,
-                    name.name(),
+                    name.leaf(),
                     module_map,
                     module_interfaces,
                 )
@@ -185,11 +189,11 @@ pub(super) fn validate_imported_runtime_units(
     let mut invalid = None;
     dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
-            && unit.spelling().qualifier().is_some_and(|alias| {
+            && unit.spelling().owner().is_some_and(|alias| {
                 imported_module_target(alias, module_map).is_some_and(|target| {
                     exported_runtime_units
                         .get(&target)
-                        .is_some_and(|names| names.contains(unit.spelling().name()))
+                        .is_some_and(|names| names.contains(unit.spelling().leaf()))
                 })
             })
         {
@@ -1796,7 +1800,7 @@ fn effective_index_binding_contract(
             // (possibly qualified) reference in the dependency's own scope.
             let dimension = resolve_dim_expr_with(&dimension_expr, |reference| {
                 dim_bindings
-                    .get(reference.name())
+                    .get(reference.leaf())
                     .filter(|_| !reference.is_qualified())
                     .map_or_else(
                         || dep_registry.dimensions.get_dimension(reference),

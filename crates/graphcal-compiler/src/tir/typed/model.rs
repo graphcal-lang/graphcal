@@ -419,7 +419,7 @@ impl ProjectTypeStore {
             );
             if let Some(info) = registry.units.get_unit(&reference) {
                 self.units.insert(
-                    ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
+                    ResolvedUnitName::from_def(owner.clone(), reference.leaf().clone()),
                     info.clone(),
                 );
             }
@@ -495,7 +495,7 @@ impl ProjectTypeStore {
                 continue;
             }
             self.insert_dimension_definition(
-                ResolvedDimName::from_def(owner.clone(), reference.name().clone()),
+                ResolvedDimName::from_def(owner.clone(), reference.leaf().clone()),
                 dimension,
             )?;
         }
@@ -504,7 +504,7 @@ impl ProjectTypeStore {
                 continue;
             }
             self.insert_unit_definition(
-                ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
+                ResolvedUnitName::from_def(owner.clone(), reference.leaf().clone()),
                 info,
             )?;
         }

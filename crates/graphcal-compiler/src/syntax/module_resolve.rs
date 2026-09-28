@@ -2359,10 +2359,10 @@ impl ModuleResolver {
                             .flat_map(|scope| scope.selected_indexes.keys()),
                     );
                 candidates.extend(names.map(|name| {
-                    NamePath::new(crate::syntax::non_empty::NonEmpty::new(
-                        alias.atom().clone(),
-                        vec![name.atom().clone()],
-                    ))
+                    NamePath::qualified(
+                        crate::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
+                        name.atom().clone(),
+                    )
                 }));
             }
         }
@@ -2998,7 +2998,8 @@ impl ModuleResolver {
         Ns: ResolvableNamespace,
         S: ModuleSymbolLookup<Ns>,
     {
-        if let Some(atom) = path.as_bare() {
+        let Some((qualifier, leaf)) = path.qualifier_and_leaf() else {
+            let atom = path.leaf();
             let name = NameDef::<Ns>::classify(atom.clone());
             let local = self.module_symbols(owner)?;
             if let Some(symbol) = local_symbols(local).get(&name) {
@@ -3023,9 +3024,8 @@ impl ModuleResolver {
                 namespace: Ns::DISPLAY_NAME,
                 name: atom.to_string(),
             });
-        }
+        };
 
-        let (qualifier, leaf) = path.split_last();
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
         let leaf_name = NameDef::<Ns>::classify(leaf.clone());
@@ -3111,15 +3111,9 @@ impl ModuleResolver {
     fn resolve_module_qualifier(
         &self,
         owner: &DagId,
-        qualifier: &[NameAtom],
+        qualifier: &NonEmpty<NameAtom>,
     ) -> Result<ResolvedModuleQualifier, ModuleResolveError> {
-        let Some((head, rest)) = qualifier.split_first() else {
-            return Err(ModuleResolveError::UnknownName {
-                owner: owner.clone(),
-                namespace: "module",
-                name: String::new(),
-            });
-        };
+        let (head, rest) = (qualifier.first(), &qualifier.as_slice()[1..]);
         let scope = self.module_scope(owner)?;
         let alias = ModuleAliasName::classify(head.clone());
         let alias_target = scope.module_aliases.get(&alias).ok_or_else(|| {
@@ -3985,8 +3979,11 @@ mod tests {
     }
 
     fn path(segments: &[&str]) -> NamePath {
-        let atoms = segments.iter().map(|s| atom(s)).collect::<Vec<_>>();
-        NamePath::new(NonEmpty::try_from_vec(atoms).unwrap())
+        let (leaf, owner) = segments.split_last().unwrap();
+        NamePath::from_parts(
+            NonEmpty::try_from_vec(owner.iter().map(|s| atom(s)).collect()).ok(),
+            atom(leaf),
+        )
     }
 
     fn module_path(segments: &[&str]) -> ModulePath {

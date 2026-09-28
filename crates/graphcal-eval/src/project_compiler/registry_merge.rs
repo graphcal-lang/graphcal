@@ -356,7 +356,7 @@ fn merge_registry_into_builder_filtered(
     // importer's bare dimension scope. Include merges copy the dependency's
     // dimension scope unchanged.
     for (reference, dim) in dep_registry.dimensions.all_dimensions() {
-        let name = reference.name();
+        let name = reference.leaf();
         if (!reference.is_qualified() && dim_bindings.contains_key(name))
             || pure_import_rejects(name.atom(), ImportItemNamespace::Dimension)
         {
@@ -371,7 +371,7 @@ fn merge_registry_into_builder_filtered(
                     continue;
                 }
                 DimRef::qualified(
-                    graphcal_compiler::syntax::names::NamespacePath::root(alias.atom().clone()),
+                    graphcal_compiler::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
                     name.clone(),
                 )
             }
@@ -401,7 +401,7 @@ fn merge_registry_into_builder_filtered(
     // dep registry) is idempotent; a *different* definition under the same
     // reference is a conflict.
     for (name, info) in dep_registry.units.all_units() {
-        if pure_import_rejects(name.name().atom(), ImportItemNamespace::Unit)
+        if pure_import_rejects(name.leaf().atom(), ImportItemNamespace::Unit)
             || (!info.scale.constness().is_const()
                 && !runtime_unit_boundary.includes_runtime_units())
         {
@@ -412,17 +412,17 @@ fn merge_registry_into_builder_filtered(
                 continue;
             }
             if external_surface
-                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.leaf().atom()))
             {
                 continue;
             }
             graphcal_compiler::syntax::dimension::UnitRef::qualified(
-                graphcal_compiler::syntax::names::NamespacePath::root(alias.atom().clone()),
-                name.name().clone(),
+                graphcal_compiler::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
+                name.leaf().clone(),
             )
         } else {
             if external_surface
-                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.leaf().atom()))
             {
                 continue;
             }
