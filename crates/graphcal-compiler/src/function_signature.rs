@@ -439,6 +439,22 @@ pub struct FunctionParam<V = DimBinder, I = IndexBinder> {
     pub kind: ParamKind<V, I>,
 }
 
+impl FunctionParam {
+    /// Render as `name: kind`, the parameter spelling used by
+    /// [`FunctionSignature::format_with_result`], using `format_dim` for
+    /// concrete dimensions.
+    ///
+    /// This is a display boundary (signature help parameter labels).
+    #[must_use]
+    pub fn format_with(&self, format_dim: &mut DimFormatter<'_>) -> String {
+        format!(
+            "{}: {}",
+            self.name,
+            format_param_kind(&self.kind, format_dim)
+        )
+    }
+}
+
 /// A [`FunctionParam`] as written, with binders referenced by name.
 pub type NamedFunctionParam = FunctionParam<DimVarName, IndexVarName>;
 
@@ -796,12 +812,7 @@ impl<S: StructResult> FunctionSignature<S> {
             if i > 0 {
                 out.push_str(", ");
             }
-            let _ = write!(
-                out,
-                "{}: {}",
-                param.name,
-                format_param_kind(&param.kind, format_dim)
-            );
+            out.push_str(&param.format_with(format_dim));
         }
         out.push_str(") -> ");
         match &self.result {

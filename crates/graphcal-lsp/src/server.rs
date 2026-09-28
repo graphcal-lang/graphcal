@@ -40,10 +40,8 @@ use crate::workspace_revision::{
 };
 use graphcal_compiler::builtin::{BuiltinEntry, BuiltinFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
-use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
-use graphcal_compiler::function_signature::{
-    DimMonomial, FunctionSignature, ParamKind, ResultKind,
-};
+use graphcal_compiler::dimension::Dimension;
+use graphcal_compiler::function_signature::FunctionSignature;
 use graphcal_compiler::registry::builtins::scalar_function;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -75,7 +73,7 @@ pub(crate) struct ResolvedImportLink {
 
 /// Structured function signature for Signature Help.
 pub(crate) struct FnSignatureInfo {
-    /// Full signature label, e.g. `"fn sqrt(x: D) -> D^(1/2)"`.
+    /// Full signature label, e.g. `"fn sqrt<D: Dim>(x: D) -> D^(1/2)"`.
     pub(crate) label: String,
     /// Individual parameter labels, e.g. `["x: D"]`.
     pub(crate) parameters: Vec<String>,
@@ -1709,88 +1707,23 @@ fn build_extern_fn_signatures(
     tir: &graphcal_compiler::tir::typed::TIR,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
-    use graphcal_compiler::function_signature::ScalarValueKind as ExternScalarValueKind;
-
+    let mut format_dim = |dim: &Dimension| tir.registry().dimensions.format_dimension(dim);
     let mut sigs = HashMap::new();
     for function in tir.extern_functions().values() {
         cancellation.checkpoint()?;
-        let format_monomial = |monomial: &graphcal_compiler::function_signature::DimMonomial| {
-            let mut parts: Vec<String> = monomial
-                .var_factors()
-                .map(|(var, power)| {
-                    if power == Rational::ONE {
-                        var.to_string()
-                    } else {
-                        format!("{var}^({power})")
-                    }
-                })
-                .collect();
-            if !monomial.fixed_factor().is_dimensionless() {
-                parts.push(
-                    tir.registry()
-                        .dimensions
-                        .format_dimension(monomial.fixed_factor()),
-                );
-            }
-            if parts.is_empty() {
-                "Dimensionless".to_string()
-            } else {
-                parts.join(" * ")
-            }
-        };
-        let format_scalar = |kind: &ExternScalarValueKind| match kind {
-            ExternScalarValueKind::Bool => "Bool".to_string(),
-            ExternScalarValueKind::Int => "Int".to_string(),
-            ExternScalarValueKind::Quantity(monomial) => format_monomial(monomial),
-        };
-        let format_kind = |kind: &ParamKind| match kind {
-            ParamKind::Scalar(scalar) => format_scalar(scalar),
-            ParamKind::Indexed { element, indexes } => {
-                let indexes = indexes
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}[{indexes}]", format_scalar(element))
-            }
-        };
-        let format_result =
-            |kind: &ResultKind<graphcal_compiler::ir::lower::ExternStructResult>| match kind {
-                ResultKind::Value(kind) => format_kind(kind),
-                ResultKind::Struct(result_struct) => result_struct.resolved.as_str().to_string(),
-            };
         let parameters: Vec<String> = function
             .signature
             .params()
             .iter()
-            .map(|param| format!("{}: {}", param.name, format_kind(&param.kind)))
+            .map(|param| param.format_with(&mut format_dim))
             .collect();
-        let binders = if function.signature.dim_vars().is_empty()
-            && function.signature.index_vars().is_empty()
-        {
-            String::new()
-        } else {
-            let vars: Vec<String> = function
-                .signature
-                .dim_vars()
-                .iter()
-                .map(|var| format!("{}: Dim", var.as_str()))
-                .chain(
-                    function
-                        .signature
-                        .index_vars()
-                        .iter()
-                        .map(|var| format!("{}: Index", var.as_str())),
-                )
-                .collect();
-            format!("<{}>", vars.join(", "))
-        };
+        let rendered = function
+            .signature
+            .format_with_result(&mut format_dim, &mut |result_struct, _| {
+                result_struct.resolved.as_str().to_string()
+            });
         let qualified = format!("{}::{}", function.alias, function.name);
-        let label = format!(
-            "fn {qualified}{binders}({}) -> {}",
-            parameters.join(", "),
-            format_result(function.signature.result())
-        );
+        let label = format!("fn {qualified}{rendered}");
         sigs.insert(qualified, FnSignatureInfo { label, parameters });
     }
     Ok(sigs)
@@ -1805,19 +1738,7 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
         for function in BuiltinFn::all() {
             let info = match function.entry() {
                 BuiltinEntry::Kernel(scalar) => {
-                    let (params, ret) =
-                        builtin_signature_parts(scalar_function(scalar).signature())
-                            .unwrap_or_else(|err| {
-                                (
-                                    vec![format!("<invalid builtin signature: {err}>")],
-                                    "<invalid>".to_string(),
-                                )
-                            });
-                    let params_str = params.join(", ");
-                    FnSignatureInfo {
-                        label: format!("fn {function}({params_str}) -> {ret}"),
-                        parameters: params,
-                    }
+                    builtin_kernel_signature_info(function, scalar_function(scalar).signature())
                 }
                 BuiltinEntry::Signature(signature) => FnSignatureInfo {
                     label: signature.label(function.as_str()),
@@ -1832,97 +1753,23 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
     &FN_SIGS
 }
 
-/// Format a dimension for display in builtin signatures.
+/// Render a builtin kernel signature through the shared signature renderer.
 ///
-/// Builtin signatures are defined only in terms of prelude dimensions, so no
-/// per-file registry is needed here. A user-defined base dimension in this path
-/// would be an internal bug in builtin construction.
-fn format_dim_display(dim: &Dimension) -> std::result::Result<String, String> {
-    if dim.is_dimensionless() {
-        return Ok("Dimensionless".to_string());
+/// Builtin signatures reference only prelude dimensions, so the canonical
+/// [`Dimension`] display needs no per-file registry.
+fn builtin_kernel_signature_info(
+    function: BuiltinFn,
+    signature: &FunctionSignature,
+) -> FnSignatureInfo {
+    let mut format_dim = |dim: &Dimension| dim.to_string();
+    FnSignatureInfo {
+        label: format!("fn {function}{}", signature.format_with(&mut format_dim)),
+        parameters: signature
+            .params()
+            .iter()
+            .map(|param| param.format_with(&mut format_dim))
+            .collect(),
     }
-    let parts = dim
-        .iter()
-        .map(|(id, exp)| {
-            let name = builtin_base_dim_name(id)?;
-            Ok(if *exp == Rational::ONE {
-                name.to_string()
-            } else {
-                format!("{name}^{exp}")
-            })
-        })
-        .collect::<std::result::Result<Vec<_>, String>>()?;
-    Ok(parts.join(" * "))
-}
-
-fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
-    match id {
-        BaseDimId::Prelude(name) => Ok(name.as_str()),
-        BaseDimId::UserDefined(_) => Err(format!(
-            "builtin signature unexpectedly referenced user-defined dimension {id:?}"
-        )),
-    }
-}
-
-/// Generate human-readable parameter and return type strings for a builtin function.
-fn builtin_signature_parts(
-    sig: &FunctionSignature,
-) -> std::result::Result<(Vec<String>, String), String> {
-    let params: Vec<String> = sig
-        .params()
-        .iter()
-        .map(|p| Ok(format!("{}: {}", p.name, param_kind_display(&p.kind)?)))
-        .collect::<std::result::Result<_, String>>()?;
-
-    let ret = match sig.result() {
-        ResultKind::Value(kind) => param_kind_display(kind)?,
-        // Builtins never declare struct results; extern hovers render the
-        // nominal type through their own path above.
-        ResultKind::Struct(_) => return Err("struct results are extern-only".to_string()),
-    };
-
-    Ok((params, ret))
-}
-
-fn param_kind_display(kind: &ParamKind) -> std::result::Result<String, String> {
-    use graphcal_compiler::function_signature::ScalarValueKind;
-
-    let scalar_display = |scalar: &ScalarValueKind| match scalar {
-        ScalarValueKind::Bool => Ok("Bool".to_string()),
-        ScalarValueKind::Int => Ok("Int".to_string()),
-        ScalarValueKind::Quantity(monomial) => monomial_display(monomial),
-    };
-    match kind {
-        ParamKind::Scalar(scalar) => scalar_display(scalar),
-        ParamKind::Indexed { element, indexes } => {
-            let indexes = indexes
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            Ok(format!("{}[{indexes}]", scalar_display(element)?))
-        }
-    }
-}
-
-fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, String> {
-    let mut parts: Vec<String> = monomial
-        .var_factors()
-        .map(|(var, power)| {
-            if power == Rational::ONE {
-                var.to_string()
-            } else {
-                format!("{var}^({power})")
-            }
-        })
-        .collect();
-    if !monomial.fixed_factor().is_dimensionless() {
-        parts.push(format_dim_display(monomial.fixed_factor())?);
-    }
-    if parts.is_empty() {
-        return Ok("Dimensionless".to_string());
-    }
-    Ok(parts.join(" * "))
 }
 
 /// Format values and explicit incompleteness outcomes for hover and inlay hints.
@@ -3120,7 +2967,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::dimension::Dimension;
-    use graphcal_compiler::function_signature::{FunctionParam, ScalarValueKind};
+    use graphcal_compiler::function_signature::{FunctionParam, ParamKind, ScalarValueKind};
     use graphcal_compiler::syntax::function_name::FnParamName;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVarName, IndexVariantName};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -3130,6 +2977,7 @@ mod tests {
     use tower_lsp::lsp_types::{InlayHintLabel, Position, Range};
 
     use super::*;
+
     use crate::{completion, goto_definition, inlay_hints};
 
     fn imported_target_for_spelling<'a>(
@@ -3141,6 +2989,53 @@ mod tests {
             .iter()
             .find(|binding| binding.spelling().to_string() == spelling)
             .map(VisibleBinding::target)
+    }
+
+    #[test]
+    fn extern_signature_labels_use_the_shared_signature_renderer() {
+        let uri = Url::parse("file:///extern-labels.gcl").unwrap();
+        let source = concat!(
+            "type DvRange { DvRange(min: Velocity, max: Velocity) }\n",
+            "import plugin \"graphcal:demo\" as demo {\n",
+            "    fn inverse<D: Dim>(x: D) -> D^-1;\n",
+            "    fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);\n",
+            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 / Time;\n",
+            "    fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;\n",
+            "}\n",
+            "node y: Dimensionless = 1.0;\n",
+        );
+        let analysis = run_analysis(&uri, source, &[], test_plugin_host());
+        let signature = |name: &str| {
+            analysis
+                .extern_fn_signatures
+                .get(name)
+                .map(|info| (info.label.as_str(), info.parameters.join("; ")))
+        };
+        assert_eq!(
+            signature("demo::inverse"),
+            Some(("fn demo::inverse<D: Dim>(x: D) -> D^-1", "x: D".to_string()))
+        );
+        assert_eq!(
+            signature("demo::geometric_mean"),
+            Some((
+                "fn demo::geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2)",
+                "x: D1; y: D2".to_string()
+            ))
+        );
+        assert_eq!(
+            signature("demo::lerp"),
+            Some((
+                "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 * Frequency",
+                "a: D; b: D; t: Dimensionless".to_string()
+            ))
+        );
+        assert_eq!(
+            signature("demo::dv_range"),
+            Some((
+                "fn demo::dv_range<I: Index>(xs: Velocity[I]) -> DvRange",
+                "xs: Velocity[I]".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -3165,8 +3060,8 @@ mod tests {
             )
             .unwrap();
             assert_eq!(
-                param_kind_display(&signature.params()[0].kind).unwrap(),
-                expected
+                signature.params()[0].format_with(&mut |_| String::new()),
+                format!("values: {expected}")
             );
             assert!(signature.format_with(|_| String::new()).contains(expected));
         }
@@ -3263,8 +3158,8 @@ mod tests {
         assert!(!signatures.contains_key("datetime"));
         assert!(!signatures.contains_key("to_float"));
         let label = |name: &str| signatures[name].label.as_str();
-        assert_eq!(label("sqrt"), "fn sqrt(x: D) -> D^(1/2)");
-        assert_eq!(label("atan2"), "fn atan2(y: D, x: D) -> Angle");
+        assert_eq!(label("sqrt"), "fn sqrt<D: Dim>(x: D) -> D^(1/2)");
+        assert_eq!(label("atan2"), "fn atan2<D: Dim>(y: D, x: D) -> Angle");
         assert_eq!(label("abs"), "fn abs<D: Dim>(x: D | Complex<D>) -> D");
         assert_eq!(
             label("cross"),
