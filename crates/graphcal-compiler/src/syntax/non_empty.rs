@@ -5,6 +5,7 @@
 //! tail is special (for example `qualifier + member`), prefer a domain-specific
 //! type instead.
 
+use std::num::NonZeroUsize;
 use std::ops::{Index, IndexMut};
 
 use thiserror::Error;
@@ -208,6 +209,14 @@ impl<T> NonEmpty<T> {
         self.items.push(item);
     }
 
+    /// Map borrowed items while preserving non-emptiness.
+    #[must_use]
+    pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> NonEmpty<U> {
+        NonEmpty {
+            items: self.items.iter().map(f).collect(),
+        }
+    }
+
     /// Map each item while preserving non-emptiness.
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> NonEmpty<U> {
         NonEmpty {
@@ -304,5 +313,117 @@ impl<T, const N: usize> TryFrom<[T; N]> for NonEmpty<T> {
 
     fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
         Self::try_from_vec(value.into_iter().collect())
+    }
+}
+
+/// A non-empty sequence whose elements are pairwise distinct.
+///
+/// Order is preserved: consumers such as named-index variants treat the
+/// declaration order as the axis order.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NonEmptyUnique<T> {
+    items: NonEmpty<T>,
+}
+
+/// Two equal items found while building a [`NonEmptyUnique`] sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("item {duplicate} duplicates item {first}")]
+pub struct DuplicateItemError {
+    /// Position of the earlier item.
+    pub first: usize,
+    /// Position of the later, duplicated item.
+    pub duplicate: usize,
+}
+
+impl<T: Eq + std::hash::Hash> NonEmptyUnique<T> {
+    /// Validate that a non-empty sequence is free of duplicates.
+    ///
+    /// # Errors
+    ///
+    /// Returns the positions of the first duplicated pair in source order.
+    pub fn try_from_non_empty(items: NonEmpty<T>) -> Result<Self, DuplicateItemError> {
+        let mut seen = std::collections::HashMap::with_capacity(items.len());
+        for (position, item) in items.iter().enumerate() {
+            if let Some(first) = seen.insert(item, position) {
+                return Err(DuplicateItemError {
+                    first,
+                    duplicate: position,
+                });
+            }
+        }
+        Ok(Self { items })
+    }
+}
+
+impl<T> NonEmptyUnique<T> {
+    /// Borrow the distinct items in order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        self.items.as_slice()
+    }
+
+    /// Iterate over the distinct items in order.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.items.iter()
+    }
+
+    /// Number of items, which is never zero.
+    #[must_use]
+    pub const fn len(&self) -> NonZeroUsize {
+        NonZeroUsize::MIN.saturating_add(self.items.len() - 1)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a NonEmptyUnique<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_empty_unique_preserves_order_and_length() {
+        let items = NonEmptyUnique::try_from_non_empty(NonEmpty::new(3, vec![1, 2])).unwrap();
+        assert_eq!(items.as_slice(), &[3, 1, 2]);
+        assert_eq!(items.iter().copied().collect::<Vec<_>>(), vec![3, 1, 2]);
+        assert_eq!((&items).into_iter().count(), 3);
+        assert_eq!(items.len().get(), 3);
+    }
+
+    #[test]
+    fn non_empty_unique_accepts_singleton() {
+        let items = NonEmptyUnique::try_from_non_empty(NonEmpty::singleton("only")).unwrap();
+        assert_eq!(items.len().get(), 1);
+        assert_eq!(items.as_slice(), &["only"]);
+    }
+
+    #[test]
+    fn non_empty_unique_reports_first_duplicate_pair() {
+        assert_eq!(
+            NonEmptyUnique::try_from_non_empty(NonEmpty::new(1, vec![2, 3, 2, 1])),
+            Err(DuplicateItemError {
+                first: 1,
+                duplicate: 3,
+            })
+        );
+        assert_eq!(
+            NonEmptyUnique::try_from_non_empty(NonEmpty::new(7, vec![7])),
+            Err(DuplicateItemError {
+                first: 0,
+                duplicate: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn map_ref_preserves_order() {
+        let items = NonEmpty::new(1, vec![2, 3]);
+        assert_eq!(items.map_ref(|item| item * 10).as_slice(), &[10, 20, 30]);
     }
 }

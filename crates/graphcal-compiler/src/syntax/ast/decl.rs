@@ -15,6 +15,7 @@ use crate::syntax::module_name::{
     IncludeInstanceId, IncludeInstanceScope, ModuleAliasName, ScopedName,
 };
 use crate::syntax::names::NamePath;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
@@ -1155,7 +1156,7 @@ pub struct FieldDecl<P: Phase = Raw> {
 pub enum IndexDeclKind<P: Phase = Raw> {
     /// Named variants: `{ Departure, Correction, Insertion }`
     Named {
-        variants: Vec<Spanned<IndexVariantName>>,
+        variants: NonEmpty<Spanned<IndexVariantName>>,
     },
     /// Coordinate range with an exact increment and endpoint:
     /// `range(start, end, step: delta)`.

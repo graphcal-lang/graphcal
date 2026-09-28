@@ -872,6 +872,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "non_empty", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "parser"]
 role = "contracts"
 

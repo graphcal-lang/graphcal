@@ -15,7 +15,7 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::IndexKind;
+use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexKind};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -218,12 +218,12 @@ impl ParameterBindingBuilder<'_> {
                 .project
                 .binding_value_error(port, "index definition is unavailable"));
         };
-        let IndexKind::Named { variants } = &definition.kind else {
+        let IndexKind::Concrete(ConcreteIndexKind::Named { variants }) = &definition.kind else {
             return Err(self
                 .project
                 .binding_value_error(port, "Tenax v2 requires a concrete named index"));
         };
-        if !variants.contains(variant) {
+        if !variants.as_slice().contains(variant) {
             return Err(self.project.binding_value_error(
                 port,
                 &format!(

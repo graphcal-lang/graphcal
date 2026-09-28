@@ -421,11 +421,12 @@ fn project_runtime_value(
                 ));
             }
             let display_unit = data
-                .display_label
+                .display()
+                .label
                 .as_ref()
-                .map(|label| DisplayUnit::new(label.clone(), data.display_scale));
+                .map(|label| DisplayUnit::new(label.clone(), data.display().scale));
             let dimension = match declared_type {
-                DeclaredType::Quantity(dimension) if dimension == &data.dimension => {
+                DeclaredType::Quantity(dimension) if dimension == data.dimension() => {
                     dimension.clone()
                 }
                 DeclaredType::Quantity(_) => {
@@ -437,7 +438,7 @@ fn project_runtime_value(
                         src,
                     ));
                 }
-                DeclaredType::Key(_) => data.dimension.clone(),
+                DeclaredType::Key(_) => data.dimension().clone(),
                 _ => {
                     return Err(projection_error(
                         runtime,

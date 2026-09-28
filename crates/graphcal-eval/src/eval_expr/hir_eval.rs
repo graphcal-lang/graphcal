@@ -11,7 +11,7 @@ use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, Str
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{IndexDef, IndexKind};
+use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::model::DagTIR;
@@ -897,7 +897,7 @@ fn eval_hir_key_form(
                     span,
                 )
             })?;
-            let IndexKind::Coordinate(data) = &definition.kind else {
+            let Some(data) = definition.coordinate_data() else {
                 return Err(
                     ctx.internal_error("coordinate search received a non-coordinate axis", span)
                 );
@@ -1005,8 +1005,8 @@ fn runtime_key_for_entry(
                     span,
                 )
             })?;
-            match &index_def.kind {
-                IndexKind::Coordinate(data) => {
+            match index_def.coordinate_data() {
+                Some(data) => {
                     let position = usize::try_from(*position).map_err(|_| {
                         ctx.internal_error(
                             format!("coordinate position {position} exceeds the platform range"),
@@ -2085,14 +2085,14 @@ fn eval_hir_for_comp_bindings(
     let mut presentations = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
     for (position, variant) in variants.iter().enumerate() {
-        let binding_value = match (&idx_def.kind, variant) {
-            (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Named(name)) => {
+        let binding_value = match (idx_def.concrete(), variant) {
+            (Some(ConcreteIndexKind::Named { .. }), IndexEntryKey::Named(name)) => {
                 RuntimeValue::Label {
                     index_name: idx_name.clone(),
                     variant: name.clone(),
                 }
             }
-            (IndexKind::Coordinate(data), IndexEntryKey::Position(_)) => {
+            (Some(ConcreteIndexKind::Coordinate(data)), IndexEntryKey::Position(_)) => {
                 RuntimeValue::coordinate_label(
                     idx_name.clone(),
                     position,
@@ -2100,7 +2100,7 @@ fn eval_hir_for_comp_bindings(
                 )
                 .map_err(|error| ctx.internal_error(error.to_string(), error_span))?
             }
-            (IndexKind::Finite { .. }, IndexEntryKey::Position(_)) => {
+            (Some(ConcreteIndexKind::Finite { .. }), IndexEntryKey::Position(_)) => {
                 RuntimeValue::Int(i64::try_from(position).map_err(|_| {
                     ctx.internal_error(
                         format!("Fin position {position} is too large for i64"),
@@ -2108,13 +2108,12 @@ fn eval_hir_for_comp_bindings(
                     )
                 })?)
             }
-            (IndexKind::RequiredCoordinate { .. }, _) => {
-                return Err(
-                    ctx.internal_error("RequiredCoordinate should have been bound", error_span)
-                );
-            }
-            (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Position(_))
-            | (IndexKind::Coordinate(_) | IndexKind::Finite { .. }, IndexEntryKey::Named(_)) => {
+            (None, _)
+            | (Some(ConcreteIndexKind::Named { .. }), IndexEntryKey::Position(_))
+            | (
+                Some(ConcreteIndexKind::Coordinate(_) | ConcreteIndexKind::Finite { .. }),
+                IndexEntryKey::Named(_),
+            ) => {
                 return Err(ctx.internal_error(
                     "registry entry-key category does not match its index kind",
                     error_span,

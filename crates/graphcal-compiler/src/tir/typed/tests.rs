@@ -346,7 +346,9 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
 
     assert!(matches!(
         &tir.index_def(&declared).unwrap().kind,
-        crate::registry::types::IndexKind::Named { variants } if variants.len() == 2
+        crate::registry::types::IndexKind::Concrete(
+            crate::registry::types::ConcreteIndexKind::Named { variants }
+        ) if variants.len().get() == 2
     ));
     assert_eq!(
         tir.index_def(&finite)

@@ -1763,7 +1763,9 @@ fn effective_index_binding_contract(
     use graphcal_compiler::registry::dimension_table::{
         DimensionResolveError, resolve_dim_expr_with,
     };
-    use graphcal_compiler::registry::types::{IndexBindingContract, IndexKind};
+    use graphcal_compiler::registry::types::{
+        ConcreteIndexKind, IndexBindingContract, IndexKind, RequiredIndexKind,
+    };
     use graphcal_compiler::syntax::dimension::DimRef;
 
     let definition = dep_registry.indexes.get_index(dep_index).ok_or_else(|| {
@@ -1775,12 +1777,14 @@ fn effective_index_binding_contract(
     })?;
 
     match &definition.kind {
-        IndexKind::Named { .. } => Ok(IndexBindingContract::Named),
-        IndexKind::RequiredNamed => Ok(IndexBindingContract::Discrete),
-        IndexKind::Coordinate(data) => Ok(IndexBindingContract::Coordinate {
-            dimension: data.dimension.clone(),
-        }),
-        IndexKind::RequiredCoordinate { .. } => {
+        IndexKind::Concrete(ConcreteIndexKind::Named { .. }) => Ok(IndexBindingContract::Named),
+        IndexKind::Required(RequiredIndexKind::Named) => Ok(IndexBindingContract::Discrete),
+        IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => {
+            Ok(IndexBindingContract::Coordinate {
+                dimension: data.dimension().clone(),
+            })
+        }
+        IndexKind::Required(RequiredIndexKind::Coordinate { .. }) => {
             let dimension_expr = dep_declarations
                 .iter()
                 .find_map(|declaration| match &declaration.kind {
@@ -1828,11 +1832,13 @@ fn effective_index_binding_contract(
             })?;
             Ok(IndexBindingContract::Coordinate { dimension })
         }
-        IndexKind::Finite { .. } => Err(CompileError::Eval(GraphcalError::InternalError {
-            message: format!("declared dependency index `{dep_index}` became structural"),
-            src: importer_src.clone(),
-            span: binding_span.into(),
-        })),
+        IndexKind::Concrete(ConcreteIndexKind::Finite { .. }) => {
+            Err(CompileError::Eval(GraphcalError::InternalError {
+                message: format!("declared dependency index `{dep_index}` became structural"),
+                src: importer_src.clone(),
+                span: binding_span.into(),
+            }))
+        }
     }
 }
 
