@@ -14,6 +14,7 @@ impl Parser<'_> {
     pub(super) fn parse_base_dimension_decl(
         &mut self,
         base_span: crate::syntax::span::Span,
+        visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         let (_, _dim_span) = self.expect(Token::Dimension)?;
         let name: Spanned<DimName> = self.parse_any_ident()?.classify();
@@ -22,10 +23,7 @@ impl Parser<'_> {
         Ok(Declaration {
             doc: None,
             attributes: vec![],
-            kind: DeclKind::BaseDimension(BaseDimDecl {
-                visibility: Visibility::Private,
-                name,
-            }),
+            kind: DeclKind::BaseDimension(BaseDimDecl { visibility, name }),
             span,
         })
     }
@@ -34,7 +32,10 @@ impl Parser<'_> {
     /// - Derived: `dim Name = DimExpr;`
     /// - Required: `dim Name;` — the library requires a dimension
     ///   bound from outside.
-    pub(super) fn parse_dimension_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_dimension_decl(
+        &mut self,
+        visibility: BindableVisibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dimension)?;
         let name: Spanned<DimName> = self.parse_any_ident()?.classify();
 
@@ -51,7 +52,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Dimension(DimDecl {
-                visibility: BindableVisibility::Private,
+                visibility,
                 name,
                 definition,
             }),
@@ -63,10 +64,14 @@ impl Parser<'_> {
     ///
     /// The no-body form `unit Name: Dim;` is rejected — use
     /// `base unit Name: Dim;` (parsed via `parse_base_unit_decl`).
-    pub(super) fn parse_unit_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_unit_decl(
+        &mut self,
+        visibility: Visibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Unit)?;
         self.parse_unit_decl_inner(
             start_span,
+            visibility,
             UnitConstness::Dynamic,
             /*require_definition=*/ true,
         )
@@ -76,10 +81,12 @@ impl Parser<'_> {
     pub(super) fn parse_const_unit(
         &mut self,
         const_span: crate::syntax::span::Span,
+        visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         self.expect(Token::Unit)?;
         self.parse_unit_decl_inner(
             const_span,
+            visibility,
             UnitConstness::Const,
             /*require_definition=*/ true,
         )
@@ -89,10 +96,12 @@ impl Parser<'_> {
     pub(super) fn parse_base_unit_decl(
         &mut self,
         base_span: crate::syntax::span::Span,
+        visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         self.expect(Token::Unit)?;
         self.parse_unit_decl_inner(
             base_span,
+            visibility,
             UnitConstness::Const,
             /*require_definition=*/ false,
         )
@@ -101,6 +110,7 @@ impl Parser<'_> {
     fn parse_unit_decl_inner(
         &mut self,
         start_span: crate::syntax::span::Span,
+        visibility: Visibility,
         constness: UnitConstness,
         require_definition: bool,
     ) -> Result<Declaration, ParseError> {
@@ -132,7 +142,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
-                visibility: Visibility::Private,
+                visibility,
                 constness,
                 name,
                 dim_type,

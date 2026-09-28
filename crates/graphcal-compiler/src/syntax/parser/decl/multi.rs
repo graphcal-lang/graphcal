@@ -18,9 +18,9 @@
 //! slots); the desugar pass later expands it into N ordinary declarations.
 
 use crate::syntax::ast::{
-    BindableVisibility, DeclKind, Declaration, MapEntryKey, MultiDeclBuilder, MultiDeclLayoutError,
+    DeclKind, Declaration, MapEntryKey, MultiDeclBuilder, MultiDeclLayoutError,
     MultiDeclRowWidthError, MultiDeclSharedAxes, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis,
-    SlotKind, TableIndexSpec, TypeExpr, Visibility,
+    SlotKind, TableIndexSpec, TypeExpr,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::fin_position::FinPosition;
@@ -31,9 +31,9 @@ use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{
-    Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser,
-    UnsupportedMultiDeclShape,
+    Expected, InvalidNumberReason, ParseError, ParseErrorKind, Parser, UnsupportedMultiDeclShape,
 };
+use super::visibility::VisibilityPrefix;
 
 /// A parsed slot header: `[pub|pub(bind)] [const] (param|node) IDENT: TypeExpr`.
 #[derive(Debug, Clone)]
@@ -69,62 +69,31 @@ impl Parser<'_> {
     /// `pub(bind)`.
     pub(super) fn parse_slot_kind(
         &mut self,
-        visibility: BindableVisibility,
-        visibility_span: Option<Span>,
+        prefix: VisibilityPrefix,
     ) -> Result<(SlotKind, Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::Param) => {
                 let (_, span) = self.advance()?;
-                Self::reject_param_visibility(visibility, visibility_span)?;
+                prefix.accept_none(Expected::ParamWithoutVisibility)?;
                 Ok((SlotKind::Param, span))
             }
             Some(Token::Node) => {
                 let (_, span) = self.advance()?;
-                let visibility = Self::node_visibility(visibility, visibility_span)?;
+                let visibility = prefix.accept_public(Expected::NodeVisibility)?;
                 Ok((SlotKind::Node(visibility), span))
             }
             Some(Token::Const) => {
                 let (_, const_span) = self.advance()?;
                 let (_, node_span) = self.expect(Token::Node)?;
-                let visibility = Self::node_visibility(visibility, visibility_span)?;
+                let visibility = prefix.accept_public(Expected::NodeVisibility)?;
                 Ok((SlotKind::ConstNode(visibility), const_span.merge(node_span)))
             }
             Some(_) | None => Err(self.unexpected_next(Expected::MultiDeclSlotKind)),
         }
     }
+}
 
-    fn reject_param_visibility(
-        visibility: BindableVisibility,
-        visibility_span: Option<Span>,
-    ) -> Result<(), ParseError> {
-        let found = match visibility {
-            BindableVisibility::Private => return Ok(()),
-            BindableVisibility::Public => Found::Pub,
-            BindableVisibility::PublicBind => Found::PubBind,
-        };
-        visibility_span.map_or(Ok(()), |vis_span| {
-            Err(Self::unexpected_token(
-                Expected::ParamWithoutVisibility,
-                found,
-                vis_span,
-            ))
-        })
-    }
-
-    const fn node_visibility(
-        visibility: BindableVisibility,
-        visibility_span: Option<Span>,
-    ) -> Result<Visibility, ParseError> {
-        match (visibility, visibility_span) {
-            (BindableVisibility::PublicBind, Some(vis_span)) => Err(Self::unexpected_token(
-                Expected::NodeVisibility,
-                Found::PubBind,
-                vis_span,
-            )),
-            (visibility, _) => Ok(super::visibility_without_bindability(visibility)),
-        }
-    }
-
+impl Parser<'_> {
     /// Parse the tail of a slot header: `IDENT : TypeExpr` given that the
     /// visibility prefix and kind keyword(s) have already been consumed.
     pub(super) fn parse_slot_header_tail(
@@ -148,8 +117,8 @@ impl Parser<'_> {
     /// Parse `, [pub|pub(bind)] (param|node|const node) IDENT : TypeExpr`.
     fn parse_next_slot_header(&mut self) -> Result<SlotHeader, ParseError> {
         self.expect(Token::Comma)?;
-        let (visibility, visibility_span) = self.parse_visibility_prefix()?;
-        let (kind, kind_span) = self.parse_slot_kind(visibility, visibility_span)?;
+        let prefix = self.parse_visibility_prefix()?;
+        let (kind, kind_span) = self.parse_slot_kind(prefix)?;
         self.parse_slot_header_tail(kind, kind_span)
     }
 
@@ -714,7 +683,7 @@ param a: Int[I], param b: Int[I]
                 err.kind,
                 ParseErrorKind::UnexpectedToken {
                     expected: Expected::Token(Token::Comma),
-                    found: Found::Token(Token::LParen),
+                    found: crate::syntax::parser::Found::Token(Token::LParen),
                 }
             ),
             "expected a missing-comma diagnostic, got {err:?}"

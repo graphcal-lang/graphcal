@@ -204,8 +204,8 @@ impl ModulePath {
 pub struct ImportItem {
     /// Attributes on this import item (e.g., `#[expected_fail(...)]`).
     pub attributes: Vec<Attribute>,
-    /// Whether this item is re-exported (`pub` prefix) from the importer.
-    pub is_pub: bool,
+    /// `Public` when the item is re-exported (`pub` prefix) from the importer.
+    pub visibility: Visibility,
     /// Which namespace this selective import targets.
     pub namespace: ImportItemNamespace,
     /// The name requested from the imported module.

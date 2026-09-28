@@ -1027,11 +1027,11 @@ mod tests {
         crate::desugar::desugared_ast::File::from(raw)
     }
 
-    fn first_import(file: &ast::File) -> (&ast::ModulePath, &ast::ImportKind) {
+    fn first_import(file: &ast::File) -> &ast::ImportDecl {
         file.declarations
             .iter()
             .find_map(|decl| match &decl.kind {
-                ast::DeclKind::Import(import) => Some((&import.path, &import.kind)),
+                ast::DeclKind::Import(import) => Some(import),
                 _ => None,
             })
             .expect("source should contain an import")
@@ -1067,7 +1067,7 @@ mod tests {
         let main = desugared_source(
             "import lib as physics; param v: physics::Vec3<physics::Length>[physics::Phase];",
         );
-        let (import_path, import_kind) = first_import(&main);
+        let import = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
         resolver
@@ -1076,9 +1076,7 @@ mod tests {
         resolver
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
-        resolver
-            .register_import(&main_id, import_path, import_kind, &lib_id)
-            .unwrap();
+        resolver.register_import(&main_id, import, &lib_id).unwrap();
 
         let scope = GenericScope::new();
         let lowered = lower_type_expr(

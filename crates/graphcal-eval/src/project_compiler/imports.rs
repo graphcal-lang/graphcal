@@ -105,8 +105,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         process_pure_import(
             project,
             target,
-            &import.path,
-            &import.kind,
+            import,
             &loaded_file.ast().declarations,
             file_src,
             module_artifacts,
@@ -536,7 +535,7 @@ fn file_exports_plot(
                 return false;
             };
             items.iter().any(|item| {
-                item.is_pub
+                item.visibility.is_public()
                     && item.local_name_atom() == name
                     && visit(project, target.source_file(), item.name.name.atom(), seen)
             })
@@ -1305,7 +1304,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
-            .filter(|it| it.is_pub)
+            .filter(|it| it.visibility.is_public())
             .map(|it| it.name.name.atom().clone())
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
@@ -1566,7 +1565,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
-            .filter(|it| it.is_pub)
+            .filter(|it| it.visibility.is_public())
             .map(|it| it.name.name.atom().clone())
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
@@ -1610,14 +1609,14 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
 pub(in crate::project_compiler) fn process_pure_import<'a>(
     project: &'a crate::loader::LoadedProject,
     resolved_module: &crate::loader::ResolvedModuleTarget,
-    import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
-    import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
+    import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     importer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
+    let import_path = import.path();
     let source_file = resolved_module.source_file();
     let module_target = resolved_module.target();
     let dep = module_artifacts.get(module_target).ok_or_else(|| {
@@ -1654,8 +1653,10 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             })
         })?;
 
-    match import_kind {
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
+    match import {
+        graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective {
+            items: names, ..
+        } => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
                 let local_name = DeclName::classify(import_item.local_name_atom().clone());
@@ -1833,7 +1834,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 }
             }
         }
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+        graphcal_compiler::desugar::desugared_ast::ImportDecl::Module { alias, .. } => {
             let module_name = alias.as_ref().map_or_else(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.value.clone(),

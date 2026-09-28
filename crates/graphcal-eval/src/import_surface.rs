@@ -138,31 +138,35 @@ pub fn extract_external_decl_surface_from_declarations(
             DeclKind::Param(param) => {
                 surface.insert_input_port(param.name.value.clone());
             }
-            DeclKind::Import(d) => match &d.kind {
-                graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
+            DeclKind::Import(d) => match d {
+                graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective {
+                    items, ..
+                } => {
                     for item in items {
-                        if item.is_pub {
+                        if item.visibility.is_public() {
                             insert_explicit(&mut surface, item.namespace, item.local_name_atom());
                         }
                     }
                 }
-                graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias }
-                    if d.visibility.is_public() =>
-                {
+                graphcal_compiler::desugar::desugared_ast::ImportDecl::Module {
+                    visibility,
+                    path,
+                    alias,
+                } if visibility.is_public() => {
                     let name = alias.as_ref().map_or_else(
-                        || d.path.leaf().name.atom().clone(),
+                        || path.leaf().name.atom().clone(),
                         |alias| alias.value.atom().clone(),
                     );
                     surface.insert_explicit_export(DeclName::classify(name));
                 }
-                graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {}
+                graphcal_compiler::desugar::desugared_ast::ImportDecl::Module { .. } => {}
             },
             DeclKind::Include(d) => {
                 if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                     &d.kind
                 {
                     for item in items {
-                        if item.is_pub {
+                        if item.visibility.is_public() {
                             insert_explicit(
                                 &mut surface,
                                 ImportItemNamespace::Term,
@@ -378,7 +382,7 @@ fn decl_pure_import_term_disposition(
             Some(PureImportTermDisposition::ResolverOnly)
         }
         DeclKind::Import(import)
-            if selective_reexport_matches(&import.kind, name, ImportItemNamespace::Term) =>
+            if selective_reexport_matches(import, name, ImportItemNamespace::Term) =>
         {
             Some(PureImportTermDisposition::ResolverOnly)
         }
@@ -480,7 +484,7 @@ fn decl_import_item_presence(
                     ImportItemPresence::Private
                 }
             }),
-        DeclKind::Import(d) => selective_reexport_matches(&d.kind, name, namespace)
+        DeclKind::Import(d) => selective_reexport_matches(d, name, namespace)
             .then_some(ImportItemPresence::ExplicitExport),
         DeclKind::Include(d) => (namespace == ImportItemNamespace::Term
             && selective_include_reexport_matches(&d.kind, name))
@@ -509,15 +513,15 @@ fn type_decl_import_item_matches(
 }
 
 fn selective_reexport_matches(
-    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
+    import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     name: &str,
     namespace: ImportItemNamespace,
 ) -> bool {
     matches!(
-        kind,
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
+        import,
+        graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective { items, .. }
             if items.iter().any(|it| {
-                it.is_pub && it.namespace == namespace && it.local_name() == name
+                it.visibility.is_public() && it.namespace == namespace && it.local_name() == name
             })
     )
 }
@@ -529,7 +533,7 @@ fn selective_include_reexport_matches(
     matches!(
         kind,
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items)
-            if items.iter().any(|it| it.is_pub && it.local_name() == name)
+            if items.iter().any(|it| it.visibility.is_public() && it.local_name() == name)
     )
 }
 

@@ -95,7 +95,7 @@ pub fn preprocess_dag_body_self_imports(
         };
 
         let is_self_import = body_resolved_imports
-            .get(&crate::loader::ModulePathKey::from_path(&import_decl.path))
+            .get(&crate::loader::ModulePathKey::from_path(import_decl.path()))
             .is_some_and(|resolution| {
                 matches!(
                     resolution,
@@ -108,8 +108,8 @@ pub fn preprocess_dag_body_self_imports(
             continue;
         }
 
-        match &import_decl.kind {
-            graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
+        match import_decl {
+            graphcal_compiler::syntax::ast::ImportDecl::Selective { items, .. } => {
                 for item in items {
                     let orig_name = &item.name.name;
                     let local_name = DeclName::classify(item.local_name_atom().clone());
@@ -122,7 +122,7 @@ pub fn preprocess_dag_body_self_imports(
                                 parent_ast,
                                 orig_name.atom(),
                                 item.namespace,
-                                &import_decl.path.display_path(),
+                                &import_decl.path().display_path(),
                                 src,
                                 span,
                             ));
@@ -130,7 +130,7 @@ pub fn preprocess_dag_body_self_imports(
                         ImportItemPresence::Private => {
                             return Err(GraphcalError::ImportPrivateItem {
                                 name: orig_name.to_string(),
-                                file_path: import_decl.path.display_path(),
+                                file_path: import_decl.path().display_path(),
                                 src: src.clone(),
                                 span: span.into(),
                             });
@@ -163,7 +163,7 @@ pub fn preprocess_dag_body_self_imports(
                                     parent_ast,
                                     orig_name.atom(),
                                     item.namespace,
-                                    &import_decl.path.display_path(),
+                                    &import_decl.path().display_path(),
                                     src,
                                     span,
                                 )
@@ -189,7 +189,7 @@ pub fn preprocess_dag_body_self_imports(
                     }
                 }
             }
-            graphcal_compiler::syntax::ast::ImportKind::Module { .. } => {
+            graphcal_compiler::syntax::ast::ImportDecl::Module { .. } => {
                 stripped_body.push(decl.clone());
             }
         }

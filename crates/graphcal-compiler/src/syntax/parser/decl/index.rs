@@ -12,7 +12,10 @@ impl Parser<'_> {
     /// - `index Samples = linspace(0.0 s, 1.0 s, points: 11);` (exact count)
     /// - `index Foo;` (required named — must be bound via parameterized include)
     /// - `index Foo: Time;` (required coordinate — bound via parameterized include)
-    pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_index_decl(
+        &mut self,
+        visibility: BindableVisibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
         let name: Spanned<IndexName> = self.parse_any_ident()?.classify();
         let (kind, end_span) = match self.lexer.peek() {
@@ -35,7 +38,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Index(IndexDecl {
-                visibility: BindableVisibility::Private,
+                visibility,
                 name,
                 kind,
             }),

@@ -2073,7 +2073,9 @@ fn collect_dag_decl(
 fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
     // Each imported name is a reference; target resolution for cross-file
     // go-to-definition is handled separately.
-    collect_import_or_include_names(&u.kind, table);
+    if let ImportDecl::Selective { items, .. } = u {
+        collect_selected_names(items, table);
+    }
 }
 
 /// Register each extern function of an `import plugin` block as an
@@ -2164,48 +2166,51 @@ fn collect_include_decl(
             }
         }
     } else {
-        collect_import_or_include_names(&include.kind, table);
+        match &include.kind {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
+                collect_selected_names(items, table);
+            }
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {}
+        }
     }
     for binding in &include.param_bindings {
         refs.collect_body(&binding.value, table);
     }
 }
 
-fn collect_import_or_include_names(
-    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
+fn collect_selected_names(
+    names: &[graphcal_compiler::desugar::desugared_ast::ImportItem],
     table: &mut SymbolTable,
 ) {
-    if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) = kind {
-        for import_item in names {
-            let path = SourceSymbolPath::local(import_item.local_name_atom().clone());
-            let unresolved = match import_item.namespace {
-                graphcal_compiler::syntax::ast::ImportItemNamespace::Term => {
-                    UnresolvedSymbol::Term(path)
-                }
-                graphcal_compiler::syntax::ast::ImportItemNamespace::Type => {
-                    UnresolvedSymbol::StructType(path)
-                }
-                graphcal_compiler::syntax::ast::ImportItemNamespace::Dimension => {
-                    UnresolvedSymbol::Dimension(path)
-                }
-                graphcal_compiler::syntax::ast::ImportItemNamespace::Unit => {
-                    UnresolvedSymbol::Unit(path)
-                }
-                graphcal_compiler::syntax::ast::ImportItemNamespace::Index => {
-                    UnresolvedSymbol::Index(path)
-                }
-            };
-            let target = ReferenceTarget::Unresolved(unresolved);
-            table.references.push(ReferenceInfo {
-                span: import_item.name.span,
-                target: target.clone(),
-            });
-            if let Some(alias) = &import_item.alias {
-                table.references.push(ReferenceInfo {
-                    span: alias.span,
-                    target,
-                });
+    for import_item in names {
+        let path = SourceSymbolPath::local(import_item.local_name_atom().clone());
+        let unresolved = match import_item.namespace {
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Term => {
+                UnresolvedSymbol::Term(path)
             }
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Type => {
+                UnresolvedSymbol::StructType(path)
+            }
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Dimension => {
+                UnresolvedSymbol::Dimension(path)
+            }
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Unit => {
+                UnresolvedSymbol::Unit(path)
+            }
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Index => {
+                UnresolvedSymbol::Index(path)
+            }
+        };
+        let target = ReferenceTarget::Unresolved(unresolved);
+        table.references.push(ReferenceInfo {
+            span: import_item.name.span,
+            target: target.clone(),
+        });
+        if let Some(alias) = &import_item.alias {
+            table.references.push(ReferenceInfo {
+                span: alias.span,
+                target,
+            });
         }
     }
 }

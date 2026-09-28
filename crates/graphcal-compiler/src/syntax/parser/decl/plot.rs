@@ -10,7 +10,7 @@ use super::super::{Expected, Found, ParseError, ParseErrorKind, Parser, PlotFiel
 
 impl Parser<'_> {
     /// Parse a plot declaration: `plot name = { mark: type, encode: { ... }, title: "..." };`
-    pub(super) fn parse_plot(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_plot(&mut self, visibility: Visibility) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Plot)?;
         let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Eq)?;
@@ -100,7 +100,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Plot(PlotDecl {
-                visibility: Visibility::Private,
+                visibility,
                 name,
                 mark,
                 encodings,

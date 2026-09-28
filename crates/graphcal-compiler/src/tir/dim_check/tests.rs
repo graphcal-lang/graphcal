@@ -223,7 +223,7 @@ fn compile_inline_dag_bodies_test(
         for decl in body {
             if let crate::desugar::desugared_ast::DeclKind::Import(import) = &decl.kind {
                 resolver
-                    .register_import(&owner, &import.path, &import.kind, parent_dag_id)
+                    .register_import(&owner, import, parent_dag_id)
                     .map_err(|err| GraphcalError::InternalError {
                         message: format!(
                             "test module resolver failed to register inline dag import: {err}"
