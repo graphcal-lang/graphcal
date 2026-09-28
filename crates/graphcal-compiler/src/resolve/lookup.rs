@@ -17,14 +17,14 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
 
-use super::ModuleResolver;
 use super::category::{DeclSymbolKind, SurfaceNameKind};
 use super::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use super::exports::{ExportedBinding, ExportedBindingTarget, ExportedImportItem};
 use super::namespace::Namespace;
 use super::scope::Access;
 use super::symbols::{GenericParamSignature, Symbol};
-use super::tables::SymbolTables;
+use super::tables::NamespaceTables;
+use super::{ModuleEntry, ModuleResolver};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedModuleQualifier {
@@ -305,7 +305,7 @@ impl ModuleResolver {
     #[must_use]
     pub fn source_index_path(&self, owner: &DagId, target: &ResolvedIndexName) -> Option<NamePath> {
         let mut candidates = Vec::new();
-        if let Some(symbols) = self.modules.get(owner) {
+        if let Some(symbols) = self.symbols(owner) {
             candidates.extend(
                 symbols
                     .indexes
@@ -313,7 +313,7 @@ impl ModuleResolver {
                     .map(|name| NamePath::local(name.atom().clone())),
             );
         }
-        if let Some(scope) = self.scopes.get(owner) {
+        if let Some(scope) = self.modules.get(owner).map(ModuleEntry::scope) {
             candidates.extend(
                 scope
                     .selected_indexes
@@ -325,13 +325,13 @@ impl ModuleResolver {
                     .modules
                     .get(binding.target())
                     .into_iter()
-                    .flat_map(|symbols| symbols.indexes.keys())
-                    .chain(
-                        self.scopes
-                            .get(binding.target())
-                            .into_iter()
-                            .flat_map(|scope| scope.selected_indexes.keys()),
-                    );
+                    .flat_map(|entry| {
+                        entry
+                            .symbols
+                            .indexes
+                            .keys()
+                            .chain(entry.scope.selected_indexes.keys())
+                    });
                 candidates.extend(names.map(|name| {
                     NamePath::qualified(
                         crate::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
@@ -398,8 +398,7 @@ impl ModuleResolver {
         // import binds them. In particular, `include module() as alias` binds
         // only `alias`, never the source module's leaf name.
         let declared_dag_child = |parent: &DagId| {
-            self.modules
-                .get(parent)
+            self.symbols(parent)
                 .and_then(|symbols| symbols.decls.get(&NameDef::classify(head.atom().clone())))
                 .filter(|symbol| *symbol.data() == DeclSymbolKind::Dag)
                 .map(|symbol| parent.inline_dag_child(symbol.resolved().to_unowned_def_name()))
@@ -495,7 +494,7 @@ impl ModuleResolver {
         }
         Ok(target)
     }
-    pub(super) fn resolve_symbol_path<Ns: SymbolTables>(
+    pub(super) fn resolve_symbol_path<Ns: NamespaceTables>(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -531,9 +530,9 @@ impl ModuleResolver {
             .get(&leaf_name)
             .map(|symbol| (symbol.resolved(), symbol.visibility()))
             .or_else(|| {
-                self.scopes
+                self.modules
                     .get(&target_ref.owner)
-                    .and_then(|scope| Ns::selected(scope).get(&leaf_name))
+                    .and_then(|entry| Ns::selected(&entry.scope).get(&leaf_name))
                     .map(|imported| (imported.resolved(), imported.visibility()))
             });
         if let Some((resolved, visibility)) = found {
@@ -681,8 +680,7 @@ impl ModuleResolver {
                 return Ok(());
             };
             let Some(symbol) = self
-                .modules
-                .get(&parent)
+                .symbols(&parent)
                 .and_then(|parent_symbols| parent_symbols.decls.get(name))
             else {
                 return Ok(());
@@ -718,7 +716,7 @@ fn public<Ns: NameNamespace, X>(
 
 /// Public spellings of one namespace (declarations, then selective
 /// re-exports) with the canonical target each denotes.
-fn public_targets<'a, Ns: SymbolTables>(
+fn public_targets<'a, Ns: NamespaceTables>(
     symbols: &'a super::symbols::ModuleSymbols,
     scope: &'a super::scope::ModuleScope,
 ) -> impl Iterator<Item = (&'a NameAtom, &'a ResolvedName<Ns>)> {

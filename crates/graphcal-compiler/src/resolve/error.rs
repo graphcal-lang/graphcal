@@ -81,6 +81,15 @@ pub enum ModuleResolveError {
         .second.file_root()
     )]
     AmbiguousModulePath { first: DagId, second: DagId },
+    /// The template include graph has a cycle, so its concrete instances
+    /// would never end.
+    #[error("recursive include expansion involving module `{module}`")]
+    RecursiveIncludeExpansion {
+        /// First template repeated along the include chain.
+        module: DagId,
+        /// The template cycle, including the repeated endpoint.
+        cycle: Vec<DagId>,
+    },
     /// No symbol table exists for a canonical module identity.
     #[error("unknown module `{owner}`")]
     UnknownModule { owner: DagId },

@@ -11,6 +11,7 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::resolve::builder::{NoModuleTargets, ScopeBuilder, SymbolTables};
 use graphcal_compiler::resolve::error::ModuleResolveError;
 use graphcal_compiler::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
@@ -56,18 +57,18 @@ pub fn build_for_buffer(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
     source: &str,
 ) -> SymbolTable {
-    fn add_modules(
-        resolver: &mut ModuleResolver,
+    fn add_modules<'a>(
+        tables: &mut SymbolTables<'a>,
         owner: &DagId,
-        declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+        declarations: &'a [graphcal_compiler::desugar::desugared_ast::Declaration],
     ) {
         // A duplicate-symbol failure leaves the module unregistered; the
         // walk then records its references via the spelling fallback.
-        let _ = resolver.add_module(owner.clone(), declarations);
+        let _ = tables.add_module(owner.clone(), declarations);
         for decl in declarations {
             if let DeclKind::Dag(dag) = &decl.kind {
                 add_modules(
-                    resolver,
+                    tables,
                     &owner.inline_dag_child(dag.name.value.clone()),
                     &dag.body,
                 );
@@ -76,8 +77,14 @@ pub fn build_for_buffer(
     }
 
     let dag_id = DagId::root_in_package("test", "buffer");
-    let mut resolver = ModuleResolver::default();
-    add_modules(&mut resolver, &dag_id, &ast.declarations);
+    let mut tables = SymbolTables::default();
+    add_modules(&mut tables, &dag_id, &ast.declarations);
+    // Without a loader no edge connects the modules; a failure degrades every
+    // reference to the spelling fallback.
+    let resolver: ModuleResolver = tables
+        .scopes(&NoModuleTargets)
+        .and_then(ScopeBuilder::freeze)
+        .unwrap_or_default();
     build_from_ast(ast, source, &dag_id, &resolver)
 }
 

@@ -84,22 +84,24 @@ fn lower_single_file_to_hir(
         cancellation,
     )?;
     let mut interfaces = vec![(file_dag_id.clone(), root_interface)];
-    for inline in loaded_file.inline_dags() {
-        let template = module_templates.get(inline.dag_id()).ok_or_else(|| {
+    // Each lowered inline DAG publishes its own frozen surface, not that of
+    // whichever module first elaborated its template.
+    for frozen in &hir.inline_dags {
+        let template = module_templates.get(frozen.dag_id()).ok_or_else(|| {
             CompileError::Eval(GraphcalError::internal_error(
                 format!(
                     "inline module template `{}` was not retained",
-                    inline.dag_id()
+                    frozen.dag_id()
                 ),
                 file_src,
                 DiagnosticAnchor::WholeFile,
             ))
         })?;
         interfaces.push((
-            inline.dag_id().clone(),
+            frozen.dag_id().clone(),
             LoweringModuleInterface::new(
                 template.frontend_registry.clone(),
-                template.external_surface.clone(),
+                frozen.external_surface.clone(),
             ),
         ));
     }

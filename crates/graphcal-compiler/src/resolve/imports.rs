@@ -21,7 +21,7 @@ use super::category::{ExportedImportItemKind, include_projection};
 use super::error::{ModuleResolveError, NameCategory};
 use super::scope::{Access, ImportAddition, ImportTarget, ModuleAliasRole, module_alias};
 use super::symbols::Symbol;
-use super::tables::SymbolTables;
+use super::tables::NamespaceTables;
 
 impl ModuleResolver {
     /// Register one loader-resolved `import` edge in `owner`'s scope.
@@ -34,7 +34,7 @@ impl ModuleResolver {
     ///
     /// Returns [`ModuleResolveError`] if either module is unknown, an imported
     /// item is missing/private, or the import introduces a duplicate local name.
-    pub fn register_import(
+    pub(super) fn register_import(
         &mut self,
         owner: &DagId,
         import: &ast::ImportDecl,
@@ -54,7 +54,7 @@ impl ModuleResolver {
     /// Instantiated includes embed the dependency DAG body, but the source-level
     /// names introduced by the include are still a cross-module boundary and
     /// must preserve public visibility.
-    pub fn register_include(
+    pub(super) fn register_include(
         &mut self,
         owner: &DagId,
         path: &ModulePath,
@@ -87,18 +87,8 @@ impl ModuleResolver {
         }
 
         let additions = self.import_additions(path, tail, target, access, role)?;
-        let symbols = self
-            .modules
-            .get(owner)
-            .ok_or_else(|| ModuleResolveError::UnknownModule {
-                owner: owner.clone(),
-            })?;
-        self.scopes
-            .get_mut(owner)
-            .ok_or_else(|| ModuleResolveError::UnknownModule {
-                owner: owner.clone(),
-            })?
-            .add_imports(symbols, additions)
+        let entry = self.entry_mut(owner)?;
+        entry.scope.add_imports(&entry.symbols, additions)
     }
 
     fn import_additions(
@@ -263,7 +253,7 @@ impl ModuleResolver {
         }
     }
 
-    fn required_exported_symbol_for_import<Ns: SymbolTables>(
+    fn required_exported_symbol_for_import<Ns: NamespaceTables>(
         &self,
         target: &DagId,
         source_atom: &NameAtom,
@@ -300,7 +290,7 @@ impl ModuleResolver {
 
     /// Look `atom` up on `target`'s public surface in one namespace: its own
     /// declarations first, then its selective (re-)exports.
-    pub(super) fn exported_symbol_for_import<Ns: SymbolTables>(
+    pub(super) fn exported_symbol_for_import<Ns: NamespaceTables>(
         &self,
         target: &DagId,
         atom: &NameAtom,

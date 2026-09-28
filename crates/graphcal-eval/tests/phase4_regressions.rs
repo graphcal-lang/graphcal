@@ -119,3 +119,51 @@ fn alias_qualifier_names_inline_dags_not_file_submodules() {
     let result = eval(&root);
     assert!((si_value(&result, "out") - 3.0).abs() < 1e-9);
 }
+
+/// P4-3 (known bug from P3-6): selecting a `const node` through a selective
+/// include of a same-file inline DAG reported "unknown module
+/// `main.<include@N>`", because the include's instance was never registered
+/// with the module resolver.
+#[test]
+fn selective_include_of_a_local_dag_can_select_a_const_node() {
+    let result = graphcal_eval::eval::compile_and_eval(
+        "dag lib {\n\
+         \x20   pub const node k: Dimensionless = 3.0;\n\
+         \x20   param v: Dimensionless;\n\
+         \x20   pub node w: Dimensionless = @v * 2.0;\n\
+         }\n\
+         param x: Dimensionless = 1.0;\n\
+         include lib(v: @x)::{ k as kk, w };\n\
+         node out: Dimensionless = @kk + @w;\n",
+    )
+    .unwrap_or_else(|error| panic!("local const selection must compile: {error}"));
+    assert!((si_value(&result, "kk") - 3.0).abs() < 1e-9);
+    assert!((si_value(&result, "out") - 5.0).abs() < 1e-9);
+}
+
+/// P4-3: the names a selective include of a same-file inline DAG introduces
+/// share the collision unit with imports, like every other include.
+#[test]
+fn local_dag_include_selection_collides_with_an_import() {
+    let (_dir, root) = write_project(
+        "p",
+        &[
+            ("dep.gcl", "pub const node k: Dimensionless = 1.0;\n"),
+            (
+                "main.gcl",
+                "import p.dep::{ k };\n\
+                 dag lib {\n\
+                 \x20   pub const node k: Dimensionless = 3.0;\n\
+                 }\n\
+                 include lib()::{ k };\n\
+                 const node out: Dimensionless = k;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = eval_error(&root);
+    assert!(
+        error.contains("duplicate name `k`"),
+        "unexpected error: {error}"
+    );
+}

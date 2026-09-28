@@ -653,7 +653,6 @@ fn store_and_freeze_module_template(
         ElaboratedModuleTemplate {
             unfrozen: template_unfrozen,
             frontend_registry: template_registry,
-            external_surface: frozen.external_surface.clone(),
         },
     );
     Ok(frozen)
@@ -1432,7 +1431,6 @@ fn elaborate_include_instances(
                 ElaboratedModuleTemplate {
                     unfrozen: dep_unfrozen,
                     frontend_registry: dep_registry,
-                    external_surface: dep_loaded.interface().external_surface().clone(),
                 },
             );
             (
@@ -1552,7 +1550,6 @@ fn elaborate_include_instances(
                 ElaboratedModuleTemplate {
                     unfrozen: dag_unfrozen,
                     frontend_registry: dag_registry,
-                    external_surface: importer.interface().external_surface().clone(),
                 },
             );
             (template, dag_id.clone(), inline_body)

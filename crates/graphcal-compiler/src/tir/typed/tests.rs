@@ -653,35 +653,15 @@ fn parse_and_type_resolve_builder_named(
         crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(path)).unwrap();
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(parent_dag_id.clone(), &file.declarations)
-        .map_err(|err| {
-            internal_error(
-                format!("test module resolver failed for root module: {err}"),
-                &src,
-                Span::new(0, 0),
-            )
-        })?;
-    for decl in &file.declarations {
-        if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
-            resolver
-                .add_module(
-                    parent_dag_id.inline_dag_child(dag.name.value.clone()),
-                    &dag.body,
-                )
-                .map_err(|err| {
-                    internal_error(
-                        format!(
-                            "test module resolver failed for inline dag `{}`: {err}",
-                            dag.name.value
-                        ),
-                        &src,
-                        Span::new(0, 0),
-                    )
-                })?;
-        }
-    }
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add_file(&parent_dag_id, &file.declarations);
+    let resolver = modules.build().map_err(|err| {
+        internal_error(
+            format!("test module resolver failed: {err}"),
+            &src,
+            Span::new(0, 0),
+        )
+    })?;
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|err| {
         internal_error(
@@ -738,27 +718,18 @@ fn compile_inline_dag_bodies_test(
             _ => None,
         })
         .collect::<Vec<_>>();
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(parent_dag_id.clone(), parent_declarations)
-        .map_err(|err| {
-            internal_error(
-                format!("test module resolver failed for parent module: {err}"),
-                src,
-                Span::new(0, 0),
-            )
-        })?;
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(parent_dag_id.clone(), parent_declarations);
     for (name, body) in &dag_bodies {
-        resolver
-            .add_module(parent_dag_id.inline_dag_child(name.clone()), body)
-            .map_err(|err| {
-                internal_error(
-                    format!("test module resolver failed for inline dag `{name}`: {err}"),
-                    src,
-                    Span::new(0, 0),
-                )
-            })?;
+        modules.add(parent_dag_id.inline_dag_child(name.clone()), body);
     }
+    let resolver = modules.build().map_err(|err| {
+        internal_error(
+            format!("test module resolver failed: {err}"),
+            src,
+            Span::new(0, 0),
+        )
+    })?;
     let mut project_types = tir.project_type_store().clone();
 
     for (name, body) in dag_bodies {
@@ -792,10 +763,9 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     let root_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(root_id.clone(), &file.declarations)
-        .unwrap();
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(root_id.clone(), &file.declarations);
+    let resolver = modules.build().unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();
@@ -858,10 +828,9 @@ fn module_aware_type_resolve_records_semantic_deps() {
     let dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(dag_id.clone(), &file.declarations)
-        .unwrap();
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(dag_id.clone(), &file.declarations);
+    let resolver = modules.build().unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();
