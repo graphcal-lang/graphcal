@@ -22,7 +22,7 @@ use graphcal_compiler::ir::static_interface::{
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
-use graphcal_compiler::syntax::ast::ImportItemNamespace;
+use graphcal_compiler::syntax::ast::{ImportItemNamespace, IntroducedKind};
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_resolve::{
@@ -1471,13 +1471,14 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                     });
                 let is_graph_value = is_term_namespace
                     && dag_body.declarations.iter().any(|declaration| {
-                        matches!(
-                            &declaration.kind,
-                            DeclKind::ConstNode(_) | DeclKind::Param(_) | DeclKind::Node(_)
-                        ) && declaration
-                            .kind
-                            .name_and_span()
-                            .is_some_and(|(name, _)| name == orig_name.as_str())
+                        declaration.kind.declared_name().is_some_and(|introduced| {
+                            matches!(
+                                introduced.kind(),
+                                IntroducedKind::ConstNode
+                                    | IntroducedKind::Param
+                                    | IntroducedKind::Node
+                            ) && introduced.atom() == orig_name.atom()
+                        })
                     });
                 if is_graph_value {
                     validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;

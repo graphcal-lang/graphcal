@@ -308,38 +308,20 @@ fn declaration_name_in_namespace(
     name: &NameAtom,
     namespace: ImportItemNamespace,
 ) -> bool {
-    match (&declaration.kind, namespace) {
-        (DeclKind::Type(type_decl), ImportItemNamespace::Type) => {
-            type_decl.name.value.atom() == name
-        }
-        (DeclKind::Type(type_decl), ImportItemNamespace::Term) => match &type_decl.body {
-            crate::desugar::desugared_ast::TypeDeclBody::Required => false,
-            crate::desugar::desugared_ast::TypeDeclBody::Constructors(members) => members
-                .iter()
-                .any(|member| member.name.value.atom() == name),
-        },
-        (DeclKind::BaseDimension(dimension), ImportItemNamespace::Dimension) => {
-            dimension.name.value.atom() == name
-        }
-        (DeclKind::Dimension(dimension), ImportItemNamespace::Dimension) => {
-            dimension.name.value.atom() == name
-        }
-        (DeclKind::Index(index), ImportItemNamespace::Index) => index.name.value.atom() == name,
-        (DeclKind::Unit(unit), ImportItemNamespace::Unit) => unit.name.value.atom() == name,
-        (DeclKind::Param(param), ImportItemNamespace::Term) => param.name.value.atom() == name,
-        (DeclKind::Node(node), ImportItemNamespace::Term) => node.name.value.atom() == name,
-        (DeclKind::ConstNode(constant), ImportItemNamespace::Term) => {
-            constant.name.value.atom() == name
-        }
-        (DeclKind::Dag(dag), ImportItemNamespace::Term) => dag.name.value.atom() == name,
-        (DeclKind::Assert(assertion), ImportItemNamespace::Term) => {
-            assertion.name.value.atom() == name
-        }
-        (DeclKind::Plot(plot), ImportItemNamespace::Term) => plot.name.value.atom() == name,
-        (DeclKind::Figure(figure), ImportItemNamespace::Term) => figure.name.value.atom() == name,
-        (DeclKind::Layer(layer), ImportItemNamespace::Term) => layer.name.value.atom() == name,
-        _ => false,
-    }
+    declaration
+        .kind
+        .introduced_names()
+        .any(|introduced| introduced.namespace() == namespace && introduced.atom() == name)
+}
+
+/// Key and role of one declaration that has a typed Static interface.
+fn static_declaration(declaration: &Declaration) -> Option<(StaticDeclarationKey, StaticRole)> {
+    let interface = static_interface(&declaration.kind)?;
+    let introduced = declaration.kind.declared_name()?;
+    Some((
+        StaticDeclarationKey::new(interface.kind(), introduced.atom().clone()),
+        interface.role(),
+    ))
 }
 
 fn reference_candidates(
@@ -451,37 +433,11 @@ pub fn first_required_static_dependency(
 ) -> Option<RequiredStaticDependency> {
     let interfaces = declarations
         .iter()
-        .filter_map(|declaration| {
-            let interface = static_interface(&declaration.kind)?;
-            let name = match &declaration.kind {
-                DeclKind::BaseDimension(dimension) => dimension.name.value.atom(),
-                DeclKind::Dimension(dimension) => dimension.name.value.atom(),
-                DeclKind::Type(type_decl) => type_decl.name.value.atom(),
-                DeclKind::Index(index) => index.name.value.atom(),
-                _ => return None,
-            };
-            Some((
-                StaticDeclarationKey::new(interface.kind(), name.clone()),
-                interface.role(),
-            ))
-        })
+        .filter_map(static_declaration)
         .collect::<HashMap<_, _>>();
     let declaration_by_key = declarations
         .iter()
-        .filter_map(|declaration| {
-            let interface = static_interface(&declaration.kind)?;
-            let name = match &declaration.kind {
-                DeclKind::BaseDimension(dimension) => dimension.name.value.atom(),
-                DeclKind::Dimension(dimension) => dimension.name.value.atom(),
-                DeclKind::Type(type_decl) => type_decl.name.value.atom(),
-                DeclKind::Index(index) => index.name.value.atom(),
-                _ => return None,
-            };
-            Some((
-                StaticDeclarationKey::new(interface.kind(), name.clone()),
-                declaration,
-            ))
-        })
+        .filter_map(|declaration| Some((static_declaration(declaration)?.0, declaration)))
         .collect::<HashMap<_, _>>();
     let selected = declarations.iter().find(|declaration| {
         declaration_name_in_namespace(declaration, selected_name, selected_namespace)

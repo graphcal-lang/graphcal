@@ -8,8 +8,10 @@ use std::collections::{HashMap, HashSet};
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, FigureDecl, LayerDecl, PlotDecl};
+use crate::syntax::ast::{DeclExposure, IntroducedName};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::phase::never;
@@ -282,6 +284,51 @@ pub struct ExternalDeclSurface {
 }
 
 impl ExternalDeclSurface {
+    /// Record one name by its import namespace and external exposure.
+    ///
+    /// Private names are not part of the surface. Only `param` declarations
+    /// carry [`DeclExposure::InputPort`], so an input port is always a Term.
+    pub fn record(
+        &mut self,
+        namespace: ImportItemNamespace,
+        name: NameAtom,
+        exposure: DeclExposure,
+    ) {
+        match (exposure, namespace) {
+            (DeclExposure::Private, _) => {}
+            (DeclExposure::InputPort, _) => {
+                self.insert(ExternalNamespace::Term, name, ExternalDeclRole::InputPort);
+            }
+            (DeclExposure::ExplicitExport, ImportItemNamespace::Term) => {
+                self.insert(
+                    ExternalNamespace::Term,
+                    name,
+                    ExternalDeclRole::ExplicitExport,
+                );
+            }
+            (
+                DeclExposure::ExplicitExport,
+                ImportItemNamespace::Type
+                | ImportItemNamespace::Dimension
+                | ImportItemNamespace::Index,
+            ) => self.insert(
+                ExternalNamespace::Static,
+                name,
+                ExternalDeclRole::ExplicitExport,
+            ),
+            (DeclExposure::ExplicitExport, ImportItemNamespace::Unit) => self.insert(
+                ExternalNamespace::Unit,
+                name,
+                ExternalDeclRole::ExplicitExport,
+            ),
+        }
+    }
+
+    /// Record a declaration's own name with its declared exposure.
+    pub fn record_declared(&mut self, name: IntroducedName<'_>) {
+        self.record(name.namespace(), name.atom().clone(), name.exposure());
+    }
+
     /// Record an explicitly exported flat Term.
     pub fn insert_explicit_export(&mut self, name: DeclName) {
         self.insert(

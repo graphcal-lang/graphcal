@@ -138,8 +138,8 @@ pub fn collect_doc_captions(
         .iter()
         .filter_map(|declaration| {
             let doc = declaration.doc.as_ref()?;
-            let (name, _) = declaration.kind.name_and_span()?;
-            Some((name.to_string(), doc.text().to_string()))
+            let name = declaration.kind.declared_name()?;
+            Some((name.atom().to_string(), doc.text().to_string()))
         })
         .collect()
 }

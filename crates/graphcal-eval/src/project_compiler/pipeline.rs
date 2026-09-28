@@ -22,9 +22,11 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
             .ast()
             .declarations
             .iter()
-            .filter_map(|declaration| match &declaration.kind {
-                DeclKind::Dag(dag) => Some((dag.name.value.clone(), dag)),
-                _ => None,
+            .filter_map(|declaration| {
+                let DeclKind::Dag(dag) = &declaration.kind else {
+                    return None;
+                };
+                Some((dag.name.value.clone(), dag))
             })
             .collect();
         recursion::check_dag_recursion(&definitions, loaded_file.named_source())
