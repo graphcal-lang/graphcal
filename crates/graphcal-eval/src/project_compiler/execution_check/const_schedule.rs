@@ -8,7 +8,6 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
@@ -77,7 +76,6 @@ pub(super) fn eval_const_pools_for_dags(
         }
     })?;
 
-    let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
     let mut const_pools = dag_ids
         .iter()
@@ -89,15 +87,9 @@ pub(super) fn eval_const_pools_for_dags(
         let key = &graph[index];
         let (dag_id, name, _) = &declaration_by_key[key];
         let dag = &tir.dag_registry()[dag_id];
-        let ctx = EvalContext::provisional_constants(
-            tir,
-            dag.dag_id(),
-            src,
-            builtin_fns,
-            cancellation.clone(),
-        )?
-        .with_roots(&visible_values, None)
-        .for_decl(key);
+        let ctx = EvalContext::provisional_constants(tir, dag.dag_id(), src, cancellation.clone())?
+            .with_roots(&visible_values, None)
+            .for_decl(key);
         let hir_expr = dag.const_expr(key).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("constant schedule references missing declaration `{name}`"),

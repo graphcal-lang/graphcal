@@ -522,7 +522,6 @@ pub(super) fn install_instance_expression_facts(
             dag,
             tir,
             registry: &tir.registry,
-            builtin_fns: crate::registry::builtins::builtin_functions(),
             src,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;

@@ -15,7 +15,6 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
         &tir,
         tir.root_dag_id(),
         &src,
-        builtin_functions(),
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
@@ -43,15 +42,10 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
         );
     }
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx = EvalContext::provisional_constants(
-        &tir,
-        tir.root_dag_id(),
-        &src,
-        builtin_functions(),
-        cancellation.token(),
-    )
-    .unwrap()
-    .for_decl(&owner);
+    let ctx =
+        EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, cancellation.token())
+            .unwrap()
+            .for_decl(&owner);
     cancellation.cancel();
     assert!(matches!(
         eval_plot_property(&original.body.mark_properties[0].value, &values, &ctx),
@@ -67,14 +61,9 @@ fn composition_properties_preserve_fatal_fact_classification() {
     let src = NamedSource::new("composition.gcl", Arc::new(source.to_owned()));
     let values = RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx = EvalContext::provisional_constants(
-        &tir,
-        tir.root_dag_id(),
-        &src,
-        builtin_functions(),
-        cancellation.token(),
-    )
-    .unwrap();
+    let ctx =
+        EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, cancellation.token())
+            .unwrap();
     for (original, foreign, names) in [
         (
             &tir.root().figures()[0].fields,

@@ -14,7 +14,6 @@ use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
-use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::FormattingRegistry;
@@ -124,7 +123,6 @@ struct DimCheckContext<'a> {
     dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a FormattingRegistry,
-    builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
     src: &'a NamedSource<Arc<String>>,
 }
 
@@ -173,7 +171,6 @@ impl DimCheckContext<'_> {
             self.dag,
             self.tir,
             self.registry,
-            self.builtin_fns,
             self.src,
             self.cancellation,
             self.expression_facts.clone(),
@@ -256,7 +253,6 @@ fn check_decl_expr_type(
         ctx.dag,
         ctx.tir,
         ctx.registry,
-        ctx.builtin_fns,
         ctx.src,
         ctx.cancellation,
         ctx.expression_facts.clone(),
@@ -313,7 +309,6 @@ fn check_dynamic_unit_scale_type(
         ctx.dag,
         ctx.tir,
         ctx.registry,
-        ctx.builtin_fns,
         ctx.src,
         ctx.cancellation,
         ctx.expression_facts.clone(),
@@ -809,7 +804,6 @@ pub fn check_dimensions_tir_with_cancellation(
         .for_each(crate::tir::typed::DagTIR::begin_checking_revision);
     detect_decl_cycles(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
-    let builtin_fns = builtin_functions();
 
     // Canonical bodies are checked once. Instance facts are specialized below,
     // after canonical publication; only independently lowered bindings infer.
@@ -819,15 +813,8 @@ pub fn check_dimensions_tir_with_cancellation(
         .map(|(dag_id, dag)| {
             cancellation.checkpoint()?;
             let collector = infer::hir::ExpressionFactCollector::new(dag);
-            let plot_shapes = check_dimensions_dag(
-                dag,
-                tir,
-                &tir.registry,
-                builtin_fns,
-                src,
-                cancellation,
-                &collector,
-            )?;
+            let plot_shapes =
+                check_dimensions_dag(dag, tir, &tir.registry, src, cancellation, &collector)?;
             dag.owned_expression_roots()
                 .try_for_each(|root| collector.record_contextual(root, src))?;
             Ok((dag_id.clone(), collector, plot_shapes))
@@ -838,14 +825,7 @@ pub fn check_dimensions_tir_with_cancellation(
         .map(|(owner, collector, _)| (owner.clone(), collector.clone()))
         .collect();
     check_field_domain_constraint_targets(tir, src)?;
-    check_field_domain_constraint_dimensions(
-        tir,
-        &tir.registry,
-        builtin_fns,
-        src,
-        cancellation,
-        &collectors,
-    )?;
+    check_field_domain_constraint_dimensions(tir, &tir.registry, src, cancellation, &collectors)?;
     drop(collectors);
     let mut checked_plot_shapes = HashMap::new();
     for (dag_id, collector, plot_shapes) in checked_dag_facts {
@@ -1081,7 +1061,6 @@ pub fn check_external_value_expr_type(
     expected: &DeclaredType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
-    let builtin_fns = builtin_functions();
     let collector = infer::hir::ExpressionFactCollector::new(tir.root());
     let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         expr,
@@ -1090,7 +1069,6 @@ pub fn check_external_value_expr_type(
         tir.root(),
         tir,
         &tir.registry,
-        builtin_fns,
         src,
         &crate::cancellation::CancellationToken::unbounded(),
         collector.clone(),
@@ -1147,7 +1125,6 @@ fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &crate::registry::types::FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     expression_facts: &infer::hir::ExpressionFactCollector,
@@ -1161,7 +1138,6 @@ fn check_dimensions_dag(
         dag,
         tir,
         registry,
-        builtin_fns,
         src,
     };
 
@@ -1287,7 +1263,6 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
                 dag,
                 ctx.tir,
                 ctx.registry,
-                ctx.builtin_fns,
                 ctx.src,
                 ctx.cancellation,
                 ctx.expression_facts.clone(),
@@ -1470,7 +1445,6 @@ fn field_constraint_definition_dag<'a>(
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     collectors: &HashMap<crate::dag_id::DagId, infer::hir::ExpressionFactCollector>,
@@ -1556,7 +1530,6 @@ fn check_field_domain_constraint_dimensions(
                     definition_dag,
                     tir,
                     registry,
-                    builtin_fns,
                     &bound.src,
                     cancellation,
                     collector.clone(),
