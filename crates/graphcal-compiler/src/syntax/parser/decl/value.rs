@@ -1,6 +1,7 @@
 use crate::node_definition::NodeDefinition;
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, Visibility,
+    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, SlotKind,
+    Visibility,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
@@ -8,7 +9,7 @@ use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
-use super::multi::{SlotHeader, SlotKind};
+use super::multi::SlotHeader;
 
 impl Parser<'_> {
     /// Complete a single `param` / `node` / `const node` declaration starting
@@ -44,13 +45,13 @@ impl Parser<'_> {
                     semi_span,
                 )
             }
-            SlotKind::Node => {
+            SlotKind::Node(visibility) => {
                 self.expect(Token::Eq)?;
                 let definition = self.parse_node_definition()?;
                 let (_, semi_span) = self.expect(Token::Semicolon)?;
                 (
                     DeclKind::Node(NodeDecl {
-                        visibility: Visibility::Private,
+                        visibility,
                         name,
                         type_ann,
                         definition,
@@ -58,13 +59,13 @@ impl Parser<'_> {
                     semi_span,
                 )
             }
-            SlotKind::ConstNode => {
+            SlotKind::ConstNode(visibility) => {
                 self.expect(Token::Eq)?;
                 let value = self.parse_expr()?;
                 let (_, semi_span) = self.expect(Token::Semicolon)?;
                 (
                     DeclKind::ConstNode(ConstNodeDecl {
-                        visibility: Visibility::Private,
+                        visibility,
                         name,
                         type_ann,
                         value,

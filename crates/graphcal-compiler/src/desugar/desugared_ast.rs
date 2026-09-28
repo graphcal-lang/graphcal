@@ -74,7 +74,6 @@ pub use crate::syntax::ast::{
     AmbiguousGenericArg, Attribute, AttributeArg, BaseDimDecl, BinOp, BindableVisibility,
     DomainBoundKind, EncodingChannel, ForBinding, ForBindingIndex, GenericConstraint, Ident,
     ImportDecl, ImportItem, ImportItemNamespace, ImportKind, MapEntryKey, MarkType, MatchPattern,
-    ModulePath, MulDivOp, MultiDataRow, MultiDecl, MultiDeclSlice, MultiDeclSlot, MultiHeaderCell,
-    MultiSlotAxis, MultiSlotColumnSpan, MultiSlotKind, NatExpr, PatternBinding, PatternBindings,
-    TableIndexSpec, UnaryOp, UnitExpr, UnitExprItem, Visibility,
+    ModulePath, MulDivOp, NatExpr, PatternBinding, PatternBindings, TableIndexSpec, UnaryOp,
+    UnitExpr, UnitExprItem, Visibility,
 };

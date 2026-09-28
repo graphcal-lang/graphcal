@@ -173,20 +173,6 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("multi-decl requires at least two slots")]
-    #[diagnostic(
-        code(graphcal::P010),
-        help(
-            "for a single declaration, use the regular `param`/`node`/`const node` form without a trailing comma"
-        )
-    )]
-    MultiDeclSingleSlot {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("single slot here")]
-        span: SourceSpan,
-    },
-
     #[error("multi-decl requires at least one shared axis")]
     #[diagnostic(
         code(graphcal::P011),
@@ -375,7 +361,6 @@ impl ParseError {
             | Self::MultiDeclTupleArity { src, .. }
             | Self::MultiDeclHeaderArity { src, .. }
             | Self::MultiDeclRowArity { src, .. }
-            | Self::MultiDeclSingleSlot { src, .. }
             | Self::MultiDeclNoSharedAxis { src, .. }
             | Self::MultiDeclUnsupportedShape { src, .. }
             | Self::InlineDagCallMissingProjection { src, .. }

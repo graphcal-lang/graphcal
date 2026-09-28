@@ -5,12 +5,14 @@ use crate::syntax::phase::{Desugared, Phase, Raw};
 mod common;
 mod decl;
 mod format_equivalent;
+mod multi_decl;
 mod plot_props;
 mod value;
 
 pub use crate::syntax::import_category::ImportItemNamespace;
 pub use common::*;
 pub use decl::*;
+pub use multi_decl::*;
 pub use plot_props::*;
 pub use value::*;
 
