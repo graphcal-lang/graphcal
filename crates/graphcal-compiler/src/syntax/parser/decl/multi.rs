@@ -18,11 +18,12 @@
 //! slots); the desugar pass later expands it into N ordinary declarations.
 
 use crate::syntax::ast::{
-    BindableVisibility, DeclKind, Declaration, MapEntryIndex, MapEntryKey, MultiDeclBuilder,
-    MultiDeclLayoutError, MultiDeclSharedAxes, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis,
+    BindableVisibility, DeclKind, Declaration, MapEntryKey, MultiDeclBuilder, MultiDeclLayoutError,
+    MultiDeclRowWidthError, MultiDeclSharedAxes, MultiDeclSlot, MultiHeaderCell, MultiSlotAxis,
     SlotKind, TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::fin_position::FinPosition;
 use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::non_empty::AtLeastTwo;
 use crate::syntax::span::Span;
@@ -296,13 +297,10 @@ impl Parser<'_> {
                             label_axis.span,
                         ));
                     }
-                    keys.push(MapEntryKey {
-                        index: Spanned::new(
-                            MapEntryIndex::Named(label_axis.value),
-                            label_axis.span,
-                        ),
+                    keys.push(MapEntryKey::Named {
+                        index: label_axis,
                         additional_index_spans: vec![axis.span],
-                        variant: Spanned::new(IndexEntryKey::named(variant.value), variant.span),
+                        variant,
                     });
                 }
                 TableIndexSpec::Finite { cardinality, span } => {
@@ -312,20 +310,10 @@ impl Parser<'_> {
                     let value: u64 = text.parse().map_err(|_| {
                         Self::invalid_number(InvalidNumberReason::SliceLabel, num_span)
                     })?;
-                    if value >= *cardinality {
-                        return Err(Self::invalid_number(
-                            InvalidNumberReason::SliceIndexOutOfRange {
-                                value,
-                                cardinality: *cardinality,
-                            },
-                            num_span,
-                        ));
-                    }
-                    let variant_span = hash_span.merge(num_span);
-                    keys.push(MapEntryKey {
-                        index: Spanned::new(MapEntryIndex::Finite(*cardinality), *span),
-                        additional_index_spans: Vec::new(),
-                        variant: Spanned::new(IndexEntryKey::position(value), variant_span),
+                    let position = Self::slice_position(*cardinality, value, num_span)?;
+                    keys.push(MapEntryKey::Finite {
+                        axis_span: *span,
+                        position: Spanned::new(position, hash_span.merge(num_span)),
                     });
                 }
             }
@@ -349,32 +337,43 @@ impl Parser<'_> {
             .begin_slice(prefix_keys, header_cells)
             .map_err(|error| multi_decl_layout_error(error, header_span))?;
 
+        // Rows past a `Fin(N)` row axis have no key and are not stored, so the
+        // row-count diagnostic counts every parsed row here.
+        let mut rows_seen: usize = 0;
         while self.lexer.peek() != Some(&Token::RBrace)
             && self.lexer.peek() != Some(&Token::LBracket)
         {
-            let (row_label, label_span) = match row_axis {
-                TableIndexSpec::Named(_) => {
+            let (row_key, row_label, label_span) = match row_axis {
+                TableIndexSpec::Named(axis) => {
                     let label = self.parse_any_ident()?;
                     let label_span = label.span;
                     let named_label: Spanned<IndexVariantName> = label.classify();
                     self.expect(Token::Colon)?;
+                    let row_label = IndexEntryKey::named(named_label.value.clone());
                     (
-                        Spanned::new(IndexEntryKey::named(named_label.value), named_label.span),
+                        Some(MapEntryKey::named(axis.clone(), named_label)),
+                        row_label,
                         label_span,
                     )
                 }
-                TableIndexSpec::Finite { .. } => {
+                TableIndexSpec::Finite { cardinality, span } => {
                     let label_span = self
                         .lexer
                         .peek_with_span()
                         .map_or(header_span, |(_, span)| span);
-                    let position = u64::try_from(slice.row_count()).map_err(|_| {
+                    let position = u64::try_from(rows_seen).map_err(|_| {
                         Self::invalid_number(InvalidNumberReason::FiniteRowPosition, label_span)
                     })?;
-                    (
-                        Spanned::new(IndexEntryKey::position(position), label_span),
-                        label_span,
-                    )
+                    // A row past `Fin(cardinality)` has no key; it is still
+                    // parsed and reported by the row-count check below.
+                    let row_key =
+                        FinPosition::try_new(*cardinality, position)
+                            .ok()
+                            .map(|position| MapEntryKey::Finite {
+                                axis_span: *span,
+                                position: Spanned::new(position, label_span),
+                            });
+                    (row_key, IndexEntryKey::position(position), label_span)
                 }
             };
             let mut values = Vec::with_capacity(slice.header_count());
@@ -391,25 +390,36 @@ impl Parser<'_> {
             let row_span = label_span.merge(row_end_span);
             self.expect(Token::Semicolon)?;
 
-            slice.push_row(row_label.clone(), values).map_err(|error| {
+            rows_seen += 1;
+            let row_width_error = |error: MultiDeclRowWidthError| {
                 ParseError::new(
                     ParseErrorKind::MultiDeclRowArity {
                         expected_count: error.header_count,
                         got: error.value_count,
-                        row_label: row_label.value,
+                        row_label,
                     },
                     row_span,
                 )
-            })?;
+            };
+            match row_key {
+                Some(row_key) => slice.push_row(row_key, values).map_err(row_width_error)?,
+                None if values.len() != slice.header_count() => {
+                    return Err(row_width_error(MultiDeclRowWidthError {
+                        header_count: slice.header_count(),
+                        value_count: values.len(),
+                    }));
+                }
+                None => {}
+            }
         }
 
         if let TableIndexSpec::Finite { cardinality, .. } = row_axis
-            && u64::try_from(slice.row_count()) != Ok(*cardinality)
+            && u64::try_from(rows_seen) != Ok(*cardinality)
         {
             return Err(ParseError::new(
                 ParseErrorKind::TableRowLengthMismatch {
                     expected: *cardinality,
-                    got: Self::table_count_from_len(slice.row_count(), header_span)?,
+                    got: Self::table_count_from_len(rows_seen, header_span)?,
                 },
                 header_span,
             ));
@@ -602,7 +612,7 @@ param y: Dimensionless[Fin(2)]
             multi.slices()[0]
                 .rows()
                 .iter()
-                .map(|row| row.label().value.clone())
+                .map(|row| row.row_key().entry_key())
                 .collect::<Vec<_>>(),
             vec![IndexEntryKey::Position(0), IndexEntryKey::Position(1)]
         );
@@ -934,10 +944,7 @@ param q: Int[Phase, Component]
         assert_eq!(multi.shared_axes().len(), 2);
         assert_eq!(multi.slices().len(), 2);
         assert_eq!(multi.slices()[0].prefix_keys().len(), 1);
-        assert_eq!(
-            multi.slices()[0].prefix_keys()[0].index.value.to_string(),
-            "Phase"
-        );
+        assert_eq!(multi.slices()[0].prefix_keys()[0].axis_text(), "Phase");
     }
 
     #[test]
@@ -1030,7 +1037,7 @@ param m: Bool[mission::Phase, mission::Component, mission::Mode]
         };
         assert_eq!(extra_axis.value.display_path(), "mission::Mode");
         assert_eq!(
-            multi.slices()[0].prefix_keys()[0].index.value.to_string(),
+            multi.slices()[0].prefix_keys()[0].axis_text(),
             "mission::Phase"
         );
     }

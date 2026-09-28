@@ -757,6 +757,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "ast", "value", "map_entry_key_tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "ast", "value", "nat_expr_display_tests"]
 role = "contracts"
 
@@ -803,6 +808,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["syntax", "doc_attach", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "fin_position"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "fin_position", "tests"]
 role = "contracts"
 
 [[module]]

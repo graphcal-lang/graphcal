@@ -21,7 +21,7 @@ use crate::syntax::ast::common::Visibility;
 use crate::syntax::ast::value::{Expr, MapEntryKey, TableIndexSpec, TypeExpr};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::format_equivalent::FormatEquivalent;
-use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::AtLeastTwo;
 use crate::syntax::span::{Span, Spanned};
@@ -167,17 +167,18 @@ impl MultiHeaderCell {
     }
 }
 
-/// One data row of a multi-decl body: label + value per header column.
+/// One data row of a multi-decl body: row-axis key + value per header column.
 #[derive(Debug, Clone, FormatEquivalent)]
 pub struct MultiDataRow {
-    label: Spanned<IndexEntryKey>,
+    row_key: MapEntryKey,
     values: Vec<Expr>,
 }
 
 impl MultiDataRow {
+    /// Key of this row on the multi-decl's row axis.
     #[must_use]
-    pub const fn label(&self) -> &Spanned<IndexEntryKey> {
-        &self.label
+    pub const fn row_key(&self) -> &MapEntryKey {
+        &self.row_key
     }
 
     #[must_use]
@@ -394,7 +395,7 @@ impl MultiSliceBuilder<'_> {
     /// as the header.
     pub fn push_row(
         &mut self,
-        label: Spanned<IndexEntryKey>,
+        row_key: MapEntryKey,
         values: Vec<Expr>,
     ) -> Result<(), MultiDeclRowWidthError> {
         let header_count = self.header_count();
@@ -404,7 +405,7 @@ impl MultiSliceBuilder<'_> {
                 value_count: values.len(),
             });
         }
-        self.slice.rows.push(MultiDataRow { label, values });
+        self.slice.rows.push(MultiDataRow { row_key, values });
         Ok(())
     }
 
@@ -607,7 +608,13 @@ mod tests {
         let mut slice = builder
             .begin_slice(vec![], vec![underscore(1), underscore(2)])
             .unwrap();
-        let label = Spanned::new(IndexEntryKey::position(0), span(0));
+        let label = MapEntryKey::Finite {
+            axis_span: span(0),
+            position: Spanned::new(
+                crate::syntax::fin_position::FinPosition::try_new(1, 0).expect("inside Fin(1)"),
+                span(0),
+            ),
+        };
         assert_eq!(
             slice.push_row(label.clone(), vec![number(1.0)]),
             Err(MultiDeclRowWidthError {

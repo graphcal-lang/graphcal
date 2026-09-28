@@ -578,7 +578,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         // The parser guarantees a map literal never mixes key ranks: scalar
         // syntax always yields exactly one key, tuple syntax always two or
         // more. Rendering each rank in its own syntax therefore round-trips.
-        let render_key = |key: &MapEntryKey| format!("{}#{}", key.index.value, key.variant.value);
+        let render_key = MapEntryKey::to_string;
         let key_doc = match e.keys.as_slice() {
             [key] => RcDoc::text(render_key(key)),
             keys => {
@@ -653,7 +653,7 @@ fn format_table_1d(
     } else {
         entries
             .iter()
-            .map(|e| display_width(&e.keys[0].variant.value.to_string()))
+            .map(|e| display_width(&e.keys[0].entry_key().to_string()))
             .max()
             .unwrap_or(0)
     };
@@ -681,7 +681,7 @@ fn format_table_1d(
         let row_text = if finite_index {
             format!("{}{};", " ".repeat(value_padding), rendered)
         } else {
-            let label = e.keys[0].variant.value.to_string();
+            let label = e.keys[0].entry_key().to_string();
             let padding = max_label_width - display_width(&label);
             format!(
                 "{}:{} {};",
@@ -748,7 +748,7 @@ fn format_table_2d_body(
     // Extract unique column labels (from the last key, preserving order)
     let mut col_labels: Vec<String> = Vec::new();
     for e in entries {
-        let col_label = e.keys[col_idx].variant.value.to_string();
+        let col_label = e.keys[col_idx].entry_key().to_string();
         if !col_labels.contains(&col_label) {
             col_labels.push(col_label);
         }
@@ -758,7 +758,7 @@ fn format_table_2d_body(
     // Extract unique row labels (from the second-to-last key, preserving order)
     let mut row_labels: Vec<String> = Vec::new();
     for e in entries {
-        let row_label = e.keys[row_idx].variant.value.to_string();
+        let row_label = e.keys[row_idx].entry_key().to_string();
         if !row_labels.contains(&row_label) {
             row_labels.push(row_label);
         }
@@ -768,8 +768,8 @@ fn format_table_2d_body(
     let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
     let mut entry_indices: Vec<Vec<Option<usize>>> = vec![vec![None; num_cols]; row_labels.len()];
     for (ei, e) in entries.iter().enumerate() {
-        let row_label = e.keys[row_idx].variant.value.to_string();
-        let col_label = e.keys[col_idx].variant.value.to_string();
+        let row_label = e.keys[row_idx].entry_key().to_string();
+        let col_label = e.keys[col_idx].entry_key().to_string();
         // Labels were built from the same entries, so lookup cannot miss.
         // If it somehow does, skip this entry rather than silently using row/col 0.
         let Some(ri) = row_labels.iter().position(|r| r == &row_label) else {
@@ -887,14 +887,7 @@ fn format_table_sliced(
     // Named axes render as `Index#Variant`; finite positions render as `#N`.
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
-        let slice_key: Vec<String> = (0..slice_dims)
-            .map(|i| match &indexes[i] {
-                TableIndexSpec::Named(_) => {
-                    format!("{}#{}", e.keys[i].index.value, e.keys[i].variant.value)
-                }
-                TableIndexSpec::Finite { .. } => e.keys[i].variant.value.to_string(),
-            })
-            .collect();
+        let slice_key: Vec<String> = (0..slice_dims).map(|i| e.keys[i].to_string()).collect();
 
         if let Some((entry_indices, _)) = slices.iter_mut().find(|(_, key)| key == &slice_key) {
             entry_indices.push(idx);
@@ -910,12 +903,13 @@ fn format_table_sliced(
 
         // Drain leading comments before this slice header
         let first_idx = entry_indices[0];
-        let first_key_offset = entries[first_idx].keys[0].index.span.offset();
+        let first_key_offset = entries[first_idx].keys[0].index_span().offset();
         let leading = fmt.drain_comments_before(first_key_offset);
 
         // Drain trailing comment on the same line as the slice header "]"
         let last_slice_key = &entries[first_idx].keys[slice_dims - 1];
-        let header_end = last_slice_key.variant.span.offset() + last_slice_key.variant.span.len();
+        let header_end =
+            last_slice_key.variant_span().offset() + last_slice_key.variant_span().len();
         let trailing = fmt
             .drain_trailing_comment(header_end)
             .unwrap_or_else(RcDoc::nil);

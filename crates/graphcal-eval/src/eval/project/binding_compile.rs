@@ -1,9 +1,7 @@
 //! Prepared-parameter binding compilation and row construction.
 
-use graphcal_compiler::syntax::ast::{
-    FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
-};
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::syntax::ast::{FieldInit, Ident, IdentPath, MapEntry, MapEntryKey};
+use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::token::SourceIdentifier;
@@ -296,11 +294,7 @@ impl PreparedProject {
                 let value = self.structured_binding_expr(entry, element, owner, path);
                 path.pop();
                 Ok(MapEntry {
-                    keys: NonEmpty::singleton(MapEntryKey {
-                        index: Spanned::new(self.structured_map_index(axis, path)?, span),
-                        additional_index_spans: Vec::new(),
-                        variant: Spanned::new(structured_map_key(axis, index, path)?, span),
-                    }),
+                    keys: NonEmpty::singleton(self.structured_map_key(axis, index, span, path)?),
                     value: value?,
                 })
             })
@@ -308,39 +302,47 @@ impl PreparedProject {
         Ok(Expr::new(AstExprKind::MapLiteral { entries }, span))
     }
 
-    fn structured_map_index(
+    /// Key of entry `position` on `axis`.
+    fn structured_map_key(
         &self,
         axis: &ModelIndexSchema,
+        position: usize,
+        span: Span,
         path: &[StructuredBindingPathSegment],
-    ) -> Result<MapEntryIndex, StructuredBindingError> {
+    ) -> Result<MapEntryKey, StructuredBindingError> {
         match axis.kind() {
-            ModelIndexKind::Finite { index } => u64::try_from(index.cardinality().get())
-                .map(MapEntryIndex::Finite)
-                .map_err(|_| structured_error(path, "finite index cardinality is too large")),
-            ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
-                .identity()
-                .declared_resolved()
-                .and_then(|resolved| self.source_index_path(resolved))
-                .map(MapEntryIndex::Named)
-                .ok_or_else(|| {
-                    structured_error(path, "indexed axis is not visible at the boundary")
-                }),
+            ModelIndexKind::Finite { index } => {
+                let cardinality = u64::try_from(index.cardinality().get())
+                    .map_err(|_| structured_error(path, "finite index cardinality is too large"))?;
+                let position = u64::try_from(position)
+                    .ok()
+                    .and_then(|position| FinPosition::try_new(cardinality, position).ok())
+                    .ok_or_else(|| structured_error(path, "indexed entry position is too large"))?;
+                Ok(MapEntryKey::Finite {
+                    axis_span: span,
+                    position: Spanned::new(position, span),
+                })
+            }
+            ModelIndexKind::Named { variants } => {
+                let index = axis
+                    .identity()
+                    .declared_resolved()
+                    .and_then(|resolved| self.source_index_path(resolved))
+                    .ok_or_else(|| {
+                        structured_error(path, "indexed axis is not visible at the boundary")
+                    })?;
+                Ok(MapEntryKey::named(
+                    Spanned::new(index, span),
+                    Spanned::new(variants.as_slice()[position].clone(), span),
+                ))
+            }
+            // A coordinate axis has neither variant names nor a `Fin(N)`
+            // cardinality, so no source map key can address its entries.
+            ModelIndexKind::Coordinate { .. } => Err(structured_error(
+                path,
+                "coordinate-indexed values cannot be bound entry by entry",
+            )),
         }
-    }
-}
-
-fn structured_map_key(
-    axis: &ModelIndexSchema,
-    index: usize,
-    path: &[StructuredBindingPathSegment],
-) -> Result<IndexEntryKey, StructuredBindingError> {
-    match axis.kind() {
-        ModelIndexKind::Named { variants } => {
-            Ok(IndexEntryKey::Named(variants.as_slice()[index].clone()))
-        }
-        ModelIndexKind::Coordinate { .. } | ModelIndexKind::Finite { .. } => u64::try_from(index)
-            .map(IndexEntryKey::Position)
-            .map_err(|_| structured_error(path, "indexed entry position is too large")),
     }
 }
 
