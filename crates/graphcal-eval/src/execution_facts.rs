@@ -10,7 +10,7 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
 
 use crate::domain_constraint::ResolvedDomainConstraint;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 

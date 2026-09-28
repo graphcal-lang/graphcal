@@ -9,9 +9,9 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::registry::error::GraphcalError;
+use crate::resolve::error::ModuleResolveError;
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_resolve::ModuleResolveError;
 use crate::syntax::names::{NameNamespace, NamePath};
 use crate::syntax::span::Span;
 
@@ -403,7 +403,7 @@ pub fn expr_lower_error_to_graphcal(
             source:
                 ModuleResolveError::UnexpectedDeclKind {
                     name,
-                    actual: crate::syntax::module_resolve::DeclSymbolKind::Assert,
+                    actual: crate::resolve::category::DeclSymbolKind::Assert,
                     ..
                 },
             span,

@@ -431,9 +431,8 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
 
 #[test]
 fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() {
-    use graphcal_compiler::syntax::type_name::{
-        ConstructorName, FieldName, ResolvedStructTypeName, StructTypeName,
-    };
+    use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+    use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
     let source = "type A<N: Nat> { A(value: Dimensionless(min: sum(for p: Fin(N) { 1.0 }))), } type B<N: Nat> { B(value: Dimensionless), }";
     let tir = compile_to_tir(source, "nat-scopes.gcl").unwrap();
     let src = miette::NamedSource::new("nat-scopes.gcl", std::sync::Arc::new(source.to_string()));
@@ -517,7 +516,7 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
         crate::exec_plan::compile_checked_with_cancellation(&tir, &facts, &src, &cancellation)
             .unwrap();
     let hosts = crate::host_fns::HostFunctionRegistry::new();
-    let owner = graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+    let owner = graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
         tir.root_dag_id().clone(),
         graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
     );
@@ -2291,7 +2290,7 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
 
 #[test]
 fn checked_tir_records_typed_template_instance_bindings() {
-    use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+    use graphcal_compiler::resolved_name::ResolvedDeclName;
     use graphcal_compiler::syntax::module_name::ScopeSegment;
 
     let (_directory, root) = write_pipeline_project(
@@ -2417,44 +2416,44 @@ fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
     let dependency = loaded_file_dag_id(&project, "lib.gcl");
     let importer = tir.root_dag_id().clone();
 
-    let dependency_dimension = graphcal_compiler::syntax::dimension::ResolvedDimName::from_def(
+    let dependency_dimension = graphcal_compiler::resolved_name::ResolvedDimName::from_def(
         dependency.clone(),
         graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
     );
-    let importer_dimension = graphcal_compiler::syntax::dimension::ResolvedDimName::from_def(
+    let importer_dimension = graphcal_compiler::resolved_name::ResolvedDimName::from_def(
         importer.clone(),
         graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
     );
     assert!(tir.dimension(&dependency_dimension).is_some());
     assert!(tir.dimension(&importer_dimension).is_none());
 
-    let dependency_unit = graphcal_compiler::syntax::dimension::ResolvedUnitName::from_def(
+    let dependency_unit = graphcal_compiler::resolved_name::ResolvedUnitName::from_def(
         dependency.clone(),
         graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
     );
-    let importer_unit = graphcal_compiler::syntax::dimension::ResolvedUnitName::from_def(
+    let importer_unit = graphcal_compiler::resolved_name::ResolvedUnitName::from_def(
         importer.clone(),
         graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
     );
     assert!(tir.unit_info(&dependency_unit).is_some());
     assert!(tir.unit_info(&importer_unit).is_none());
 
-    let dependency_index = graphcal_compiler::syntax::index_name::ResolvedIndexName::from_def(
+    let dependency_index = graphcal_compiler::resolved_name::ResolvedIndexName::from_def(
         dependency.clone(),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
     );
-    let importer_index = graphcal_compiler::syntax::index_name::ResolvedIndexName::from_def(
+    let importer_index = graphcal_compiler::resolved_name::ResolvedIndexName::from_def(
         importer.clone(),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
     );
     assert!(tir.declared_index_def(&dependency_index).is_some());
     assert!(tir.declared_index_def(&importer_index).is_none());
 
-    let dependency_type = graphcal_compiler::syntax::type_name::ResolvedStructTypeName::from_def(
+    let dependency_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::from_def(
         dependency,
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
-    let importer_type = graphcal_compiler::syntax::type_name::ResolvedStructTypeName::from_def(
+    let importer_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::from_def(
         importer,
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
@@ -2464,9 +2463,8 @@ fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
 
 #[test]
 fn diamond_imports_install_one_canonical_shared_definition() {
-    use graphcal_compiler::syntax::dimension::{
-        DimName, ResolvedDimName, ResolvedUnitName, UnitName,
-    };
+    use graphcal_compiler::resolved_name::{ResolvedDimName, ResolvedUnitName};
+    use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 
     let (_directory, root) = write_pipeline_project(
         &[
@@ -2528,9 +2526,8 @@ fn diamond_imports_install_one_canonical_shared_definition() {
 
 #[test]
 fn same_leaf_definitions_from_distinct_modules_keep_distinct_canonical_owners() {
-    use graphcal_compiler::syntax::dimension::{
-        DimName, ResolvedDimName, ResolvedUnitName, UnitName,
-    };
+    use graphcal_compiler::resolved_name::{ResolvedDimName, ResolvedUnitName};
+    use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 
     let (_directory, root) = write_pipeline_project(
         &[
@@ -5385,7 +5382,7 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
 
     match project.build_module_resolver() {
         Err(crate::loader::ModuleResolverBuildError::ModuleResolve(
-            graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+            graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
                 namespace,
                 name,
                 ..
@@ -6136,7 +6133,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
     );
@@ -6197,7 +6194,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
@@ -6297,7 +6294,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     assert_eq!(
         index
             .declared_resolved()
-            .map(graphcal_compiler::syntax::names::ResolvedName::owner,),
+            .map(graphcal_compiler::resolved_name::ResolvedName::owner,),
         Some(&a_id)
     );
 }
@@ -7039,7 +7036,7 @@ fn eval_unfold_uses_resolved_explicit_range_index_owner_with_same_leaf_indexes()
     assert_eq!(
         index_name
             .declared_resolved()
-            .map(graphcal_compiler::syntax::names::ResolvedName::owner),
+            .map(graphcal_compiler::resolved_name::ResolvedName::owner),
         Some(&a_owner)
     );
 }
@@ -7063,7 +7060,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );
@@ -7140,7 +7137,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         panic!("expected one for-comprehension binding, got {bindings:?}");
     };
     let match_expr = body.as_ref();
-    let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );

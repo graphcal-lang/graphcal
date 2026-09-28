@@ -9,13 +9,13 @@ use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
 use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
+use crate::resolve::error::ModuleResolveError;
+use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;
-use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::index_name::{IndexName, ResolvedIndexName};
-use crate::syntax::module_resolve::ModuleResolveError;
+use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
+use crate::syntax::type_name::GenericParamName;
 
 use super::{
     ModuleTypeContext, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,

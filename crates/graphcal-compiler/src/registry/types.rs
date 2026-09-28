@@ -500,7 +500,7 @@ mod tests {
     }
 
     fn user_dim_id(name: &str) -> BaseDimId {
-        BaseDimId::UserDefined(crate::syntax::dimension::ResolvedDimName::from_def(
+        BaseDimId::UserDefined(crate::resolved_name::ResolvedDimName::from_def(
             crate::dag_id::DagId::root_in_package("test", "test"),
             DimName::expect_valid(name),
         ))

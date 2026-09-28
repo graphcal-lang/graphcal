@@ -1,7 +1,6 @@
 use super::*;
-use graphcal_compiler::syntax::type_name::{
-    ConstructorName, FieldName, ResolvedStructTypeName, StructTypeName,
-};
+use graphcal_compiler::resolved_name::ResolvedStructTypeName;
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 use graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts;
 
 #[test]

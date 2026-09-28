@@ -11,8 +11,8 @@
 //!
 //! - definition sites are owned by canonical [`DagId`](crate::dag_id::DagId)
 //!   identities;
-//! - module-level reference sites use [`ResolvedName`](crate::syntax::names::ResolvedName)
-//!   or [`ResolvedIndexVariant`](crate::syntax::index_name::ResolvedIndexVariant);
+//! - module-level reference sites use [`ResolvedName`](crate::resolved_name::ResolvedName)
+//!   or [`ResolvedIndexVariant`](crate::resolved_name::ResolvedIndexVariant);
 //! - lexical references, such as locals and generic parameters, use dedicated
 //!   lexical IDs instead of module names;
 //! - built-ins use explicit variants or dedicated typed wrappers, not ad-hoc

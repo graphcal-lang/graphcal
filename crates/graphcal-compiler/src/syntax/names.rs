@@ -17,14 +17,16 @@
 //!   boundaries. Structured index-entry positions remain typed values rather
 //!   than `NameAtom`s.
 //! - [`NameNamespace`] is implemented by zero-sized marker types owned by the
-//!   relevant domain module. It gives [`NameDef`] and [`ResolvedName`] their
+//!   relevant domain module. It gives [`NameDef`] and
+//!   [`ResolvedName`](crate::resolved_name::ResolvedName) their
 //!   type-level namespace without adding runtime data.
 //! - <code>[NameDef]&lt;Ns&gt;</code> is a definition-site leaf name tagged with a semantic
 //!   namespace marker. Use it when the grammar already determines the namespace
 //!   of the identifier being introduced.
-//! - <code>[ResolvedName]&lt;Ns&gt;</code> is a reference that has passed module-aware
-//!   resolution. It stores the canonical owning [`DagId`](crate::dag_id::DagId)
-//!   plus the leaf [`NameAtom`], rather than preserving source qualifier text.
+//! - [`ResolvedName`](crate::resolved_name::ResolvedName) is a reference that
+//!   has passed module-aware resolution. It lives beside
+//!   [`DagId`](crate::dag_id::DagId), downstream of this module, because it
+//!   stores the canonical owning module rather than source qualifier text.
 //! - <code>[Qualified]&lt;Seg, Leaf&gt;</code> is the single source-path shape
 //!   `leaf` / `seg.seg::leaf`. [`NamePath`] is its span-less,
 //!   namespace-neutral instance. Keep unresolved reference positions as a
@@ -125,7 +127,7 @@ impl TryFrom<&str> for NameAtom {
 /// Marker trait for a semantic name namespace.
 ///
 /// Namespaces are zero-sized marker types used by [`NameDef`] and
-/// [`ResolvedName`] to make it impossible to mix, for example, a function name
+/// [`ResolvedName`](crate::resolved_name::ResolvedName) to make it impossible to mix, for example, a function name
 /// with an index name. The marker's [`NameNamespace::DISPLAY_NAME`] is used
 /// only for diagnostics and panic messages at construction boundaries.
 pub trait NameNamespace:
@@ -142,7 +144,7 @@ pub trait NameNamespace:
 /// grammar, such as `type Foo`, `index Phase`, or `unit m`. Reference positions
 /// that may be qualified should stay as [`NamePath`]
 /// / [`IdentPath`](crate::syntax::ast::IdentPath) until module-aware
-/// resolution can produce a [`ResolvedName`].
+/// resolution can produce a [`ResolvedName`](crate::resolved_name::ResolvedName).
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NameDef<Ns: NameNamespace> {
     atom: NameAtom,
@@ -236,86 +238,6 @@ impl<Ns: NameNamespace> TryFrom<&str> for NameDef<Ns> {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         Self::try_new(s)
-    }
-}
-
-/// A fully resolved reference in a semantic namespace.
-///
-/// Unlike [`NamePath`], this no longer stores source qualifier text. The
-/// `owner` is the canonical DAG/module identity chosen by module-aware
-/// resolution; `name` is the declaration leaf inside that owner.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ResolvedName<Ns: NameNamespace> {
-    owner: crate::dag_id::DagId,
-    name: NameAtom,
-    _ns: PhantomData<Ns>,
-}
-
-impl<Ns: NameNamespace> std::fmt::Debug for ResolvedName<Ns> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedName")
-            .field("namespace", &Ns::DISPLAY_NAME)
-            .field("owner", &self.owner)
-            .field("name", &self.name)
-            .finish()
-    }
-}
-
-impl<Ns: NameNamespace> ResolvedName<Ns> {
-    /// Construct a resolved name from its canonical owner and leaf atom.
-    #[must_use]
-    pub(crate) const fn new(owner: crate::dag_id::DagId, name: NameAtom) -> Self {
-        Self {
-            owner,
-            name,
-            _ns: PhantomData,
-        }
-    }
-
-    /// Resolve an existing definition-site name into a canonical owner.
-    #[must_use]
-    pub fn from_def(owner: crate::dag_id::DagId, name: NameDef<Ns>) -> Self {
-        Self::new(owner, name.into_atom())
-    }
-
-    /// The canonical DAG/module that owns this name.
-    #[must_use]
-    pub const fn owner(&self) -> &crate::dag_id::DagId {
-        &self.owner
-    }
-
-    /// The leaf atom inside [`Self::owner`].
-    #[must_use]
-    pub const fn atom(&self) -> &NameAtom {
-        &self.name
-    }
-
-    /// The leaf string inside [`Self::owner`].
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.name.as_str()
-    }
-
-    /// Return the unowned definition-site leaf in the same namespace.
-    ///
-    /// This deliberately drops the canonical owner. Use it only at explicit
-    /// standalone registry, diagnostic, or serialization boundaries that
-    /// cannot yet carry [`ResolvedName`] itself.
-    #[must_use]
-    pub fn to_unowned_def_name(&self) -> NameDef<Ns> {
-        NameDef::classify(self.name.clone())
-    }
-
-    /// Consume this value and return the canonical owner plus leaf atom.
-    #[must_use]
-    pub fn into_parts(self) -> (crate::dag_id::DagId, NameAtom) {
-        (self.owner, self.name)
-    }
-}
-
-impl<Ns: NameNamespace> std::fmt::Display for ResolvedName<Ns> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.owner, self.name)
     }
 }
 
@@ -657,26 +579,6 @@ mod tests {
         assert_eq!(
             TestIndexName::try_new("module.x"),
             Err(NameAtomError::ContainsDot)
-        );
-    }
-
-    #[test]
-    fn resolved_name_carries_canonical_owner_and_leaf() {
-        let name = TestDeclName::expect_valid("dry_mass");
-        let resolved = ResolvedName::<TestDeclNamespace>::from_def(
-            crate::dag_id::DagId::new(
-                "test",
-                crate::syntax::non_empty::NonEmpty::new("helpers", vec!["mass"]),
-            ),
-            name,
-        );
-
-        assert_eq!(resolved.owner().to_string(), "helpers.mass");
-        assert_eq!(resolved.as_str(), "dry_mass");
-        assert_eq!(resolved.to_string(), "helpers.mass.dry_mass");
-        assert_eq!(
-            resolved.to_unowned_def_name(),
-            TestDeclName::expect_valid("dry_mass")
         );
     }
 }

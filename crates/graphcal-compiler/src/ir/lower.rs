@@ -25,8 +25,9 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::resolve_types::ParsedExpectedFail;
 use crate::registry::types::{Registry, RegistryBuilder, SemanticRegistry};
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
-use crate::syntax::dimension::{ResolvedUnitName, UnitName, UnitRef};
+use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::{Span, Spanned};
 
@@ -528,9 +529,9 @@ fn single_module_resolver(
     ast: &File,
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::syntax::module_resolve::ModuleResolver, GraphcalError> {
+) -> Result<crate::resolve::ModuleResolver, GraphcalError> {
     fn add_module_with_dags(
-        target: &mut crate::syntax::module_resolve::ModuleResolver,
+        target: &mut crate::resolve::ModuleResolver,
         owner: &crate::dag_id::DagId,
         declarations: &[crate::desugar::desugared_ast::Declaration],
         src: &NamedSource<Arc<String>>,
@@ -553,7 +554,7 @@ fn single_module_resolver(
         Ok(())
     }
 
-    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    let mut resolver = crate::resolve::ModuleResolver::default();
     add_module_with_dags(&mut resolver, dag_id, &ast.declarations, src)?;
     Ok(resolver)
 }
@@ -565,25 +566,25 @@ fn collect_static_ports(ast: &File, owner: &crate::dag_id::DagId) -> Vec<crate::
             let interface = crate::static_interface::static_interface(&declaration.kind)?;
             let identity = match &declaration.kind {
                 DeclKind::Type(type_decl) => crate::hir::StaticPortIdentity::Type(
-                    crate::syntax::type_name::ResolvedStructTypeName::from_def(
+                    crate::resolved_name::ResolvedStructTypeName::from_def(
                         owner.clone(),
                         type_decl.name.value.clone(),
                     ),
                 ),
                 DeclKind::BaseDimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
-                    crate::syntax::dimension::ResolvedDimName::from_def(
+                    crate::resolved_name::ResolvedDimName::from_def(
                         owner.clone(),
                         dimension.name.value.clone(),
                     ),
                 ),
                 DeclKind::Dimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
-                    crate::syntax::dimension::ResolvedDimName::from_def(
+                    crate::resolved_name::ResolvedDimName::from_def(
                         owner.clone(),
                         dimension.name.value.clone(),
                     ),
                 ),
                 DeclKind::Index(index) => crate::hir::StaticPortIdentity::Index(
-                    crate::syntax::index_name::ResolvedIndexName::from_def(
+                    crate::resolved_name::ResolvedIndexName::from_def(
                         owner.clone(),
                         index.name.value.clone(),
                     ),
@@ -790,7 +791,7 @@ pub(crate) fn lower_dag_body_to_ir(
     dag_name: &str,
     stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    resolver: &crate::resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
@@ -1215,11 +1216,11 @@ mod tests {
              type Box<T: Type = Marker> { Box(value: T) }\n",
         )
         .unwrap();
-        let identity = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+        let identity = crate::resolved_name::ResolvedStructTypeName::from_def(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Box"),
         );
-        let marker = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+        let marker = crate::resolved_name::ResolvedStructTypeName::from_def(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Marker"),
         );
@@ -1371,7 +1372,7 @@ mod tests {
         let owner =
             crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
                 .unwrap();
-        let resolver = crate::syntax::module_resolve::ModuleResolver::default();
+        let resolver = crate::resolve::ModuleResolver::default();
         let source = make_src("missing.Dimension");
 
         let error = resolve_extern_struct_return(

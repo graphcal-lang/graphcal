@@ -2,8 +2,9 @@
 
 use crate::dag_id::DagId;
 use crate::dimension::Dimension;
-use crate::syntax::index_name::{IndexName, IndexNameNamespace, ResolvedIndexName};
-use crate::syntax::names::{NameDef, NameNamespace, ResolvedName};
+use crate::resolved_name::{ResolvedIndexName, ResolvedName};
+use crate::syntax::index_name::{IndexName, IndexNameNamespace};
+use crate::syntax::names::{NameDef, NameNamespace};
 use crate::syntax::type_name::StructTypeNameNamespace;
 
 use crate::nat::NatPolyForm;

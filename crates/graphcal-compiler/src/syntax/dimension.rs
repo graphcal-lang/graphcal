@@ -1,6 +1,6 @@
 //! Syntax-level dimension and unit names.
 
-use crate::syntax::names::{NameAtom, NameDef, NameNamespace, Qualified, ResolvedName};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, Qualified};
 
 /// Dimension namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -29,14 +29,8 @@ impl NameNamespace for DimVarNameNamespace {
 /// Name of a dimension (e.g., `"Length"`, `"Velocity"`).
 pub type DimName = NameDef<DimNameNamespace>;
 
-/// Module-resolved dimension name.
-pub type ResolvedDimName = ResolvedName<DimNameNamespace>;
-
 /// Name of a unit (e.g., `"m"`, `"km"`, `"h"`).
 pub type UnitName = NameDef<UnitNameNamespace>;
-
-/// Module-resolved unit name.
-pub type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 
 /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
 ///

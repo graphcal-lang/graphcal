@@ -124,10 +124,10 @@ pub fn flatten_document_symbols(uri: &Url, symbols: Vec<DocumentSymbol>) -> Vec<
 fn build_variants_index(
     analysis: &AnalysisResult,
 ) -> HashMap<
-    graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    graphcal_compiler::resolved_name::ResolvedIndexName,
     Vec<&crate::symbol_table::DefinitionInfo>,
 > {
-    let mut out: HashMap<graphcal_compiler::syntax::index_name::ResolvedIndexName, Vec<_>> =
+    let mut out: HashMap<graphcal_compiler::resolved_name::ResolvedIndexName, Vec<_>> =
         HashMap::new();
     for (key, def) in &analysis.symbol_table.definitions {
         if def.category != SymbolCategory::IndexVariant {
@@ -148,10 +148,10 @@ fn build_variants_index(
 fn collect_children(
     lines: &LineIndex<'_>,
     variants_by_parent: &HashMap<
-        graphcal_compiler::syntax::index_name::ResolvedIndexName,
+        graphcal_compiler::resolved_name::ResolvedIndexName,
         Vec<&crate::symbol_table::DefinitionInfo>,
     >,
-    parent: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    parent: &graphcal_compiler::resolved_name::ResolvedIndexName,
 ) -> Vec<DocumentSymbol> {
     let Some(defs) = variants_by_parent.get(parent) else {
         return Vec::new();

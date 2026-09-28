@@ -12,8 +12,9 @@ use super::static_interface::{
     StaticInputKind, StaticInterface, StaticProjectionError, StaticProjectionIdentity, StaticRole,
     project_static_identity, static_binding_valid,
 };
+use crate::resolve::category::DeclSymbolKind;
+use crate::resolve::category::{ExportedImportItemKind, include_projection};
 use crate::syntax::ast::ImportItemNamespace;
-use crate::syntax::module_resolve::{DeclSymbolKind, ExportedImportItemKind, include_projection};
 use crate::syntax::names::NameAtom;
 use crate::syntax::parser::Parser;
 

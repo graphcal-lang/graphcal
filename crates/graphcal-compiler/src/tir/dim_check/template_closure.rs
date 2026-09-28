@@ -5,11 +5,10 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::DeclarationKind;
+use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::static_interface::StaticRole;
-use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::ResolvedStructTypeName;
 use crate::tir::template_closure::{
     StaticDependency, StaticUseContext, TemplateClosureCheck, validate,
 };
@@ -340,7 +339,7 @@ fn check_rigid_unit_bodies(
 fn check_rigid_dimension_port(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
-    dimension: &crate::syntax::dimension::ResolvedDimName,
+    dimension: &crate::resolved_name::ResolvedDimName,
 ) -> Result<(), GraphcalError> {
     let rigid_tir =
         crate::tir::typed::rigid_dimension_view(ctx.tir, ctx.dag.dag_id(), dimension, ctx.src)?;

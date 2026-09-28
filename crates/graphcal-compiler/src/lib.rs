@@ -37,6 +37,8 @@ pub mod plot_visibility;
 pub mod plugin_identity;
 pub mod ratio;
 pub mod registry;
+pub mod resolve;
+pub mod resolved_name;
 pub mod source_id;
 pub(crate) mod source_line;
 pub mod source_registry;

@@ -10,18 +10,19 @@ use graphcal_compiler::desugar::desugared_ast::{
     TypeDecl, TypeDeclBody, TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::hir;
+use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::resolve::error::ModuleResolveError;
+use graphcal_compiler::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
+    ResolvedStructTypeName, ResolvedUnitName,
+};
 use graphcal_compiler::syntax::attribute::AttributeName;
-use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
-use graphcal_compiler::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
-use graphcal_compiler::syntax::index_name::ResolvedIndexName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
-use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{
-    GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
-};
+use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::registry::format::format_unit_terms_with_config;
@@ -137,9 +138,7 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn variant_key(
-        variant: &graphcal_compiler::syntax::index_name::ResolvedIndexVariant,
-    ) -> SymbolKey {
+    fn variant_key(variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant) -> SymbolKey {
         SymbolKey::IndexVariant(IndexVariantId::from_resolved(variant))
     }
 

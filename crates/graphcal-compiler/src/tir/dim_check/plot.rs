@@ -19,7 +19,7 @@ use super::{
 };
 
 pub(super) type CheckedPlotChannelShapes = HashMap<
-    crate::syntax::decl_name::ResolvedDeclName,
+    crate::resolved_name::ResolvedDeclName,
     HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
 >;
 
@@ -50,7 +50,7 @@ pub(super) fn check_plot_entry(
     entry: &crate::ir::lower::PlotEntry,
 ) -> Result<
     (
-        crate::syntax::decl_name::ResolvedDeclName,
+        crate::resolved_name::ResolvedDeclName,
         HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
     ),
     GraphcalError,
@@ -218,7 +218,7 @@ fn check_plot_references(
 
 fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
-    owner: &crate::syntax::decl_name::ResolvedDeclName,
+    owner: &crate::resolved_name::ResolvedDeclName,
     body: &crate::ir::lower::LoweredPlotBody,
 ) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, GraphcalError> {
     let shapes = body
@@ -339,7 +339,7 @@ fn invalid_property(
 /// Check one property value against its expected type.
 pub(super) fn check_property_value(
     ctx: &DimCheckContext<'_>,
-    owner: &crate::syntax::decl_name::ResolvedDeclName,
+    owner: &crate::resolved_name::ResolvedDeclName,
     property: &'static str,
     expected: PlotPropertyType,
     field: &LoweredPlotField,
@@ -393,7 +393,7 @@ pub(super) fn check_property_value(
 
 fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
-    owner: &crate::syntax::decl_name::ResolvedDeclName,
+    owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
     ctx.infer_hir(expr, owner)

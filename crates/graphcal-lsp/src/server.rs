@@ -138,7 +138,7 @@ pub(crate) struct AnalysisResult {
     /// exact marker required in a selective import item.
     pub(crate) import_surfaces: HashMap<
         graphcal_compiler::syntax::non_empty::NonEmpty<String>,
-        Vec<graphcal_compiler::syntax::module_resolve::ExportedImportItem>,
+        Vec<graphcal_compiler::resolve::exports::ExportedImportItem>,
     >,
     /// Diagnostics to publish, grouped by the URI they belong to. The active
     /// document's URI is always present (with an empty Vec when clean) so a
@@ -1589,7 +1589,7 @@ fn run_analysis_with_cancellation(
             let (module_resolver, degradations) = match project.build_module_resolver() {
                 Ok(module_resolver) => (module_resolver, Vec::new()),
                 Err(resolver_error) => (
-                    graphcal_compiler::syntax::module_resolve::ModuleResolver::default(),
+                    graphcal_compiler::resolve::ModuleResolver::default(),
                     vec![AnalysisDegradation::EmptyModuleResolver {
                         reason: resolver_error.to_string(),
                     }],
@@ -1994,12 +1994,12 @@ fn format_tuple_keyed_entries(
 /// Collect canonical export surfaces for every import path in the root file.
 fn collect_import_surfaces(
     project: &graphcal_eval::loader::LoadedProject,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<
     HashMap<
         graphcal_compiler::syntax::non_empty::NonEmpty<String>,
-        Vec<graphcal_compiler::syntax::module_resolve::ExportedImportItem>,
+        Vec<graphcal_compiler::resolve::exports::ExportedImportItem>,
     >,
     Cancelled,
 > {
@@ -2044,7 +2044,7 @@ fn build_project_symbol_documents(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::TIR>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>, Cancelled>
 {
@@ -2121,7 +2121,7 @@ fn collect_file_imported_symbols(
     file_id: &graphcal_compiler::dag_id::DagId,
     loaded_file: &graphcal_eval::loader::LoadedFile,
     documents: &HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<ImportedSymbols, Cancelled> {
     let mut imported = ImportedSymbols {
@@ -2188,7 +2188,7 @@ fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::TIR>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<ImportedSymbols, Cancelled> {
     cancellation.checkpoint()?;
@@ -2254,7 +2254,7 @@ fn collect_imported_definitions(
 fn resolve_selective_binding(
     owner: &graphcal_compiler::dag_id::DagId,
     item: &graphcal_compiler::syntax::ast::ImportItem,
-    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &graphcal_compiler::resolve::ModuleResolver,
 ) -> Option<VisibleBinding> {
     use graphcal_compiler::syntax::ast::ImportItemNamespace;
     use graphcal_compiler::syntax::names::NamePath;

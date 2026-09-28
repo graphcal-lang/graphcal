@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::dag_id::{DagId, InstanceId};
 use crate::registry::index::FiniteIndex;
-use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::dimension::{ResolvedDimName, UnitName};
-use crate::syntax::index_name::ResolvedIndexName;
+use crate::resolved_name::{
+    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+};
+use crate::syntax::dimension::UnitName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
-use crate::syntax::type_name::ResolvedStructTypeName;
 
 /// Canonical importer-side target of one instance index binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

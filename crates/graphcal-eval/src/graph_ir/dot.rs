@@ -698,7 +698,8 @@ fn escape(value: &str) -> String {
 mod tests {
 
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
+    use graphcal_compiler::resolved_name::ResolvedDeclName;
+    use graphcal_compiler::syntax::decl_name::DeclName;
 
     use super::*;
     use crate::graph_ir::{GraphCluster, GraphEdge};

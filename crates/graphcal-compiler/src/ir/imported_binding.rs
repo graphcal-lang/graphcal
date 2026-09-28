@@ -5,7 +5,7 @@
 //! execution-fact stores.
 
 use crate::registry::declared_type::DeclaredType;
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::resolved_name::ResolvedDeclName;
 
 /// Whether an imported value comes from checked constants or a runtime frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -867,11 +867,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "index_name", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["syntax", "lexer"]
 role = "contracts"
 
@@ -902,12 +897,67 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "module_resolve"]
+path = ["resolved_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolved_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve"]
 role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "module_resolve", "tests"]
+path = ["resolve", "category"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "exports"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "imports"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "lookup"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "namespace"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "projection"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "scope"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "symbols"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "tests"]
 role = "checking"
 
 [[module]]

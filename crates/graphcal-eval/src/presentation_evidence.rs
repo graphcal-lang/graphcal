@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// A display-only computation, to be performed in the selected value's owner frame.
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ pub struct LeafPresentationDiagnostic {
 /// A separately reported display failure; the computational value remains available.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PresentationDiagnostic {
-    pub declaration: graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    pub declaration: graphcal_compiler::resolved_name::ResolvedDeclName,
     pub channel: Option<graphcal_compiler::syntax::ast::EncodingChannel>,
     pub detail: LeafPresentationDiagnostic,
 }

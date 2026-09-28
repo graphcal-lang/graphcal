@@ -61,8 +61,8 @@ def measure []: nothing -> record {
     let core = production-sources [graphcal-compiler graphcal-eval]
     let consumers = production-sources [graphcal-compiler graphcal-eval graphcal-lsp]
     let outside_resolver = $consumers
-        | where {|source| not ($source.path | str contains "syntax/module_resolve") }
-    let resolver = $core | where {|source| $source.path | str contains "syntax/module_resolve" }
+        | where {|source| not ($source.path | str contains "graphcal-compiler/src/resolve/") }
+    let resolver = $core | where {|source| $source.path | str contains "graphcal-compiler/src/resolve/" }
     {
         internal_error_calls: (count-matches $core '(?<!fn )\binternal_error\(')
         resolved_name_from_def_outside_resolver: (count-matches $outside_resolver 'Resolved[A-Za-z]*Name::from_def\b')

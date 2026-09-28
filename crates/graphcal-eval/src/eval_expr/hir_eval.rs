@@ -20,7 +20,7 @@ use miette::NamedSource;
 
 use crate::presentation_evidence::{PresentationInstance, PresentationInstanceMap};
 use crate::runtime_presentation::EvaluatedRuntimeValue;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::arithmetic::{Comparison, OrderingOp};
 use super::{
@@ -1834,7 +1834,7 @@ fn index_def_for_ref<'a>(
 
 fn ensure_index_ref_matches_resolved(
     actual: &IndexTypeRef,
-    expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
@@ -2461,7 +2461,7 @@ fn evaluated_match_field(
     field: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::type_name::FieldName,
     >,
-    type_name: &graphcal_compiler::syntax::type_name::ResolvedStructTypeName,
+    type_name: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
     fields: &IndexMap<graphcal_compiler::syntax::type_name::FieldName, RuntimeValue>,
     presentation: &PresentationInstance,
     ctx: &EvalContext<'_>,

@@ -64,7 +64,7 @@ impl ExternFunctionEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternStructResult {
     /// Canonical identity of the record type named at the declaration site.
-    pub resolved: crate::syntax::type_name::ResolvedStructTypeName,
+    pub resolved: crate::resolved_name::ResolvedStructTypeName,
     /// Checked record constructor; invocation need not recover it from a type spelling.
     pub constructor: crate::syntax::type_name::ConstructorName,
     /// The record's flattened field shape, as the plugin manifest sees it.
@@ -95,7 +95,7 @@ pub(super) fn resolve_plugin_imports(
     decls: &[crate::desugar::desugared_ast::PluginImportDecl],
     registry: &Registry,
     owner: &crate::dag_id::DagId,
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    resolver: &crate::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
     let mut map = HashMap::new();
@@ -227,7 +227,7 @@ fn resolve_extern_function(
     function: &crate::desugar::desugared_ast::ExternFnDecl,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    resolver: &crate::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ExternFunctionEntry, GraphcalError> {
     // Binder idents share one lexical namespace regardless of
@@ -331,7 +331,7 @@ fn resolve_extern_result_kind(
     index_vars: &[crate::syntax::index_name::IndexVarName],
     registry: &Registry,
     owner: &crate::dag_id::DagId,
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    resolver: &crate::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
@@ -378,7 +378,7 @@ pub(super) fn resolve_extern_struct_return(
     span: Span,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
+    resolver: &crate::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};

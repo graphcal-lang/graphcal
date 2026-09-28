@@ -3,10 +3,11 @@ use crate::dimension::{BaseDimId, Rational};
 use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{FormattingRegistry, RegistryBuilder};
-use crate::syntax::dimension::{ResolvedUnitName, UnitName};
-use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
+use crate::syntax::dimension::UnitName;
+use crate::syntax::index_name::IndexName;
 use crate::syntax::parser::Parser;
-use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
+use crate::syntax::type_name::StructTypeName;
 
 fn make_registry() -> FormattingRegistry {
     let mut b = RegistryBuilder::new();
@@ -518,7 +519,7 @@ fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
 fn project_type_store_rejects_competing_dimension_definitions() {
     let first = lower_store_hir("dim Custom = Length;");
     let competing = lower_store_hir("dim Custom = Time;");
-    let identity = crate::syntax::dimension::ResolvedDimName::from_def(
+    let identity = crate::resolved_name::ResolvedDimName::from_def(
         first.dag_id().clone(),
         crate::syntax::dimension::DimName::expect_valid("Custom"),
     );
@@ -537,7 +538,7 @@ fn project_type_store_rejects_competing_dimension_definitions() {
 fn project_type_store_rejects_competing_unit_definitions() {
     let first = lower_store_hir("const unit custom: Length = 2.0 m;");
     let competing = lower_store_hir("const unit custom: Length = 3.0 m;");
-    let identity = crate::syntax::dimension::ResolvedUnitName::from_def(
+    let identity = crate::resolved_name::ResolvedUnitName::from_def(
         first.dag_id().clone(),
         crate::syntax::dimension::UnitName::expect_valid("custom"),
     );
@@ -575,7 +576,7 @@ fn project_type_store_rejects_competing_index_definitions() {
 fn project_type_store_rejects_competing_nominal_definitions() {
     let first = lower_store_hir("type Item { Item(value: Dimensionless) }");
     let competing = lower_store_hir("type Item { Item(value: Bool) }");
-    let identity = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+    let identity = crate::resolved_name::ResolvedStructTypeName::from_def(
         first.dag_id().clone(),
         StructTypeName::expect_valid("Item"),
     );

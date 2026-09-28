@@ -187,7 +187,7 @@ fn bind_type_nats(
 
 fn check_retained_reconciliations(
     dag: &crate::tir::typed::model::DagTIR,
-    declaration: &crate::syntax::decl_name::ResolvedDeclName,
+    declaration: &crate::resolved_name::ResolvedDeclName,
     observations: &[crate::tir::expression_facts::NominalObservation],
 ) -> Result<(), GraphcalError> {
     use crate::tir::expression_facts::NominalObservation;

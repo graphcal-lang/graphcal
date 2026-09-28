@@ -103,7 +103,7 @@ pub enum BaseDimId {
     /// Built-in prelude dimension.
     Prelude(PreludeBaseDimension),
     /// User-defined dimension with its canonical defining DAG and typed leaf.
-    UserDefined(crate::syntax::dimension::ResolvedDimName),
+    UserDefined(crate::resolved_name::ResolvedDimName),
 }
 
 impl BaseDimId {
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
-        let resolved = crate::syntax::dimension::ResolvedDimName::from_def(
+        let resolved = crate::resolved_name::ResolvedDimName::from_def(
             crate::dag_id::DagId::root_in_package("test", "test"),
             crate::syntax::dimension::DimName::expect_valid("Information"),
         );

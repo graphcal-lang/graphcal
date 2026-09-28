@@ -23,13 +23,13 @@ pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_
 
 pub fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
-    expected: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
 ) -> bool {
     actual.declared_resolved() == Some(expected)
 }
 
 fn imported_binding_value<'a>(
-    target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    target: &graphcal_compiler::resolved_name::ResolvedDeclName,
     caller_values: &'a RuntimeValueMap,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a RuntimeValue> {
