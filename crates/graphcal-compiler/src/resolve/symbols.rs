@@ -1,14 +1,10 @@
 //! Per-module declaration symbol tables collected from a desugared AST.
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedIndexName, ResolvedName,
-    ResolvedStructTypeName, ResolvedUnitName,
-};
+use crate::resolved_name::ResolvedName;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
@@ -24,27 +20,37 @@ use crate::syntax::type_name::{
 
 use super::category::DeclSymbolKind;
 use super::error::ModuleResolveError;
-use super::namespace::{ExclusiveNameKind, ExclusiveNameOccupancy, FlatNamespace};
+use super::namespace::{Namespace, Namespaced, Occupant};
 
-/// A declaration symbol in one semantic namespace.
+/// One name visible in a module, bound to its canonical target.
+///
+/// `resolved` is the canonical identity the name denotes; `span` and
+/// `visibility` belong to the binding site (a declaration, or the local name a
+/// selective import introduces). `data` is the namespace-specific payload a
+/// declaration carries, such as a declaration's kind or a type's generic
+/// signature; a selective import carries none (`X = ()`), because its
+/// target's payload lives with the target's own declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleSymbol<Ns: NameNamespace> {
-    pub(super) resolved: ResolvedName<Ns>,
-    pub(super) visibility: BindableVisibility,
-    pub(super) span: Span,
+pub struct Symbol<Ns: NameNamespace, X = ()> {
+    resolved: ResolvedName<Ns>,
+    visibility: BindableVisibility,
+    span: Span,
+    data: X,
 }
 
-impl<Ns: NameNamespace> ModuleSymbol<Ns> {
-    pub(super) fn new(
-        owner: &DagId,
-        name: NameDef<Ns>,
+impl<Ns: NameNamespace, X> Symbol<Ns, X> {
+    /// Bind a name to an already-resolved canonical target.
+    pub(super) const fn new(
+        resolved: ResolvedName<Ns>,
         visibility: BindableVisibility,
         span: Span,
+        data: X,
     ) -> Self {
         Self {
-            resolved: ResolvedName::from_def(owner.clone(), name),
+            resolved,
             visibility,
             span,
+            data,
         }
     }
 
@@ -54,98 +60,27 @@ impl<Ns: NameNamespace> ModuleSymbol<Ns> {
         &self.resolved
     }
 
-    /// Visibility of this symbol across module boundaries.
+    /// Visibility of this binding across module boundaries.
     #[must_use]
-    pub(super) const fn visibility(&self) -> BindableVisibility {
+    pub(crate) const fn visibility(&self) -> BindableVisibility {
         self.visibility
     }
 
-    /// Source span of the definition-site name.
+    /// Source span of the binding-site name.
     #[must_use]
-    pub(super) const fn span(&self) -> Span {
+    pub(crate) const fn span(&self) -> Span {
         self.span
     }
-}
 
-pub(super) trait ModuleSymbolLookup<Ns: NameNamespace> {
-    fn resolved(&self) -> &ResolvedName<Ns>;
-    fn visibility(&self) -> BindableVisibility;
-    fn span(&self) -> Span;
-}
-
-impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ModuleSymbol<Ns> {
-    fn resolved(&self) -> &ResolvedName<Ns> {
-        self.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.span()
-    }
-}
-
-/// Value/declaration symbol plus its semantic declaration kind.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleDeclSymbol {
-    pub(super) symbol: ModuleSymbol<DeclNameNamespace>,
-    pub(super) kind: DeclSymbolKind,
-}
-
-impl ModuleDeclSymbol {
-    pub(super) fn new(
-        owner: &DagId,
-        name: DeclName,
-        visibility: BindableVisibility,
-        span: Span,
-        kind: DeclSymbolKind,
-    ) -> Self {
-        Self {
-            symbol: ModuleSymbol::new(owner, name, visibility, span),
-            kind,
-        }
-    }
-
-    /// Canonical resolved identity for this declaration.
+    /// Namespace-specific payload of this binding.
     #[must_use]
-    pub(super) const fn resolved(&self) -> &ResolvedDeclName {
-        self.symbol.resolved()
-    }
-
-    /// Visibility of this declaration across module boundaries.
-    #[must_use]
-    pub(super) const fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    /// Source span of the definition-site name.
-    #[must_use]
-    pub(super) const fn span(&self) -> Span {
-        self.symbol.span()
-    }
-
-    /// Semantic declaration kind.
-    #[must_use]
-    pub(super) const fn kind(&self) -> DeclSymbolKind {
-        self.kind
+    pub(crate) const fn data(&self) -> &X {
+        &self.data
     }
 }
 
-impl ModuleSymbolLookup<DeclNameNamespace> for ModuleDeclSymbol {
-    fn resolved(&self) -> &ResolvedDeclName {
-        self.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.span()
-    }
-}
+/// One symbol table: leaf name to binding.
+pub(super) type Table<Ns, X = ()> = HashMap<NameDef<Ns>, Symbol<Ns, X>>;
 
 /// Source signature of one generic parameter, retained by name resolution so
 /// HIR can sort application arguments after resolving the callee.
@@ -166,161 +101,30 @@ impl GenericParamSignature {
     }
 }
 
-/// Type symbol plus its declared generic-parameter signature.
+/// The identity and generic signature of a constructor's owning type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ModuleTypeSymbol {
-    pub(super) symbol: ModuleSymbol<StructTypeNameNamespace>,
-    pub(super) generic_params: Vec<GenericParamSignature>,
-}
-
-impl ModuleTypeSymbol {
-    pub(super) fn generic_params(&self) -> &[GenericParamSignature] {
-        &self.generic_params
-    }
-
-    pub(crate) const fn resolved(&self) -> &ResolvedStructTypeName {
-        self.symbol.resolved()
-    }
-
-    pub(crate) const fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    pub(crate) const fn span(&self) -> Span {
-        self.symbol.span()
-    }
-}
-
-impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {
-    fn resolved(&self) -> &ResolvedStructTypeName {
-        self.symbol.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.symbol.span()
-    }
-}
-
-/// Unit symbol plus whether its scale is compile-time or instance-specific.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ModuleUnitSymbol {
-    pub(super) symbol: ModuleSymbol<UnitNameNamespace>,
-    pub(super) constness: UnitConstness,
-}
-
-impl ModuleUnitSymbol {
-    pub(super) const fn constness(&self) -> UnitConstness {
-        self.constness
-    }
-}
-
-impl ModuleSymbolLookup<UnitNameNamespace> for ModuleUnitSymbol {
-    fn resolved(&self) -> &ResolvedUnitName {
-        self.symbol.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.symbol.span()
-    }
-}
-
-/// Constructor symbol plus the identity and generic signature of its owning type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ModuleConstructorSymbol {
-    pub(super) symbol: ModuleSymbol<ConstructorNameNamespace>,
+pub(crate) struct ConstructorSignature {
     pub(super) owner_type: StructTypeName,
     pub(super) generic_params: Vec<GenericParamSignature>,
 }
 
-impl ModuleConstructorSymbol {
-    pub(super) const fn owner_type(&self) -> &StructTypeName {
-        &self.owner_type
-    }
-
-    pub(super) fn generic_params(&self) -> &[GenericParamSignature] {
-        &self.generic_params
-    }
-}
-
-impl ModuleSymbolLookup<ConstructorNameNamespace> for ModuleConstructorSymbol {
-    fn resolved(&self) -> &ResolvedConstructorName {
-        self.symbol.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.symbol.span()
-    }
-}
-
-/// Index symbol plus the variants declared by that index.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModuleIndexSymbol {
-    pub(super) symbol: ModuleSymbol<IndexNameNamespace>,
-    pub(super) variants: HashMap<IndexVariantName, Span>,
-}
-
-impl ModuleIndexSymbol {
-    /// Canonical resolved identity for the index type.
-    #[must_use]
-    pub(crate) const fn resolved(&self) -> &ResolvedIndexName {
-        self.symbol.resolved()
-    }
-
-    /// Visibility of the index declaration.
-    #[must_use]
-    pub(crate) const fn visibility(&self) -> BindableVisibility {
-        self.symbol.visibility()
-    }
-
-    /// Source span of the index definition-site name.
-    #[must_use]
-    pub(super) const fn span(&self) -> Span {
-        self.symbol.span()
-    }
-
-    /// Variant names declared by this index, keyed by leaf name.
-    #[must_use]
-    pub(crate) const fn variants(&self) -> &HashMap<IndexVariantName, Span> {
-        &self.variants
-    }
-}
-
-impl ModuleSymbolLookup<IndexNameNamespace> for ModuleIndexSymbol {
-    fn resolved(&self) -> &ResolvedIndexName {
-        self.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.span()
-    }
-}
-
 /// Symbols declared by a single DAG/module.
+///
+/// Every table is keyed by the leaf a declaration introduces. The tables
+/// partition the module's collision unit ([`Namespace`]): no two of them hold
+/// the same leaf in the same namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSymbols {
     pub(super) owner: DagId,
-    pub(super) decls: HashMap<DeclName, ModuleDeclSymbol>,
-    pub(super) dimensions: HashMap<DimName, ModuleSymbol<DimNameNamespace>>,
-    pub(super) units: HashMap<UnitName, ModuleUnitSymbol>,
-    pub(super) struct_types: HashMap<StructTypeName, ModuleTypeSymbol>,
-    pub(super) indexes: HashMap<IndexName, ModuleIndexSymbol>,
-    pub(super) constructors: HashMap<ConstructorName, ModuleConstructorSymbol>,
+    pub(super) decls: HashMap<DeclName, Symbol<DeclNameNamespace, DeclSymbolKind>>,
+    pub(super) dimensions: HashMap<DimName, Symbol<DimNameNamespace>>,
+    pub(super) units: HashMap<UnitName, Symbol<UnitNameNamespace, UnitConstness>>,
+    pub(super) struct_types:
+        HashMap<StructTypeName, Symbol<StructTypeNameNamespace, Vec<GenericParamSignature>>>,
+    pub(super) indexes:
+        HashMap<IndexName, Symbol<IndexNameNamespace, HashMap<IndexVariantName, Span>>>,
+    pub(super) constructors:
+        HashMap<ConstructorName, Symbol<ConstructorNameNamespace, ConstructorSignature>>,
 }
 
 impl ModuleSymbols {
@@ -331,8 +135,9 @@ impl ModuleSymbols {
     ///
     /// # Errors
     ///
-    /// Returns [`ModuleResolveError::DuplicateSymbol`] when two definitions in
-    /// the same namespace share a leaf name.
+    /// Returns [`ModuleResolveError::DuplicateSymbol`] when two definitions
+    /// occupy the same slot of the module's collision unit, or one index
+    /// declares a variant twice.
     pub(super) fn from_declarations(
         owner: DagId,
         declarations: &[ast::Declaration],
@@ -346,8 +151,9 @@ impl ModuleSymbols {
             indexes: HashMap::new(),
             constructors: HashMap::new(),
         };
-
-        symbols.collect_declarations(declarations)?;
+        for decl in declarations {
+            symbols.collect_declaration(&decl.kind)?;
+        }
         Ok(symbols)
     }
 
@@ -359,364 +165,151 @@ impl ModuleSymbols {
 
     /// Value/declaration namespace symbols.
     #[must_use]
-    pub(crate) const fn decls(&self) -> &HashMap<DeclName, ModuleDeclSymbol> {
+    pub(crate) const fn decls(
+        &self,
+    ) -> &HashMap<DeclName, Symbol<DeclNameNamespace, DeclSymbolKind>> {
         &self.decls
     }
 
     /// Dimension namespace symbols.
     #[must_use]
-    pub(crate) const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
+    pub(crate) const fn dimensions(&self) -> &HashMap<DimName, Symbol<DimNameNamespace>> {
         &self.dimensions
     }
 
     /// Unit namespace symbols.
     #[must_use]
-    pub(crate) const fn units(&self) -> &HashMap<UnitName, ModuleUnitSymbol> {
+    pub(crate) const fn units(
+        &self,
+    ) -> &HashMap<UnitName, Symbol<UnitNameNamespace, UnitConstness>> {
         &self.units
     }
 
     /// Struct/tagged-union type namespace symbols.
     #[must_use]
-    pub(crate) const fn struct_types(&self) -> &HashMap<StructTypeName, ModuleTypeSymbol> {
+    pub(crate) const fn struct_types(
+        &self,
+    ) -> &HashMap<StructTypeName, Symbol<StructTypeNameNamespace, Vec<GenericParamSignature>>> {
         &self.struct_types
     }
 
-    /// Index namespace symbols.
+    /// Index namespace symbols, each with the variants its index declares.
     #[must_use]
-    pub(crate) const fn indexes(&self) -> &HashMap<IndexName, ModuleIndexSymbol> {
+    pub(crate) const fn indexes(
+        &self,
+    ) -> &HashMap<IndexName, Symbol<IndexNameNamespace, HashMap<IndexVariantName, Span>>> {
         &self.indexes
     }
 
-    /// Tagged-union constructor namespace symbols.
-    #[must_use]
-    pub(super) const fn constructors(&self) -> &HashMap<ConstructorName, ModuleConstructorSymbol> {
-        &self.constructors
-    }
-
-    fn collect_declarations(
-        &mut self,
-        declarations: &[ast::Declaration],
-    ) -> Result<(), ModuleResolveError> {
-        let mut exclusive_names = HashMap::new();
-        for decl in declarations {
-            match &decl.kind {
-                ast::DeclKind::Param(p) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &p.name,
-                    BindableVisibility::PublicBind,
-                    DeclSymbolKind::Param,
-                )?,
-                ast::DeclKind::Node(n) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &n.name,
-                    BindableVisibility::from(n.visibility),
-                    DeclSymbolKind::Node,
-                )?,
-                ast::DeclKind::ConstNode(c) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &c.name,
-                    BindableVisibility::from(c.visibility),
-                    DeclSymbolKind::Const,
-                )?,
-                ast::DeclKind::Assert(a) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &a.name,
-                    BindableVisibility::from(a.visibility),
-                    DeclSymbolKind::Assert,
-                )?,
-                ast::DeclKind::Plot(p) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &p.name,
-                    BindableVisibility::from(p.visibility),
-                    DeclSymbolKind::Plot,
-                )?,
-                ast::DeclKind::Figure(f) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &f.name,
-                    BindableVisibility::from(f.visibility),
-                    DeclSymbolKind::Figure,
-                )?,
-                ast::DeclKind::Layer(l) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &l.name,
-                    BindableVisibility::from(l.visibility),
-                    DeclSymbolKind::Layer,
-                )?,
-                ast::DeclKind::Dag(d) => self.insert_value_decl(
-                    &mut exclusive_names,
-                    &d.name,
-                    BindableVisibility::from(d.visibility),
-                    DeclSymbolKind::Dag,
-                )?,
-                ast::DeclKind::BaseDimension(d) => self.insert_dimension_decl(
-                    &mut exclusive_names,
-                    &d.name,
-                    BindableVisibility::from(d.visibility),
-                )?,
-                ast::DeclKind::Dimension(d) => {
-                    self.insert_dimension_decl(&mut exclusive_names, &d.name, d.visibility)?;
-                }
-                ast::DeclKind::Unit(u) => self.insert_unit(
-                    &u.name,
-                    BindableVisibility::from(u.visibility),
-                    u.constness,
-                    UnitNameNamespace::DISPLAY_NAME,
-                )?,
-                ast::DeclKind::Type(t) => self.insert_type_decl(&mut exclusive_names, t)?,
-                ast::DeclKind::Index(i) => self.insert_index_decl(&mut exclusive_names, i)?,
-                // Plugin imports register their alias into the module scope
-                // (see `register_plugin_imports`), not the symbol table.
-                ast::DeclKind::Import(_)
-                | ast::DeclKind::PluginImport(_)
-                | ast::DeclKind::Include(_) => {}
-                #[expect(
-                    clippy::uninhabited_references,
-                    reason = "Sugar(Infallible) proves this arm unreachable"
-                )]
-                ast::DeclKind::Sugar(s) => never(*s),
+    /// The local declaration occupying `(namespace, atom)`, if any.
+    pub(super) fn occupant(&self, namespace: Namespace, atom: &NameAtom) -> Option<Occupant> {
+        match namespace {
+            Namespace::Term => {
+                occupant_in(&self.decls, atom).or_else(|| occupant_in(&self.constructors, atom))
             }
+            Namespace::Static => occupant_in(&self.dimensions, atom)
+                .or_else(|| occupant_in(&self.struct_types, atom))
+                .or_else(|| occupant_in(&self.indexes, atom)),
+            Namespace::Unit => occupant_in(&self.units, atom),
         }
-        Ok(())
     }
 
-    fn insert_value_decl(
-        &mut self,
-        exclusive_names: &mut ExclusiveNameOccupancy,
-        name: &Spanned<DeclName>,
-        visibility: BindableVisibility,
-        kind: DeclSymbolKind,
-    ) -> Result<(), ModuleResolveError> {
-        self.insert_exclusive_name(
-            exclusive_names,
-            name.value.atom(),
-            ExclusiveNameKind::Value,
-            name.span,
-        )?;
-        self.insert_decl(name, visibility, DeclNameNamespace::DISPLAY_NAME, kind)
+    /// Whether this module declares a `dag` named `atom`.
+    pub(super) fn declares_dag(&self, atom: &NameAtom) -> bool {
+        self.decls
+            .get(&NameDef::classify(atom.clone()))
+            .is_some_and(|symbol| *symbol.data() == DeclSymbolKind::Dag)
     }
 
-    fn insert_dimension_decl(
-        &mut self,
-        exclusive_names: &mut ExclusiveNameOccupancy,
-        name: &Spanned<DimName>,
-        visibility: BindableVisibility,
-    ) -> Result<(), ModuleResolveError> {
-        self.insert_exclusive_name(
-            exclusive_names,
-            name.value.atom(),
-            ExclusiveNameKind::Dimension,
-            name.span,
-        )?;
-        self.insert_dimension(name, visibility, DimNameNamespace::DISPLAY_NAME)
+    fn collect_declaration(&mut self, kind: &ast::DeclKind) -> Result<(), ModuleResolveError> {
+        let decl = |symbols: &mut Self, name, visibility, kind| {
+            symbols.declare(|symbols| &mut symbols.decls, name, visibility, kind)
+        };
+        match kind {
+            ast::DeclKind::Param(p) => decl(
+                self,
+                &p.name,
+                BindableVisibility::PublicBind,
+                DeclSymbolKind::Param,
+            ),
+            ast::DeclKind::Node(n) => {
+                decl(self, &n.name, n.visibility.into(), DeclSymbolKind::Node)
+            }
+            ast::DeclKind::ConstNode(c) => {
+                decl(self, &c.name, c.visibility.into(), DeclSymbolKind::Const)
+            }
+            ast::DeclKind::Assert(a) => {
+                decl(self, &a.name, a.visibility.into(), DeclSymbolKind::Assert)
+            }
+            ast::DeclKind::Plot(p) => {
+                decl(self, &p.name, p.visibility.into(), DeclSymbolKind::Plot)
+            }
+            ast::DeclKind::Figure(f) => {
+                decl(self, &f.name, f.visibility.into(), DeclSymbolKind::Figure)
+            }
+            ast::DeclKind::Layer(l) => {
+                decl(self, &l.name, l.visibility.into(), DeclSymbolKind::Layer)
+            }
+            ast::DeclKind::Dag(d) => decl(self, &d.name, d.visibility.into(), DeclSymbolKind::Dag),
+            ast::DeclKind::BaseDimension(d) => self.declare(
+                |symbols| &mut symbols.dimensions,
+                &d.name,
+                d.visibility.into(),
+                (),
+            ),
+            ast::DeclKind::Dimension(d) => {
+                self.declare(|symbols| &mut symbols.dimensions, &d.name, d.visibility, ())
+            }
+            ast::DeclKind::Unit(u) => self.declare(
+                |symbols| &mut symbols.units,
+                &u.name,
+                u.visibility.into(),
+                u.constness,
+            ),
+            ast::DeclKind::Type(t) => self.declare_type(t),
+            ast::DeclKind::Index(i) => self.declare_index(i),
+            // Import, include, and plugin aliases live in the module scope
+            // (see `scope::declare_aliases`), not the symbol table.
+            ast::DeclKind::Import(_)
+            | ast::DeclKind::PluginImport(_)
+            | ast::DeclKind::Include(_) => Ok(()),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            ast::DeclKind::Sugar(s) => never(*s),
+        }
     }
 
-    fn insert_type_decl(
-        &mut self,
-        exclusive_names: &mut ExclusiveNameOccupancy,
-        type_decl: &ast::TypeDecl,
-    ) -> Result<(), ModuleResolveError> {
-        let visibility = type_decl.visibility;
-        self.insert_exclusive_name(
-            exclusive_names,
-            type_decl.name.value.atom(),
-            ExclusiveNameKind::StructType,
-            type_decl.name.span,
-        )?;
+    fn declare_type(&mut self, type_decl: &ast::TypeDecl) -> Result<(), ModuleResolveError> {
         let generic_params = type_decl
             .generic_params
             .iter()
             .map(GenericParamSignature::from_param)
             .collect::<Vec<_>>();
-        self.insert_struct_type(
+        self.declare(
+            |symbols| &mut symbols.struct_types,
             &type_decl.name,
-            visibility,
-            StructTypeNameNamespace::DISPLAY_NAME,
+            type_decl.visibility,
             generic_params.clone(),
         )?;
         if let ast::TypeDeclBody::Constructors(members) = &type_decl.body {
             for member in members {
-                self.insert_exclusive_name(
-                    exclusive_names,
-                    member.name.value.atom(),
-                    ExclusiveNameKind::Constructor,
-                    member.name.span,
-                )?;
-                self.insert_constructor(
+                self.declare(
+                    |symbols| &mut symbols.constructors,
                     &member.name,
-                    &type_decl.name.value,
-                    visibility,
-                    ConstructorNameNamespace::DISPLAY_NAME,
-                    generic_params.clone(),
+                    type_decl.visibility,
+                    ConstructorSignature {
+                        owner_type: type_decl.name.value.clone(),
+                        generic_params: generic_params.clone(),
+                    },
                 )?;
             }
         }
         Ok(())
     }
 
-    fn insert_index_decl(
-        &mut self,
-        exclusive_names: &mut ExclusiveNameOccupancy,
-        index: &ast::IndexDecl,
-    ) -> Result<(), ModuleResolveError> {
-        self.insert_exclusive_name(
-            exclusive_names,
-            index.name.value.atom(),
-            ExclusiveNameKind::Index,
-            index.name.span,
-        )?;
-        self.insert_index(index)
-    }
-
-    fn insert_exclusive_name(
-        &self,
-        occupied: &mut ExclusiveNameOccupancy,
-        atom: &NameAtom,
-        kind: ExclusiveNameKind,
-        span: Span,
-    ) -> Result<(), ModuleResolveError> {
-        let namespace = kind.namespace();
-        let slot = (namespace, atom.clone());
-        match occupied.entry(slot) {
-            Entry::Occupied(entry) => Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: match namespace {
-                    FlatNamespace::Static => "Static",
-                    FlatNamespace::Term => "Term",
-                },
-                name: atom.to_string(),
-                first: *entry.get(),
-                duplicate: span,
-            }),
-            Entry::Vacant(entry) => {
-                entry.insert(span);
-                Ok(())
-            }
-        }
-    }
-
-    fn insert_decl(
-        &mut self,
-        name: &Spanned<DeclName>,
-        visibility: BindableVisibility,
-        namespace_name: &'static str,
-        kind: DeclSymbolKind,
-    ) -> Result<(), ModuleResolveError> {
-        insert_decl_symbol(
-            &self.owner,
-            &mut self.decls,
-            name,
-            visibility,
-            namespace_name,
-            kind,
-        )
-    }
-
-    fn insert_dimension(
-        &mut self,
-        name: &Spanned<DimName>,
-        visibility: BindableVisibility,
-        namespace_name: &'static str,
-    ) -> Result<(), ModuleResolveError> {
-        insert_symbol(
-            &self.owner,
-            &mut self.dimensions,
-            name,
-            visibility,
-            namespace_name,
-        )
-    }
-
-    fn insert_unit(
-        &mut self,
-        name: &Spanned<UnitName>,
-        visibility: BindableVisibility,
-        constness: UnitConstness,
-        namespace_name: &'static str,
-    ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.units.get(&name.value) {
-            return Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: namespace_name,
-                name: name.value.to_string(),
-                first: first.span(),
-                duplicate: name.span,
-            });
-        }
-        self.units.insert(
-            name.value.clone(),
-            ModuleUnitSymbol {
-                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
-                constness,
-            },
-        );
-        Ok(())
-    }
-
-    fn insert_struct_type(
-        &mut self,
-        name: &Spanned<StructTypeName>,
-        visibility: BindableVisibility,
-        namespace_name: &'static str,
-        generic_params: Vec<GenericParamSignature>,
-    ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.struct_types.get(&name.value) {
-            return Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: namespace_name,
-                name: name.value.to_string(),
-                first: first.span(),
-                duplicate: name.span,
-            });
-        }
-        self.struct_types.insert(
-            name.value.clone(),
-            ModuleTypeSymbol {
-                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
-                generic_params,
-            },
-        );
-        Ok(())
-    }
-
-    fn insert_constructor(
-        &mut self,
-        name: &Spanned<ConstructorName>,
-        owner_type: &StructTypeName,
-        visibility: BindableVisibility,
-        namespace_name: &'static str,
-        generic_params: Vec<GenericParamSignature>,
-    ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.constructors.get(&name.value) {
-            return Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: namespace_name,
-                name: name.value.to_string(),
-                first: first.span(),
-                duplicate: name.span,
-            });
-        }
-        self.constructors.insert(
-            name.value.clone(),
-            ModuleConstructorSymbol {
-                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
-                owner_type: owner_type.clone(),
-                generic_params,
-            },
-        );
-        Ok(())
-    }
-
-    fn insert_index(&mut self, index: &ast::IndexDecl) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.indexes.get(&index.name.value) {
-            return Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: IndexNameNamespace::DISPLAY_NAME,
-                name: index.name.value.to_string(),
-                first: first.span(),
-                duplicate: index.name.span,
-            });
-        }
-
+    fn declare_index(&mut self, index: &ast::IndexDecl) -> Result<(), ModuleResolveError> {
         let mut variants = HashMap::new();
         if let ast::IndexDeclKind::Named { variants: declared } = &index.kind {
             for variant in declared {
@@ -731,66 +324,52 @@ impl ModuleSymbols {
                 }
             }
         }
+        self.declare(
+            |symbols| &mut symbols.indexes,
+            &index.name,
+            index.visibility,
+            variants,
+        )
+    }
 
-        self.indexes.insert(
-            index.name.value.clone(),
-            ModuleIndexSymbol {
-                symbol: ModuleSymbol::new(
-                    &self.owner,
-                    index.name.value.clone(),
-                    index.visibility,
-                    index.name.span,
-                ),
-                variants,
-            },
+    /// Claim the name's slot and record the declaration in its table.
+    fn declare<Ns: Namespaced, X>(
+        &mut self,
+        table: fn(&mut Self) -> &mut Table<Ns, X>,
+        name: &Spanned<NameDef<Ns>>,
+        visibility: BindableVisibility,
+        data: X,
+    ) -> Result<(), ModuleResolveError> {
+        if let Some(first) = self.occupant(Ns::NAMESPACE, name.value.atom()) {
+            return Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: Ns::NAMESPACE.label(),
+                name: name.value.to_string(),
+                first: first.span,
+                duplicate: name.span,
+            });
+        }
+        let symbol = Symbol::new(
+            ResolvedName::from_def(self.owner.clone(), name.value.clone()),
+            visibility,
+            name.span,
+            data,
         );
+        table(self).insert(name.value.clone(), symbol);
         Ok(())
     }
 }
 
-fn insert_symbol<Ns: NameNamespace>(
-    owner: &DagId,
-    map: &mut HashMap<NameDef<Ns>, ModuleSymbol<Ns>>,
-    name: &Spanned<NameDef<Ns>>,
-    visibility: BindableVisibility,
-    namespace_name: &'static str,
-) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(&name.value) {
-        return Err(ModuleResolveError::DuplicateSymbol {
-            owner: owner.clone(),
-            namespace: namespace_name,
-            name: name.value.to_string(),
-            first: first.span(),
-            duplicate: name.span,
-        });
-    }
-    map.insert(
-        name.value.clone(),
-        ModuleSymbol::new(owner, name.value.clone(), visibility, name.span),
-    );
-    Ok(())
-}
-
-fn insert_decl_symbol(
-    owner: &DagId,
-    map: &mut HashMap<DeclName, ModuleDeclSymbol>,
-    name: &Spanned<DeclName>,
-    visibility: BindableVisibility,
-    namespace_name: &'static str,
-    kind: DeclSymbolKind,
-) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(&name.value) {
-        return Err(ModuleResolveError::DuplicateSymbol {
-            owner: owner.clone(),
-            namespace: namespace_name,
-            name: name.value.to_string(),
-            first: first.span(),
-            duplicate: name.span,
-        });
-    }
-    map.insert(
-        name.value.clone(),
-        ModuleDeclSymbol::new(owner, name.value.clone(), visibility, name.span, kind),
-    );
-    Ok(())
+/// The binding of `atom` in one symbol table, as a collision-unit occupant.
+pub(super) fn occupant_in<Ns: Namespaced, X>(
+    table: &Table<Ns, X>,
+    atom: &NameAtom,
+) -> Option<Occupant> {
+    table
+        .get(&NameDef::classify(atom.clone()))
+        .map(|symbol| Occupant {
+            span: symbol.span,
+            visibility: symbol.visibility,
+            surface: Some(Ns::SURFACE_KIND),
+        })
 }

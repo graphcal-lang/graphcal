@@ -21,12 +21,13 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
+use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::resolve_types::{
     CollectedAssertEntry, CollectedConstEntry, CollectedExpectedFail, CollectedFigureEntry,
     CollectedLayerEntry, CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry,
     ExternalDeclSurface,
 };
+use crate::resolve::namespace::Namespace;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -90,16 +91,13 @@ fn check_builtin_name_shadowing(
         .iter()
         .flat_map(|decl| decl.kind.introduced_names())
         .try_for_each(|introduced| {
-            validate_reserved_name(
-                ReservedNameNamespace::of(introduced.namespace()),
-                introduced.atom(),
-            )
-            .map_err(|_| GraphcalError::BuiltinNameShadowed {
-                kind: introduced.kind().describe(),
-                name: introduced.atom().to_string(),
-                src: src.clone(),
-                span: introduced.span().into(),
-            })
+            validate_reserved_name(Namespace::of(introduced.namespace()), introduced.atom())
+                .map_err(|_| GraphcalError::BuiltinNameShadowed {
+                    kind: introduced.kind().describe(),
+                    name: introduced.atom().to_string(),
+                    src: src.clone(),
+                    span: introduced.span().into(),
+                })
         })
 }
 
@@ -115,7 +113,7 @@ fn check_imported_graph_value_names(
         .filter(|(name, _)| !name.is_qualified())
         .try_for_each(|(name, span)| {
             let atom = name.leaf().atom();
-            validate_reserved_name(ReservedNameNamespace::Term, atom).map_err(|_| {
+            validate_reserved_name(Namespace::Term, atom).map_err(|_| {
                 GraphcalError::BuiltinNameShadowed {
                     kind: "graph-value alias",
                     name: atom.to_string(),
@@ -136,9 +134,7 @@ fn check_static_namespace_collisions(
         .declarations
         .iter()
         .filter_map(|decl| decl.kind.declared_name())
-        .filter(|introduced| {
-            ReservedNameNamespace::of(introduced.namespace()) == ReservedNameNamespace::Static
-        })
+        .filter(|introduced| Namespace::of(introduced.namespace()) == Namespace::Static)
     {
         register_exclusive_universe_name(&mut occupied, introduced.atom(), introduced.span(), src)?;
     }
@@ -567,13 +563,12 @@ fn validate_private_in_public(
         .iter()
         .filter_map(|decl| {
             let introduced = decl.kind.declared_name()?;
-            (ReservedNameNamespace::of(introduced.namespace()) == ReservedNameNamespace::Static)
-                .then(|| {
-                    (
-                        introduced.atom(),
-                        DeclarationKind::from_decl_kind(&decl.kind),
-                    )
-                })
+            (Namespace::of(introduced.namespace()) == Namespace::Static).then(|| {
+                (
+                    introduced.atom(),
+                    DeclarationKind::from_decl_kind(&decl.kind),
+                )
+            })
         })
         .collect();
 

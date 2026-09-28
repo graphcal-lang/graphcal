@@ -9,7 +9,7 @@ use crate::resolved_name::{
 };
 use crate::syntax::ast::{IdentPath, ModulePath, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
-use crate::syntax::dimension::UnitNameNamespace;
+use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
 use crate::syntax::index_name::{IndexNameNamespace, IndexVariantName};
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
@@ -21,12 +21,10 @@ use super::ModuleResolver;
 use super::category::{DeclSymbolKind, SurfaceNameKind};
 use super::error::ModuleResolveError;
 use super::exports::{ExportedBinding, ExportedBindingTarget, ExportedImportItem};
-use super::namespace::{LookupNamespace, ResolvableNamespace};
-use super::scope::{Access, ImportedSymbol, ModuleAliasTarget, ModuleScope, PluginAliasTarget};
-use super::symbols::{
-    GenericParamSignature, ModuleConstructorSymbol, ModuleDeclSymbol, ModuleSymbolLookup,
-    ModuleSymbols, ModuleTypeSymbol, ModuleUnitSymbol,
-};
+use super::namespace::Namespace;
+use super::scope::Access;
+use super::symbols::{GenericParamSignature, Symbol};
+use super::tables::SymbolTables;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedModuleQualifier {
@@ -45,10 +43,6 @@ impl ModuleResolver {
     ///
     /// Returns [`ModuleResolveError`] if `owner` or a re-exported declaration's
     /// canonical owner is missing.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one exhaustive traversal preserves declaration order across every Term category"
-    )]
     pub fn exported_bindings(
         &self,
         owner: &DagId,
@@ -56,114 +50,60 @@ impl ModuleResolver {
         let symbols = self.module_symbols(owner)?;
         let scope = self.module_scope(owner)?;
         let mut bindings = Vec::new();
+        let mut export = |name: &NameAtom, target| {
+            bindings.push(ExportedBinding {
+                name: name.clone(),
+                target,
+            });
+        };
 
-        for (name, symbol) in &symbols.decls {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Decl {
-                        identity: symbol.resolved().clone(),
-                        kind: symbol.kind(),
-                    },
-                });
-            }
+        for (name, symbol) in public(&symbols.decls) {
+            export(
+                name,
+                ExportedBindingTarget::Decl {
+                    identity: symbol.resolved().clone(),
+                    kind: *symbol.data(),
+                },
+            );
         }
-        for (name, symbol) in &scope.selected_decls {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Decl {
-                        identity: symbol.resolved().clone(),
-                        kind: self.decl_symbol_kind(symbol.resolved())?,
-                    },
-                });
-            }
+        for (name, symbol) in public(&scope.selected_decls) {
+            export(
+                name,
+                ExportedBindingTarget::Decl {
+                    identity: symbol.resolved().clone(),
+                    kind: self.decl_symbol_kind(symbol.resolved())?,
+                },
+            );
         }
-        for (name, symbol) in &symbols.constructors {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Constructor(symbol.resolved().clone()),
-                });
-            }
+        for (name, symbol) in public(&symbols.units) {
+            export(
+                name,
+                ExportedBindingTarget::Unit {
+                    identity: symbol.resolved().clone(),
+                    constness: *symbol.data(),
+                },
+            );
         }
-        for (name, symbol) in &scope.selected_constructors {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Constructor(symbol.resolved().clone()),
-                });
-            }
+        for (name, symbol) in public(&scope.selected_units) {
+            export(
+                name,
+                ExportedBindingTarget::Unit {
+                    identity: symbol.resolved().clone(),
+                    constness: self.unit_constness(symbol.resolved())?,
+                },
+            );
         }
-        for (name, symbol) in &symbols.struct_types {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Type(symbol.resolved().clone()),
-                });
-            }
+        for (name, resolved) in public_targets::<ConstructorNameNamespace>(symbols, scope) {
+            export(name, ExportedBindingTarget::Constructor(resolved.clone()));
         }
-        for (name, symbol) in &scope.selected_struct_types {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Type(symbol.resolved().clone()),
-                });
-            }
+        for (name, resolved) in public_targets::<StructTypeNameNamespace>(symbols, scope) {
+            export(name, ExportedBindingTarget::Type(resolved.clone()));
         }
-        for (name, symbol) in &symbols.dimensions {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Dimension(symbol.resolved().clone()),
-                });
-            }
+        for (name, resolved) in public_targets::<DimNameNamespace>(symbols, scope) {
+            export(name, ExportedBindingTarget::Dimension(resolved.clone()));
         }
-        for (name, symbol) in &scope.selected_dimensions {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Dimension(symbol.resolved().clone()),
-                });
-            }
-        }
-        for (name, symbol) in &symbols.units {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Unit {
-                        identity: symbol.resolved().clone(),
-                        constness: symbol.constness(),
-                    },
-                });
-            }
-        }
-        for (name, symbol) in &scope.selected_units {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Unit {
-                        identity: symbol.resolved().clone(),
-                        constness: self.unit_constness(symbol.resolved())?,
-                    },
-                });
-            }
-        }
-        for (name, symbol) in &symbols.indexes {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Index(symbol.resolved().clone()),
-                });
-            }
-        }
-        for (name, symbol) in &scope.selected_indexes {
-            if symbol.visibility().is_public() {
-                bindings.push(ExportedBinding {
-                    name: name.atom().clone(),
-                    target: ExportedBindingTarget::Index(symbol.resolved().clone()),
-                });
-            }
+        for (name, resolved) in public_targets::<IndexNameNamespace>(symbols, scope) {
+            export(name, ExportedBindingTarget::Index(resolved.clone()));
         }
 
         bindings.sort_by(|left, right| {
@@ -237,9 +177,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedDeclName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::decls, |scope| {
-            &scope.selected_decls
-        })
+        self.resolve_symbol_path::<DeclNameNamespace>(owner, path)
     }
 
     /// Resolve a declaration path and require that it names a const declaration.
@@ -266,54 +204,23 @@ impl ModuleResolver {
         &self,
         name: &ResolvedDeclName,
     ) -> Result<DeclSymbolKind, ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        let def_name = name.to_unowned_def_name();
-        symbols
-            .decls
-            .get(&def_name)
-            .map(ModuleDeclSymbol::kind)
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: DeclNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declared(name).copied()
     }
 
     pub(super) fn unit_constness(
         &self,
         name: &ResolvedUnitName,
     ) -> Result<UnitConstness, ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        symbols
-            .units
-            .get(&name.to_unowned_def_name())
-            .map(ModuleUnitSymbol::constness)
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: UnitNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declared(name).copied()
     }
 
     pub(super) fn constructor_owner_type(
         &self,
         name: &ResolvedConstructorName,
     ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        symbols
-            .constructors
-            .get(&name.to_unowned_def_name())
-            .map(|constructor| {
-                ResolvedStructTypeName::from_def(
-                    name.owner().clone(),
-                    constructor.owner_type().clone(),
-                )
-            })
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: ConstructorNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declared(name).map(|signature| {
+            ResolvedStructTypeName::from_def(name.owner().clone(), signature.owner_type.clone())
+        })
     }
 
     /// Return whether an instantiated declaration may be referenced by its consumer.
@@ -324,17 +231,9 @@ impl ModuleResolver {
         &self,
         name: &ResolvedDeclName,
     ) -> Result<bool, ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        let def_name = name.to_unowned_def_name();
-        symbols
-            .decls
-            .get(&def_name)
-            .map(|symbol| symbol.kind() == DeclSymbolKind::Param || symbol.visibility().is_public())
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: DeclNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declaration(name).map(|symbol| {
+            *symbol.data() == DeclSymbolKind::Param || symbol.visibility().is_public()
+        })
     }
 
     /// Resolve a syntactic dimension path to a canonical owner + leaf.
@@ -343,9 +242,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedDimName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::dimensions, |scope| {
-            &scope.selected_dimensions
-        })
+        self.resolve_symbol_path::<DimNameNamespace>(owner, path)
     }
 
     /// Resolve a syntactic unit path to a canonical owner + leaf.
@@ -354,9 +251,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedUnitName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::units, |scope| {
-            &scope.selected_units
-        })
+        self.resolve_symbol_path::<UnitNameNamespace>(owner, path)
     }
 
     /// Resolve a syntactic struct/tagged-union type path to a canonical owner + leaf.
@@ -365,9 +260,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::struct_types, |scope| {
-            &scope.selected_struct_types
-        })
+        self.resolve_symbol_path::<StructTypeNameNamespace>(owner, path)
     }
 
     /// Return the source generic signature for a resolved user-defined type.
@@ -375,16 +268,7 @@ impl ModuleResolver {
         &self,
         name: &ResolvedStructTypeName,
     ) -> Result<&[GenericParamSignature], ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        symbols
-            .struct_types
-            .get(&name.to_unowned_def_name())
-            .map(ModuleTypeSymbol::generic_params)
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: StructTypeNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declared(name).map(Vec::as_slice)
     }
 
     /// Resolve a syntactic tagged-union constructor path to a canonical owner + leaf.
@@ -393,9 +277,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedConstructorName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::constructors, |scope| {
-            &scope.selected_constructors
-        })
+        self.resolve_symbol_path::<ConstructorNameNamespace>(owner, path)
     }
 
     /// Return the owning type's source generic signature for a resolved constructor.
@@ -403,16 +285,8 @@ impl ModuleResolver {
         &self,
         name: &ResolvedConstructorName,
     ) -> Result<&[GenericParamSignature], ModuleResolveError> {
-        let symbols = self.module_symbols(name.owner())?;
-        symbols
-            .constructors
-            .get(&name.to_unowned_def_name())
-            .map(ModuleConstructorSymbol::generic_params)
-            .ok_or_else(|| ModuleResolveError::UnknownName {
-                owner: name.owner().clone(),
-                namespace: ConstructorNameNamespace::DISPLAY_NAME,
-                name: name.as_str().to_string(),
-            })
+        self.declared(name)
+            .map(|signature| signature.generic_params.as_slice())
     }
 
     /// Resolve a span-aware constructor path without losing source path shape at
@@ -479,9 +353,7 @@ impl ModuleResolver {
         owner: &DagId,
         path: &NamePath,
     ) -> Result<ResolvedIndexName, ModuleResolveError> {
-        self.resolve_symbol_path(owner, path, ModuleSymbols::indexes, |scope| {
-            &scope.selected_indexes
-        })
+        self.resolve_symbol_path::<IndexNameNamespace>(owner, path)
     }
 
     /// Resolve an already-split index path plus variant leaf to a canonical
@@ -498,17 +370,7 @@ impl ModuleResolver {
         variant: &IndexVariantName,
     ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
         let resolved_index = self.resolve_index_path(owner, index_path)?;
-        let index_owner = resolved_index.owner().clone();
-        let index_name = resolved_index.to_unowned_def_name();
-        let target_symbols = self.module_symbols(&index_owner)?;
-        let index_symbol = target_symbols.indexes.get(&index_name).ok_or_else(|| {
-            ModuleResolveError::UnknownName {
-                owner: index_owner.clone(),
-                namespace: IndexNameNamespace::DISPLAY_NAME,
-                name: index_name.to_string(),
-            }
-        })?;
-        if !index_symbol.variants.contains_key(variant) {
+        if !self.declared(&resolved_index)?.contains_key(variant) {
             return Err(ModuleResolveError::UnknownIndexVariant {
                 index: resolved_index,
                 variant: variant.clone(),
@@ -539,7 +401,7 @@ impl ModuleResolver {
             self.modules
                 .get(parent)
                 .and_then(|symbols| symbols.decls.get(&NameDef::classify(head.atom().clone())))
-                .filter(|symbol| symbol.kind() == DeclSymbolKind::Dag)
+                .filter(|symbol| *symbol.data() == DeclSymbolKind::Dag)
                 .map(|_| parent.child(head.as_str()))
                 .filter(|child| self.modules.contains_key(child))
         };
@@ -633,31 +495,21 @@ impl ModuleResolver {
         }
         Ok(target)
     }
-    pub(super) fn resolve_symbol_path<Ns, S>(
+    pub(super) fn resolve_symbol_path<Ns: SymbolTables>(
         &self,
         owner: &DagId,
         path: &NamePath,
-        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
-        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    ) -> Result<ResolvedName<Ns>, ModuleResolveError>
-    where
-        Ns: ResolvableNamespace,
-        S: ModuleSymbolLookup<Ns>,
-    {
+    ) -> Result<ResolvedName<Ns>, ModuleResolveError> {
         let Some((qualifier, leaf)) = path.qualifier_and_leaf() else {
             let atom = path.leaf();
             let name = NameDef::<Ns>::classify(atom.clone());
-            let local = self.module_symbols(owner)?;
-            if let Some(symbol) = local_symbols(local).get(&name) {
+            if let Some(symbol) = Ns::declared(self.module_symbols(owner)?).get(&name) {
                 return Ok(symbol.resolved().clone());
             }
-            let scope = self.module_scope(owner)?;
-            if let Some(imported) = selected_symbols(scope).get(&name) {
+            if let Some(imported) = Ns::selected(self.module_scope(owner)?).get(&name) {
                 return Ok(imported.resolved().clone());
             }
-            if let Some(actual) =
-                self.visible_surface_kind_for_bare_name(owner, atom, Ns::LOOKUP_NAMESPACE)?
-            {
+            if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
                     owner: owner.clone(),
                     name: atom.to_string(),
@@ -673,33 +525,30 @@ impl ModuleResolver {
         };
 
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
-        let target = self.module_symbols(&target_ref.owner)?;
+        let requires_public = target_ref.access.requires_public();
         let leaf_name = NameDef::<Ns>::classify(leaf.clone());
-        if let Some(symbol) = local_symbols(target).get(&leaf_name) {
-            if target_ref.access.requires_public() && !symbol.visibility().is_public() {
+        let found = Ns::declared(self.module_symbols(&target_ref.owner)?)
+            .get(&leaf_name)
+            .map(|symbol| (symbol.resolved(), symbol.visibility()))
+            .or_else(|| {
+                self.scopes
+                    .get(&target_ref.owner)
+                    .and_then(|scope| Ns::selected(scope).get(&leaf_name))
+                    .map(|imported| (imported.resolved(), imported.visibility()))
+            });
+        if let Some((resolved, visibility)) = found {
+            if requires_public && !visibility.is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: target_ref.owner,
                     namespace: Ns::DISPLAY_NAME,
                     name: leaf.to_string(),
                 });
             }
-            return Ok(symbol.resolved().clone());
-        }
-
-        let target_scope = self.module_scope(&target_ref.owner)?;
-        if let Some(imported) = selected_symbols(target_scope).get(&leaf_name) {
-            if target_ref.access.requires_public() && !imported.visibility().is_public() {
-                return Err(ModuleResolveError::PrivateName {
-                    owner: target_ref.owner,
-                    namespace: Ns::DISPLAY_NAME,
-                    name: leaf.to_string(),
-                });
-            }
-            return Ok(imported.resolved().clone());
+            return Ok(resolved.clone());
         }
 
         if let Some(actual) =
-            self.visible_surface_kind_for_qualified_leaf(&target_ref, leaf, Ns::LOOKUP_NAMESPACE)?
+            self.visible_surface_kind(&target_ref.owner, Ns::NAMESPACE, leaf, requires_public)?
         {
             return Err(ModuleResolveError::WrongUniverseName {
                 owner: target_ref.owner,
@@ -716,42 +565,31 @@ impl ModuleResolver {
         })
     }
 
-    fn visible_surface_kind_for_bare_name(
+    /// The surface category of whatever occupies `(namespace, atom)` in
+    /// `owner`, for wrong-universe diagnostics. Private occupants are skipped
+    /// when the lookup `requires_public`.
+    fn visible_surface_kind(
         &self,
         owner: &DagId,
+        namespace: Namespace,
         atom: &NameAtom,
-        namespace: LookupNamespace,
+        requires_public: bool,
     ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
-        let local = self.module_symbols(owner)?;
-        if let Some(kind) = surface_kind_in_local_symbols(local, atom, false, namespace) {
-            return Ok(Some(kind));
-        }
-        let scope = self.module_scope(owner)?;
-        Ok(surface_kind_in_scope(scope, atom, false, namespace))
-    }
-
-    fn visible_surface_kind_for_qualified_leaf(
-        &self,
-        target_ref: &ResolvedModuleQualifier,
-        leaf: &NameAtom,
-        namespace: LookupNamespace,
-    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
-        let target = self.module_symbols(&target_ref.owner)?;
-        if let Some(kind) = surface_kind_in_local_symbols(
-            target,
-            leaf,
-            target_ref.access.requires_public(),
-            namespace,
-        ) {
-            return Ok(Some(kind));
-        }
-        let target_scope = self.module_scope(&target_ref.owner)?;
-        Ok(surface_kind_in_scope(
-            target_scope,
-            leaf,
-            target_ref.access.requires_public(),
-            namespace,
-        ))
+        let visible = |occupant: &super::namespace::Occupant| {
+            !requires_public || occupant.visibility.is_public()
+        };
+        let local = self
+            .module_symbols(owner)?
+            .occupant(namespace, atom)
+            .filter(visible);
+        let occupant = match local {
+            Some(occupant) => Some(occupant),
+            None => self
+                .module_scope(owner)?
+                .occupant(namespace, atom)
+                .filter(visible),
+        };
+        Ok(occupant.and_then(|occupant| occupant.surface))
     }
 
     fn resolve_module_qualifier(
@@ -806,93 +644,21 @@ impl ModuleResolver {
             Err(ModuleResolveError::UnknownModule { owner: target })
         }
     }
-    /// Definition/import span occupying one visible Static slot.
-    pub(crate) fn visible_static_span(
+    /// Definition/import span occupying `(namespace, name)` in `owner`.
+    pub(crate) fn visible_span(
         &self,
         owner: &DagId,
+        namespace: Namespace,
         name: &NameAtom,
     ) -> Result<Option<Span>, ModuleResolveError> {
-        let local = self.module_symbols(owner)?;
-        let scope = self.module_scope(owner)?;
-        Ok(local
-            .dimensions
-            .get(&NameDef::classify(name.clone()))
-            .map(ModuleSymbolLookup::span)
-            .or_else(|| {
-                local
-                    .struct_types
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ModuleSymbolLookup::span)
-            })
-            .or_else(|| {
-                local
-                    .indexes
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ModuleSymbolLookup::span)
-            })
-            .or_else(|| {
-                scope
-                    .selected_dimensions
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ImportedSymbol::span)
-            })
-            .or_else(|| {
-                scope
-                    .selected_struct_types
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ImportedSymbol::span)
-            })
-            .or_else(|| {
-                scope
-                    .selected_indexes
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ImportedSymbol::span)
-            }))
+        let local = self.module_symbols(owner)?.occupant(namespace, name);
+        let occupant = match local {
+            Some(occupant) => Some(occupant),
+            None => self.module_scope(owner)?.occupant(namespace, name),
+        };
+        Ok(occupant.map(|occupant| occupant.span))
     }
 
-    /// Definition/import span occupying one visible flat Term slot.
-    pub(crate) fn visible_term_span(
-        &self,
-        owner: &DagId,
-        name: &NameAtom,
-    ) -> Result<Option<Span>, ModuleResolveError> {
-        let local = self.module_symbols(owner)?;
-        let scope = self.module_scope(owner)?;
-        Ok(local
-            .decls
-            .get(&NameDef::classify(name.clone()))
-            .map(ModuleDeclSymbol::span)
-            .or_else(|| {
-                local
-                    .constructors
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ModuleSymbolLookup::span)
-            })
-            .or_else(|| {
-                scope
-                    .selected_decls
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ImportedSymbol::span)
-            })
-            .or_else(|| {
-                scope
-                    .selected_constructors
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ImportedSymbol::span)
-            })
-            .or_else(|| {
-                scope
-                    .module_aliases
-                    .get(&NameDef::classify(name.clone()))
-                    .map(ModuleAliasTarget::span)
-            })
-            .or_else(|| {
-                scope
-                    .plugin_aliases
-                    .get(&NameDef::classify(name.clone()))
-                    .map(PluginAliasTarget::span)
-            }))
-    }
     pub(super) fn ensure_module_path_visible(
         &self,
         target: &DagId,
@@ -924,7 +690,7 @@ impl ModuleResolver {
                 // source `dag` declaration on that edge.
                 return Ok(());
             };
-            if symbol.kind() != DeclSymbolKind::Dag {
+            if *symbol.data() != DeclSymbolKind::Dag {
                 return Ok(());
             }
             if !symbol.visibility().is_public() {
@@ -939,68 +705,27 @@ impl ModuleResolver {
     }
 }
 
-fn surface_kind_in_local_symbols(
-    symbols: &ModuleSymbols,
-    atom: &NameAtom,
-    requires_public: bool,
-    namespace: LookupNamespace,
-) -> Option<SurfaceNameKind> {
-    macro_rules! probe {
-        ($map:expr, $kind:expr) => {
-            if let Some(symbol) = $map.get(&NameDef::classify(atom.clone()))
-                && (!requires_public || symbol.visibility().is_public())
-            {
-                return Some($kind);
-            }
-        };
-    }
-
-    match namespace {
-        LookupNamespace::Static => {
-            probe!(symbols.dimensions, SurfaceNameKind::Dimension);
-            probe!(symbols.struct_types, SurfaceNameKind::Type);
-            probe!(symbols.indexes, SurfaceNameKind::Index);
-        }
-        LookupNamespace::Term => {
-            probe!(symbols.decls, SurfaceNameKind::Value);
-            probe!(symbols.constructors, SurfaceNameKind::Constructor);
-        }
-        LookupNamespace::Unit => probe!(symbols.units, SurfaceNameKind::Unit),
-    }
-    None
-}
-
-fn surface_kind_in_scope(
-    scope: &ModuleScope,
-    atom: &NameAtom,
-    requires_public: bool,
-    namespace: LookupNamespace,
-) -> Option<SurfaceNameKind> {
-    macro_rules! probe {
-        ($map:expr, $kind:expr) => {
-            if let Some(symbol) = $map.get(&NameDef::classify(atom.clone()))
-                && (!requires_public || symbol.visibility().is_public())
-            {
-                return Some($kind);
-            }
-        };
-    }
-
-    match namespace {
-        LookupNamespace::Static => {
-            probe!(scope.selected_dimensions, SurfaceNameKind::Dimension);
-            probe!(scope.selected_struct_types, SurfaceNameKind::Type);
-            probe!(scope.selected_indexes, SurfaceNameKind::Index);
-        }
-        LookupNamespace::Term => {
-            probe!(scope.selected_decls, SurfaceNameKind::Value);
-            probe!(scope.selected_constructors, SurfaceNameKind::Constructor);
-        }
-        LookupNamespace::Unit => probe!(scope.selected_units, SurfaceNameKind::Unit),
-    }
-    None
-}
-
 fn ident_path_to_name_path(path: &IdentPath) -> NamePath {
     path.to_name_path()
+}
+
+/// Publicly visible bindings of one table.
+fn public<Ns: NameNamespace, X>(
+    table: &HashMap<NameDef<Ns>, Symbol<Ns, X>>,
+) -> impl Iterator<Item = (&NameAtom, &Symbol<Ns, X>)> {
+    table
+        .iter()
+        .filter(|(_, symbol)| symbol.visibility().is_public())
+        .map(|(name, symbol)| (name.atom(), symbol))
+}
+
+/// Public spellings of one namespace (declarations, then selective
+/// re-exports) with the canonical target each denotes.
+fn public_targets<'a, Ns: SymbolTables>(
+    symbols: &'a super::symbols::ModuleSymbols,
+    scope: &'a super::scope::ModuleScope,
+) -> impl Iterator<Item = (&'a NameAtom, &'a ResolvedName<Ns>)> {
+    public(Ns::declared(symbols))
+        .map(|(name, symbol)| (name, symbol.resolved()))
+        .chain(public(Ns::selected(scope)).map(|(name, symbol)| (name, symbol.resolved())))
 }

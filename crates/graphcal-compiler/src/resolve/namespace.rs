@@ -1,90 +1,114 @@
-//! Namespaces the resolver checks names in: collision slots and lookup universes.
+//! The unit of collision checking and name lookup.
 
-use std::collections::HashMap;
-
+use crate::syntax::ast::BindableVisibility;
 use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
+use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexNameNamespace;
-use crate::syntax::names::{NameAtom, NameNamespace};
+use crate::syntax::names::NameNamespace;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
 
 use super::category::SurfaceNameKind;
 
+/// The unit of collision checking and name lookup.
+///
+/// Every name a module can see occupies exactly one slot `(Namespace, leaf)`.
+/// Two names in one slot are a duplicate, whether they come from local
+/// declarations, `import` / `include` / plugin aliases, or selective imports.
+/// The finer symbol tables (declarations and constructors in [`Self::Term`];
+/// dimensions, types, and indexes in [`Self::Static`]) only partition a slot
+/// for lookup; they are never separate collision units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum FlatNamespace {
-    Static,
+pub enum Namespace {
+    /// Values and declarations, constructors, and module / plugin aliases.
     Term,
+    /// Dimensions, struct / tagged-union types, and indexes.
+    Static,
+    /// Units.
+    Unit,
 }
 
-impl std::fmt::Display for FlatNamespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Static => "Static",
-            Self::Term => "Term",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum ExclusiveNameKind {
-    Value,
-    Dimension,
-    StructType,
-    Index,
-    Constructor,
-}
-
-impl ExclusiveNameKind {
-    pub(super) const fn namespace(self) -> FlatNamespace {
+impl Namespace {
+    /// Diagnostic label of this namespace.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            Self::Value | Self::Constructor => FlatNamespace::Term,
-            Self::Dimension | Self::StructType | Self::Index => FlatNamespace::Static,
+            Self::Term => "Term",
+            Self::Static => "Static",
+            Self::Unit => "Unit",
         }
     }
 }
 
-/// Span of the first binding that occupies each exclusive name slot.
-pub(super) type ExclusiveNameOccupancy = HashMap<(FlatNamespace, NameAtom), Span>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LookupNamespace {
-    Static,
-    Term,
-    Unit,
+impl Namespace {
+    /// The namespace a selective-import category introduces names into: the
+    /// type, dimension, and index categories share Static.
+    #[must_use]
+    pub const fn of(category: ImportItemNamespace) -> Self {
+        match category {
+            ImportItemNamespace::Term => Self::Term,
+            ImportItemNamespace::Unit => Self::Unit,
+            ImportItemNamespace::Type
+            | ImportItemNamespace::Dimension
+            | ImportItemNamespace::Index => Self::Static,
+        }
+    }
 }
 
-pub(super) trait ResolvableNamespace: NameNamespace {
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// A symbol-table namespace marker together with the slot its names occupy
+/// and the category diagnostics report for them.
+pub(super) trait Namespaced: NameNamespace {
+    /// The collision / lookup unit of names in this namespace.
+    const NAMESPACE: Namespace;
+    /// The category reported when a name is found in the wrong universe.
     const SURFACE_KIND: SurfaceNameKind;
-    const LOOKUP_NAMESPACE: LookupNamespace;
 }
 
-impl ResolvableNamespace for DeclNameNamespace {
+impl Namespaced for DeclNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Term;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Value;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Term;
 }
 
-impl ResolvableNamespace for DimNameNamespace {
-    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
-}
-
-impl ResolvableNamespace for UnitNameNamespace {
-    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Unit;
-}
-
-impl ResolvableNamespace for StructTypeNameNamespace {
-    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
-}
-
-impl ResolvableNamespace for IndexNameNamespace {
-    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
-}
-
-impl ResolvableNamespace for ConstructorNameNamespace {
+impl Namespaced for ConstructorNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Term;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Constructor;
-    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Term;
+}
+
+impl Namespaced for DimNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Static;
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
+}
+
+impl Namespaced for StructTypeNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Static;
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
+}
+
+impl Namespaced for IndexNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Static;
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
+}
+
+impl Namespaced for UnitNameNamespace {
+    const NAMESPACE: Namespace = Namespace::Unit;
+    const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
+}
+
+/// The binding that occupies one slot of a module's collision unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Occupant {
+    /// Source span of the occupying definition or import.
+    pub(super) span: Span,
+    /// Visibility of the occupying binding across module boundaries.
+    pub(super) visibility: BindableVisibility,
+    /// Category reported by wrong-universe diagnostics; module and plugin
+    /// aliases have none.
+    pub(super) surface: Option<SurfaceNameKind>,
 }

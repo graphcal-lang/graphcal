@@ -21,10 +21,10 @@ use graphcal_compiler::ir::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
 use graphcal_compiler::plot_visibility::PlotVisibility;
-use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
 use graphcal_compiler::resolve::exports::ExportedBindingTarget;
+use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::dimension::UnitName;
@@ -1065,7 +1065,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     && (dep.declares(orig_name.atom(), IntroducedKind::ConstNode)
                         || declares_runtime_value(dep, orig_name.atom()));
                 if is_graph_value {
-                    validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
+                    validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                 }
                 let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
@@ -1325,7 +1325,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                         .declared_kinds(orig_name.atom(), ImportItemNamespace::Term)
                         .any(is_graph_value_kind);
                 if is_graph_value {
-                    validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
+                    validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                 }
                 let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
@@ -1528,14 +1528,11 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 )?;
 
                 if import_item.namespace != ImportItemNamespace::Term {
-                    let namespace = match import_item.namespace {
-                        ImportItemNamespace::Unit => ReservedNameNamespace::Unit,
-                        ImportItemNamespace::Type
-                        | ImportItemNamespace::Dimension
-                        | ImportItemNamespace::Index => ReservedNameNamespace::Static,
-                        ImportItemNamespace::Term => ReservedNameNamespace::Term,
-                    };
-                    validate_reserved_alias(namespace, import_item, file_src)?;
+                    validate_reserved_alias(
+                        Namespace::of(import_item.namespace),
+                        import_item,
+                        file_src,
+                    )?;
                     if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
                             dep,
@@ -1579,7 +1576,11 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         ExportedImportItemKind::Constructor => {
                             Some(PureImportTermDisposition::ResolverOnly)
                         }
-                        _ => None,
+                        // A Term item never resolves to a Static or Unit export.
+                        ExportedImportItemKind::Dimension
+                        | ExportedImportItemKind::Unit(_)
+                        | ExportedImportItemKind::Type
+                        | ExportedImportItemKind::Index => None,
                     })
                     .or_else(|| dep_interface.pure_import_term_disposition(orig_name.atom()))
                     .ok_or_else(|| {
@@ -1607,11 +1608,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 
                 match disposition {
                     PureImportTermDisposition::BindConstant => {
-                        validate_reserved_alias(
-                            ReservedNameNamespace::Term,
-                            import_item,
-                            file_src,
-                        )?;
+                        validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                         let canonical = resolved_export
                             .and_then(|binding| binding.target.declaration())
                             .cloned()

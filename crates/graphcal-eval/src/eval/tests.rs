@@ -5373,6 +5373,25 @@ fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
 }
 
 #[test]
+fn module_aliases_and_same_named_nodes_are_duplicate_names() {
+    // B4 regression: an include alias is a Term name exactly like an import
+    // alias, including when it instantiates a local inline DAG.
+    let velocity = "dag velocity { param r: Dimensionless; pub node v: Dimensionless = @r; }\n";
+    for alias_decl in [
+        "include velocity(r: 1.0) as parking;",
+        "import velocity as parking;",
+    ] {
+        let source = format!("{velocity}{alias_decl}\nnode parking: Dimensionless = 2.0;\n");
+        match compile_and_eval(&source) {
+            Err(CompileError::Eval(GraphcalError::DuplicateName { name, .. })) => {
+                assert_eq!(name, "parking", "{alias_decl}");
+            }
+            other => panic!("expected N001 for `{alias_decl}`, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn project_selective_includes_still_reject_duplicate_local_names() {
     let (_dir, root) = write_same_leaf_include_project(
         "include app.analysis.shared(input: 2.0)::{ output as duplicate };\n\
@@ -8424,12 +8443,15 @@ fn eval_inline_dag_namespace_alias_at_field() {
 #[test]
 fn field_access_on_value_is_not_hijacked_by_include_alias() {
     // `.` after a graph reference is always struct field access; `::` is the
-    // only namespace-member boundary, even when a value shares an alias name.
+    // only namespace-member boundary. A value can no longer share an include
+    // alias's name (both are Term names; see
+    // `module_aliases_and_same_named_nodes_are_duplicate_names`), so the value
+    // and the alias expose the same member name instead.
     let source = "dag d { pub node out: Dimensionless = 8.0; }\n\
                   include d() as inst;\n\
                   type S { S(out: Dimensionless) }\n\
-                  node inst: S = S(out: 1.0);\n\
-                  node y: Dimensionless = @inst.out;\n\
+                  node value: S = S(out: 1.0);\n\
+                  node y: Dimensionless = @value.out;\n\
                   node z: Dimensionless = @inst::out;";
     let result = compile_and_eval(source).unwrap();
     let y = find_value(&result, "y");

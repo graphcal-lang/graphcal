@@ -23,10 +23,8 @@ use super::ModuleResolver;
 use super::category::include_projection;
 use super::error::ModuleResolveError;
 use super::imports::ExportLookup;
-use super::scope::{Access, ImportedSymbol};
-use super::symbols::{
-    ModuleConstructorSymbol, ModuleIndexSymbol, ModuleSymbol, ModuleSymbols, ModuleTypeSymbol,
-};
+use super::scope::Access;
+use super::symbols::{ConstructorSignature, Symbol};
 
 impl ModuleResolver {
     /// Redirect selected Static aliases to supplied effective binding targets.
@@ -59,7 +57,7 @@ impl ModuleResolver {
         for item in items {
             if let Some(target) = source_target {
                 for addition in self.import_item_additions(target, item, Access::CrossModule)? {
-                    let Some(kind) = self.import_addition_kind(&addition)? else {
+                    let Some(kind) = self.import_target_kind(&addition.target)? else {
                         continue;
                     };
                     if include_projection(kind).is_none() {
@@ -106,7 +104,7 @@ impl ModuleResolver {
                                 namespace: StructTypeNameNamespace::DISPLAY_NAME,
                                 name: source_name.to_string(),
                             })?;
-                        let generic_params = source_symbol.generic_params.clone();
+                        let generic_params = source_symbol.data().clone();
                         let local_name = StructTypeName::classify(local);
                         self.scopes
                             .get_mut(owner)
@@ -123,17 +121,12 @@ impl ModuleResolver {
                             .struct_types
                             .insert(
                                 local_name,
-                                ModuleTypeSymbol {
-                                    symbol: ModuleSymbol {
-                                        resolved: ResolvedStructTypeName::from_def(
-                                            owner.clone(),
-                                            source_name,
-                                        ),
-                                        visibility,
-                                        span: item.local_span(),
-                                    },
+                                Symbol::new(
+                                    ResolvedStructTypeName::from_def(owner.clone(), source_name),
+                                    visibility,
+                                    item.local_span(),
                                     generic_params,
-                                },
+                                ),
                             );
                         continue;
                     }
@@ -154,7 +147,7 @@ impl ModuleResolver {
                         .selected_struct_types
                         .insert(
                             StructTypeName::classify(local),
-                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                            Symbol::new(resolved, visibility, item.local_span(), ()),
                         );
                 }
                 ImportItemNamespace::Dimension => {
@@ -179,7 +172,12 @@ impl ModuleResolver {
                             .dimensions
                             .insert(
                                 local_name.clone(),
-                                ModuleSymbol::new(owner, local_name, visibility, item.local_span()),
+                                Symbol::new(
+                                    ResolvedDimName::from_def(owner.clone(), local_name),
+                                    visibility,
+                                    item.local_span(),
+                                    (),
+                                ),
                             );
                         continue;
                     }
@@ -203,7 +201,7 @@ impl ModuleResolver {
                         .selected_dimensions
                         .insert(
                             DimName::classify(local),
-                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                            Symbol::new(resolved, visibility, item.local_span(), ()),
                         );
                 }
                 ImportItemNamespace::Index => {
@@ -217,15 +215,12 @@ impl ModuleResolver {
                             .indexes
                             .insert(
                                 local.clone(),
-                                ModuleIndexSymbol {
-                                    symbol: ModuleSymbol::new(
-                                        owner,
-                                        local,
-                                        visibility,
-                                        item.local_span(),
-                                    ),
-                                    variants: HashMap::new(),
-                                },
+                                Symbol::new(
+                                    ResolvedIndexName::from_def(owner.clone(), local),
+                                    visibility,
+                                    item.local_span(),
+                                    HashMap::new(),
+                                ),
                             );
                         continue;
                     }
@@ -249,7 +244,7 @@ impl ModuleResolver {
                         .selected_indexes
                         .insert(
                             IndexName::classify(local),
-                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                            Symbol::new(resolved, visibility, item.local_span(), ()),
                         );
                 }
                 ImportItemNamespace::Unit => {
@@ -268,7 +263,7 @@ impl ModuleResolver {
                         .selected_units
                         .insert(
                             UnitName::classify(local),
-                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                            Symbol::new(resolved, visibility, item.local_span(), ()),
                         );
                 }
                 ImportItemNamespace::Term => {
@@ -277,13 +272,12 @@ impl ModuleResolver {
                     };
                     let source_constructor =
                         ConstructorName::classify(item.name.name.atom().clone());
-                    let resolved = match self.exported_symbol_for_import(
-                        source_target,
-                        source_constructor.atom(),
-                        Access::CrossModule,
-                        ModuleSymbols::constructors,
-                        |scope| &scope.selected_constructors,
-                    )? {
+                    let resolved = match self
+                        .exported_symbol_for_import::<ConstructorNameNamespace>(
+                            source_target,
+                            source_constructor.atom(),
+                            Access::CrossModule,
+                        )? {
                         ExportLookup::Public(resolved) => resolved,
                         ExportLookup::Private | ExportLookup::Missing => continue,
                     };
@@ -327,15 +321,15 @@ impl ModuleResolver {
                             .constructors
                             .insert(
                                 resolved.to_unowned_def_name(),
-                                ModuleConstructorSymbol {
-                                    symbol: ModuleSymbol {
-                                        resolved: resolved.clone(),
-                                        visibility,
-                                        span: item.local_span(),
+                                Symbol::new(
+                                    resolved.clone(),
+                                    visibility,
+                                    item.local_span(),
+                                    ConstructorSignature {
+                                        owner_type: owner_type.to_unowned_def_name(),
+                                        generic_params: source_symbol.data().generic_params.clone(),
                                     },
-                                    owner_type: owner_type.to_unowned_def_name(),
-                                    generic_params: source_symbol.generic_params,
-                                },
+                                ),
                             );
                         resolved
                     } else {
@@ -353,7 +347,7 @@ impl ModuleResolver {
                     );
                     scope
                         .selected_constructors
-                        .insert(local, ImportedSymbol::new(resolved, span, visibility));
+                        .insert(local, Symbol::new(resolved, visibility, span, ()));
                 }
             }
         }

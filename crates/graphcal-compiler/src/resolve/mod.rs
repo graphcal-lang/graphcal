@@ -3,7 +3,7 @@
 //! The resolver builds typed symbol tables for loaded DAG/module identities and
 //! resolves syntactic [`NamePath`](crate::syntax::names::NamePath) /
 //! [`IdentPath`](crate::syntax::ast::IdentPath) references to canonical
-//! [`ResolvedName`](crate::resolved_name::ResolvedName) values. It consumes the
+//! [`ResolvedName`] values. It consumes the
 //! desugared AST, so it sits downstream of both [`crate::syntax`] and
 //! [`crate::desugar`].
 //!
@@ -14,11 +14,13 @@
 //! conventions.
 //!
 //! - [`category`]: declaration kinds, import categories, and include projections.
-//! - [`symbols`]: per-module declaration tables.
+//! - [`namespace`]: [`Namespace`](namespace::Namespace), the unit of collision
+//!   checking and lookup.
+//! - [`symbols`]: per-module declaration tables of [`Symbol`]s.
 //! - [`scope`]: per-module import scopes (aliases and selective imports).
-//! - [`namespace`]: collision slots and lookup universes.
 //! - [`exports`]: the public module surface.
 //! - [`error`]: resolver errors.
+//! - `tables`: per-namespace access to the declaration and import tables.
 //! - `imports`, `projection`, `lookup`: registration of import/include edges,
 //!   selective-include Static projection, and path resolution over
 //!   [`ModuleResolver`].
@@ -32,6 +34,7 @@ pub mod namespace;
 mod projection;
 pub mod scope;
 pub mod symbols;
+mod tables;
 #[cfg(test)]
 mod tests;
 
@@ -39,16 +42,19 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::resolved_name::{
+    ResolvedDimName, ResolvedIndexName, ResolvedName, ResolvedStructTypeName,
+};
 use crate::syntax::ast::BindableVisibility;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Span;
 
 use self::error::ModuleResolveError;
 use self::scope::{
-    ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget, register_plugin_imports,
+    ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget, declare_aliases,
 };
-use self::symbols::{ModuleIndexSymbol, ModuleSymbol, ModuleSymbols, ModuleTypeSymbol};
+use self::symbols::{ModuleSymbols, Symbol};
+use self::tables::SymbolTables;
 
 /// Project-wide module resolver backed by canonical [`DagId`] identities.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -94,7 +100,7 @@ impl ModuleResolver {
         }
         let symbols = ModuleSymbols::from_declarations(owner.clone(), declarations)?;
         let scope = self.scopes.entry(owner.clone()).or_default();
-        register_plugin_imports(&owner, scope, &symbols, declarations)?;
+        declare_aliases(scope, &symbols, declarations)?;
         self.modules.insert(owner, symbols);
         Ok(())
     }
@@ -183,21 +189,13 @@ impl ModuleResolver {
         &self,
         name: &ResolvedDimName,
     ) -> Option<BindableVisibility> {
-        self.modules
-            .get(name.owner())?
-            .dimensions
-            .get(&name.to_unowned_def_name())
-            .map(ModuleSymbol::visibility)
+        self.declared_symbol(name).map(Symbol::visibility)
     }
 
     /// Visibility of a canonical index declaration.
     #[must_use]
     pub(crate) fn index_visibility(&self, name: &ResolvedIndexName) -> Option<BindableVisibility> {
-        self.modules
-            .get(name.owner())?
-            .indexes
-            .get(&name.to_unowned_def_name())
-            .map(ModuleIndexSymbol::visibility)
+        self.declared_symbol(name).map(Symbol::visibility)
     }
 
     /// Visibility of a canonical nominal type declaration.
@@ -206,27 +204,49 @@ impl ModuleResolver {
         &self,
         name: &ResolvedStructTypeName,
     ) -> Option<BindableVisibility> {
-        self.modules
-            .get(name.owner())?
-            .struct_types
-            .get(&name.to_unowned_def_name())
-            .map(ModuleTypeSymbol::visibility)
+        self.declared_symbol(name).map(Symbol::visibility)
     }
 
     /// Source span of a canonical nominal type declaration.
     #[must_use]
     pub(crate) fn struct_type_span(&self, name: &ResolvedStructTypeName) -> Option<Span> {
-        self.modules
-            .get(name.owner())?
-            .struct_types
-            .get(&name.to_unowned_def_name())
-            .map(ModuleTypeSymbol::span)
+        self.declared_symbol(name).map(Symbol::span)
     }
 
     /// Borrow all module import scopes.
     #[must_use]
     pub const fn scopes(&self) -> &HashMap<DagId, ModuleScope> {
         &self.scopes
+    }
+
+    /// The declaration a canonical name denotes, in its owner's own table.
+    fn declared_symbol<Ns: SymbolTables>(
+        &self,
+        name: &ResolvedName<Ns>,
+    ) -> Option<&Symbol<Ns, Ns::Declared>> {
+        Ns::declared(self.modules.get(name.owner())?).get(&name.to_unowned_def_name())
+    }
+
+    /// The declaration a canonical name denotes.
+    fn declaration<Ns: SymbolTables>(
+        &self,
+        name: &ResolvedName<Ns>,
+    ) -> Result<&Symbol<Ns, Ns::Declared>, ModuleResolveError> {
+        Ns::declared(self.module_symbols(name.owner())?)
+            .get(&name.to_unowned_def_name())
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: Ns::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
+    }
+
+    /// The payload of the declaration a canonical name denotes.
+    fn declared<Ns: SymbolTables>(
+        &self,
+        name: &ResolvedName<Ns>,
+    ) -> Result<&Ns::Declared, ModuleResolveError> {
+        self.declaration(name).map(Symbol::data)
     }
 
     fn module_symbols(&self, owner: &DagId) -> Result<&ModuleSymbols, ModuleResolveError> {

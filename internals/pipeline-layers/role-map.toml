@@ -962,6 +962,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["resolve", "tables"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "names"]
 role = "contracts"
 

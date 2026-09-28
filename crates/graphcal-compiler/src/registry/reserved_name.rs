@@ -9,42 +9,9 @@ use thiserror::Error;
 use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::registry::prelude::{prelude_dimension_names, prelude_unit_names};
 use crate::registry::time_scale::TimeScale;
+use crate::resolve::namespace::Namespace;
 use crate::syntax::builtin_type_name::BuiltinTypeName;
-use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
-
-/// Semantic namespace into which a source-visible local name is introduced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReservedNameNamespace {
-    Static,
-    Term,
-    Unit,
-}
-
-impl ReservedNameNamespace {
-    /// Reserved-name policy governing names introduced into `namespace`:
-    /// the type, dimension, and index namespaces share the Static policy.
-    #[must_use]
-    pub const fn of(namespace: ImportItemNamespace) -> Self {
-        match namespace {
-            ImportItemNamespace::Term => Self::Term,
-            ImportItemNamespace::Unit => Self::Unit,
-            ImportItemNamespace::Type
-            | ImportItemNamespace::Dimension
-            | ImportItemNamespace::Index => Self::Static,
-        }
-    }
-}
-
-impl std::fmt::Display for ReservedNameNamespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Static => "Static",
-            Self::Term => "Term",
-            Self::Unit => "Unit",
-        })
-    }
-}
 
 /// Closed semantic category that reserves a spelling in one namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -78,7 +45,7 @@ impl std::fmt::Display for ReservedName {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("{name} is reserved by the {reserved} in the {namespace} namespace")]
 pub struct ReservedNameError<'a> {
-    pub namespace: ReservedNameNamespace,
+    pub namespace: Namespace,
     pub name: &'a NameAtom,
     pub reserved: ReservedName,
 }
@@ -88,11 +55,11 @@ pub struct ReservedNameError<'a> {
 /// Every built-in occupies exactly one of Static, Term, or Unit. Cross-
 /// namespace reuse is accepted; same-namespace reuse is rejected uniformly.
 pub fn validate_reserved_name(
-    namespace: ReservedNameNamespace,
+    namespace: Namespace,
     name: &NameAtom,
 ) -> Result<(), ReservedNameError<'_>> {
     let reserved = match namespace {
-        ReservedNameNamespace::Static => {
+        Namespace::Static => {
             if prelude_dimension_names().any(|prelude| prelude == name.as_str()) {
                 Some(ReservedName::PreludeDimension)
             } else if BuiltinTypeName::parse(name.as_str()).is_some() {
@@ -105,7 +72,7 @@ pub fn validate_reserved_name(
                 None
             }
         }
-        ReservedNameNamespace::Term => BuiltinConst::parse(name.as_str())
+        Namespace::Term => BuiltinConst::parse(name.as_str())
             .map(ReservedName::BuiltinConstant)
             .or_else(|| BuiltinFn::parse(name.as_str()).map(ReservedName::BuiltinFunction))
             .or_else(|| {
@@ -121,7 +88,7 @@ pub fn validate_reserved_name(
                 )
                 .then_some(ReservedName::ContextualCallable)
             }),
-        ReservedNameNamespace::Unit => prelude_unit_names()
+        Namespace::Unit => prelude_unit_names()
             .any(|prelude| prelude == name.as_str())
             .then_some(ReservedName::PreludeUnit),
     };
@@ -138,25 +105,19 @@ pub fn validate_reserved_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax::import_category::ImportItemNamespace;
 
     #[test]
     fn import_namespaces_select_their_reserved_policy() {
         let cases = [
-            (ImportItemNamespace::Term, ReservedNameNamespace::Term),
-            (ImportItemNamespace::Unit, ReservedNameNamespace::Unit),
-            (ImportItemNamespace::Type, ReservedNameNamespace::Static),
-            (
-                ImportItemNamespace::Dimension,
-                ReservedNameNamespace::Static,
-            ),
-            (ImportItemNamespace::Index, ReservedNameNamespace::Static),
+            (ImportItemNamespace::Term, Namespace::Term),
+            (ImportItemNamespace::Unit, Namespace::Unit),
+            (ImportItemNamespace::Type, Namespace::Static),
+            (ImportItemNamespace::Dimension, Namespace::Static),
+            (ImportItemNamespace::Index, Namespace::Static),
         ];
         for (namespace, policy) in cases {
-            assert_eq!(
-                ReservedNameNamespace::of(namespace),
-                policy,
-                "{namespace:?}"
-            );
+            assert_eq!(Namespace::of(namespace), policy, "{namespace:?}");
         }
     }
 
@@ -166,27 +127,27 @@ mod tests {
             prelude_dimension_names().chain(BuiltinTypeName::ALL.map(BuiltinTypeName::as_str))
         {
             let atom = NameAtom::parse(name).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
         }
         for scale in TimeScale::ALL {
             let atom = NameAtom::parse(scale.to_string()).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
         }
         for name in ["Fin", "range", "linspace"] {
             let atom = NameAtom::parse(name).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
         }
         for name in prelude_unit_names() {
             let atom = NameAtom::parse(name).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Unit, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Unit, &atom).is_err());
         }
         for constant in BuiltinConst::ALL {
             let atom = NameAtom::parse(constant.as_str()).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Term, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Term, &atom).is_err());
         }
         for function in BuiltinFn::all() {
             let atom = NameAtom::parse(function.to_string()).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Term, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Term, &atom).is_err());
         }
         for name in [
             "scan",
@@ -198,19 +159,19 @@ mod tests {
             "nearest_key",
         ] {
             let atom = NameAtom::parse(name).unwrap();
-            assert!(validate_reserved_name(ReservedNameNamespace::Term, &atom).is_err());
+            assert!(validate_reserved_name(Namespace::Term, &atom).is_err());
         }
     }
 
     #[test]
     fn reservations_do_not_leak_between_namespaces() {
         let metre = NameAtom::parse("m").unwrap();
-        assert!(validate_reserved_name(ReservedNameNamespace::Term, &metre).is_ok());
+        assert!(validate_reserved_name(Namespace::Term, &metre).is_ok());
         let utc = NameAtom::parse("UTC").unwrap();
-        assert!(validate_reserved_name(ReservedNameNamespace::Term, &utc).is_ok());
+        assert!(validate_reserved_name(Namespace::Term, &utc).is_ok());
         let sqrt = NameAtom::parse("sqrt").unwrap();
-        assert!(validate_reserved_name(ReservedNameNamespace::Static, &sqrt).is_ok());
+        assert!(validate_reserved_name(Namespace::Static, &sqrt).is_ok());
         let e = NameAtom::parse("E").unwrap();
-        assert!(validate_reserved_name(ReservedNameNamespace::Unit, &e).is_ok());
+        assert!(validate_reserved_name(Namespace::Unit, &e).is_ok());
     }
 }

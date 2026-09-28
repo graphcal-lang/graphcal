@@ -8,19 +8,20 @@ use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedName,
     ResolvedStructTypeName, ResolvedUnitName,
 };
-use crate::syntax::ast::BindableVisibility;
+use crate::syntax::ast::{BindableVisibility, ImportKind, ModulePath};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::index_name::{IndexName, IndexNameNamespace};
-use crate::syntax::module_name::{ModuleAliasName, ModuleAliasNameNamespace};
-use crate::syntax::names::{NameDef, NameNamespace};
+use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{
     ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
 };
 
 use super::error::ModuleResolveError;
-use super::symbols::{ModuleDeclSymbol, ModuleSymbolLookup, ModuleSymbols};
+use super::namespace::{Namespace, Occupant};
+use super::symbols::{ModuleSymbols, Symbol, occupant_in};
 
 /// Visibility rule applied when a module path or symbol is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,12 +76,6 @@ impl ModuleAliasTarget {
         &self.target
     }
 
-    /// Source span of the local alias name.
-    #[must_use]
-    pub(super) const fn span(&self) -> Span {
-        self.span
-    }
-
     /// Visibility rule for names reached through this alias.
     #[must_use]
     pub const fn access(&self) -> Access {
@@ -104,9 +99,9 @@ impl ModuleAliasTarget {
 /// `import plugin "path" as alias { ... }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginAliasTarget {
-    pub(super) path: crate::plugin_identity::PluginIdentity,
-    pub(super) span: Span,
-    pub(super) functions: HashMap<crate::syntax::function_name::FnName, Span>,
+    path: crate::plugin_identity::PluginIdentity,
+    span: Span,
+    functions: HashMap<crate::syntax::function_name::FnName, Span>,
 }
 
 impl PluginAliasTarget {
@@ -116,12 +111,6 @@ impl PluginAliasTarget {
         &self.path
     }
 
-    /// Source span of the local alias name.
-    #[must_use]
-    pub(super) const fn span(&self) -> Span {
-        self.span
-    }
-
     /// The extern functions declared under this alias, with their name spans.
     #[must_use]
     pub(crate) const fn functions(&self) -> &HashMap<crate::syntax::function_name::FnName, Span> {
@@ -129,73 +118,20 @@ impl PluginAliasTarget {
     }
 }
 
-/// A selective import binding for one namespace.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedSymbol<Ns: NameNamespace> {
-    pub(super) resolved: ResolvedName<Ns>,
-    pub(super) span: Span,
-    pub(super) visibility: BindableVisibility,
-}
-
-impl<Ns: NameNamespace> ImportedSymbol<Ns> {
-    pub(super) const fn new(
-        resolved: ResolvedName<Ns>,
-        span: Span,
-        visibility: BindableVisibility,
-    ) -> Self {
-        Self {
-            resolved,
-            span,
-            visibility,
-        }
-    }
-
-    /// Canonical target identity of the imported symbol.
-    #[must_use]
-    pub(super) const fn resolved(&self) -> &ResolvedName<Ns> {
-        &self.resolved
-    }
-
-    /// Source span of the local import name.
-    #[must_use]
-    pub(super) const fn span(&self) -> Span {
-        self.span
-    }
-
-    /// Visibility of this selective import when the importing module is itself imported.
-    #[must_use]
-    pub(super) const fn visibility(&self) -> BindableVisibility {
-        self.visibility
-    }
-}
-
-impl<Ns: NameNamespace> ModuleSymbolLookup<Ns> for ImportedSymbol<Ns> {
-    fn resolved(&self) -> &ResolvedName<Ns> {
-        self.resolved()
-    }
-
-    fn visibility(&self) -> BindableVisibility {
-        self.visibility()
-    }
-
-    fn span(&self) -> Span {
-        self.span()
-    }
-}
-
 /// Import scope for a single module.
+///
+/// Selective imports are [`Symbol`]s without a payload: the local name binds
+/// the target's canonical identity, whose payload stays with its declaration.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleScope {
     pub(super) module_aliases: HashMap<ModuleAliasName, ModuleAliasTarget>,
     pub(super) plugin_aliases: HashMap<ModuleAliasName, PluginAliasTarget>,
-    pub(super) selected_decls: HashMap<DeclName, ImportedSymbol<DeclNameNamespace>>,
-    pub(super) selected_dimensions: HashMap<DimName, ImportedSymbol<DimNameNamespace>>,
-    pub(super) selected_units: HashMap<UnitName, ImportedSymbol<UnitNameNamespace>>,
-    pub(super) selected_struct_types:
-        HashMap<StructTypeName, ImportedSymbol<StructTypeNameNamespace>>,
-    pub(super) selected_indexes: HashMap<IndexName, ImportedSymbol<IndexNameNamespace>>,
-    pub(super) selected_constructors:
-        HashMap<ConstructorName, ImportedSymbol<ConstructorNameNamespace>>,
+    pub(super) selected_decls: HashMap<DeclName, Symbol<DeclNameNamespace>>,
+    pub(super) selected_dimensions: HashMap<DimName, Symbol<DimNameNamespace>>,
+    pub(super) selected_units: HashMap<UnitName, Symbol<UnitNameNamespace>>,
+    pub(super) selected_struct_types: HashMap<StructTypeName, Symbol<StructTypeNameNamespace>>,
+    pub(super) selected_indexes: HashMap<IndexName, Symbol<IndexNameNamespace>>,
+    pub(super) selected_constructors: HashMap<ConstructorName, Symbol<ConstructorNameNamespace>>,
 }
 
 impl ModuleScope {
@@ -210,289 +146,269 @@ impl ModuleScope {
     pub const fn plugin_aliases(&self) -> &HashMap<ModuleAliasName, PluginAliasTarget> {
         &self.plugin_aliases
     }
-}
 
-#[derive(Debug, Clone)]
-pub(super) enum ImportAddition {
-    ModuleAlias {
-        alias: Spanned<ModuleAliasName>,
-        target: DagId,
-        access: Access,
-        role: ModuleAliasRole,
-        visibility: BindableVisibility,
-    },
-    Decl {
-        local: Spanned<DeclName>,
-        target: ResolvedDeclName,
-        visibility: BindableVisibility,
-    },
-    Dimension {
-        local: Spanned<DimName>,
-        target: ResolvedDimName,
-        visibility: BindableVisibility,
-    },
-    Unit {
-        local: Spanned<UnitName>,
-        target: ResolvedUnitName,
-        visibility: BindableVisibility,
-    },
-    StructType {
-        local: Spanned<StructTypeName>,
-        target: ResolvedStructTypeName,
-        visibility: BindableVisibility,
-    },
-    Index {
-        local: Spanned<IndexName>,
-        target: ResolvedIndexName,
-        visibility: BindableVisibility,
-    },
-    Constructor {
-        local: Spanned<ConstructorName>,
-        target: ResolvedConstructorName,
-        visibility: BindableVisibility,
-    },
-}
+    /// The import binding occupying `(namespace, atom)`, if any.
+    pub(super) fn occupant(&self, namespace: Namespace, atom: &NameAtom) -> Option<Occupant> {
+        match namespace {
+            Namespace::Term => occupant_in(&self.selected_decls, atom)
+                .or_else(|| occupant_in(&self.selected_constructors, atom))
+                .or_else(|| {
+                    let alias = ModuleAliasName::classify(atom.clone());
+                    self.module_aliases
+                        .get(&alias)
+                        .map(|target| Occupant {
+                            span: target.span,
+                            visibility: target.visibility,
+                            surface: None,
+                        })
+                        .or_else(|| {
+                            self.plugin_aliases.get(&alias).map(|target| Occupant {
+                                span: target.span,
+                                visibility: BindableVisibility::Private,
+                                surface: None,
+                            })
+                        })
+                }),
+            Namespace::Static => occupant_in(&self.selected_dimensions, atom)
+                .or_else(|| occupant_in(&self.selected_struct_types, atom))
+                .or_else(|| occupant_in(&self.selected_indexes, atom)),
+            Namespace::Unit => occupant_in(&self.selected_units, atom),
+        }
+    }
 
-impl ModuleScope {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one exhaustive typed dispatch installs every import-surface category"
-    )]
-    pub(super) fn apply_addition(
+    /// Install the names one `import` / `include` edge introduces.
+    ///
+    /// Each name must claim a free slot of the owner's collision unit: local
+    /// declarations, earlier imports, and the edge's own earlier names all
+    /// occupy it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::DuplicateImportName`] for the first
+    /// addition whose slot is already occupied.
+    pub(super) fn add_imports(
         &mut self,
-        owner: &DagId,
-        addition: ImportAddition,
+        symbols: &ModuleSymbols,
+        additions: Vec<ImportAddition>,
     ) -> Result<(), ModuleResolveError> {
-        match addition {
-            ImportAddition::ModuleAlias {
-                alias,
+        for addition in additions {
+            let namespace = addition.target.namespace();
+            let local = &addition.local;
+            if let Some(first) = symbols
+                .occupant(namespace, &local.value)
+                .or_else(|| self.occupant(namespace, &local.value))
+            {
+                return Err(ModuleResolveError::DuplicateImportName {
+                    owner: symbols.owner().clone(),
+                    namespace: namespace.label(),
+                    name: local.value.to_string(),
+                    first: first.span,
+                    duplicate: local.span,
+                });
+            }
+            self.install(addition);
+        }
+        Ok(())
+    }
+
+    fn install(&mut self, addition: ImportAddition) {
+        fn select<Ns: NameNamespace>(
+            table: &mut HashMap<NameDef<Ns>, Symbol<Ns>>,
+            local: Spanned<NameAtom>,
+            target: ResolvedName<Ns>,
+            visibility: BindableVisibility,
+        ) {
+            table.insert(
+                NameDef::classify(local.value),
+                Symbol::new(target, visibility, local.span, ()),
+            );
+        }
+
+        let ImportAddition {
+            local,
+            visibility,
+            target,
+        } = addition;
+        match target {
+            ImportTarget::ModuleAlias {
                 target,
                 access,
                 role,
-                visibility,
             } => {
-                // Module aliases and plugin aliases share one qualifier
-                // namespace: `alias.name` must have a single meaning.
-                if let Some(first) = self.plugin_aliases.get(&alias.value) {
-                    return Err(ModuleResolveError::DuplicateImportName {
-                        owner: owner.clone(),
-                        namespace: ModuleAliasNameNamespace::DISPLAY_NAME,
-                        name: alias.value.to_string(),
-                        first: first.span(),
-                        duplicate: alias.span,
-                    });
-                }
-                insert_module_alias(
-                    owner,
-                    &mut self.module_aliases,
-                    alias,
-                    target,
-                    access,
-                    role,
-                    visibility,
-                    ModuleAliasNameNamespace::DISPLAY_NAME,
-                )
+                self.module_aliases.insert(
+                    ModuleAliasName::classify(local.value),
+                    ModuleAliasTarget {
+                        target,
+                        span: local.span,
+                        access,
+                        role,
+                        visibility,
+                    },
+                );
             }
-            ImportAddition::Decl {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_decls,
-                local,
-                target,
-                visibility,
-                DeclNameNamespace::DISPLAY_NAME,
-            ),
-            ImportAddition::Dimension {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_dimensions,
-                local,
-                target,
-                visibility,
-                DimNameNamespace::DISPLAY_NAME,
-            ),
-            ImportAddition::Unit {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_units,
-                local,
-                target,
-                visibility,
-                UnitNameNamespace::DISPLAY_NAME,
-            ),
-            ImportAddition::StructType {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_struct_types,
-                local,
-                target,
-                visibility,
-                StructTypeNameNamespace::DISPLAY_NAME,
-            ),
-            ImportAddition::Index {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_indexes,
-                local,
-                target,
-                visibility,
-                IndexNameNamespace::DISPLAY_NAME,
-            ),
-            ImportAddition::Constructor {
-                local,
-                target,
-                visibility,
-            } => insert_imported_symbol(
-                owner,
-                &mut self.selected_constructors,
-                local,
-                target,
-                visibility,
-                ConstructorNameNamespace::DISPLAY_NAME,
-            ),
+            ImportTarget::Decl(target) => {
+                select(&mut self.selected_decls, local, target, visibility);
+            }
+            ImportTarget::Dimension(target) => {
+                select(&mut self.selected_dimensions, local, target, visibility);
+            }
+            ImportTarget::Unit(target) => {
+                select(&mut self.selected_units, local, target, visibility);
+            }
+            ImportTarget::StructType(target) => {
+                select(&mut self.selected_struct_types, local, target, visibility);
+            }
+            ImportTarget::Index(target) => {
+                select(&mut self.selected_indexes, local, target, visibility);
+            }
+            ImportTarget::Constructor(target) => {
+                select(&mut self.selected_constructors, local, target, visibility);
+            }
         }
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "module aliases preserve target, access, role, visibility, and diagnostic context"
-)]
-fn insert_module_alias(
-    owner: &DagId,
-    map: &mut HashMap<ModuleAliasName, ModuleAliasTarget>,
-    alias: Spanned<ModuleAliasName>,
-    target: DagId,
-    access: Access,
-    role: ModuleAliasRole,
-    visibility: BindableVisibility,
-    namespace_name: &'static str,
-) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(&alias.value) {
-        return Err(ModuleResolveError::DuplicateImportName {
-            owner: owner.clone(),
-            namespace: namespace_name,
-            name: alias.value.to_string(),
-            first: first.span(),
-            duplicate: alias.span,
-        });
-    }
-    map.insert(
-        alias.value,
-        ModuleAliasTarget {
-            target,
-            span: alias.span,
-            access,
-            role,
-            visibility,
-        },
-    );
-    Ok(())
+/// One local name an `import` / `include` edge introduces.
+#[derive(Debug, Clone)]
+pub(super) struct ImportAddition {
+    /// The local spelling and its source span.
+    pub(super) local: Spanned<NameAtom>,
+    /// Visibility of the local name when the owner is itself imported.
+    pub(super) visibility: BindableVisibility,
+    /// What the local name denotes.
+    pub(super) target: ImportTarget,
 }
 
-/// Register the plugin aliases declared by a module's `import plugin`
-/// declarations into its scope.
+/// What one import-introduced local name denotes.
+#[derive(Debug, Clone)]
+pub(super) enum ImportTarget {
+    ModuleAlias {
+        target: DagId,
+        access: Access,
+        role: ModuleAliasRole,
+    },
+    Decl(ResolvedDeclName),
+    Dimension(ResolvedDimName),
+    Unit(ResolvedUnitName),
+    StructType(ResolvedStructTypeName),
+    Index(ResolvedIndexName),
+    Constructor(ResolvedConstructorName),
+}
+
+impl ImportTarget {
+    /// The collision unit the local name occupies.
+    pub(super) const fn namespace(&self) -> Namespace {
+        match self {
+            Self::ModuleAlias { .. } | Self::Decl(_) | Self::Constructor(_) => Namespace::Term,
+            Self::Dimension(_) | Self::StructType(_) | Self::Index(_) => Namespace::Static,
+            Self::Unit(_) => Namespace::Unit,
+        }
+    }
+}
+
+/// The module alias an `import` / module-form `include` binds: the explicit
+/// `as` name, or else the path's last segment.
+pub(super) fn module_alias(
+    path: &ModulePath,
+    alias: Option<&Spanned<ModuleAliasName>>,
+) -> Spanned<ModuleAliasName> {
+    alias.cloned().unwrap_or_else(|| {
+        Spanned::new(
+            ModuleAliasName::classify(path.leaf().name.atom().clone()),
+            path.leaf().span,
+        )
+    })
+}
+
+/// Claim the Term slots of the aliases a module's declarations introduce and
+/// register its plugin aliases.
 ///
-/// Rejects duplicate aliases across plugin imports and duplicate function
-/// names inside one plugin block. Collisions with module-import aliases are
-/// caught when the module alias registers (imports register after modules).
-pub(super) fn register_plugin_imports(
-    owner: &DagId,
+/// Every `import` / module-form `include` alias (explicit `as` or the path's
+/// last segment) and every `import plugin` alias occupies the declaring
+/// module's Term namespace whether or not the loader resolves its target to a
+/// registered module, so an alias and a local declaration of the same name are
+/// rejected uniformly. The one exception is an alias that re-spells the local
+/// `dag` its single-segment path names (`include d(...)`, `import d`): it
+/// shares that declaration's name rather than introducing a second one.
+///
+/// Import and include aliases are installed later, when their loader-resolved
+/// edge registers (see [`ModuleScope::add_imports`]); plugin aliases have no
+/// edge and are installed here.
+///
+/// # Errors
+///
+/// Returns [`ModuleResolveError::DuplicateImportName`] when an alias collides
+/// with a local declaration or an earlier plugin alias, and
+/// [`ModuleResolveError::DuplicateSymbol`] for a function declared twice in
+/// one plugin block.
+pub(super) fn declare_aliases(
     scope: &mut ModuleScope,
     symbols: &ModuleSymbols,
     declarations: &[ast::Declaration],
 ) -> Result<(), ModuleResolveError> {
+    let owner = symbols.owner();
     for decl in declarations {
-        let ast::DeclKind::PluginImport(plugin) = &decl.kind else {
-            continue;
+        let (alias, respells_path) = match &decl.kind {
+            ast::DeclKind::Import(ast::ImportDecl::Module { path, alias, .. })
+            | ast::DeclKind::Include(ast::IncludeDecl {
+                path,
+                kind: ImportKind::Module { alias },
+                ..
+            }) => {
+                let alias = module_alias(path, alias.as_ref());
+                let respells_path =
+                    path.segments().len() == 1 && path.leaf().name.atom() == alias.value.atom();
+                (alias, respells_path)
+            }
+            ast::DeclKind::PluginImport(plugin) => (plugin.alias.clone(), false),
+            _ => continue,
         };
-        let alias_atom = plugin.alias.value.atom();
-        let local_term_span = symbols
-            .decls
-            .get(&NameDef::classify(alias_atom.clone()))
-            .map(ModuleDeclSymbol::span)
-            .or_else(|| {
-                symbols
-                    .constructors
-                    .get(&NameDef::classify(alias_atom.clone()))
-                    .map(ModuleSymbolLookup::span)
-            });
-        if let Some(first) = local_term_span.or_else(|| {
-            scope
-                .plugin_aliases
-                .get(&plugin.alias.value)
-                .map(PluginAliasTarget::span)
-        }) {
+        let plugin_alias = match &decl.kind {
+            ast::DeclKind::PluginImport(_) => scope.plugin_aliases.get(&alias.value),
+            _ => None,
+        };
+        let names_local_dag = respells_path && symbols.declares_dag(alias.value.atom());
+        if let Some(first) = symbols
+            .occupant(Namespace::Term, alias.value.atom())
+            .filter(|_| !names_local_dag)
+            .map(|occupant| occupant.span)
+            .or_else(|| plugin_alias.map(|target| target.span))
+        {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
-                namespace: "Term",
-                name: plugin.alias.value.to_string(),
+                namespace: Namespace::Term.label(),
+                name: alias.value.to_string(),
                 first,
-                duplicate: plugin.alias.span,
+                duplicate: alias.span,
             });
         }
-        let mut functions = HashMap::new();
-        for function in &plugin.functions {
-            if let Some(first) = functions.insert(function.name.value.clone(), function.name.span) {
-                return Err(ModuleResolveError::DuplicateSymbol {
-                    owner: owner.clone(),
-                    namespace: crate::syntax::function_name::FnNameNamespace::DISPLAY_NAME,
-                    name: function.name.value.to_string(),
-                    first,
-                    duplicate: function.name.span,
-                });
+        if let ast::DeclKind::PluginImport(plugin) = &decl.kind {
+            let mut functions = HashMap::new();
+            for function in &plugin.functions {
+                if let Some(first) =
+                    functions.insert(function.name.value.clone(), function.name.span)
+                {
+                    return Err(ModuleResolveError::DuplicateSymbol {
+                        owner: owner.clone(),
+                        namespace: crate::syntax::function_name::FnNameNamespace::DISPLAY_NAME,
+                        name: function.name.value.to_string(),
+                        first,
+                        duplicate: function.name.span,
+                    });
+                }
             }
+            scope.plugin_aliases.insert(
+                alias.value,
+                PluginAliasTarget {
+                    path: crate::plugin_identity::PluginIdentity::resolve(
+                        &plugin.path.value,
+                        owner.package(),
+                    ),
+                    span: alias.span,
+                    functions,
+                },
+            );
         }
-        scope.plugin_aliases.insert(
-            plugin.alias.value.clone(),
-            PluginAliasTarget {
-                path: crate::plugin_identity::PluginIdentity::resolve(
-                    &plugin.path.value,
-                    owner.package(),
-                ),
-                span: plugin.alias.span,
-                functions,
-            },
-        );
     }
-    Ok(())
-}
-
-fn insert_imported_symbol<Ns: NameNamespace>(
-    owner: &DagId,
-    map: &mut HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
-    local: Spanned<NameDef<Ns>>,
-    target: ResolvedName<Ns>,
-    visibility: BindableVisibility,
-    namespace_name: &'static str,
-) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(&local.value) {
-        return Err(ModuleResolveError::DuplicateImportName {
-            owner: owner.clone(),
-            namespace: namespace_name,
-            name: local.value.to_string(),
-            first: first.span(),
-            duplicate: local.span,
-        });
-    }
-    map.insert(
-        local.value,
-        ImportedSymbol::new(target, local.span, visibility),
-    );
     Ok(())
 }

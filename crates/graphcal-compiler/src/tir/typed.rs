@@ -1698,7 +1698,8 @@ impl HirPolicyChecker<'_> {
             .get(self.ctx.owner)
             .and_then(|symbols| symbols.indexes().get(&index.to_unowned_def_name()))
             .is_some_and(|symbol| {
-                symbol.visibility().is_bindable() && !symbol.variants().is_empty()
+                // A bindable index with declared variants.
+                symbol.visibility().is_bindable() && !symbol.data().is_empty()
             });
         if is_pub_bind {
             return Err(GraphcalError::PubIndexVariantLiteral {

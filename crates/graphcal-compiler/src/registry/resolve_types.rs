@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, FigureDecl, LayerDecl, PlotDecl};
+use crate::resolve::namespace::Namespace;
 use crate::syntax::ast::{DeclExposure, IntroducedName};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -264,17 +265,9 @@ enum ExternalDeclRole {
     InputPort,
 }
 
-/// Namespace component of one typed external-surface slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ExternalNamespace {
-    Static,
-    Term,
-    Unit,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ExternalDeclSlot {
-    namespace: ExternalNamespace,
+    namespace: Namespace,
     name: NameAtom,
 }
 
@@ -294,33 +287,18 @@ impl ExternalDeclSurface {
         name: NameAtom,
         exposure: DeclExposure,
     ) {
-        match (exposure, namespace) {
-            (DeclExposure::Private, _) => {}
-            (DeclExposure::InputPort, _) => {
-                self.insert(ExternalNamespace::Term, name, ExternalDeclRole::InputPort);
+        match exposure {
+            DeclExposure::Private => {}
+            DeclExposure::InputPort => {
+                self.insert(Namespace::Term, name, ExternalDeclRole::InputPort);
             }
-            (DeclExposure::ExplicitExport, ImportItemNamespace::Term) => {
+            DeclExposure::ExplicitExport => {
                 self.insert(
-                    ExternalNamespace::Term,
+                    Namespace::of(namespace),
                     name,
                     ExternalDeclRole::ExplicitExport,
                 );
             }
-            (
-                DeclExposure::ExplicitExport,
-                ImportItemNamespace::Type
-                | ImportItemNamespace::Dimension
-                | ImportItemNamespace::Index,
-            ) => self.insert(
-                ExternalNamespace::Static,
-                name,
-                ExternalDeclRole::ExplicitExport,
-            ),
-            (DeclExposure::ExplicitExport, ImportItemNamespace::Unit) => self.insert(
-                ExternalNamespace::Unit,
-                name,
-                ExternalDeclRole::ExplicitExport,
-            ),
         }
     }
 
@@ -332,13 +310,13 @@ impl ExternalDeclSurface {
     /// Record an explicitly exported flat Term.
     pub fn insert_explicit_export(&mut self, name: DeclName) {
         self.insert(
-            ExternalNamespace::Term,
+            Namespace::Term,
             name.into_atom(),
             ExternalDeclRole::ExplicitExport,
         );
     }
 
-    fn insert(&mut self, namespace: ExternalNamespace, name: NameAtom, role: ExternalDeclRole) {
+    fn insert(&mut self, namespace: Namespace, name: NameAtom, role: ExternalDeclRole) {
         let slot = ExternalDeclSlot { namespace, name };
         match self.roles.entry(slot) {
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -350,7 +328,7 @@ impl ExternalDeclSurface {
         }
     }
 
-    fn role(&self, namespace: ExternalNamespace, name: &NameAtom) -> Option<ExternalDeclRole> {
+    fn role(&self, namespace: Namespace, name: &NameAtom) -> Option<ExternalDeclRole> {
         self.roles
             .get(&ExternalDeclSlot {
                 namespace,
@@ -362,38 +340,38 @@ impl ExternalDeclSurface {
     /// Whether a flat Term carries an explicit export.
     #[must_use]
     pub fn is_explicit_export(&self, name: &DeclName) -> bool {
-        self.role(ExternalNamespace::Term, name.atom()) == Some(ExternalDeclRole::ExplicitExport)
+        self.role(Namespace::Term, name.atom()) == Some(ExternalDeclRole::ExplicitExport)
     }
 
     /// Whether a Static entity carries an explicit export.
     #[must_use]
     pub fn is_static_explicit_export(&self, name: &NameAtom) -> bool {
-        self.role(ExternalNamespace::Static, name) == Some(ExternalDeclRole::ExplicitExport)
+        self.role(Namespace::Static, name) == Some(ExternalDeclRole::ExplicitExport)
     }
 
     /// Whether a Unit carries an explicit export.
     #[must_use]
     pub fn is_unit_explicit_export(&self, name: &NameAtom) -> bool {
-        self.role(ExternalNamespace::Unit, name) == Some(ExternalDeclRole::ExplicitExport)
+        self.role(Namespace::Unit, name) == Some(ExternalDeclRole::ExplicitExport)
     }
 
     /// Whether the Term is a named `param` input port.
     #[must_use]
     pub fn is_input_port(&self, name: &DeclName) -> bool {
-        self.role(ExternalNamespace::Term, name.atom()) == Some(ExternalDeclRole::InputPort)
+        self.role(Namespace::Term, name.atom()) == Some(ExternalDeclRole::InputPort)
     }
 
     /// Whether external Term syntax can resolve the declaration in either role.
     #[must_use]
     pub fn is_externally_nameable(&self, name: &DeclName) -> bool {
-        self.role(ExternalNamespace::Term, name.atom()).is_some()
+        self.role(Namespace::Term, name.atom()).is_some()
     }
 
     /// Whether a Term may be selected from an instance output surface.
     #[must_use]
     pub fn can_select_output(&self, name: &DeclName) -> bool {
         matches!(
-            self.role(ExternalNamespace::Term, name.atom()),
+            self.role(Namespace::Term, name.atom()),
             Some(ExternalDeclRole::ExplicitExport | ExternalDeclRole::InputPort)
         )
     }

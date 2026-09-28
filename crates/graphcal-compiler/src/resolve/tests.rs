@@ -173,7 +173,7 @@ fn same_named_type_and_constructor_remain_distinct() {
     );
     assert!(
         symbols
-            .constructors()
+            .constructors
             .contains_key(&ConstructorName::expect_valid("T"))
     );
 }
@@ -256,7 +256,7 @@ fn unit_import_colliding_with_local_unit_is_rejected() {
         err,
         ModuleResolveError::DuplicateImportName {
             owner,
-            namespace: "UnitName",
+            namespace: "Unit",
             name,
             ..
         } if owner == main_id && name == "m"
@@ -286,7 +286,7 @@ fn constructor_import_colliding_with_local_constructor_is_rejected() {
         err,
         ModuleResolveError::DuplicateImportName {
             owner,
-            namespace: "ConstructorName",
+            namespace: "Term",
             name,
             ..
         } if owner == main_id && name == "Mk"
@@ -1241,30 +1241,88 @@ fn aliased_include_does_not_expose_same_named_file_module() {
 
 #[test]
 fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
-    let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let local_id = main_id.child("shared");
-    let lib = desugared_source("pub node result: Dimensionless = 1.0;");
     let main = desugared_source("dag shared {} import lib as shared;");
-    let local = first_dag(&main);
-    let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.add_module(local_id, &local.body).unwrap();
+    // The alias occupies the Term slot as soon as its declaration is
+    // collected, before (and whether or not) the loader registers the edge.
+    let result = ModuleResolver::default().add_module(main_id, &main.declarations);
     assert!(matches!(
-        resolver.register_import(&main_id, import, &lib_id),
+        result,
+        Err(ModuleResolveError::DuplicateImportName {
+            namespace: "Term",
+            ref name,
+            first,
+            duplicate,
+            ..
+        }) if name == "shared" && first.offset() < duplicate.offset()
+    ));
+}
+
+/// Collect `source` as module `main`, returning the duplicate Term name, if any.
+fn duplicate_term_alias(source: &str) -> Option<(String, Span, Span)> {
+    let main = desugared_source(source);
+    match ModuleResolver::default()
+        .add_module(DagId::root_in_package("test", "main"), &main.declarations)
+    {
+        Ok(()) => None,
         Err(ModuleResolveError::DuplicateImportName {
             namespace: "Term",
             name,
+            first,
+            duplicate,
             ..
-        }) if name == "shared"
-    ));
+        }) => Some((name, first, duplicate)),
+        Err(other) => panic!("unexpected resolver error for {source:?}: {other:?}"),
+    }
+}
+
+#[test]
+fn include_alias_colliding_with_local_node_is_rejected() {
+    // B4: a module-form include alias is a Term name like an import alias,
+    // even when it instantiates a local inline DAG whose edge the loader never
+    // registers. The node is the first definition; the alias the duplicate.
+    let source = "dag velocity { param r: Dimensionless; pub node v: Dimensionless = @r; }\n\
+                  include velocity(r: 1.0) as parking;\n\
+                  node parking: Dimensionless = 2.0;";
+    let (name, first, duplicate) = duplicate_term_alias(source).unwrap();
+    assert_eq!(name, "parking");
+    assert_eq!(
+        &source[first.offset()..first.offset() + first.len()],
+        "parking"
+    );
+    assert!(duplicate.offset() < first.offset());
+}
+
+#[test]
+fn every_alias_form_claims_a_term_slot() {
+    for source in [
+        "dag velocity {}\nimport velocity as parking;\nnode parking: Dimensionless = 2.0;",
+        "dag velocity {}\ninclude velocity() as parking;\ntype parking { parking }",
+        "import app.lib;\nnode lib: Dimensionless = 2.0;",
+        "include app.lib();\nconst node lib: Dimensionless = 2.0;",
+        "import plugin \"p.wasm\" as parking { fn f(x: Dimensionless) -> Dimensionless; }\nnode parking: Dimensionless = 2.0;",
+    ] {
+        assert!(
+            duplicate_term_alias(source).is_some(),
+            "{source:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn alias_respelling_its_local_dag_is_that_dags_own_name() {
+    for source in [
+        "dag velocity {}\ninclude velocity();",
+        "dag velocity {}\ninclude velocity() as velocity;",
+        "dag velocity {}\nimport velocity;",
+    ] {
+        assert_eq!(duplicate_term_alias(source), None, "{source:?}");
+    }
+    // A single-segment path that names a non-DAG local is still a collision.
+    assert!(
+        duplicate_term_alias("node velocity: Dimensionless = 1.0;\ninclude velocity();").is_some()
+    );
 }
 
 #[test]
