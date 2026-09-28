@@ -365,17 +365,21 @@ fn loader_manifest_error(error: impl std::fmt::Display) -> CompileError {
     })
 }
 
-/// Fold a parse outcome into the loader's error type.
+/// Parse the text of `named_source`, rendering a parse failure against that
+/// same named source.
 ///
-/// Transitional boundary: until the loader returns `Outcome<_>` itself,
-/// cancellation still travels inside `CompileError` (as `GraphcalError::Cancelled`).
-fn parse_outcome_error(
-    outcome: Outcome<graphcal_compiler::syntax::parser::ParseError>,
-) -> CompileError {
-    match outcome {
-        Outcome::Cancelled => graphcal_compiler::cancellation::Cancelled.into(),
-        Outcome::Failed(error) => error.into(),
-    }
+/// Until the loader returns `Outcome<_>` itself, cancellation still travels
+/// inside `CompileError` (as `GraphcalError::Cancelled`).
+fn parse_named_source(
+    named_source: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::syntax::ast::File, CompileError> {
+    graphcal_compiler::syntax::parser::Parser::new(named_source.inner())
+        .parse_file_with_cancellation(cancellation)
+        .map_err(|outcome| match outcome {
+            Outcome::Cancelled => graphcal_compiler::cancellation::Cancelled.into(),
+            Outcome::Failed(error) => CompileError::parse(error, named_source.clone()),
+        })
 }
 
 /// Loader-resolved identities for one module path.
@@ -1235,9 +1239,7 @@ impl LoadedProject {
         cancellation.checkpoint()?;
         let source = Arc::new(source.to_string());
         let named_source = NamedSource::new(name, Arc::clone(&source));
-        let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
-            .parse_file_with_cancellation(cancellation)
-            .map_err(parse_outcome_error)?;
+        let raw_ast = parse_named_source(&named_source, cancellation)?;
         cancellation.checkpoint()?;
         let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
         cancellation.checkpoint()?;
@@ -2214,9 +2216,7 @@ fn read_source_file(
         })?;
     let source = Arc::new(source_str);
     let named_source = NamedSource::new(name, Arc::clone(&source));
-    let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
-        .parse_file_with_cancellation(cancellation)
-        .map_err(parse_outcome_error)?;
+    let raw_ast = parse_named_source(&named_source, cancellation)?;
     let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
     Ok(ParsedFile {
         source,
@@ -4106,15 +4106,15 @@ node result: Dimensionless = @calculation()::out;
             };
             let name = file.display().to_string();
             let source = Arc::new((*text).to_string());
-            let parsed = match graphcal_compiler::syntax::parser::Parser::with_name(&source, &name)
-                .parse_file()
+            let named_source = NamedSource::new(name.as_str(), Arc::clone(&source));
+            let parsed = match graphcal_compiler::syntax::parser::Parser::new(&source).parse_file()
             {
                 Ok(raw) => ParsedFile {
-                    named_source: NamedSource::new(name.as_str(), Arc::clone(&source)),
+                    named_source,
                     source,
                     ast: graphcal_compiler::desugar::desugared_ast::File::from(raw),
                 },
-                Err(error) => return Ok(Err(error.into())),
+                Err(error) => return Ok(Err(CompileError::parse(error, named_source))),
             };
             let location = ModuleLocation {
                 package: DagPackageId::new("pkg"),
@@ -4210,7 +4210,7 @@ node result: Dimensionless = @calculation()::out;
     fn project_module_resolution_is_typed_and_span_free() {
         let sources = ScriptedSources::new(&[("lib", ""), ("nested/deep", "")]);
         let resolve = |text: &str| {
-            let parsed = graphcal_compiler::syntax::parser::Parser::with_name(text, "t.gcl")
+            let parsed = graphcal_compiler::syntax::parser::Parser::new(text)
                 .parse_file()
                 .unwrap();
             let graphcal_compiler::syntax::ast::DeclKind::Import(import) =
@@ -4261,10 +4261,9 @@ node result: Dimensionless = @calculation()::out;
                 package_name: "pkg".to_string(),
             })
         );
-        let parsed =
-            graphcal_compiler::syntax::parser::Parser::with_name("import pkg.lib::{x};", "t.gcl")
-                .parse_file()
-                .unwrap();
+        let parsed = graphcal_compiler::syntax::parser::Parser::new("import pkg.lib::{x};")
+            .parse_file()
+            .unwrap();
         let graphcal_compiler::syntax::ast::DeclKind::Import(import) = &parsed.declarations[0].kind
         else {
             panic!("expected an import");

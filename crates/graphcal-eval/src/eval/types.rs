@@ -9,6 +9,7 @@ use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
+use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
@@ -17,6 +18,7 @@ use graphcal_compiler::registry::unit::PositiveFiniteScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::parser::{ParseError, ParseErrorKind};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -1017,9 +1019,10 @@ pub enum PlotFieldValue {
 /// parameter binding.
 #[derive(Debug, Error, Diagnostic)]
 pub enum CompileError {
+    /// A source file failed to parse; rendered against the text it indexes.
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Parse(#[from] graphcal_compiler::syntax::parser::ParseError),
+    Parse(RenderableDiagnostic<ParseErrorKind>),
 
     #[error(transparent)]
     #[diagnostic(transparent)]
@@ -1053,6 +1056,14 @@ impl From<graphcal_compiler::cancellation::Cancelled> for CompileError {
 }
 
 impl CompileError {
+    /// Attach the named source a parse error was produced from.
+    #[must_use]
+    pub fn parse(error: ParseError, source: NamedSource<Arc<String>>) -> Self {
+        Self::Parse(RenderableDiagnostic::in_source(
+            error.kind, error.span, source,
+        ))
+    }
+
     /// Whether this outcome represents cooperative cancellation rather than a
     /// Graphcal source error.
     #[must_use]
@@ -1062,9 +1073,7 @@ impl CompileError {
 
     /// Return the `NamedSource` embedded in this error, if any.
     ///
-    /// Forwards to the inner
-    /// [`ParseError::named_source`](graphcal_compiler::syntax::parser::ParseError::named_source)
-    /// or
+    /// Forwards to the parse diagnostic's attached source or
     /// [`GraphcalError::named_source`](graphcal_compiler::registry::error::GraphcalError::named_source).
     /// When present, the returned
     /// `NamedSource` pairs the file's name with the exact source text whose
@@ -1072,7 +1081,7 @@ impl CompileError {
     /// can build a line index over the right text without having to look it
     /// up by name.
     ///
-    /// `ParseError` and external-binding diagnostics always carry a source;
+    /// Parse and external-binding diagnostics always carry a source;
     /// `GraphcalError` may return `None` for a few variants representing
     /// source-less errors (e.g. `FileNotFound`, `CircularImport`).
     #[must_use]

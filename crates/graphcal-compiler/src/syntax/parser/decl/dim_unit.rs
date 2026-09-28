@@ -5,7 +5,7 @@ use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, ParseError, Parser};
 
 impl Parser<'_> {
     // --- dimension and unit declarations ---
@@ -119,9 +119,9 @@ impl Parser<'_> {
         if require_definition && definition.is_none() {
             // Non-base units need a scale body; use `base unit` for a canonical unit.
             let err_span = name.span;
-            return Err(self.unexpected_token(
-                "`=` followed by a unit definition (use `base unit` for a no-body declaration)",
-                ";",
+            return Err(Self::unexpected(
+                Expected::UnitDefinition,
+                Token::Semicolon,
                 err_span,
             ));
         }

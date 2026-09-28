@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::syntax::builtin_type_name::BuiltinTypeName;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::token::{ContextualKeyword, Token};
@@ -15,17 +16,14 @@ use crate::cursor_context::{
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
-/// Built-ins available while editing a type annotation. `Fin` is offered for
-/// nested Index positions such as `T[Fin(N)]`.
-const TYPE_KEYWORDS: &[&str] = &[
-    "Dimensionless",
-    "Bool",
-    "Int",
-    "Datetime",
-    "Complex",
-    "Key",
-    "Fin",
-];
+/// Built-ins available while editing a type annotation: the prelude's
+/// built-in types, plus `Fin` for nested Index positions such as `T[Fin(N)]`.
+fn type_keywords() -> impl Iterator<Item = &'static str> {
+    BuiltinTypeName::ALL
+        .into_iter()
+        .map(BuiltinTypeName::as_str)
+        .chain([ContextualKeyword::Fin.as_str()])
+}
 
 struct VisibleDefinition<'a> {
     label: Cow<'a, str>,
@@ -311,7 +309,7 @@ fn complete_graph_refs(
 
 /// Complete type names (after `:`).
 fn complete_types(analysis: &AnalysisResult) -> Vec<CompletionItem> {
-    let mut items = keyword_items(TYPE_KEYWORDS);
+    let mut items = keyword_items(&type_keywords().collect::<Vec<_>>());
     items.extend(build_definition_items(analysis, |cat| match cat {
         SymbolCategory::Dimension => Some(CompletionItemKind::CLASS),
         SymbolCategory::StructType => Some(CompletionItemKind::STRUCT),

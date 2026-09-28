@@ -3,7 +3,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a dag declaration: `dag name { declarations... }`
@@ -21,7 +21,7 @@ impl Parser<'_> {
         let mut body = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace) {
             if self.lexer.peek().is_none() {
-                return Err(self.unexpected_eof("`}` to close `dag` block"));
+                return Err(self.unexpected_eof(Expected::DagBlockClose));
             }
             body.push(self.parse_declaration()?);
         }

@@ -219,16 +219,40 @@ pub enum MarkType {
     Tick,
 }
 
+impl MarkType {
+    /// Every mark type, in the order the grammar lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Point,
+        Self::Line,
+        Self::Bar,
+        Self::Area,
+        Self::Rect,
+        Self::Tick,
+    ];
+
+    /// Source spelling of the mark type.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Point => "point",
+            Self::Line => "line",
+            Self::Bar => "bar",
+            Self::Area => "area",
+            Self::Rect => "rect",
+            Self::Tick => "tick",
+        }
+    }
+
+    /// The mark type spelled `spelling`, if any.
+    #[must_use]
+    pub fn parse(spelling: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mark| mark.as_str() == spelling)
+    }
+}
+
 impl std::fmt::Display for MarkType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Point => write!(f, "point"),
-            Self::Line => write!(f, "line"),
-            Self::Bar => write!(f, "bar"),
-            Self::Area => write!(f, "area"),
-            Self::Rect => write!(f, "rect"),
-            Self::Tick => write!(f, "tick"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -246,19 +270,48 @@ pub enum EncodingChannel {
     Tooltip,
 }
 
+impl EncodingChannel {
+    /// Every encoding channel, in the order the grammar lists them.
+    pub const ALL: [Self; 9] = [
+        Self::X,
+        Self::Y,
+        Self::Color,
+        Self::Size,
+        Self::Shape,
+        Self::Opacity,
+        Self::Detail,
+        Self::Text,
+        Self::Tooltip,
+    ];
+
+    /// Source spelling of the channel.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Color => "color",
+            Self::Size => "size",
+            Self::Shape => "shape",
+            Self::Opacity => "opacity",
+            Self::Detail => "detail",
+            Self::Text => "text",
+            Self::Tooltip => "tooltip",
+        }
+    }
+
+    /// The channel spelled `spelling`, if any.
+    #[must_use]
+    pub fn parse(spelling: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|channel| channel.as_str() == spelling)
+    }
+}
+
 impl std::fmt::Display for EncodingChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::X => write!(f, "x"),
-            Self::Y => write!(f, "y"),
-            Self::Color => write!(f, "color"),
-            Self::Size => write!(f, "size"),
-            Self::Shape => write!(f, "shape"),
-            Self::Opacity => write!(f, "opacity"),
-            Self::Detail => write!(f, "detail"),
-            Self::Text => write!(f, "text"),
-            Self::Tooltip => write!(f, "tooltip"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -758,13 +811,32 @@ pub enum GenericConstraint {
     Type,
 }
 
-impl std::fmt::Display for GenericConstraint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl GenericConstraint {
+    /// Every generic constraint, in the order the grammar lists them.
+    pub const ALL: [Self; 4] = [Self::Dim, Self::Index, Self::Nat, Self::Type];
+
+    /// Source spelling of the constraint.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::Dim => "Dim",
             Self::Index => "Index",
             Self::Nat => "Nat",
             Self::Type => "Type",
-        })
+        }
+    }
+
+    /// The constraint spelled `spelling`, if any.
+    #[must_use]
+    pub fn parse(spelling: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|constraint| constraint.as_str() == spelling)
+    }
+}
+
+impl std::fmt::Display for GenericConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }

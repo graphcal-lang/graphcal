@@ -6,7 +6,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, Found, ParseError, ParseErrorKind, Parser, PlotFieldContext};
 
 impl Parser<'_> {
     /// Parse a plot declaration: `plot name = { mark: type, encode: { ... }, title: "..." };`
@@ -34,9 +34,9 @@ impl Parser<'_> {
             match field_keyword {
                 Some(ContextualKeyword::Mark) => {
                     if mark.is_some() {
-                        return Err(self.duplicate_plot_field(
-                            ContextualKeyword::Mark.as_str(),
-                            "plot declaration",
+                        return Err(Self::duplicate_plot_field(
+                            field_name.name,
+                            PlotFieldContext::PlotDeclaration,
                             field_start,
                         ));
                     }
@@ -45,9 +45,9 @@ impl Parser<'_> {
                 }
                 Some(ContextualKeyword::Encode) => {
                     if encode_seen {
-                        return Err(self.duplicate_plot_field(
-                            ContextualKeyword::Encode.as_str(),
-                            "plot declaration",
+                        return Err(Self::duplicate_plot_field(
+                            field_name.name,
+                            PlotFieldContext::PlotDeclaration,
                             field_start,
                         ));
                     }
@@ -59,9 +59,9 @@ impl Parser<'_> {
                         .iter()
                         .any(|p| p.name.value.as_str() == field_name.name.as_str())
                     {
-                        return Err(self.duplicate_plot_field(
-                            field_name.name.as_str(),
-                            "plot declaration",
+                        return Err(Self::duplicate_plot_field(
+                            field_name.name,
+                            PlotFieldContext::PlotDeclaration,
                             field_start,
                         ));
                     }
@@ -86,17 +86,14 @@ impl Parser<'_> {
         let span = start_span.merge(semi_span);
 
         let Some(mark) = mark else {
-            return Err(self.unexpected_token("`mark` field in plot declaration", "}", span));
+            return Err(Self::unexpected(Expected::MarkField, Token::RBrace, span));
         };
 
         // A plot with no encoding channels renders an empty chart — almost
         // certainly a mistake; require at least one channel, symmetric with
         // the required `mark` field (#844).
         if encodings.is_empty() {
-            return Err(ParseError::MissingPlotEncoding {
-                src: self.named_source(),
-                span: span.into(),
-            });
+            return Err(ParseError::new(ParseErrorKind::MissingPlotEncoding, span));
         }
 
         Ok(Declaration {
@@ -120,20 +117,12 @@ impl Parser<'_> {
     ) -> Result<MarkSpec, ParseError> {
         let mark_ident = self.parse_any_ident()?;
         let mark_type_span = mark_ident.span;
-        let mark_type = match mark_ident.name.as_str() {
-            "point" => MarkType::Point,
-            "line" => MarkType::Line,
-            "bar" => MarkType::Bar,
-            "area" => MarkType::Area,
-            "rect" => MarkType::Rect,
-            "tick" => MarkType::Tick,
-            _ => {
-                return Err(self.unexpected_token(
-                    "`point`, `line`, `bar`, `area`, `rect`, or `tick`",
-                    mark_ident.name.as_str(),
-                    mark_type_span,
-                ));
-            }
+        let Some(mark_type) = MarkType::parse(mark_ident.name.as_str()) else {
+            return Err(Self::unexpected_token(
+                Expected::MarkType,
+                Found::Name(mark_ident.name),
+                mark_type_span,
+            ));
         };
 
         // Optional mark properties: { stroke_width: 2.0, opacity: 0.5 }
@@ -148,9 +137,9 @@ impl Parser<'_> {
                     .iter()
                     .any(|p: &PlotField| p.name.value.as_str() == prop_name.name.as_str())
                 {
-                    return Err(self.duplicate_plot_field(
-                        prop_name.name.as_str(),
-                        "mark properties",
+                    return Err(Self::duplicate_plot_field(
+                        prop_name.name,
+                        PlotFieldContext::MarkProperties,
                         prop_start,
                     ));
                 }
@@ -189,29 +178,18 @@ impl Parser<'_> {
         while self.lexer.peek() != Some(&Token::RBrace) {
             let channel_ident = self.parse_any_ident()?;
             let channel_span = channel_ident.span;
-            let channel = match channel_ident.name.as_str() {
-                "x" => EncodingChannel::X,
-                "y" => EncodingChannel::Y,
-                "color" => EncodingChannel::Color,
-                "size" => EncodingChannel::Size,
-                "shape" => EncodingChannel::Shape,
-                "opacity" => EncodingChannel::Opacity,
-                "detail" => EncodingChannel::Detail,
-                "text" => EncodingChannel::Text,
-                "tooltip" => EncodingChannel::Tooltip,
-                _ => {
-                    return Err(self.unexpected_token(
-                        "encoding channel (`x`, `y`, `color`, `size`, `shape`, `opacity`, `detail`, `text`, `tooltip`)",
-                        channel_ident.name.as_str(),
-                        channel_span,
-                    ));
-                }
+            let Some(channel) = EncodingChannel::parse(channel_ident.name.as_str()) else {
+                return Err(Self::unexpected_token(
+                    Expected::EncodingChannel,
+                    Found::Name(channel_ident.name),
+                    channel_span,
+                ));
             };
             self.expect(Token::Colon)?;
             if encodings.iter().any(|e: &Encoding| e.channel == channel) {
-                return Err(self.duplicate_plot_field(
-                    channel_ident.name.as_str(),
-                    "encode block",
+                return Err(Self::duplicate_plot_field(
+                    channel_ident.name,
+                    PlotFieldContext::EncodeBlock,
                     channel_span,
                 ));
             }

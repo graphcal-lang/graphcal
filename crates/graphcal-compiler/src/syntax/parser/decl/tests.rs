@@ -4,7 +4,9 @@ use crate::syntax::ast::{
     ImportItemNamespace, ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind,
     UnionMember, UnitConstness, Visibility,
 };
-use crate::syntax::parser::{MAX_NESTING_DEPTH, ParseError, Parser};
+use crate::syntax::parser::{
+    CompositionKind, Expected, Found, MAX_NESTING_DEPTH, ParseErrorKind, Parser,
+};
 
 fn type_members(t: &TypeDecl) -> &[UnionMember] {
     match &t.body {
@@ -563,7 +565,7 @@ fn parse_type_decl_empty_generic_params_rejected() {
     let error = Parser::new("type Marker<> { Marker }")
         .parse_file()
         .unwrap_err();
-    assert!(matches!(error, ParseError::UnexpectedToken { .. }));
+    assert!(matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }));
 }
 
 #[test]
@@ -729,8 +731,8 @@ fn nat_subtraction_in_generic_default_has_targeted_error() {
     let source = "type Buffer<N: Nat = N - 1> { Buffer(value: Dimensionless) }";
     let error = Parser::new(source).parse_file().unwrap_err();
     assert!(matches!(
-        error,
-        crate::syntax::parser::ParseError::NatSubtractionUnsupported { .. }
+        error.kind,
+        ParseErrorKind::NatSubtractionUnsupported
     ));
 }
 
@@ -764,7 +766,7 @@ fn parse_type_decl_no_attributes() {
 #[test]
 fn parse_empty_named_index_rejected() {
     let error = Parser::new("index Empty = {};").parse_file().unwrap_err();
-    assert!(matches!(error, ParseError::UnexpectedToken { .. }));
+    assert!(matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }));
 }
 
 #[test]
@@ -867,7 +869,7 @@ fn parse_empty_import_and_include_selectors_rejected() {
     for source in ["import helper::{};", "include helper()::{};"] {
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(error, ParseError::UnexpectedToken { .. }),
+            matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }),
             "unexpected error for `{source}`: {error:?}"
         );
     }
@@ -1114,7 +1116,9 @@ fn duplicate_include_binding_is_rejected() {
     let err = Parser::new("include combine(a: 1.0, a: 2.0) as result;")
         .parse_file()
         .unwrap_err();
-    assert!(matches!(err, ParseError::DuplicateDagBinding { name, .. } if name.as_str() == "a"));
+    assert!(
+        matches!(err.kind, ParseErrorKind::DuplicateDagBinding { name, .. } if name.as_str() == "a")
+    );
 }
 
 #[test]
@@ -1421,7 +1425,7 @@ fn deeply_nested_attribute_groups_exhaust_the_shared_nesting_budget() {
     );
     let error = Parser::new(&source).parse_file().unwrap_err();
     assert!(
-        matches!(error, ParseError::TooDeeplyNested { .. }),
+        matches!(error.kind, ParseErrorKind::TooDeeplyNested),
         "{error:?}"
     );
 }
@@ -1642,7 +1646,7 @@ fn deeply_nested_dag_declarations_exhaust_the_shared_nesting_budget() {
     let source = format!("{}{}", "dag nested {\n".repeat(depth), "}\n".repeat(depth));
     let error = Parser::new(&source).parse_file().unwrap_err();
     assert!(
-        matches!(error, ParseError::TooDeeplyNested { .. }),
+        matches!(error.kind, ParseErrorKind::TooDeeplyNested),
         "{error:?}"
     );
 }
@@ -1873,9 +1877,9 @@ fn plain_unit_decl_still_parses_as_dynamic_unit() {
 
 fn expect_duplicate_field(src: &str, field: &str) {
     let err = Parser::new(src).parse_file().unwrap_err();
-    match &err {
-        crate::syntax::parser::ParseError::DuplicatePlotField { field: f, .. } => {
-            assert_eq!(f, field, "wrong duplicate field reported: {err:?}");
+    match &err.kind {
+        ParseErrorKind::DuplicatePlotField { field: f, .. } => {
+            assert_eq!(f.as_str(), field, "wrong duplicate field reported: {err:?}");
         }
         other => panic!("expected DuplicatePlotField for `{field}`, got {other:?}"),
     }
@@ -1942,10 +1946,7 @@ fn plot_without_encode_is_rejected() {
         .parse_file()
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            crate::syntax::parser::ParseError::MissingPlotEncoding { .. }
-        ),
+        matches!(err.kind, ParseErrorKind::MissingPlotEncoding),
         "expected MissingPlotEncoding, got {err:?}"
     );
 }
@@ -1956,10 +1957,7 @@ fn plot_with_empty_encode_is_rejected() {
         .parse_file()
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            crate::syntax::parser::ParseError::MissingPlotEncoding { .. }
-        ),
+        matches!(err.kind, ParseErrorKind::MissingPlotEncoding),
         "expected MissingPlotEncoding, got {err:?}"
     );
 }
@@ -1971,8 +1969,10 @@ fn figure_without_plots_is_rejected() {
         .unwrap_err();
     assert!(
         matches!(
-            err,
-            crate::syntax::parser::ParseError::EmptyCompositionPlots { kind: "figure", .. }
+            err.kind,
+            ParseErrorKind::EmptyCompositionPlots {
+                kind: CompositionKind::Figure
+            }
         ),
         "expected EmptyCompositionPlots, got {err:?}"
     );
@@ -1985,8 +1985,10 @@ fn layer_with_empty_plots_is_rejected() {
         .unwrap_err();
     assert!(
         matches!(
-            err,
-            crate::syntax::parser::ParseError::EmptyCompositionPlots { kind: "layer", .. }
+            err.kind,
+            ParseErrorKind::EmptyCompositionPlots {
+                kind: CompositionKind::Layer
+            }
         ),
         "expected EmptyCompositionPlots, got {err:?}"
     );
@@ -2045,7 +2047,16 @@ fn parse_extern_binder_requires_constraint() {
     let err = Parser::new("import plugin \"p\" as x { fn f<D>(a: D) -> D; }")
         .parse_file()
         .unwrap_err();
-    assert!(format!("{err:?}").contains(':'), "{err:?}");
+    assert!(
+        matches!(
+            err.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::Token(crate::syntax::token::Token::Colon),
+                found: Found::Token(crate::syntax::token::Token::Gt),
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -2055,7 +2066,16 @@ fn parse_extern_binder_rejects_non_dim_constraint() {
     )
     .parse_file()
     .unwrap_err();
-    assert!(format!("{err:?}").contains("Dim"), "{err:?}");
+    assert!(
+        matches!(
+            &err.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::ExternBinderConstraint,
+                found: Found::Name(name),
+            } if name.as_str() == "Nat"
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -2063,7 +2083,16 @@ fn parse_plugin_import_requires_alias() {
     let err = Parser::new("import plugin \"p\" { fn f(x: Dimensionless) -> Dimensionless; }")
         .parse_file()
         .unwrap_err();
-    assert!(format!("{err:?}").contains("as"), "{err:?}");
+    assert!(
+        matches!(
+            err.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::Token(crate::syntax::token::Token::As),
+                found: Found::Token(crate::syntax::token::Token::LBrace),
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -2072,7 +2101,16 @@ fn parse_plugin_import_rejects_pub() {
         Parser::new("pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }")
             .parse_file()
             .unwrap_err();
-    assert!(format!("{err:?}").contains("whole-DAG import"), "{err:?}");
+    assert!(
+        matches!(
+            err.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::PubWholeDagImport,
+                found: Found::NonDagImport,
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -2080,7 +2118,16 @@ fn parse_plugin_import_rejects_non_fn_body() {
     let err = Parser::new("import plugin \"p\" as x { node y: Dimensionless = 1.0; }")
         .parse_file()
         .unwrap_err();
-    assert!(format!("{err:?}").contains("fn"), "{err:?}");
+    assert!(
+        matches!(
+            err.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::ExternFunctionOrBlockClose,
+                found: Found::Token(crate::syntax::token::Token::Node),
+            }
+        ),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -2116,11 +2163,14 @@ fn declaration_keywords_match_parser_dispatch() {
     for &keyword in Token::HARD_KEYWORDS {
         let source = keyword.to_string();
         let error = Parser::new(&source).parse_file().unwrap_err();
-        let rejected_at_start = matches!(
-            &error,
-            ParseError::UnexpectedToken { found, span, .. }
-                if span.offset() == 0 && *found == source
-        );
+        let rejected_at_start = error.span.offset() == 0
+            && matches!(
+                &error.kind,
+                ParseErrorKind::UnexpectedToken {
+                    expected: Expected::Declaration,
+                    found: Found::Token(found),
+                } if *found == keyword
+            );
         // `pub` is accepted at a declaration start as a visibility prefix,
         // not as a declaration keyword.
         let expected_to_start_declaration =

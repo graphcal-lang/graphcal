@@ -1,12 +1,12 @@
 use crate::syntax::ast::{DeclKind, Declaration, FigureDecl, Visibility};
 use crate::syntax::token::Token;
 
-use super::super::{ParseError, Parser};
+use super::super::{CompositionKind, ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a figure declaration: `figure name = { plots: [a, b], title: "..." };`
     pub(super) fn parse_figure(&mut self) -> Result<Declaration, ParseError> {
-        let parts = self.parse_composition_decl_parts(Token::Figure, "figure")?;
+        let parts = self.parse_composition_decl_parts(Token::Figure, CompositionKind::Figure)?;
         Ok(Declaration {
             doc: None,
             attributes: vec![],

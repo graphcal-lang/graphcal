@@ -31,10 +31,6 @@ pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
     PreludeBaseDimension::parse(name).map(|base| Dimension::base(BaseDimId::Prelude(base)))
 }
 
-/// Non-dimension type names provided by the Graphcal prelude.
-pub(crate) const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] =
-    &["Dimensionless", "Bool", "Int", "Datetime", "Complex", "Key"];
-
 /// Canonical synthetic owner for Graphcal prelude symbols.
 #[must_use]
 pub fn prelude_dag_id() -> DagId {

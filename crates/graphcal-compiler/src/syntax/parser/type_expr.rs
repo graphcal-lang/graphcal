@@ -4,6 +4,7 @@ use crate::syntax::ast::{
     GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
     TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
+use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
@@ -11,7 +12,7 @@ use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, SourceIdentifier, Token};
 use crate::syntax::type_name::GenericParamName;
 
-use super::{ParseError, Parser};
+use super::{Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 #[derive(Debug, Clone)]
 enum IndexExprAtom {
@@ -43,24 +44,26 @@ impl Parser<'_> {
                     constraints: vec![],
                 }
             } else {
-                let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
-                match bare_name.as_deref() {
-                    Some("Dimensionless") => TypeExpr {
+                let builtin = path
+                    .as_bare()
+                    .and_then(|ident| BuiltinTypeName::parse(ident.name.as_str()));
+                match builtin {
+                    Some(BuiltinTypeName::Dimensionless) => TypeExpr {
                         kind: TypeExprKind::Dimensionless,
                         constraints: vec![],
                         span: path_span,
                     },
-                    Some("Bool") => TypeExpr {
+                    Some(BuiltinTypeName::Bool) => TypeExpr {
                         kind: TypeExprKind::Bool,
                         constraints: vec![],
                         span: path_span,
                     },
-                    Some("Int") => TypeExpr {
+                    Some(BuiltinTypeName::Int) => TypeExpr {
                         kind: TypeExprKind::Int,
                         constraints: vec![],
                         span: path_span,
                     },
-                    Some("Datetime") => {
+                    Some(BuiltinTypeName::Datetime) => {
                         if self.lexer.peek() == Some(&Token::Lt) {
                             // Datetime<TT> — built-in parameterized type, kept in
                             // its own variant so TIR resolution doesn't need to
@@ -80,8 +83,8 @@ impl Parser<'_> {
                             }
                         }
                     }
-                    Some("Complex") => self.parse_complex_type(path_span)?,
-                    Some("Key") => self.parse_key_type(path_span)?,
+                    Some(BuiltinTypeName::Complex) => self.parse_complex_type(path_span)?,
+                    Some(BuiltinTypeName::Key) => self.parse_key_type(path_span)?,
                     _ if self.lexer.peek() == Some(&Token::Lt) => {
                         // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
                         // `<` cannot follow a complete dim expr in type position,
@@ -197,27 +200,21 @@ impl Parser<'_> {
             }
             let ident = self.parse_any_ident()?;
             let kind_span = ident.span;
-            let kind = match ident.name.as_str() {
-                "min" => crate::syntax::ast::DomainBoundKind::Min,
-                "max" => crate::syntax::ast::DomainBoundKind::Max,
-                _ => {
-                    return Err(ParseError::InvalidDomainBoundKey {
-                        key: ident.name.to_string(),
-                        src: self.named_source(),
-                        span: kind_span.into(),
-                    });
-                }
+            let Some(kind) = crate::syntax::ast::DomainBoundKind::parse(ident.name.as_str()) else {
+                return Err(ParseError::new(
+                    ParseErrorKind::InvalidDomainBoundKey { key: ident.name },
+                    kind_span,
+                ));
             };
             let seen_span = match kind {
                 crate::syntax::ast::DomainBoundKind::Min => &mut min_span,
                 crate::syntax::ast::DomainBoundKind::Max => &mut max_span,
             };
             if seen_span.replace(kind_span).is_some() {
-                return Err(ParseError::DuplicateDomainBound {
-                    bound: kind.to_string(),
-                    src: self.named_source(),
-                    span: kind_span.into(),
-                });
+                return Err(ParseError::new(
+                    ParseErrorKind::DuplicateDomainBound { bound: kind },
+                    kind_span,
+                ));
             }
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
@@ -236,9 +233,9 @@ impl Parser<'_> {
         }
         let (_, rparen_span) = self.expect(Token::RParen)?;
         if constraints.is_empty() {
-            return Err(self.unexpected_token(
-                "at least one domain constraint (e.g., `min: 0`)",
-                ")",
+            return Err(Self::unexpected(
+                Expected::DomainConstraint,
+                Token::RParen,
                 rparen_span,
             ));
         }
@@ -298,7 +295,7 @@ impl Parser<'_> {
 
         let end_span = terms
             .last()
-            .ok_or_else(|| self.unexpected_eof("dimension term"))?
+            .ok_or_else(|| self.unexpected_eof(Expected::DimensionTerm))?
             .term
             .span;
         Ok(DimExpr {
@@ -325,12 +322,12 @@ impl Parser<'_> {
                 .into_iter()
                 .map(|item| {
                     let inner_power = item.term.effective_power();
-                    let combined =
-                        (inner_power * outer_power).map_err(|_| ParseError::InvalidNumber {
-                            reason: "dimension exponent overflows `i32`".to_string(),
-                            src: self.named_source(),
-                            span: item.term.span.into(),
-                        })?;
+                    let combined = (inner_power * outer_power).map_err(|_| {
+                        Self::invalid_number(
+                            InvalidNumberReason::DimensionExponentOverflow,
+                            item.term.span,
+                        )
+                    })?;
                     Ok(DimExprItem {
                         op: item.op,
                         term: DimTerm {
@@ -407,12 +404,9 @@ impl Parser<'_> {
     ///
     /// Zero exponents (including `0/n`) are rejected (#648 N3): a zero power
     /// erases its term, so it is never meaningful.
-    fn integer_exponent(&self, value: i32, span: Span) -> Result<Rational, ParseError> {
-        Rational::integer(value).map_err(|_| ParseError::InvalidNumber {
-            reason: "exponent is out of range".to_string(),
-            src: self.named_source(),
-            span: span.into(),
-        })
+    fn integer_exponent(value: i32, span: Span) -> Result<Rational, ParseError> {
+        Rational::integer(value)
+            .map_err(|_| Self::invalid_number(InvalidNumberReason::ExponentOutOfRange, span))
     }
 
     fn parse_exponent_value(&mut self) -> Result<(Rational, Span), ParseError> {
@@ -424,28 +418,23 @@ impl Parser<'_> {
                 self.lexer.next_token();
                 let (den_neg, den, den_span) = self.parse_integer_literal()?;
                 let den = if den_neg { -den } else { den };
-                Rational::try_new(num, den).map_err(|_| ParseError::InvalidNumber {
-                    reason: "exponent denominator must be a non-zero integer".to_string(),
-                    src: self.named_source(),
-                    span: den_span.into(),
+                Rational::try_new(num, den).map_err(|_| {
+                    Self::invalid_number(InvalidNumberReason::ExponentZeroDenominator, den_span)
                 })?
             } else {
-                self.integer_exponent(num, num_span)?
+                Self::integer_exponent(num, num_span)?
             };
             let (_, rparen_span) = self.expect(Token::RParen)?;
             (value, num_span.merge(rparen_span))
         } else {
             let (neg, value, span) = self.parse_integer_literal()?;
             (
-                self.integer_exponent(if neg { -value } else { value }, span)?,
+                Self::integer_exponent(if neg { -value } else { value }, span)?,
                 span,
             )
         };
         if value.is_zero() {
-            return Err(ParseError::ZeroExponent {
-                src: self.named_source(),
-                span: span.into(),
-            });
+            return Err(ParseError::new(ParseErrorKind::ZeroExponent, span));
         }
         Ok((value, span))
     }
@@ -483,11 +472,10 @@ impl Parser<'_> {
             let (_, one_span) = self.expect(Token::Number)?;
             let text = self.lexer.slice_at(one_span);
             if text != "1" {
-                return Err(ParseError::InvalidNumber {
-                    reason: "only `1` can appear as a unit numerator (e.g. `1/min`)".to_string(),
-                    src: self.named_source(),
-                    span: one_span.into(),
-                });
+                return Err(Self::invalid_number(
+                    InvalidNumberReason::UnitNumeratorNotOne,
+                    one_span,
+                ));
             }
             self.expect(Token::Slash)?;
             let (terms, _, end) = self.parse_unit_term_or_group(MulDivOp::Div)?;
@@ -559,11 +547,10 @@ impl Parser<'_> {
                 .into_iter()
                 .map(|item| {
                     let combined_power = (item.effective_power() * outer_power).map_err(|_| {
-                        ParseError::InvalidNumber {
-                            reason: "unit exponent overflows `i32`".to_string(),
-                            src: self.named_source(),
-                            span: item.name.span.into(),
-                        }
+                        Self::invalid_number(
+                            InvalidNumberReason::UnitExponentOverflow,
+                            item.name.span,
+                        )
                     })?;
                     Ok(UnitExprItem {
                         op: Self::combine_ops(outer_op, item.op),
@@ -610,15 +597,13 @@ impl Parser<'_> {
         match self.lexer.next_token() {
             Some((Token::Number, span)) => {
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: i32 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected integer".to_string(),
-                    src: self.named_source(),
-                    span: span.into(),
+                let value: i32 = text.parse().map_err(|_| {
+                    Self::invalid_number(InvalidNumberReason::ExpectedInteger, span)
                 })?;
                 Ok((neg, value, span))
             }
-            Some((tok, span)) => Err(self.unexpected_token("integer", &tok.to_string(), span)),
-            None => Err(self.unexpected_eof("integer")),
+            Some((tok, span)) => Err(Self::unexpected(Expected::Integer, tok, span)),
+            None => Err(self.unexpected_eof(Expected::Integer)),
         }
     }
 
@@ -643,7 +628,7 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value = self.parse_finite_f64_literal(&text, span)?;
+                let value = Self::parse_finite_f64_literal(&text, span)?;
                 Ok(Expr::new(ExprKind::Number(value), span))
             }
             Some(Token::LParen) => {
@@ -652,11 +637,7 @@ impl Parser<'_> {
                 self.expect(Token::RParen)?;
                 Ok(expr)
             }
-            Some(_) => {
-                let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("number or `(`", &tok.to_string(), span))
-            }
-            None => Err(self.unexpected_eof("number or `(`")),
+            Some(_) | None => Err(self.unexpected_next(Expected::UnitScale)),
         }
     }
 
@@ -712,14 +693,19 @@ impl Parser<'_> {
                     return Ok(Self::ambiguous_generic_arg(&type_expr)
                         .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
                 }
-                Err(error @ ParseError::TooDeeplyNested { .. }) => return Err(error),
+                Err(
+                    error @ ParseError {
+                        kind: ParseErrorKind::TooDeeplyNested,
+                        ..
+                    },
+                ) => return Err(error),
                 Ok(_) | Err(_) => {}
             }
         }
 
         let nat = self.parse_nat_expr()?;
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
-            return Err(self.nat_subtraction_unsupported(span));
+            return Err(Self::nat_subtraction_unsupported(span));
         }
         Ok(GenericArg::Nat(nat))
     }
@@ -788,7 +774,7 @@ impl Parser<'_> {
 
         if !has_operator {
             if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
-                return Err(self.nat_subtraction_unsupported(span));
+                return Err(Self::nat_subtraction_unsupported(span));
             }
             // Simple case: a path is an index/type-level name; a literal is a
             // nat expression. Semantic resolution later decides whether the
@@ -803,7 +789,7 @@ impl Parser<'_> {
         // nat expressions currently accept only bare generic Nat variables;
         // qualified paths remain syntactic names in non-arithmetic index
         // position and are rejected here rather than flattened.
-        let first_nat = self.index_expr_atom_into_nat_expr(first_atom)?;
+        let first_nat = Self::index_expr_atom_into_nat_expr(first_atom)?;
         let mut lhs = self.parse_nat_mul_continuation(first_nat)?;
 
         // Then parse additive continuation: `+ term + term + ...`
@@ -815,7 +801,7 @@ impl Parser<'_> {
         }
 
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
-            return Err(self.nat_subtraction_unsupported(span));
+            return Err(Self::nat_subtraction_unsupported(span));
         }
         Ok(IndexExpr::BareNat(lhs))
     }
@@ -825,7 +811,7 @@ impl Parser<'_> {
     /// This is a complete multiplicative term (starts by parsing an atom).
     fn parse_nat_mul_term_in_index(&mut self) -> Result<NatExpr, ParseError> {
         let atom = self.parse_index_expr_atom()?;
-        let nat_expr = self.index_expr_atom_into_nat_expr(atom)?;
+        let nat_expr = Self::index_expr_atom_into_nat_expr(atom)?;
         self.parse_nat_mul_continuation(nat_expr)
     }
 
@@ -835,7 +821,7 @@ impl Parser<'_> {
         while self.lexer.peek() == Some(&Token::Star) {
             self.lexer.next_token(); // consume '*'
             let rhs_atom = self.parse_index_expr_atom()?;
-            let rhs = self.index_expr_atom_into_nat_expr(rhs_atom)?;
+            let rhs = Self::index_expr_atom_into_nat_expr(rhs_atom)?;
             let full_span = lhs.span().merge(rhs.span());
             lhs = NatExpr::mul(lhs, rhs, full_span);
         }
@@ -848,11 +834,9 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected non-negative integer in index position".to_string(),
-                    src: self.named_source(),
-                    span: span.into(),
-                })?;
+                let value: u64 = text
+                    .parse()
+                    .map_err(|_| Self::invalid_number(InvalidNumberReason::IndexPosition, span))?;
                 Ok(IndexExprAtom::Nat(NatExpr::Literal(value, span)))
             }
             Some(token) if token.is_identifier() => {
@@ -860,25 +844,24 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "integer literal or type-level name path",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(Self::unexpected(Expected::IndexExprAtom, tok, span))
             }
         }
     }
 
-    fn index_expr_atom_into_nat_expr(&self, atom: IndexExprAtom) -> Result<NatExpr, ParseError> {
+    fn index_expr_atom_into_nat_expr(atom: IndexExprAtom) -> Result<NatExpr, ParseError> {
         match atom {
             IndexExprAtom::Nat(nat_expr) => Ok(nat_expr),
             IndexExprAtom::Path(path) => match path.into_bare() {
                 Ok(ident) => Ok(NatExpr::Var(ident)),
-                Err(path) => Err(self.unexpected_token(
-                    "bare Nat parameter name in arithmetic index expression",
-                    &path.display_path(),
-                    path.span(),
-                )),
+                Err(path) => {
+                    let span = path.span();
+                    Err(Self::unexpected_token(
+                        Expected::BareNatParameter,
+                        Found::Path(path.into_spanned_name_path().value),
+                        span,
+                    ))
+                }
             },
         }
     }
@@ -890,18 +873,12 @@ impl Parser<'_> {
             let name: Spanned<GenericParamName> = parser.parse_any_ident()?.classify();
             parser.expect(Token::Colon)?;
             let constraint_ident = parser.parse_any_ident()?;
-            let constraint = match constraint_ident.name.as_str() {
-                "Dim" => GenericConstraint::Dim,
-                "Index" => GenericConstraint::Index,
-                "Nat" => GenericConstraint::Nat,
-                "Type" => GenericConstraint::Type,
-                _ => {
-                    return Err(parser.unexpected_token(
-                        "`Dim`, `Index`, `Nat`, or `Type`",
-                        constraint_ident.name.as_str(),
-                        constraint_ident.span,
-                    ));
-                }
+            let Some(constraint) = GenericConstraint::parse(constraint_ident.name.as_str()) else {
+                return Err(Self::unexpected_token(
+                    Expected::GenericConstraint,
+                    Found::Name(constraint_ident.name),
+                    constraint_ident.span,
+                ));
             };
             // Optional sorted default: `= GenericArg`.
             // Classification is deferred until HIR lowering checks it against
@@ -958,11 +935,12 @@ mod tests {
 
     fn unexpected_token_source(source: &str) -> &str {
         let error = Parser::new(source).parse_file().unwrap_err();
-        let ParseError::UnexpectedToken { span, .. } = error else {
-            panic!("expected unexpected-token error, got {error:?}");
-        };
-        let start = span.offset();
-        let end = start + span.len();
+        assert!(
+            matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }),
+            "expected unexpected-token error, got {error:?}"
+        );
+        let start = error.span.offset();
+        let end = start + error.span.len();
         &source[start..end]
     }
 
@@ -1026,14 +1004,20 @@ mod tests {
         // debug builds, silently wrong dimension in release builds.
         let source = "param x: (Length^2000000000)^2000000000 = 1.0;";
         let err = Parser::new(source).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
+        assert!(
+            matches!(err.kind, ParseErrorKind::InvalidNumber { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn unit_power_flattening_overflow_errors() {
         let source = "param x: Length = 1.0 m/(s^2000000000)^2000000000;";
         let err = Parser::new(source).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
+        assert!(
+            matches!(err.kind, ParseErrorKind::InvalidNumber { .. }),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1044,7 +1028,7 @@ mod tests {
             .parse_standalone_dim_expr()
             .unwrap_err();
         assert!(
-            matches!(error, ParseError::TooDeeplyNested { .. }),
+            matches!(error.kind, ParseErrorKind::TooDeeplyNested),
             "{error:?}"
         );
     }
@@ -1057,7 +1041,7 @@ mod tests {
             .parse_standalone_unit_expr()
             .unwrap_err();
         assert!(
-            matches!(error, ParseError::TooDeeplyNested { .. }),
+            matches!(error.kind, ParseErrorKind::TooDeeplyNested),
             "{error:?}"
         );
     }
@@ -1072,7 +1056,7 @@ mod tests {
         );
         let error = Parser::new(&source).parse_file().unwrap_err();
         assert!(
-            matches!(error, ParseError::TooDeeplyNested { .. }),
+            matches!(error.kind, ParseErrorKind::TooDeeplyNested),
             "{error:?}"
         );
     }
@@ -1088,7 +1072,7 @@ mod tests {
         ] {
             let error = Parser::new(source).parse_file().unwrap_err();
             assert!(
-                matches!(error, ParseError::UnexpectedToken { .. }),
+                matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }),
                 "unexpected error for `{source}`: {error:?}"
             );
         }
@@ -1178,7 +1162,7 @@ mod tests {
         ] {
             let error = Parser::new(source).parse_file().unwrap_err();
             assert!(
-                matches!(error, ParseError::NatSubtractionUnsupported { .. }),
+                matches!(error.kind, ParseErrorKind::NatSubtractionUnsupported),
                 "unexpected error for `{source}`: {error:?}"
             );
         }
@@ -1454,7 +1438,12 @@ mod tests {
         let source = "param m: Mass(min: 1.0 kg, min: 2.0 kg) = 1.5 kg;";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(err, ParseError::DuplicateDomainBound { ref bound, .. } if bound == "min"),
+            matches!(
+                err.kind,
+                ParseErrorKind::DuplicateDomainBound {
+                    bound: crate::syntax::ast::DomainBoundKind::Min
+                }
+            ),
             "got {err:?}"
         );
     }

@@ -205,8 +205,8 @@ pub enum OverrideParseError {
         name: DeclName,
         /// The underlying parser error.
         ///
-        /// Boxed because `ParseError` carries source / span context that makes
-        /// it large; boxing keeps the enum compact on the `Ok` path.
+        /// Boxed because `ParseError`'s typed payload is large; boxing keeps
+        /// the enum compact on the `Ok` path.
         #[source]
         source: Box<ParseError>,
     },

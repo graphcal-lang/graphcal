@@ -352,8 +352,7 @@ fn resolve_plugin_pins(
     let mut plugin_paths = BTreeSet::new();
     for file in &gcl_files {
         let source = budget.read_text(&fs, file, IngestionArtifact::Source)?;
-        let display = file.display().to_string();
-        let ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display)
+        let ast = graphcal_compiler::syntax::parser::Parser::new(&source)
             .parse_file()
             .map_err(|err| DepsError::PluginScanParse {
                 path: file.clone(),

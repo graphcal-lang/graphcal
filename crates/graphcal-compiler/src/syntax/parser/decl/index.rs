@@ -3,7 +3,7 @@ use crate::syntax::index_name::IndexName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, ParseError, Parser};
 
 impl Parser<'_> {
     /// Parse a unified index declaration:
@@ -54,7 +54,7 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("`{`, `range`, or `linspace`", &tok.to_string(), span))
+                Err(Self::unexpected(Expected::IndexBody, tok, span))
             }
         }
     }

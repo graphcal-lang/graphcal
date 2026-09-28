@@ -14,7 +14,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
-use super::{ParseError, Parser};
+use super::{Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
     loop {
@@ -393,15 +393,16 @@ impl Parser<'_> {
         if let Some((numerator, denominator)) = exact_fraction {
             return ExactRational::try_new(numerator, denominator)
                 .map(PowerExponent::Exact)
-                .map_err(|error| ParseError::InvalidNumber {
-                    reason: match error {
-                        RatioError::ZeroDenominator => {
-                            "power exponent denominator must be non-zero".to_string()
-                        }
-                        RatioError::Overflow => "exact power exponent overflows `i64`".to_string(),
-                    },
-                    src: self.named_source(),
-                    span: exponent.span.into(),
+                .map_err(|error| {
+                    Self::invalid_number(
+                        match error {
+                            RatioError::ZeroDenominator => {
+                                InvalidNumberReason::PowerExponentZeroDenominator
+                            }
+                            RatioError::Overflow => InvalidNumberReason::PowerExponentOverflow,
+                        },
+                        exponent.span,
+                    )
                 });
         }
 
@@ -531,11 +532,7 @@ impl Parser<'_> {
                 self.expect(Token::RParen)?;
                 Ok(expr)
             }
-            Some(_) => {
-                let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("expression", &tok.to_string(), span))
-            }
-            None => Err(self.unexpected_eof("expression")),
+            Some(_) | None => Err(self.unexpected_next(Expected::Expression)),
         }
     }
 
@@ -616,13 +613,13 @@ impl Parser<'_> {
                 self.lexer.next_token();
             }
             Some((_, span)) => {
-                return Err(ParseError::InlineDagCallMissingProjection {
-                    src: self.named_source(),
-                    span: span.into(),
-                });
+                return Err(ParseError::new(
+                    ParseErrorKind::InlineDagCallMissingProjection,
+                    span,
+                ));
             }
             None => {
-                return Err(self.unexpected_eof("`::<output>` projection"));
+                return Err(self.unexpected_eof(Expected::InlineDagProjection));
             }
         }
         let output = self.parse_any_ident()?;
@@ -667,23 +664,18 @@ impl Parser<'_> {
             // Integer literal: no decimal point or scientific notation.
             if self.same_line_unit_expr_start(span).is_some() {
                 // Integer followed by unit is an error: must use float
-                return Err(ParseError::InvalidNumber {
-                    reason: format!("integer literal cannot have units; write `{text}.0` instead"),
-                    src: self.named_source(),
-                    span: span.into(),
-                });
+                return Err(Self::invalid_number(
+                    InvalidNumberReason::IntegerWithUnits { literal: text },
+                    span,
+                ));
             }
-            let value: i64 =
-                text.parse()
-                    .map_err(|e: std::num::ParseIntError| ParseError::InvalidNumber {
-                        reason: e.to_string(),
-                        src: self.named_source(),
-                        span: span.into(),
-                    })?;
+            let value: i64 = text
+                .parse()
+                .map_err(|error| Self::invalid_number(InvalidNumberReason::Integer(error), span))?;
             Ok(Expr::new(ExprKind::Integer(value), span))
         } else {
             // Floating-point literal: has a decimal point or scientific notation
-            let value = self.parse_finite_f64_literal(&text, span)?;
+            let value = Self::parse_finite_f64_literal(&text, span)?;
 
             // A newline starts the next syntactic item; without this guard,
             // a missing comma between match arms could be misread as a unit
@@ -795,23 +787,31 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::Colon) {
                 self.parse_map_literal_after_first_entry(start_span, index, variant)
             } else {
-                let (found, found_span) = self.lexer.peek_with_span().map_or_else(
-                    || ("EOF".to_string(), start_span),
-                    |(tok, span)| (tok.to_string(), span),
-                );
-                Err(self.unexpected_token("`:` after label in map literal", &found, found_span))
+                let (found, found_span) = self
+                    .lexer
+                    .peek_with_span()
+                    .map_or((Found::EndOfFile, start_span), |(tok, span)| {
+                        (Found::Token(*tok), span)
+                    });
+                Err(Self::unexpected_token(
+                    Expected::MapLiteralColon,
+                    found,
+                    found_span,
+                ))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Could be tuple-key map literal: { (Index#Label, ...): expr, ... }
             self.parse_tuple_key_map_literal(start_span)
         } else {
-            let (found, found_span) = self.lexer.peek_with_span().map_or_else(
-                || ("EOF".to_string(), start_span),
-                |(tok, span)| (tok.to_string(), span),
-            );
-            Err(self.unexpected_token(
-                "map literal (`{ Index#Variant: expr, ... }`)",
-                &found,
+            let (found, found_span) = self
+                .lexer
+                .peek_with_span()
+                .map_or((Found::EndOfFile, start_span), |(tok, span)| {
+                    (Found::Token(*tok), span)
+                });
+            Err(Self::unexpected_token(
+                Expected::MapLiteral,
+                found,
                 found_span,
             ))
         }
@@ -1011,14 +1011,20 @@ mod tests {
             ")".repeat(depth)
         );
         let err = Parser::new(&src).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::TooDeeplyNested { .. }), "{err:?}");
+        assert!(
+            matches!(err.kind, ParseErrorKind::TooDeeplyNested),
+            "{err:?}"
+        );
     }
 
     #[test]
     fn deeply_nested_unary_chain_errors_instead_of_stack_overflow() {
         let src = format!("node x: Dimensionless = {}1.0;", "-".repeat(100_000));
         let err = Parser::new(&src).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::TooDeeplyNested { .. }), "{err:?}");
+        assert!(
+            matches!(err.kind, ParseErrorKind::TooDeeplyNested),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1049,13 +1055,17 @@ mod tests {
     fn brace_expr_error_points_at_offending_token() {
         let source = "node x: Dimensionless = { nope };";
         let err = Parser::new(source).parse_file().unwrap_err();
-        match err {
-            ParseError::UnexpectedToken { found, span, .. } => {
-                assert_eq!(found, "}");
-                assert_eq!(span.offset(), source.find('}').unwrap());
-            }
-            other => panic!("expected UnexpectedToken, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                err.kind,
+                ParseErrorKind::UnexpectedToken {
+                    expected: Expected::Token(Token::Hash),
+                    found: Found::Token(Token::RBrace),
+                }
+            ),
+            "expected UnexpectedToken, got {err:?}"
+        );
+        assert_eq!(err.span.offset(), source.find('}').unwrap());
     }
 
     #[test]
@@ -1073,7 +1083,7 @@ mod tests {
             let source = format!("node label: Dimensionless = \"first{line_ending}second\";");
             let error = Parser::new(&source).parse_file().unwrap_err();
             assert!(
-                matches!(error, ParseError::UnknownToken { .. }),
+                matches!(error.kind, ParseErrorKind::UnknownToken),
                 "line ending {line_ending:?} produced {error:?}"
             );
         }
@@ -1163,7 +1173,7 @@ mod tests {
         for source in ["2.0 1.0/s", "2.0 1_0/s"] {
             let error = Parser::new(source).parse_single_expr().unwrap_err();
             assert!(
-                matches!(error, ParseError::UnexpectedToken { .. }),
+                matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }),
                 "`{source}` must not be classified as a reciprocal unit suffix: {error:?}"
             );
         }
@@ -1821,7 +1831,7 @@ mod tests {
             .parse_file()
             .unwrap_err();
         assert!(
-            matches!(err, ParseError::DuplicateDagBinding { name, .. } if name.as_str() == "a")
+            matches!(err.kind, ParseErrorKind::DuplicateDagBinding { name, .. } if name.as_str() == "a")
         );
     }
 
@@ -1984,7 +1994,7 @@ mod tests {
         for source in ["sqrt<>(4.0)", "Wrapper<>(value: 4.0)"] {
             let error = Parser::new(source).parse_single_expr().unwrap_err();
             assert!(
-                matches!(error, ParseError::UnexpectedToken { .. }),
+                matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }),
                 "unexpected error for `{source}`: {error:?}"
             );
         }
@@ -1993,7 +2003,7 @@ mod tests {
     #[test]
     fn empty_index_access_is_rejected() {
         let error = Parser::new("@values[]").parse_single_expr().unwrap_err();
-        assert!(matches!(error, ParseError::UnexpectedToken { .. }));
+        assert!(matches!(error.kind, ParseErrorKind::UnexpectedToken { .. }));
     }
 
     #[test]

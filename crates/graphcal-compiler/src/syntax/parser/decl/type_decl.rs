@@ -6,7 +6,7 @@ use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, Found, ParseError, Parser};
 
 impl Parser<'_> {
     // --- type declaration ---
@@ -46,7 +46,7 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("'{' or ';'", &tok.to_string(), span))
+                Err(Self::unexpected(Expected::TypeBody, tok, span))
             }
         }
     }
@@ -73,9 +73,9 @@ impl Parser<'_> {
             // either meant `type T { T }` (single unit constructor) or
             // `type T;` (required, awaits include binding).
             let (_, end_span) = self.advance()?;
-            return Err(self.unexpected_token(
-                "at least one constructor (`type T { T }` for a unit marker, `type T;` for a required type)",
-                "empty body",
+            return Err(Self::unexpected_token(
+                Expected::TypeConstructor,
+                Found::EmptyBody,
                 start_span.merge(end_span),
             ));
         }
@@ -85,9 +85,9 @@ impl Parser<'_> {
             Some(&Token::Colon) => {
                 // Record-shaped entry. Reject with a precise diagnostic
                 // pointing at the explicit single-variant form.
-                Err(self.unexpected_token(
-                    "a constructor — write `type T { T(x: U, ...) }` instead of a field list",
-                    "record-style field",
+                Err(Self::unexpected_token(
+                    Expected::ConstructorNotField,
+                    Found::RecordStyleField,
                     first_ident.span,
                 ))
             }
@@ -110,11 +110,7 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "'(' (constructor payload), or ',' / '}' (unit constructor)",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(Self::unexpected(Expected::ConstructorTail, tok, span))
             }
         }
     }
@@ -179,7 +175,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     let (tok, span) = self.advance()?;
-                    return Err(self.unexpected_token("',' or terminator", &tok.to_string(), span));
+                    return Err(Self::unexpected(Expected::FieldSeparator, tok, span));
                 }
             }
         }
@@ -202,9 +198,9 @@ impl Parser<'_> {
             // If we see a record-form field here (`:` follows the ident),
             // reject with a precise error rather than silently parsing it.
             if self.lexer.peek() == Some(&Token::Colon) {
-                return Err(self.unexpected_token(
-                    "constructor (this body started as a tagged union, every entry must be a constructor)",
-                    "record-style field",
+                return Err(Self::unexpected_token(
+                    Expected::UnionConstructor,
+                    Found::RecordStyleField,
                     ident.span,
                 ));
             }
