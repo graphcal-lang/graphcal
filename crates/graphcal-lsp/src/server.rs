@@ -2406,7 +2406,11 @@ fn selective_import_spelling(
         }
         SymbolKey::Declaration(name) => {
             name.owner().parent().as_ref() == Some(target_module)
-                && name.owner().leaf().spelling() == Some(original)
+                && name
+                    .owner()
+                    .leaf()
+                    .inline_dag()
+                    .is_some_and(|dag| dag.as_str() == original)
         }
         _ => false,
     };
@@ -2478,7 +2482,7 @@ fn module_import_spelling(
     // local module alias (`@alias(...)`).
     if let SymbolKey::Declaration(name) = key
         && target_module.parent().as_ref() == Some(name.owner())
-        && target_module.leaf().spelling() == Some(name.as_str())
+        && target_module.leaf().inline_dag() == Some(&name.to_unowned_def_name())
     {
         return Some(SourceSymbolPath::local(module_name.clone()));
     }
@@ -2516,18 +2520,10 @@ fn module_relative_qualifier(
     owner: &graphcal_compiler::dag_id::DagId,
     target_module: &graphcal_compiler::dag_id::DagId,
 ) -> Option<Vec<NameAtom>> {
-    if owner != target_module && !owner.is_descendant_of(target_module) {
-        return None;
-    }
     let relative = owner
-        .segments()
-        .iter()
-        .skip(target_module.segments().len())
-        .map(|segment| {
-            segment
-                .spelling()
-                .and_then(|name| NameAtom::parse(name).ok())
-        })
+        .scopes_below(target_module)?
+        .into_iter()
+        .map(|scope| scope.alias().map(|alias| alias.atom().clone()))
         .collect::<Option<Vec<_>>>()?;
     let mut qualifier = Vec::with_capacity(relative.len() + 1);
     qualifier.push(module_name.clone());

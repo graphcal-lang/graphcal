@@ -41,7 +41,10 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     for decl in &file.declarations {
         if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
             resolver
-                .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
+                .add_module(
+                    parent_dag_id.inline_dag_child(dag.name.value.clone()),
+                    &dag.body,
+                )
                 .map_err(|err| GraphcalError::InternalError {
                     message: format!(
                         "test module resolver failed for inline dag `{}`: {err}",
@@ -211,7 +214,7 @@ fn compile_inline_dag_bodies_test(
         })?;
     for (name, body) in &dag_bodies {
         resolver
-            .add_module(parent_dag_id.child(name.as_str()), body)
+            .add_module(parent_dag_id.inline_dag_child(name.clone()), body)
             .map_err(|err| GraphcalError::InternalError {
                 message: format!("test module resolver failed for inline dag `{name}`: {err}"),
                 src: src.clone(),
@@ -219,7 +222,7 @@ fn compile_inline_dag_bodies_test(
             })?;
     }
     for (name, body) in &dag_bodies {
-        let owner = parent_dag_id.child(name.as_str());
+        let owner = parent_dag_id.inline_dag_child(name.clone());
         for decl in body {
             if let crate::desugar::desugared_ast::DeclKind::Import(import) = &decl.kind {
                 resolver
@@ -238,7 +241,7 @@ fn compile_inline_dag_bodies_test(
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            name.as_str(),
+            &name,
             &body,
             parent_registry,
             &resolver,

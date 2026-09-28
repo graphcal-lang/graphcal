@@ -2291,7 +2291,6 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
 #[test]
 fn checked_tir_records_typed_template_instance_bindings() {
     use graphcal_compiler::resolved_name::ResolvedDeclName;
-    use graphcal_compiler::syntax::module_name::ScopeSegment;
 
     let (_directory, root) = write_pipeline_project(
         &[
@@ -2334,7 +2333,7 @@ fn checked_tir_records_typed_template_instance_bindings() {
         assert_eq!(concrete.as_str(), "factor");
 
         let output_name = ScopedName::in_scope(
-            ScopeSegment::from_nested_dag_segment(instance.id.owner().leaf()),
+            instance.id.scope().clone(),
             DeclName::expect_valid("output"),
         );
         let output = &tir.root().semantic().decl_bindings[&output_name];

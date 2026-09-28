@@ -450,7 +450,12 @@ mod tests {
 
         let [target] = import_targets(files.root()).try_into().unwrap();
         assert_eq!(target.source_file(), &dag_id("lib"));
-        assert_eq!(target.target(), &dag_id("lib").child("inner"));
+        assert_eq!(
+            target.target(),
+            &dag_id("lib").inline_dag_child(
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("inner")
+            )
+        );
     }
 
     #[test]
@@ -699,7 +704,12 @@ mod tests {
         .unwrap();
         let [target] = import_targets(files.root()).try_into().unwrap();
         assert_eq!(target.source_file(), &dag_id("main"));
-        assert_eq!(target.target(), &dag_id("main").child("inner"));
+        assert_eq!(
+            target.target(),
+            &dag_id("main").inline_dag_child(
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("inner")
+            )
+        );
 
         let files = build_loaded_files(snapshot(
             "main",
@@ -771,7 +781,12 @@ mod tests {
 
         assert_eq!(order(&files), [dag_id("b"), dag_id("main")]);
         let inner = &files.root().inline_dags[0];
-        assert_eq!(inner.dag_id, dag_id("main").child("inner"));
+        assert_eq!(
+            inner.dag_id,
+            dag_id("main").inline_dag_child(
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("inner")
+            )
+        );
         let resolution = |segments: &[&str]| {
             inner
                 .resolved_imports
@@ -815,7 +830,12 @@ mod tests {
             .root()
             .inline_dags
             .iter()
-            .find(|dag| dag.dag_id.leaf().spelling() == Some("b"))
+            .find(|dag| {
+                dag.dag_id
+                    .leaf()
+                    .inline_dag()
+                    .is_some_and(|name| name.as_str() == "b")
+            })
             .unwrap();
         assert!(
             b.resolved_imports

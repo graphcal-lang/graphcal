@@ -498,7 +498,8 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
 fn publication_rejects_runtime_units_without_a_defining_body() {
     let (mut tir, unit) = unit_overlay_tir("root.gcl");
     let missing = ResolvedUnitName::from_def(
-        tir.root_dag_id().child("missing"),
+        tir.root_dag_id()
+            .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("missing")),
         unit.to_unowned_def_name(),
     );
     let info = tir.unit_info(&unit).unwrap().clone();
@@ -665,7 +666,10 @@ fn parse_and_type_resolve_builder_named(
     for decl in &file.declarations {
         if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
             resolver
-                .add_module(parent_dag_id.child(dag.name.value.as_str()), &dag.body)
+                .add_module(
+                    parent_dag_id.inline_dag_child(dag.name.value.clone()),
+                    &dag.body,
+                )
                 .map_err(|err| {
                     internal_error(
                         format!(
@@ -746,7 +750,7 @@ fn compile_inline_dag_bodies_test(
         })?;
     for (name, body) in &dag_bodies {
         resolver
-            .add_module(parent_dag_id.child(name.as_str()), body)
+            .add_module(parent_dag_id.inline_dag_child(name.clone()), body)
             .map_err(|err| {
                 internal_error(
                     format!("test module resolver failed for inline dag `{name}`: {err}"),
@@ -759,7 +763,7 @@ fn compile_inline_dag_bodies_test(
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            name.as_str(),
+            &name,
             &body,
             parent_registry,
             &resolver,
@@ -825,7 +829,9 @@ fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
          node result: Dimensionless = @child()::output;",
     )
     .unwrap();
-    let child_id = tir.root_dag_id().child("child");
+    let child_id = tir
+        .root_dag_id()
+        .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("child"));
 
     assert_eq!(tir.local_dags().count(), 2);
     assert_eq!(

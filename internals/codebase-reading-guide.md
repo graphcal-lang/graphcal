@@ -873,9 +873,13 @@ may be qualified stay as `IdentPath`/`NamePath` until module-aware resolution
 produces `ResolvedName<Ns>` or `ResolvedIndexVariant`. `ResolvedName<Ns>` is the
 core owner-qualified identity: a canonical `DagId` owner plus a namespace-typed
 leaf atom. `DagId` keeps package identity plus one sequence of typed
-`DagSegment`s (`SourceModule`, `NamedInstance`, or the spelling-free
-`IncludeInstance` of a selective include) structurally; its dotted `Display`
-output is not canonical identity. `ResolvedIndexVariant`
+`DagSegment`s (a prefix of `File` path components, then `InlineDag`
+declaration names and `Instance` scopes, where the scope of a selective
+include is the spelling-free `IncludeInstance`) structurally; its dotted
+`Display` output is not canonical identity. A file submodule is therefore
+never the child of the file its path extends, and a file submodule and an
+inline DAG with one module-path spelling are rejected as ambiguous.
+`ResolvedIndexVariant`
 stores the resolved index identity plus the variant leaf. Diagnostics for
 unresolved qualified dimensions also retain `NamePath`; dotted rendering occurs
 only at the diagnostic boundary and is never smuggled through `DimName`.
@@ -1517,22 +1521,22 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 17. `crates/graphcal-compiler/src/datetime_literal.rs`
 18. `crates/graphcal-compiler/src/builtin.rs`
 19. `crates/graphcal-compiler/src/complex_value.rs`
-20. `crates/graphcal-compiler/src/dag_id.rs`
-21. `crates/graphcal-compiler/src/syntax/names.rs`
-22. `crates/graphcal-compiler/src/syntax/import_category.rs`
-23. `crates/graphcal-compiler/src/stack.rs`
-24. `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
-25. `crates/graphcal-compiler/src/syntax/decl_name.rs`
-26. `crates/graphcal-compiler/src/syntax/span.rs`
-27. `crates/graphcal-compiler/src/syntax/token.rs`
-28. `crates/graphcal-compiler/src/syntax/comments.rs`
-29. `crates/graphcal-compiler/src/syntax/lexer.rs`
-30. `crates/graphcal-compiler/src/syntax/function_name.rs`
-31. `crates/graphcal-compiler/src/syntax/plugin.rs`
-32. `crates/graphcal-compiler/src/plugin_identity.rs` (resolved package-owned artifacts versus global host identities)
-33. `crates/graphcal-compiler/src/syntax/index_name.rs`
-34. `crates/graphcal-compiler/src/syntax/local_name.rs`
-35. `crates/graphcal-compiler/src/syntax/module_name.rs`
+20. `crates/graphcal-compiler/src/syntax/names.rs`
+21. `crates/graphcal-compiler/src/syntax/import_category.rs`
+22. `crates/graphcal-compiler/src/stack.rs`
+23. `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
+24. `crates/graphcal-compiler/src/syntax/decl_name.rs`
+25. `crates/graphcal-compiler/src/syntax/span.rs`
+26. `crates/graphcal-compiler/src/syntax/token.rs`
+27. `crates/graphcal-compiler/src/syntax/comments.rs`
+28. `crates/graphcal-compiler/src/syntax/lexer.rs`
+29. `crates/graphcal-compiler/src/syntax/function_name.rs`
+30. `crates/graphcal-compiler/src/syntax/plugin.rs`
+31. `crates/graphcal-compiler/src/syntax/index_name.rs`
+32. `crates/graphcal-compiler/src/syntax/local_name.rs`
+33. `crates/graphcal-compiler/src/syntax/module_name.rs`
+34. `crates/graphcal-compiler/src/dag_id.rs`
+35. `crates/graphcal-compiler/src/plugin_identity.rs` (resolved package-owned artifacts versus global host identities)
 36. `crates/graphcal-compiler/src/syntax/dimension.rs`
 37. `crates/graphcal-compiler/src/syntax/type_name.rs`
 38. `crates/graphcal-compiler/src/sparse_monomial.rs`
@@ -1874,23 +1878,24 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 370. `crates/graphcal-eval/tests/chunk6_regressions.rs`
 371. `crates/graphcal-eval/tests/namespace_formal_conformance.rs`
 372. `crates/graphcal-eval/tests/phase1_regressions.rs`
-373. `crates/graphcal-report/tests/report.rs`
-374. `crates/graphcal-wasm/tests/tutorial_examples.rs`
-375. `crates/graphcal-wasm/tests/wasm_runtime.rs`
-376. `crates/graphcal-wasm/tests/wasm_presentation.rs`
-377. `crates/graphcal-wasm/tests/playground_examples.rs`
-378. `crates/graphcal-wasm/tests/playground_experiments.rs`
-379. `crates/graphcal-plugin-host/tests/runtime.rs`
-380. `crates/graphcal-plugin-host/tests/project_eval.rs`
-381. `crates/graphcal-fmt/tests/todo.rs`
-382. `crates/graphcal-fmt/tests/format_tests.rs`
-383. `crates/graphcal-cli/tests/todo.rs`
-384. `crates/graphcal-cli/tests/cli.rs`
-385. `crates/graphcal-cli/tests/plugin_cmd.rs`
-386. `crates/graphcal-cli/tests/plugin_e2e.rs`
-387. `crates/graphcal-cli/tests/dump.rs`
-388. `crates/graphcal-cli/tests/presentation.rs`
-389. `crates/graphcal-cli/tests/report_engine.rs`
-390. `crates/graphcal-cli/tests/output_golden.rs`
+373. `crates/graphcal-eval/tests/phase4_regressions.rs`
+374. `crates/graphcal-report/tests/report.rs`
+375. `crates/graphcal-wasm/tests/tutorial_examples.rs`
+376. `crates/graphcal-wasm/tests/wasm_runtime.rs`
+377. `crates/graphcal-wasm/tests/wasm_presentation.rs`
+378. `crates/graphcal-wasm/tests/playground_examples.rs`
+379. `crates/graphcal-wasm/tests/playground_experiments.rs`
+380. `crates/graphcal-plugin-host/tests/runtime.rs`
+381. `crates/graphcal-plugin-host/tests/project_eval.rs`
+382. `crates/graphcal-fmt/tests/todo.rs`
+383. `crates/graphcal-fmt/tests/format_tests.rs`
+384. `crates/graphcal-cli/tests/todo.rs`
+385. `crates/graphcal-cli/tests/cli.rs`
+386. `crates/graphcal-cli/tests/plugin_cmd.rs`
+387. `crates/graphcal-cli/tests/plugin_e2e.rs`
+388. `crates/graphcal-cli/tests/dump.rs`
+389. `crates/graphcal-cli/tests/presentation.rs`
+390. `crates/graphcal-cli/tests/report_engine.rs`
+391. `crates/graphcal-cli/tests/output_golden.rs`
 
 <!-- END generated by `./internals/reading-order.py --write-guide` -->

@@ -617,11 +617,21 @@ fn rebase_nested_instance(
     runtime_owner_rebases: &mut HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
 ) -> HirInstanceRecord {
     let template_nested_owner = nested.instance.id.owner().clone();
-    let nested_owner = match template_nested_owner.rebase_descendant(template_owner, owner) {
+    let nested_parent = match nested
+        .instance
+        .id
+        .parent()
+        .rebase_descendant(template_owner, owner)
+    {
         DescendantRebase::Rebased(rebased) => rebased,
-        DescendantRebase::OutsideSubtree => owner.instance_child_like(template_nested_owner.leaf()),
+        DescendantRebase::OutsideSubtree => owner.clone(),
     };
-    runtime_owner_rebases.insert(template_nested_owner, nested_owner.clone());
+    let nested_id = InstanceId::new(
+        nested_parent,
+        nested.instance.id.scope().clone(),
+        nested.instance.specialization.template.clone(),
+    );
+    runtime_owner_rebases.insert(template_nested_owner, nested_id.owner().clone());
     compose_index_targets(
         nested
             .instance
@@ -657,10 +667,7 @@ fn rebase_nested_instance(
         .iter_mut()
         .filter_map(|projection| projection.expected_fail.as_mut())
         .for_each(|expected| specialize_expected_fail(expected, substitution));
-    nested.instance.id = InstanceId::new(
-        nested_owner,
-        nested.instance.specialization.template.clone(),
-    );
+    nested.instance.id = nested_id;
     nested.instance.parent_owner = owner.clone();
     nested.owner_rebases.extend(runtime_owner_rebases.clone());
     nested

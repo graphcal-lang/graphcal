@@ -73,6 +73,14 @@ pub enum ModuleResolveError {
     /// A module was added twice.
     #[error("duplicate module `{owner}`")]
     DuplicateModule { owner: DagId },
+    /// Two source modules share one module-path spelling, e.g. the file
+    /// `lib/x.gcl` and an inline `dag x` in `lib.gcl`. Neither is preferred.
+    #[error(
+        "module path `{first}` is ambiguous: it names a module in file `{}` and a module in file `{}`",
+        .first.file_root(),
+        .second.file_root()
+    )]
+    AmbiguousModulePath { first: DagId, second: DagId },
     /// No symbol table exists for a canonical module identity.
     #[error("unknown module `{owner}`")]
     UnknownModule { owner: DagId },

@@ -157,7 +157,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         }
         let dag_name = &include.path.segments[0].name;
         // A single-segment include names a top-level `dag` of this file.
-        let dag_id = file_dag_id.child(dag_name.as_str());
+        let dag_id = file_dag_id.inline_dag_child(DeclName::classify(dag_name.atom().clone()));
         let Some((_, loaded_dag)) = project.inline_dag(&dag_id) else {
             continue;
         };

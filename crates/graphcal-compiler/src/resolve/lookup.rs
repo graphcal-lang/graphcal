@@ -159,7 +159,7 @@ impl ModuleResolver {
                             imported
                                 .resolved()
                                 .owner()
-                                .child(imported.resolved().as_str()),
+                                .inline_dag_child(imported.resolved().to_unowned_def_name()),
                         )
                     })
                 })
@@ -402,7 +402,7 @@ impl ModuleResolver {
                 .get(parent)
                 .and_then(|symbols| symbols.decls.get(&NameDef::classify(head.atom().clone())))
                 .filter(|symbol| *symbol.data() == DeclSymbolKind::Dag)
-                .map(|_| parent.child(head.as_str()))
+                .map(|symbol| parent.inline_dag_child(symbol.resolved().to_unowned_def_name()))
                 .filter(|child| self.modules.contains_key(child))
         };
         let local_target = declared_dag_child(owner).or_else(|| {
@@ -426,7 +426,7 @@ impl ModuleResolver {
                     imported
                         .resolved()
                         .owner()
-                        .child(imported.resolved().as_str()),
+                        .inline_dag_child(imported.resolved().to_unowned_def_name()),
                     Access::CrossModule,
                 ))
             }
@@ -465,7 +465,7 @@ impl ModuleResolver {
                 }
                 if path.segments().len() == 1 {
                     return Err(ModuleResolveError::UnknownModule {
-                        owner: owner.child(head.as_str()),
+                        owner: owner.inline_dag_child(DeclName::classify(head.atom().clone())),
                     });
                 }
                 return Err(ModuleResolveError::UnknownModuleAlias {
@@ -487,7 +487,7 @@ impl ModuleResolver {
 
         self.ensure_module_path_visible(&target, access)?;
         for segment in path.segments().iter().skip(1) {
-            target = target.child(segment.name.as_str());
+            target = target.inline_dag_child(DeclName::classify(segment.name.atom().clone()));
             if !self.modules.contains_key(&target) {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
@@ -628,7 +628,7 @@ impl ModuleResolver {
                 }
                 target = nested_alias.target().clone();
             } else {
-                target = target.child(segment.as_str());
+                target = target.inline_dag_child(DeclName::classify(segment.clone()));
                 if !self.modules.contains_key(&target) {
                     return Err(ModuleResolveError::UnknownModule { owner: target });
                 }
@@ -668,26 +668,23 @@ impl ModuleResolver {
             return Ok(());
         }
 
+        // Only inline-DAG edges carry a `dag` declaration's visibility. The
+        // walk stops at a file root (file-path components are package
+        // identity, not declarations) and at a concrete include instance
+        // (its namespace has no source `dag` declaration on that edge).
         let mut child = target.clone();
         loop {
+            let Some(name) = child.leaf().inline_dag() else {
+                return Ok(());
+            };
             let Some(parent) = child.parent() else {
                 return Ok(());
             };
-            let Some(parent_symbols) = self.modules.get(&parent) else {
-                // File-root path components are semantic package identity, not
-                // source DAG declarations, and therefore carry no visibility.
-                return Ok(());
-            };
-            let Some((name, symbol)) = child
-                .leaf()
-                .spelling()
-                // `DagSegment` spells source modules as text; classify the
-                // leaf into the declaration namespace at this boundary.
-                .and_then(|name| DeclName::try_new(name).ok())
-                .and_then(|name| parent_symbols.decls.get_key_value(&name))
+            let Some(symbol) = self
+                .modules
+                .get(&parent)
+                .and_then(|parent_symbols| parent_symbols.decls.get(name))
             else {
-                // Synthetic include namespaces have a semantic parent but no
-                // source `dag` declaration on that edge.
                 return Ok(());
             };
             if *symbol.data() != DeclSymbolKind::Dag {

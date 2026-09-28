@@ -474,7 +474,9 @@ fn selective_type_alias_resolves_to_original_owner_and_leaf() {
 #[test]
 fn type_import_in_child_dag_does_not_import_same_named_constructor() {
     let main_id = DagId::root_in_package("test", "main");
-    let child_id = main_id.child("build_transfer");
+    let child_id = main_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(
+        "build_transfer",
+    ));
     let main = desugared_source(
         "pub type TransferResult { TransferResult }
          dag build_transfer {
@@ -749,7 +751,9 @@ fn include_projection_classification_is_shared_and_exhaustive() {
 fn selective_include_rejects_dag_projection_at_selector() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.named_instance_child("projection");
+    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
+    ));
     let lib = desugared_source("pub dag child { pub node output: Dimensionless = 1.0; }");
     let main = desugared_source("include lib()::{ child };");
     let (include_path, include_kind) = first_include(&main);
@@ -784,7 +788,9 @@ fn selective_include_rejects_dag_projection_at_selector() {
 fn selective_include_constructor_keeps_source_canonical_identity() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.named_instance_child("projection");
+    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
+    ));
     let lib = desugared_source("pub type Choice { Pick }");
     let main = desugared_source("include lib()::{ Pick as Selected };");
     let include = main
@@ -824,7 +830,9 @@ fn selective_include_constructor_keeps_source_canonical_identity() {
 fn selective_include_rejects_constructor_when_owner_type_is_rebound() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.named_instance_child("projection");
+    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
+    ));
     let lib = desugared_source("pub(bind) type Choice { Pick }");
     let main = desugared_source(
         "type Replacement { Replacement }
@@ -920,7 +928,8 @@ fn imported_file_module_alias_is_callable_as_its_exact_target() {
 #[test]
 fn imported_inline_dag_alias_is_callable_as_its_exact_target() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "pub dag helper {
@@ -954,7 +963,8 @@ fn imported_inline_dag_alias_is_callable_as_its_exact_target() {
 #[test]
 fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "dag helper {
@@ -1029,7 +1039,8 @@ fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace
 #[test]
 fn selective_import_from_private_inline_dag_is_rejected() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "dag helper {
@@ -1064,8 +1075,12 @@ fn selective_import_from_private_inline_dag_is_rejected() {
 #[test]
 fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let private_id = lib_id.child("private_parent");
-    let child_id = private_id.child("public_child");
+    let private_id = lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(
+        "private_parent",
+    ));
+    let child_id = private_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(
+        "public_child",
+    ));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "dag private_parent {
@@ -1121,7 +1136,8 @@ fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
 #[test]
 fn selectively_imported_dag_alias_is_callable() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source("pub dag helper { pub node result: Dimensionless = 1.0; }");
     let helper = first_dag(&lib);
@@ -1151,8 +1167,10 @@ fn selectively_imported_dag_alias_is_callable() {
 #[test]
 fn local_inline_dag_can_qualify_its_nested_child() {
     let main_id = DagId::root_in_package("test", "main");
-    let outer_id = main_id.child("outer");
-    let inner_id = outer_id.child("inner");
+    let outer_id =
+        main_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("outer"));
+    let inner_id =
+        outer_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("inner"));
     let main = desugared_source("dag outer { dag inner {} }");
     let outer = first_dag(&main);
     let inner = outer
@@ -1210,7 +1228,9 @@ fn aliased_include_does_not_expose_same_named_file_module() {
     let main_id = DagId::root_in_package("test", "app");
     let defaults_id =
         DagId::from_relative_path("test", std::path::Path::new("app/defaults.gcl")).unwrap();
-    let instance_id = main_id.named_instance_child("configured");
+    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+        crate::syntax::module_name::ModuleAliasName::expect_valid("configured"),
+    ));
     let defaults = desugared_source("pub node result: Dimensionless = 1.0;");
     let main = desugared_source("include app.defaults() as configured;");
     let (include_path, include_kind) = first_include(&main);
@@ -1329,8 +1349,11 @@ fn alias_respelling_its_local_dag_is_that_dags_own_name() {
 #[test]
 fn local_and_selected_bindings_to_same_dag_are_one_callable() {
     let root_id = DagId::root_in_package("test", "self");
-    let helper_id = root_id.child("helper");
-    let calculation_id = root_id.child("calculation");
+    let helper_id =
+        root_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
+    let calculation_id = root_id.inline_dag_child(
+        crate::syntax::decl_name::DeclName::expect_valid("calculation"),
+    );
     let root = desugared_source(
         "pub dag helper {}
          dag calculation { import self::{ helper }; }",
@@ -1379,7 +1402,8 @@ fn local_and_selected_bindings_to_same_dag_are_one_callable() {
 #[test]
 fn qualified_private_dag_path_is_rejected() {
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "dag helper {
@@ -1421,7 +1445,8 @@ fn qualified_symbol_path_through_private_dag_is_rejected() {
     // the dag-visibility check that `resolve_module_path` enforces, so
     // `lib.helper.shown` resolved even though `helper` is a private dag.
     let lib_id = DagId::root_in_package("test", "lib");
-    let helper_id = lib_id.child("helper");
+    let helper_id =
+        lib_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("helper"));
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source(
         "dag helper {
@@ -1645,4 +1670,131 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
     for (error, expected) in cases {
         assert_eq!(error.to_string(), expected);
     }
+}
+
+fn decl(name: &str) -> crate::syntax::decl_name::DeclName {
+    crate::syntax::decl_name::DeclName::expect_valid(name)
+}
+
+#[test]
+fn file_submodule_and_inline_dag_with_one_spelling_are_ambiguous() {
+    let lib = desugared_source("pub dag x { pub const node a: Dimensionless = 1.0; }");
+    let lib_x = desugared_source("pub const node a: Dimensionless = 2.0;");
+    let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
+    let inline_id = lib_id.inline_dag_child(decl("x"));
+    let file_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
+
+    let mut resolver = ModuleResolver::default();
+    resolver.add_module(lib_id, &lib.declarations).unwrap();
+    let ast::DeclKind::Dag(dag) = &lib.declarations[0].kind else {
+        panic!("expected a dag declaration");
+    };
+    resolver.add_module(inline_id.clone(), &dag.body).unwrap();
+    let error = resolver
+        .add_module(file_id.clone(), &lib_x.declarations)
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        ModuleResolveError::AmbiguousModulePath {
+            first: inline_id,
+            second: file_id,
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "module path `pkg.lib.x` is ambiguous: it names a module in file `pkg.lib` and a module in file `pkg.lib.x`"
+    );
+}
+
+#[test]
+fn same_spelling_in_another_package_or_instance_is_not_ambiguous() {
+    let body = desugared_source("pub const node a: Dimensionless = 2.0;");
+    let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
+    let mut resolver = ModuleResolver::default();
+    resolver
+        .add_module(lib_id.clone(), &body.declarations)
+        .unwrap();
+    resolver
+        .add_module(lib_id.inline_dag_child(decl("x")), &body.declarations)
+        .unwrap();
+    resolver
+        .add_module(
+            DagId::new("other", NonEmpty::new("pkg", vec!["lib", "x"])),
+            &body.declarations,
+        )
+        .unwrap();
+    resolver
+        .add_module(
+            lib_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+                crate::syntax::module_name::ModuleAliasName::expect_valid("x"),
+            )),
+            &body.declarations,
+        )
+        .unwrap();
+}
+
+#[test]
+fn alias_qualifier_does_not_reach_a_file_submodule() {
+    let lib = desugared_source("pub const node b: Dimensionless = 1.0;");
+    let lib_x = desugared_source("pub const node a: Dimensionless = 2.0;");
+    let main = desugared_source("import pkg.lib as l;");
+    let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
+    let lib_x_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
+    let main_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["main"]));
+    let mut resolver = ModuleResolver::default();
+    resolver
+        .add_module(lib_id.clone(), &lib.declarations)
+        .unwrap();
+    resolver.add_module(lib_x_id, &lib_x.declarations).unwrap();
+    resolver
+        .add_module(main_id.clone(), &main.declarations)
+        .unwrap();
+    resolver
+        .register_import(&main_id, first_import(&main), &lib_id)
+        .unwrap();
+
+    // `l.x` names an inline `dag x` of `lib`, never the file `lib/x.gcl`.
+    assert_eq!(
+        resolver.resolve_decl_path(&main_id, &path(&["l", "x", "a"])),
+        Err(ModuleResolveError::UnknownModule {
+            owner: lib_id.inline_dag_child(decl("x")),
+        })
+    );
+    assert_eq!(
+        resolver
+            .resolve_decl_path(&main_id, &path(&["l", "b"]))
+            .map(|name| name.owner().clone()),
+        Ok(lib_id)
+    );
+}
+
+#[test]
+fn file_submodule_does_not_inherit_the_visibility_of_a_parent_file_dag() {
+    // A private non-`dag` declaration `x` in `lib.gcl` has no bearing on the
+    // file `lib/x.gcl`, and neither would a private `dag x` (which would be
+    // ambiguous and rejected when both modules are registered).
+    let lib = desugared_source("const node x: Dimensionless = 1.0;");
+    let lib_x = desugared_source("pub const node a: Dimensionless = 2.0;");
+    let main = desugared_source("import pkg.lib.x::{ a };");
+    let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
+    let lib_x_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
+    let main_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["main"]));
+    let mut resolver = ModuleResolver::default();
+    resolver.add_module(lib_id, &lib.declarations).unwrap();
+    resolver
+        .add_module(lib_x_id.clone(), &lib_x.declarations)
+        .unwrap();
+    resolver
+        .add_module(main_id.clone(), &main.declarations)
+        .unwrap();
+    resolver
+        .register_import(&main_id, first_import(&main), &lib_x_id)
+        .unwrap();
+    assert_eq!(
+        resolver
+            .resolve_decl_path(&main_id, &path(&["a"]))
+            .map(|name| name.owner().clone()),
+        Ok(lib_x_id)
+    );
 }

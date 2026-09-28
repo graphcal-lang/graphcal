@@ -5,6 +5,8 @@
 //! source-body location, same-file lookup, and file-root self-import handling
 //! are one algorithm here.
 
+use graphcal_compiler::syntax::decl_name::DeclName;
+
 use super::{
     DagBodyLocator, DagId, DeclKind, Declaration, File, HashMap, HashSet,
     InlineBodyImportResolution, LoadedDag, ModulePath, ModulePathKey, ResolvedModuleTarget,
@@ -57,7 +59,7 @@ fn lift_inline_dags_from_declarations<ResolveExternal>(
         let DeclKind::Dag(dag) = &decl.kind else {
             return;
         };
-        let dag_id = lexical_parent_id.child(dag.name.value.as_str());
+        let dag_id = lexical_parent_id.inline_dag_child(dag.name.value.clone());
         let resolved_imports = resolve_inline_body_imports(&dag.body, &dag_id, context);
         let mut body_path = parent_path.to_vec();
         body_path.push(index);
@@ -127,12 +129,13 @@ fn resolve_same_file_inline_dag_path(
     let [leaf] = path.segments() else {
         return None;
     };
-    let child = lexical_parent_id.child(leaf.name.as_str());
+    let name = DeclName::classify(leaf.name.atom().clone());
+    let child = lexical_parent_id.inline_dag_child(name.clone());
     if same_file_dag_ids.contains(&child) {
         return Some(child);
     }
     lexical_parent_id.parent().and_then(|parent| {
-        let sibling = parent.child(leaf.name.as_str());
+        let sibling = parent.inline_dag_child(name);
         same_file_dag_ids.contains(&sibling).then_some(sibling)
     })
 }
@@ -145,7 +148,7 @@ pub(super) fn collect_inline_dag_ids(
         .iter()
         .flat_map(|decl| match &decl.kind {
             DeclKind::Dag(dag) => {
-                let dag_id = lexical_parent_id.child(dag.name.value.as_str());
+                let dag_id = lexical_parent_id.inline_dag_child(dag.name.value.clone());
                 let mut ids = collect_inline_dag_ids(&dag.body, &dag_id);
                 ids.insert(dag_id);
                 ids

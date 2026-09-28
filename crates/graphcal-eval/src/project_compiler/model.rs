@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::dag_id::IncludeInstanceId;
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
@@ -17,6 +16,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::module_name::IncludeInstanceId;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
