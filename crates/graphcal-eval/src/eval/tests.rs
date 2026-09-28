@@ -1147,6 +1147,46 @@ fn selective_include_unit_projection_resolves_in_unit_definitions() {
 }
 
 #[test]
+fn renamed_include_projection_does_not_bind_the_source_name_in_declarations() {
+    // `dim X as Y` / `unit X as Y` bind only `Y` in the importer's own
+    // `dim` / `unit` declarations; `X` is as unknown as any undeclared name.
+    let target = "dag target {\n\
+                      pub dim Rate = Mass / Time;\n\
+                      pub const unit double_metre: Length = 2.0 m;\n\
+                  }\n";
+    for (body, expected) in [
+        (
+            "include target()::{ dim Rate as R };\ndim D = Rate * Time;",
+            "Rate",
+        ),
+        (
+            "include target()::{ dim Rate as R };\nunit u: Rate = 2.0 kg/s;",
+            "Rate",
+        ),
+    ] {
+        match compile_and_eval(&format!("{target}{body}")) {
+            Err(CompileError::Eval(GraphcalError::UnknownDimension { name, .. })) => {
+                assert_eq!(name.to_string(), expected, "{body}");
+            }
+            other => panic!("expected UnknownDimension for {expected} in {body}, got {other:?}"),
+        }
+    }
+    for body in [
+        "include target()::{ unit double_metre as dm };\n\
+         const unit quad_metre: Length = 2.0 double_metre;",
+        "include target()::{ unit double_metre as dm };\n\
+         unit quad_metre: Length = 2.0 double_metre;",
+    ] {
+        match compile_and_eval(&format!("{target}{body}")) {
+            Err(CompileError::Eval(GraphcalError::UnknownUnit { name, .. })) => {
+                assert_eq!(name.to_string(), "double_metre", "{body}");
+            }
+            other => panic!("expected UnknownUnit for double_metre in {body}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn selective_include_projects_specialized_adt_constructors() {
     let source = "dag target {\n\
                       pub(bind) dim Quantity;\n\
