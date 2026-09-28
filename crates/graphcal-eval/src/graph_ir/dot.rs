@@ -705,7 +705,7 @@ mod tests {
     use crate::graph_ir::{GraphCluster, GraphEdge};
 
     fn id(owner: &DagId, name: &str) -> ResolvedDeclName {
-        ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid(name))
+        ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid(name))
     }
 
     fn sample_ir() -> GraphIr {

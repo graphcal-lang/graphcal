@@ -437,7 +437,7 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     let tir = compile_to_tir(source, "nat-scopes.gcl").unwrap();
     let src = miette::NamedSource::new("nat-scopes.gcl", std::sync::Arc::new(source.to_string()));
     let type_id = |name| {
-        ResolvedStructTypeName::from_def(
+        ResolvedStructTypeName::for_test(
             tir.root_dag_id().clone(),
             StructTypeName::expect_valid(name),
         )
@@ -516,7 +516,7 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
         crate::exec_plan::compile_checked_with_cancellation(&tir, &facts, &src, &cancellation)
             .unwrap();
     let hosts = crate::host_fns::HostFunctionRegistry::new();
-    let owner = graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
+    let owner = graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
         tir.root_dag_id().clone(),
         graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
     );
@@ -2309,7 +2309,7 @@ fn checked_tir_records_typed_template_instance_bindings() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let template = loaded_file_dag_id(&project, "lib.gcl");
     let template_param =
-        ResolvedDeclName::from_def(template.clone(), DeclName::expect_valid("factor"));
+        ResolvedDeclName::for_test(template.clone(), DeclName::expect_valid("factor"));
     let instances = tir
         .root()
         .semantic_instances()
@@ -2415,44 +2415,44 @@ fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
     let dependency = loaded_file_dag_id(&project, "lib.gcl");
     let importer = tir.root_dag_id().clone();
 
-    let dependency_dimension = graphcal_compiler::resolved_name::ResolvedDimName::from_def(
+    let dependency_dimension = graphcal_compiler::resolved_name::ResolvedDimName::for_test(
         dependency.clone(),
         graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
     );
-    let importer_dimension = graphcal_compiler::resolved_name::ResolvedDimName::from_def(
+    let importer_dimension = graphcal_compiler::resolved_name::ResolvedDimName::for_test(
         importer.clone(),
         graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
     );
     assert!(tir.dimension(&dependency_dimension).is_some());
     assert!(tir.dimension(&importer_dimension).is_none());
 
-    let dependency_unit = graphcal_compiler::resolved_name::ResolvedUnitName::from_def(
+    let dependency_unit = graphcal_compiler::resolved_name::ResolvedUnitName::for_test(
         dependency.clone(),
         graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
     );
-    let importer_unit = graphcal_compiler::resolved_name::ResolvedUnitName::from_def(
+    let importer_unit = graphcal_compiler::resolved_name::ResolvedUnitName::for_test(
         importer.clone(),
         graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
     );
     assert!(tir.unit_info(&dependency_unit).is_some());
     assert!(tir.unit_info(&importer_unit).is_none());
 
-    let dependency_index = graphcal_compiler::resolved_name::ResolvedIndexName::from_def(
+    let dependency_index = graphcal_compiler::resolved_name::ResolvedIndexName::for_test(
         dependency.clone(),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
     );
-    let importer_index = graphcal_compiler::resolved_name::ResolvedIndexName::from_def(
+    let importer_index = graphcal_compiler::resolved_name::ResolvedIndexName::for_test(
         importer.clone(),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
     );
     assert!(tir.declared_index_def(&dependency_index).is_some());
     assert!(tir.declared_index_def(&importer_index).is_none());
 
-    let dependency_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::from_def(
+    let dependency_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::for_test(
         dependency,
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
-    let importer_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::from_def(
+    let importer_type = graphcal_compiler::resolved_name::ResolvedStructTypeName::for_test(
         importer,
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
@@ -2498,26 +2498,26 @@ fn diamond_imports_install_one_canonical_shared_definition() {
     let unit = UnitName::expect_valid("su");
 
     assert!(
-        tir.dimension(&ResolvedDimName::from_def(
+        tir.dimension(&ResolvedDimName::for_test(
             shared.clone(),
             dimension.clone()
         ))
         .is_some()
     );
     assert!(
-        tir.unit_info(&ResolvedUnitName::from_def(shared, unit.clone()))
+        tir.unit_info(&ResolvedUnitName::for_test(shared, unit.clone()))
             .is_some()
     );
     for alias_owner in aliases {
         assert!(
-            tir.dimension(&ResolvedDimName::from_def(
+            tir.dimension(&ResolvedDimName::for_test(
                 alias_owner.clone(),
                 dimension.clone(),
             ))
             .is_none()
         );
         assert!(
-            tir.unit_info(&ResolvedUnitName::from_def(alias_owner, unit.clone()))
+            tir.unit_info(&ResolvedUnitName::for_test(alias_owner, unit.clone()))
                 .is_none()
         );
     }
@@ -2555,20 +2555,20 @@ fn same_leaf_definitions_from_distinct_modules_keep_distinct_canonical_owners() 
 
     for owner in [left, right] {
         assert!(
-            tir.dimension(&ResolvedDimName::from_def(owner.clone(), dimension.clone()))
+            tir.dimension(&ResolvedDimName::for_test(owner.clone(), dimension.clone()))
                 .is_some()
         );
         assert!(
-            tir.unit_info(&ResolvedUnitName::from_def(owner, unit.clone()))
+            tir.unit_info(&ResolvedUnitName::for_test(owner, unit.clone()))
                 .is_some()
         );
     }
     assert!(
-        tir.dimension(&ResolvedDimName::from_def(root_owner.clone(), dimension,))
+        tir.dimension(&ResolvedDimName::for_test(root_owner.clone(), dimension,))
             .is_none()
     );
     assert!(
-        tir.unit_info(&ResolvedUnitName::from_def(root_owner, unit))
+        tir.unit_info(&ResolvedUnitName::for_test(root_owner, unit))
             .is_none()
     );
 }
@@ -6152,7 +6152,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
     );
@@ -6213,7 +6213,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
     );
@@ -7079,7 +7079,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );
@@ -7156,7 +7156,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         panic!("expected one for-comprehension binding, got {bindings:?}");
     };
     let match_expr = body.as_ref();
-    let b_owner = graphcal_compiler::resolved_name::ResolvedName::from_def(
+    let b_owner = graphcal_compiler::resolved_name::ResolvedName::for_test(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
     );

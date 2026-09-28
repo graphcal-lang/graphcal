@@ -95,9 +95,11 @@ fn collect_declarations(
                     TypeDeclBody::Required => &[][..],
                     TypeDeclBody::Constructors(members) => members.as_slice(),
                 };
+                let Ok(type_id) = resolver.declaration(owner, &type_decl.name.value) else {
+                    continue;
+                };
                 for member in members {
-                    let constructor =
-                        ResolvedConstructorName::from_def(owner.clone(), member.name.value.clone());
+                    let constructor = type_id.resolved().constructor(member.name.value.clone());
                     for field in member.payload.iter().flatten() {
                         if let Some(field_type) =
                             nominal_constructor(&field.type_ann, owner, resolver)
@@ -144,11 +146,12 @@ fn collect_declared_value(
     resolver: &ModuleResolver,
     index: &mut NominalTypeIndex,
 ) {
-    if let Some(constructor) = nominal_constructor(type_expr, owner, resolver) {
-        index.declaration_types.insert(
-            ResolvedDeclName::from_def(owner.clone(), name.clone()),
-            constructor,
-        );
+    if let Some(constructor) = nominal_constructor(type_expr, owner, resolver)
+        && let Ok(declaration) = resolver.declaration(owner, name)
+    {
+        index
+            .declaration_types
+            .insert(declaration.into_resolved(), constructor);
     }
 }
 
@@ -179,8 +182,7 @@ fn nominal_constructor(
         }
         _ => return None,
     };
-    Some(ResolvedConstructorName::from_def(
-        type_name.owner().clone(),
+    Some(type_name.constructor(
         graphcal_compiler::syntax::type_name::record_constructor_name(
             &type_name.to_unowned_def_name(),
         ),

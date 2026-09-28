@@ -534,7 +534,7 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
     let mut unknown = target.clone();
     unknown.terms[0].name.value = graphcal_compiler::hir::expr::ResolvedUnitRef::new(
         unknown.terms[0].name.value.spelling().clone(),
-        graphcal_compiler::resolved_name::ResolvedUnitName::from_def(
+        graphcal_compiler::resolved_name::ResolvedUnitName::for_test(
             tir.root_dag_id().clone(),
             graphcal_compiler::syntax::dimension::UnitName::expect_valid("missing"),
         ),

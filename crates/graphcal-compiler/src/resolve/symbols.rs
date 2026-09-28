@@ -220,10 +220,8 @@ pub struct ModuleSymbols {
 }
 
 impl ModuleSymbols {
-    /// Build a module symbol table from a declaration list.
-    ///
-    /// The `owner` is the canonical DAG/module identity assigned by the loader.
-    /// The declarations are not modified; this is a pure collection pass.
+    /// Build a module symbol table, failing on the first declaration that
+    /// cannot be recorded.
     ///
     /// # Errors
     ///
@@ -231,10 +229,25 @@ impl ModuleSymbols {
     /// occupy the same slot of the module's collision unit, or
     /// [`ModuleResolveError::DuplicateIndexVariant`] when one index declares a
     /// variant twice.
+    #[cfg(test)]
     pub(super) fn from_declarations(
         owner: DagId,
         declarations: &[ast::Declaration],
     ) -> Result<Self, ModuleResolveError> {
+        let (symbols, errors) = Self::collect(owner, declarations);
+        errors.into_iter().next().map_or(Ok(symbols), Err)
+    }
+
+    /// Build a module symbol table from a declaration list, skipping each
+    /// declaration that cannot be recorded (a duplicate) and returning its
+    /// error; every other declaration is still collected.
+    ///
+    /// The `owner` is the canonical DAG/module identity assigned by the loader.
+    /// The declarations are not modified; this is a pure collection pass.
+    pub(super) fn collect(
+        owner: DagId,
+        declarations: &[ast::Declaration],
+    ) -> (Self, Vec<ModuleResolveError>) {
         let mut symbols = Self {
             owner,
             decls: HashMap::new(),
@@ -244,10 +257,11 @@ impl ModuleSymbols {
             indexes: HashMap::new(),
             constructors: HashMap::new(),
         };
-        for decl in declarations {
-            symbols.collect_declaration(&decl.kind)?;
-        }
-        Ok(symbols)
+        let errors = declarations
+            .iter()
+            .filter_map(|decl| symbols.collect_declaration(&decl.kind).err())
+            .collect();
+        (symbols, errors)
     }
 
     /// The canonical owner for this table.

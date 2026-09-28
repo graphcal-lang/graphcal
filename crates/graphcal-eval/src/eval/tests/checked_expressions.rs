@@ -23,7 +23,7 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
                 .into_bound()
                 .unwrap(),
             crate::eval_expr::RuntimeValue::Struct {
-                type_name: ResolvedStructTypeName::from_def(
+                type_name: ResolvedStructTypeName::for_test(
                     tir.root_dag_id().clone(),
                     StructTypeName::expect_valid("Token"),
                 ),
@@ -70,7 +70,7 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         let tir =
             compile_to_tir(&source, "scalar-prototype.gcl").expect("unused prototype is valid");
         let src = miette::NamedSource::new("scalar-prototype.gcl", std::sync::Arc::new(source));
-        let identity = ResolvedStructTypeName::from_def(
+        let identity = ResolvedStructTypeName::for_test(
             tir.root_dag_id().clone(),
             StructTypeName::expect_valid("T"),
         );

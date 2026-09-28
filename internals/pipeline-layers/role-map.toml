@@ -397,6 +397,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "instance", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["ir", "lower"]
 role = "checking"
 

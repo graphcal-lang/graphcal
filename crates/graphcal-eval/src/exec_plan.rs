@@ -586,7 +586,7 @@ mod tests {
     }
 
     fn resolved_key(name: &str) -> ResolvedDeclName {
-        ResolvedDeclName::from_def(test_dag_id(), DeclName::expect_valid(name))
+        ResolvedDeclName::for_test(test_dag_id(), DeclName::expect_valid(name))
     }
 
     #[test]
@@ -950,7 +950,7 @@ mod tests {
             (quantity(
                 plan.root
                     .const_values
-                    .get(&ResolvedDeclName::from_def(
+                    .get(&ResolvedDeclName::for_test(
                         tir.root_dag_id().clone(),
                         DeclName::expect_valid("b")
                     ))
@@ -973,7 +973,7 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &ResolvedDeclName::from_def(
+                name == &ResolvedDeclName::for_test(
                     tir.root_dag_id().clone(),
                     DeclName::expect_valid("a"),
                 )
@@ -984,7 +984,7 @@ mod tests {
             .topo_order
             .iter()
             .position(|name| {
-                name == &ResolvedDeclName::from_def(
+                name == &ResolvedDeclName::for_test(
                     tir.root_dag_id().clone(),
                     DeclName::expect_valid("b"),
                 )

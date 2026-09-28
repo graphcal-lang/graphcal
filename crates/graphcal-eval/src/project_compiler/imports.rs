@@ -1751,7 +1751,7 @@ pub(in crate::project_compiler) fn import_selective_item(
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
     import_selective_resolved_item(
-        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
+        graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
             source_owner.clone(),
             DeclName::classify(orig_name.clone()),
         ),
@@ -1982,7 +1982,7 @@ mod tests {
         let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
         assert_eq!(
             &imported_bindings[&lexical],
-            &graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
+            &graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
                 owner,
                 DeclName::expect_valid("g0"),
             )

@@ -94,15 +94,52 @@ impl<'a> SymbolTables<'a> {
     /// Returns [`ModuleResolveError::DuplicateModule`] when `owner` was already
     /// added, [`ModuleResolveError::AmbiguousModulePath`] when another source
     /// module of the package has the same module-path spelling (a file
-    /// submodule and an inline `dag` of one name), and the symbol-collection
-    /// errors of the module's own declarations and aliases.
+    /// submodule and an inline `dag` of one name), and the first
+    /// symbol-collection error of the module's own declarations and aliases.
+    /// The module is not added on error.
     pub fn add_module(
         &mut self,
         owner: DagId,
         declarations: &'a [ast::Declaration],
     ) -> Result<(), ModuleResolveError> {
-        if self.modules.contains_key(&owner) {
-            return Err(ModuleResolveError::DuplicateModule { owner });
+        let path_key = self.new_module_path(&owner)?;
+        let (entry, errors) = collected_entry(owner.clone(), declarations);
+        if let Some(error) = errors.into_iter().next() {
+            return Err(error);
+        }
+        self.insert(owner, path_key, declarations, entry);
+        Ok(())
+    }
+
+    /// Add one source module even when some of its declarations cannot be
+    /// recorded, for editor tooling on incomplete code.
+    ///
+    /// Each duplicate declaration or alias is skipped and its error returned;
+    /// the module keeps every other declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::DuplicateModule`] or
+    /// [`ModuleResolveError::AmbiguousModulePath`] as [`Self::add_module`]
+    /// does, without adding the module.
+    pub fn add_module_lenient(
+        &mut self,
+        owner: DagId,
+        declarations: &'a [ast::Declaration],
+    ) -> Result<Vec<ModuleResolveError>, ModuleResolveError> {
+        let path_key = self.new_module_path(&owner)?;
+        let (entry, errors) = collected_entry(owner.clone(), declarations);
+        self.insert(owner, path_key, declarations, entry);
+        Ok(errors)
+    }
+
+    /// Check that `owner` is new and its module path is unambiguous,
+    /// returning the path key it will claim.
+    fn new_module_path(&self, owner: &DagId) -> Result<Option<ModulePathKey>, ModuleResolveError> {
+        if self.modules.contains_key(owner) {
+            return Err(ModuleResolveError::DuplicateModule {
+                owner: owner.clone(),
+            });
         }
         let path_key = owner.module_path_spelling().map(|spelling| {
             (
@@ -113,10 +150,19 @@ impl<'a> SymbolTables<'a> {
         if let Some(first) = path_key.as_ref().and_then(|key| self.module_paths.get(key)) {
             return Err(ModuleResolveError::AmbiguousModulePath {
                 first: first.clone(),
-                second: owner,
+                second: owner.clone(),
             });
         }
-        let entry = declared_entry(owner.clone(), declarations)?;
+        Ok(path_key)
+    }
+
+    fn insert(
+        &mut self,
+        owner: DagId,
+        path_key: Option<ModulePathKey>,
+        declarations: &'a [ast::Declaration],
+        entry: ModuleEntry,
+    ) {
         if let Some(key) = path_key {
             self.module_paths.insert(key, owner.clone());
         }
@@ -128,7 +174,6 @@ impl<'a> SymbolTables<'a> {
                 entry,
             },
         );
-        Ok(())
     }
 
     /// Add a file root and, in source preorder, every inline `dag` nested in
@@ -214,15 +259,16 @@ impl<'a> SymbolTables<'a> {
     }
 }
 
-/// A module's declared symbols and the aliases its declarations claim.
-fn declared_entry(
+/// A module's declared symbols and the aliases its declarations claim, with
+/// the error of each declaration that could not be recorded.
+fn collected_entry(
     owner: DagId,
     declarations: &[ast::Declaration],
-) -> Result<ModuleEntry, ModuleResolveError> {
-    let symbols = ModuleSymbols::from_declarations(owner, declarations)?;
+) -> (ModuleEntry, Vec<ModuleResolveError>) {
+    let (symbols, mut errors) = ModuleSymbols::collect(owner, declarations);
     let mut scope = ModuleScope::default();
-    declare_aliases(&mut scope, &symbols, declarations)?;
-    Ok(ModuleEntry { symbols, scope })
+    errors.extend(declare_aliases(&mut scope, &symbols, declarations));
+    (ModuleEntry { symbols, scope }, errors)
 }
 
 /// One `import` / `include` declaration of a source module, with the module
@@ -341,7 +387,10 @@ fn expand_instances(
         if resolver.modules.contains_key(&instance) {
             return Err(ModuleResolveError::DuplicateModule { owner: instance });
         }
-        let entry = declared_entry(instance.clone(), template_declarations)?;
+        let (entry, errors) = collected_entry(instance.clone(), template_declarations);
+        if let Some(error) = errors.into_iter().next() {
+            return Err(error);
+        }
         resolver.modules.insert(instance.clone(), entry);
         instances.push((instance.clone(), template.clone()));
         open.push(Expansion {

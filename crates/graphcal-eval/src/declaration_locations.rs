@@ -71,7 +71,7 @@ mod tests {
     }
 
     fn declaration() -> ResolvedDeclName {
-        ResolvedDeclName::from_def(owner("instance.gcl"), DeclName::expect_valid("answer"))
+        ResolvedDeclName::for_test(owner("instance.gcl"), DeclName::expect_valid("answer"))
     }
 
     #[test]

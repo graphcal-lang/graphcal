@@ -16,7 +16,9 @@ use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
 use crate::syntax::index_name::{IndexNameNamespace, IndexVariantName};
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace};
-use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
+use crate::syntax::type_name::{
+    ConstructorName, ConstructorNameNamespace, StructTypeNameNamespace,
+};
 
 /// A fully resolved reference in a semantic namespace.
 ///
@@ -54,8 +56,26 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
 
     /// Resolve an existing definition-site name into a canonical owner.
     #[must_use]
-    pub fn from_def(owner: DagId, name: NameDef<Ns>) -> Self {
+    pub(crate) fn from_def(owner: DagId, name: NameDef<Ns>) -> Self {
         Self::new(owner, name.into_atom())
+    }
+
+    /// Construct an identity outside module resolution, for tests that
+    /// name a declaration directly (including one that does not exist).
+    ///
+    /// Production code outside the compiler obtains identities from the
+    /// module resolver only.
+    #[cfg(any(test, feature = "test-identities"))]
+    #[must_use]
+    pub fn for_test(owner: DagId, name: NameDef<Ns>) -> Self {
+        Self::from_def(owner, name)
+    }
+
+    /// The same owner with another leaf in the same namespace, e.g. the
+    /// identity a declaration would take if it were renamed.
+    #[must_use]
+    pub fn with_leaf(&self, name: NameDef<Ns>) -> Self {
+        Self::new(self.owner.clone(), name.into_atom())
     }
 
     /// The canonical DAG/module that owns this name.
@@ -116,6 +136,25 @@ pub type ResolvedConstructorName = ResolvedName<ConstructorNameNamespace>;
 
 /// Module-resolved index name.
 pub type ResolvedIndexName = ResolvedName<IndexNameNamespace>;
+
+impl ResolvedDeclName {
+    /// The `dag` declaration that names an inline DAG module in its parent,
+    /// or `None` for a file root or a concrete instance.
+    #[must_use]
+    pub fn naming_inline_dag(dag: &DagId) -> Option<Self> {
+        let name = dag.leaf().inline_dag()?.clone();
+        Some(Self::from_def(dag.parent()?, name))
+    }
+}
+
+impl ResolvedStructTypeName {
+    /// The constructor `member` of this type, which is declared beside the
+    /// type in the same module.
+    #[must_use]
+    pub fn constructor(&self, member: ConstructorName) -> ResolvedConstructorName {
+        ResolvedName::new(self.owner.clone(), member.into_atom())
+    }
+}
 
 /// A fully resolved index variant reference.
 ///
@@ -205,5 +244,40 @@ mod tests {
         assert_eq!(variant.index().as_str(), "Phase");
         assert_eq!(variant.variant().as_str(), "Burn");
         assert_eq!(variant.to_string(), "mission.Phase#Burn");
+    }
+
+    #[test]
+    fn derived_identities_keep_the_owner() {
+        let owner = DagId::root_in_package("test", "mission");
+        let node = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("mass"));
+        let renamed = node.with_leaf(DeclName::expect_valid("dry_mass"));
+        assert_eq!(renamed.owner(), &owner);
+        assert_eq!(renamed.as_str(), "dry_mass");
+
+        let choice = ResolvedStructTypeName::from_def(
+            owner.clone(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Choice"),
+        );
+        let pick = choice.constructor(ConstructorName::expect_valid("Pick"));
+        assert_eq!(pick.owner(), &owner);
+        assert_eq!(pick.as_str(), "Pick");
+    }
+
+    #[test]
+    fn inline_dags_are_named_by_a_declaration_of_their_parent() {
+        let file = DagId::root_in_package("test", "mission");
+        let inline = file.inline_dag_child(DeclName::expect_valid("stage"));
+        assert_eq!(
+            ResolvedDeclName::naming_inline_dag(&inline),
+            Some(ResolvedDeclName::from_def(
+                file.clone(),
+                DeclName::expect_valid("stage")
+            ))
+        );
+        assert_eq!(ResolvedDeclName::naming_inline_dag(&file), None);
+        let instance = file.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+            crate::syntax::module_name::ModuleAliasName::expect_valid("stage"),
+        ));
+        assert_eq!(ResolvedDeclName::naming_inline_dag(&instance), None);
     }
 }

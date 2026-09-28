@@ -1655,6 +1655,78 @@ fn resolved_symbols_carry_their_target_declaration_facts() {
 }
 
 #[test]
+fn lenient_registration_keeps_every_recordable_declaration() {
+    let main = desugared_source(
+        "node a: Dimensionless = 1.0;
+         node a: Dimensionless = 2.0;
+         node b: Dimensionless = 3.0;
+         import lib as b;",
+    );
+    let main_id = DagId::root_in_package("test", "main");
+
+    let mut strict = SymbolTables::default();
+    assert!(matches!(
+        strict.add_module(main_id.clone(), &main.declarations),
+        Err(ModuleResolveError::DuplicateSymbol { .. })
+    ));
+
+    let mut lenient = SymbolTables::default();
+    let errors = lenient
+        .add_module_lenient(main_id.clone(), &main.declarations)
+        .unwrap();
+    assert!(matches!(
+        errors.as_slice(),
+        [
+            ModuleResolveError::DuplicateSymbol { name, .. },
+            ModuleResolveError::DuplicateImportName { name: alias, .. },
+        ] if name.as_str() == "a" && alias.as_str() == "b"
+    ));
+    assert!(matches!(
+        lenient.add_module_lenient(main_id.clone(), &main.declarations),
+        Err(ModuleResolveError::DuplicateModule { .. })
+    ));
+    let resolver = lenient
+        .scopes(&super::builder::NoModuleTargets)
+        .unwrap()
+        .freeze()
+        .unwrap();
+    for name in ["a", "b"] {
+        let symbol = resolver.declaration(&main_id, &decl(name)).unwrap();
+        assert_eq!(symbol.resolved().owner(), &main_id);
+        assert_eq!(*symbol.kind(), DeclSymbolKind::Node);
+    }
+}
+
+#[test]
+fn declaration_lookup_ignores_visibility_but_not_ownership() {
+    let lib = desugared_source("node hidden: Dimensionless = 1.0;");
+    let main = desugared_source("import lib::{ hidden };");
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let resolver = super::ModuleResolver::without_edges([
+        (lib_id.clone(), lib.declarations.as_slice()),
+        (main_id.clone(), main.declarations.as_slice()),
+    ])
+    .unwrap();
+
+    assert!(
+        !resolver
+            .declaration(&lib_id, &decl("hidden"))
+            .unwrap()
+            .visibility()
+            .is_public()
+    );
+    assert!(matches!(
+        resolver.declaration(&main_id, &decl("hidden")),
+        Err(ModuleResolveError::UnknownName { .. })
+    ));
+    assert!(matches!(
+        resolver.declaration(&DagId::root_in_package("test", "absent"), &decl("hidden")),
+        Err(ModuleResolveError::UnknownModule { .. })
+    ));
+}
+
+#[test]
 fn recursive_include_expansion_is_rejected_with_its_template_cycle() {
     let main = desugared_source(
         "dag first { include second() as next; }

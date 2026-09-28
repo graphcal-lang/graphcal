@@ -134,12 +134,23 @@ pub fn preprocess_dag_body_self_imports(
                         }
                         Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => {}
                     }
-                    if let Some(binding) = exported_bindings.iter().find(|binding| {
+                    let exported = exported_bindings.iter().find(|binding| {
                         &binding.name == orig_name.atom()
                             && binding.target.kind().namespace() == item.namespace
-                    }) {
+                    });
+                    if let Some(binding) = exported {
                         validate_constructor_alias(binding.target.kind(), item, src)?;
                     }
+                    let not_found = || {
+                        import_item_not_found_error(
+                            parent_interface,
+                            orig_name.atom(),
+                            item.namespace,
+                            &import_decl.path().display_path(),
+                            src,
+                            span,
+                        )
+                    };
 
                     match item.namespace {
                         ImportItemNamespace::Type
@@ -153,27 +164,17 @@ pub fn preprocess_dag_body_self_imports(
                         ImportItemNamespace::Term => {
                             let disposition = parent_interface
                                 .pure_import_term_disposition(orig_name.atom())
-                                .ok_or_else(|| {
-                                    import_item_not_found_error(
-                                        parent_interface,
-                                        orig_name.atom(),
-                                        item.namespace,
-                                        &import_decl.path().display_path(),
-                                        src,
-                                        span,
-                                    )
-                                })?;
+                                .ok_or_else(not_found)?;
                             match disposition {
                                 PureImportTermDisposition::BindConstant => {
+                                    // The parent's exported binding is the
+                                    // canonical constant the local name denotes.
+                                    let target = exported
+                                        .and_then(|binding| binding.target.declaration())
+                                        .ok_or_else(not_found)?;
                                     let scoped = ScopedName::local(local_name);
                                     names.const_names.push((scoped.clone(), span));
-                                    bindings.insert(
-                                        scoped,
-                                        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
-                                            parent_dag_id.clone(),
-                                            DeclName::classify(orig_name.atom().clone()),
-                                        ),
-                                    );
+                                    bindings.insert(scoped, target.clone());
                                 }
                                 PureImportTermDisposition::ResolverOnly => {}
                                 PureImportTermDisposition::Reject(reason) => {
