@@ -25,6 +25,8 @@
 //! rather than re-resolving source-shaped syntax AST references.
 
 pub mod closed_expr;
+pub mod const_expr;
+pub(crate) mod const_lower;
 pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;
