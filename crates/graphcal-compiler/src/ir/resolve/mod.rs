@@ -220,7 +220,7 @@ fn check_imported_graph_value_names(
         .chain(&imported.node_names)
         .filter(|(name, _)| !name.is_qualified())
         .try_for_each(|(name, span)| {
-            let atom = name.member().atom();
+            let atom = name.leaf().atom();
             validate_reserved_name(ReservedNameNamespace::Term, atom).map_err(|_| {
                 GraphcalError::BuiltinNameShadowed {
                     kind: "graph-value alias",
@@ -1144,7 +1144,7 @@ pub(crate) fn resolve_with_imported_values(
         names.insert(name.clone(), *span);
     }
     for (name, span) in &imported.assert_names {
-        names.insert(ScopedName::from(name), *span);
+        names.insert(ScopedName::local(name.clone()), *span);
     }
     for (name, span) in &imported.plot_names {
         names.insert(name.clone(), *span);

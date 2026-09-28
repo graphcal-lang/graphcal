@@ -181,7 +181,7 @@ impl<'a> HirRefCollector<'a> {
                 else {
                     return;
                 };
-                let path = SourceSymbolPath::module_member(qualifier, name.member().atom().clone());
+                let path = SourceSymbolPath::module_member(qualifier, name.leaf().atom().clone());
                 (UnresolvedSymbol::Declaration(path), *span)
             }
             hir::ExprLowerError::UnknownLocalRef { name, span } => (
@@ -1314,7 +1314,10 @@ impl SymbolTable {
             .map(ScopeSegment::try_from_dag_segment)
             .collect::<Result<Vec<_>, _>>()
             .ok()?;
-        Some(ScopedName::qualified_path(qualifier, member))
+        Some(ScopedName::from_parts(
+            graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(qualifier).ok(),
+            member,
+        ))
     }
 
     pub fn definition_for_scoped_decl(&self, name: &ScopedName) -> Option<&DefinitionInfo> {
@@ -1336,7 +1339,7 @@ impl SymbolTable {
                                 .is_ok_and(|segment| &segment == qualifier)
                         })
             };
-            (owner_matches && resolved.as_str() == name.member().as_str()).then_some(definition)
+            (owner_matches && resolved.as_str() == name.leaf().as_str()).then_some(definition)
         })
     }
 }

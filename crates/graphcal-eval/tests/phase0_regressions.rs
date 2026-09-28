@@ -689,7 +689,7 @@ fn include_binding_lowering_error_uses_importer_source() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
     match result {
         Err(CompileError::Eval(GraphcalError::UnknownGraphRef { name, src, span })) => {
-            assert_eq!(name.member().as_str(), "missing");
+            assert_eq!(name.leaf().as_str(), "missing");
             assert!(
                 src.name().ends_with("main.gcl"),
                 "wrong source: {}",

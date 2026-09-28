@@ -45,7 +45,7 @@ use crate::dimension::Rational;
 use crate::exact_rational::ExactRational;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexEntryKey;
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_name::ScopeSegment;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, Qualified};
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::plugin::PluginPath;
@@ -93,7 +93,7 @@ format_equivalent_via_eq!(
     // Identifiers and paths — written identity only, never a span.
     NameAtom,
     SourceIdentifier,
-    ScopedName,
+    ScopeSegment,
     IndexEntryKey,
     PluginPath,
     ImportItemNamespace,

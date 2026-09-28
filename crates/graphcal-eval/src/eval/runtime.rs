@@ -55,9 +55,14 @@ fn root_instance_name(
         .iter()
         .skip(root.segments().len())
         .map(ScopeSegment::from_nested_dag_segment);
-    ScopedName::qualified_path(
-        parent_path.chain(exposed.qualifier().iter().cloned()),
-        exposed.member().clone(),
+    ScopedName::from_parts(
+        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
+            parent_path
+                .chain(exposed.qualifier().iter().cloned())
+                .collect(),
+        )
+        .ok(),
+        exposed.leaf().clone(),
     )
 }
 
@@ -483,7 +488,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             } else {
                 ScopeSegment::Named(record.debug_scope.clone())
             };
-            let debug_name = ScopedName::qualified(debug_scope, name.member().clone());
+            let debug_name = ScopedName::in_scope(debug_scope, name.leaf().clone());
             result_values.insert(
                 key,
                 debug_name,
@@ -559,7 +564,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let entry = plot_dag
                 .plots()
                 .iter()
-                .find(|entry| entry.name.member().as_str() == owner.atom().as_str())
+                .find(|entry| entry.name.leaf().as_str() == owner.atom().as_str())
                 .ok_or_else(|| {
                     GraphcalError::internal_error(
                         format!("projected plot `{owner}` is absent from semantic instance"),

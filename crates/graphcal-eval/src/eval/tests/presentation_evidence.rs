@@ -464,7 +464,7 @@ fn imported_constant_outputs_keep_selected_units_and_display_failures() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     let distance = result
         .consts()
-        .find(|(name, _)| name.member() == &DeclName::expect_valid("distance"))
+        .find(|(name, _)| name.leaf() == &DeclName::expect_valid("distance"))
         .unwrap()
         .1
         .as_ref()
@@ -472,7 +472,7 @@ fn imported_constant_outputs_keep_selected_units_and_display_failures() {
     assert_eq!(labels(distance), [Some("km".into())]);
     let huge = result
         .consts()
-        .find(|(name, _)| name.member() == &DeclName::expect_valid("huge"))
+        .find(|(name, _)| name.leaf() == &DeclName::expect_valid("huge"))
         .unwrap()
         .1
         .as_ref()

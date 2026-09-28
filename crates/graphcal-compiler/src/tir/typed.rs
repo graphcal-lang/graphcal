@@ -117,8 +117,8 @@ impl DagTIR {
         self.projectable_outputs.extend(
             self.params
                 .iter()
-                .map(|entry| entry.name.member())
-                .chain(self.nodes.iter().map(|entry| entry.name.member()))
+                .map(|entry| entry.name.leaf())
+                .chain(self.nodes.iter().map(|entry| entry.name.leaf()))
                 .filter(|name| surface.can_select_output(name))
                 .cloned(),
         );
@@ -852,7 +852,7 @@ fn resolve_override_reconciliations(
             Ok((
                 ResolvedDeclName::from_def(
                     entry.declaration_owner.clone(),
-                    entry.name.member().clone(),
+                    entry.name.leaf().clone(),
                 ),
                 reconciliations,
             ))
@@ -1272,7 +1272,7 @@ fn take_declaration_domain_bounds(
             let bounds = std::mem::take(&mut annotation.domain_bounds);
             (!bounds.is_empty()).then(|| {
                 (
-                    ResolvedDeclName::from_def(owner.clone(), name.member().clone()),
+                    ResolvedDeclName::from_def(owner.clone(), name.leaf().clone()),
                     bounds
                         .into_iter()
                         .map(|bound| ResolvedDomainBound {
@@ -1442,7 +1442,7 @@ fn check_sink_body_policies(
     for entry in &dag.plots {
         let body = &entry.body;
         let check_literals =
-            !entry.name.is_qualified() && is_explicit_export(entry.name.member().as_str());
+            !entry.name.is_qualified() && is_explicit_export(entry.name.leaf().as_str());
         let checker = HirPolicyChecker { ctx, src };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1457,7 +1457,7 @@ fn check_sink_body_policies(
         .map(|entry| (&entry.name, &entry.fields))
         .chain(dag.layers.iter().map(|entry| (&entry.name, &entry.fields)))
     {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.leaf().as_str());
         let checker = HirPolicyChecker { ctx, src };
         for field in fields {
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
@@ -1734,16 +1734,13 @@ fn install_non_value_decl_bindings<'a>(
     let assertions = asserts.iter().map(|entry| {
         (
             &entry.name,
-            ResolvedDeclName::from_def(
-                entry.declaration_owner.clone(),
-                entry.name.member().clone(),
-            ),
+            ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.leaf().clone()),
         )
     });
     let dag_owned = dag_owned_names.map(|name| {
         (
             name,
-            ResolvedDeclName::from_def(dag_id.clone(), name.member().clone()),
+            ResolvedDeclName::from_def(dag_id.clone(), name.leaf().clone()),
         )
     });
     for (name, identity) in assertions.chain(dag_owned) {

@@ -391,7 +391,7 @@ fn include_surface_outputs(
                 .filter(|decl| decl_has_external_role(decl))
                 .filter_map(value_decl_identity)
                 .map(|identity| {
-                    ScopedName::qualified(prefix.clone(), DeclName::classify(identity.name.clone()))
+                    ScopedName::in_scope(prefix.clone(), DeclName::classify(identity.name.clone()))
                 })
                 .collect()
         },
@@ -1249,7 +1249,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast().declarations {
                 if let Some((name, is_const)) = include_value_decl(dep_decl) {
-                    let scoped = ScopedName::qualified(module_alias.clone(), name);
+                    let scoped = ScopedName::in_scope(module_alias.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -1536,7 +1536,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             let import_span = include_decl.path.span();
             for dep_decl in &dag_body.declarations {
                 if let Some((name, is_const)) = include_value_decl(dep_decl) {
-                    let scoped = ScopedName::qualified(instance_scope.clone(), name);
+                    let scoped = ScopedName::in_scope(instance_scope.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -1995,7 +1995,7 @@ fn import_module_values_from_resolver(
             continue;
         };
         let local = DeclName::classify(binding.name.clone());
-        let scoped = ScopedName::qualified(module_name.clone(), local);
+        let scoped = ScopedName::in_scope(module_name.clone(), local);
         imported_names
             .const_names
             .push((scoped.clone(), import_span));

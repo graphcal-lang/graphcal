@@ -2001,7 +2001,7 @@ impl<'a> ExprLowerer<'a> {
     /// separately.
     fn lower_dotted_path_ref(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
         let span = path.span();
-        let scoped = ScopedName::from(path.to_name_path());
+        let scoped = ScopedName::classify_path(&path.to_name_path());
         self.lower_const_ref(&scoped, span)
             .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
     }
@@ -2142,10 +2142,10 @@ impl<'a> ExprLowerer<'a> {
 
     fn lower_const_ref(&self, name: &ScopedName, span: Span) -> Result<ConstRef, ExprLowerError> {
         if !name.is_qualified() {
-            if let Some(builtin) = BuiltinConst::parse(name.member().as_str()) {
+            if let Some(builtin) = BuiltinConst::parse(name.leaf().as_str()) {
                 return Ok(ConstRef::Builtin(builtin));
             }
-            let generic_name = GenericParamName::classify(name.member().atom().clone());
+            let generic_name = GenericParamName::classify(name.leaf().atom().clone());
             if let Some(binding) = self.ctx.generic_scope.get(&generic_name)
                 && binding.constraint == ast::GenericConstraint::Nat
             {

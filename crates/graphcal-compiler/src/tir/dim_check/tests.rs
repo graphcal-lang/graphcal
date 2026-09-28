@@ -173,8 +173,8 @@ fn model_port_application(
 ) {
     let (tir, src) = module_aware_tir(source);
     let declared_types = tir.build_declared_types(&src).unwrap();
-    let DeclaredType::Struct(identity, generic_args) =
-        &declared_types[&ScopedName::parse("port").unwrap()]
+    let DeclaredType::Struct(identity, generic_args) = &declared_types
+        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("port"))]
     else {
         panic!("expected `port` to be a concrete model struct");
     };
@@ -475,7 +475,7 @@ fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
 fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
-        types[&ScopedName::parse("g0").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("g0"))],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -484,7 +484,7 @@ fn check_dimensionless_const() {
 fn check_dimensionless_arithmetic() {
     let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
     assert_eq!(
-        types[&ScopedName::parse("y").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("y"))],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -496,7 +496,7 @@ fn check_length_quantity_literal() {
         crate::dimension::PreludeBaseDimension::Length,
     ));
     assert_eq!(
-        types[&ScopedName::parse("alt").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("alt"))],
         DeclaredType::Quantity(length)
     );
 }
@@ -512,7 +512,7 @@ fn check_velocity_from_division() {
     )))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::parse("speed").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("speed"))],
         DeclaredType::Quantity(velocity)
     );
 }
@@ -627,7 +627,9 @@ fn check_conversion_same_dimension() {
     )))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::parse("speed_kmh").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
+            "speed_kmh"
+        ))],
         DeclaredType::Quantity(velocity)
     );
 }
@@ -715,7 +717,7 @@ Maneuver#Insertion: 1.8 km / s,
     )))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::parse("dv").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("dv"))],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Quantity(velocity)),
             index: test_index_ref("Maneuver"),
@@ -2952,7 +2954,7 @@ fn inline_dag_call_basic_returns_output_type() {
         crate::dimension::PreludeBaseDimension::Length,
     ));
     assert_eq!(
-        types[&ScopedName::parse("doubled").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("doubled"))],
         DeclaredType::Quantity(length)
     );
 }
@@ -2969,11 +2971,15 @@ node bound_factor: Dimensionless = @config(factor: 3.0)::factor;
 ";
     let types = check(source).unwrap();
     assert_eq!(
-        types[&ScopedName::parse("default_factor").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
+            "default_factor"
+        ))],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
     assert_eq!(
-        types[&ScopedName::parse("bound_factor").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
+            "bound_factor"
+        ))],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -3084,7 +3090,9 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
         crate::dimension::PreludeBaseDimension::Length,
     ));
     assert_eq!(
-        types[&ScopedName::parse("distances").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
+            "distances"
+        ))],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Quantity(length)),
             index: test_index_ref("Region"),
@@ -3133,7 +3141,7 @@ node out: Length = @doubler(v: @dist)::result[Region#A];
         crate::dimension::PreludeBaseDimension::Length,
     ));
     assert_eq!(
-        types[&ScopedName::parse("out").unwrap()],
+        types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("out"))],
         DeclaredType::Quantity(length)
     );
 }

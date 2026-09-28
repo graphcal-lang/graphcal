@@ -1,10 +1,9 @@
 //! Module aliases and module-scoped declaration names.
 
-use std::sync::Arc;
-
 use crate::dag_id::{DagId, DagSegment, IncludeInstanceId};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::names::{NameAtom, NameAtomError, NameDef, NameNamespace, NamePath};
+use crate::syntax::names::{NameAtomError, NameDef, NameNamespace, NamePath, Qualified};
+use crate::syntax::non_empty::NonEmpty;
 
 /// Module alias namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -137,130 +136,32 @@ impl PartialOrd for ScopeSegment {
     }
 }
 
-/// Error returned when parsing a canonical [`ScopedName`] rendering.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ScopedNameParseError {
-    /// A dot-delimited path component was not a valid name atom.
-    #[error("invalid scoped-name segment {position} (`{segment}`): {source}")]
-    InvalidSegment {
-        /// One-based position of the invalid segment.
-        position: usize,
-        /// Segment spelling at the display boundary.
-        segment: String,
-        /// Violated name-atom invariant.
-        #[source]
-        source: NameAtomError,
-    },
-}
-
 /// A declaration name that may optionally be qualified by a module path.
 ///
-/// Qualifier segments and the declaration member are separate validated name
-/// types. Consequently, dots can only be path separators: two unequal
+/// This classifies both parts of a source [`Qualified`] path: owner segments
+/// are module scopes (source aliases or anonymous include instances) and the
+/// leaf is the declaration. Dots can only be path separators, so two unequal
 /// `ScopedName` values cannot share a canonical [`std::fmt::Display`]
-/// rendering.
-///
-/// The [`std::fmt::Display`] impl renders `qualifier: ["helpers", "math"],
-/// member: "G0"` as `helpers.math::G0`. That serialized form is for boundary
-/// use only (diagnostics, debug output, third-party APIs); the compiler core
-/// should use [`Self::qualifier`] and [`Self::member`] instead.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ScopedName {
-    /// Module/path segments that qualify `member`. Empty for a local name.
-    qualifier: Arc<[ScopeSegment]>,
-    /// The declaration/member name inside the qualifier scope.
-    member: Arc<DeclName>,
-}
+/// rendering (`helpers.math::G0`). That rendering is for boundary use only
+/// (diagnostics, debug output, third-party APIs); the compiler core uses
+/// [`Qualified::qualifier`] and [`Qualified::leaf`].
+pub type ScopedName = Qualified<ScopeSegment, DeclName>;
 
 impl ScopedName {
-    /// Create a local name from an already-validated declaration name.
+    /// Qualify a declaration by one module scope.
     #[must_use]
-    pub fn local(member: DeclName) -> Self {
-        Self {
-            qualifier: Arc::from([] as [ScopeSegment; 0]),
-            member: Arc::new(member),
-        }
+    pub fn in_scope(scope: impl Into<ScopeSegment>, member: DeclName) -> Self {
+        Self::qualified(NonEmpty::singleton(scope.into()), member)
     }
 
-    /// Create a name qualified by one already-validated module segment.
+    /// Classify a namespace-neutral path in a declaration-reference position:
+    /// owner segments name module aliases and the leaf a declaration.
     #[must_use]
-    pub fn qualified(module: impl Into<ScopeSegment>, member: DeclName) -> Self {
-        Self::qualified_path([module], member)
-    }
-
-    /// Create a name qualified by an arbitrary-depth validated module path.
-    #[must_use]
-    pub fn qualified_path(
-        qualifier: impl IntoIterator<Item = impl Into<ScopeSegment>>,
-        member: DeclName,
-    ) -> Self {
-        Self {
-            qualifier: qualifier.into_iter().map(Into::into).collect(),
-            member: Arc::new(member),
-        }
-    }
-
-    /// Parse canonical source-like display text at a serialization boundary.
-    /// Local names have no separator; qualified names use dotted DAG owners
-    /// followed by exactly one `::` member boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ScopedNameParseError`] when any path component is empty. A
-    /// literal dot cannot occur inside a component because dots delimit the
-    /// serialized path.
-    pub fn parse(display: impl AsRef<str>) -> Result<Self, ScopedNameParseError> {
-        fn parse_segment(segment: &str, position: usize) -> Result<NameAtom, ScopedNameParseError> {
-            NameAtom::parse(segment).map_err(|source| ScopedNameParseError::InvalidSegment {
-                position,
-                segment: segment.to_string(),
-                source,
-            })
-        }
-
-        let display = display.as_ref();
-        let Some((owner, member)) = display.split_once("::") else {
-            return parse_segment(display, 1).map(|atom| Self::local(DeclName::classify(atom)));
-        };
-        if member.contains("::") {
-            return Err(ScopedNameParseError::InvalidSegment {
-                position: 2,
-                segment: member.to_string(),
-                source: NameAtomError::ContainsDot,
-            });
-        }
-        let owner = owner
-            .split('.')
-            .enumerate()
-            .map(|(index, segment)| parse_segment(segment, index + 1))
-            .collect::<Result<Vec<_>, _>>()?;
-        let owner = crate::syntax::non_empty::NonEmpty::try_from_vec(owner).map_err(|_| {
-            ScopedNameParseError::InvalidSegment {
-                position: 1,
-                segment: String::new(),
-                source: NameAtomError::Empty,
-            }
-        })?;
-        let member = parse_segment(member, owner.len() + 1)?;
-        Ok(Self::qualified_path(
-            owner.into_iter().map(ModuleAliasName::classify),
-            DeclName::classify(member),
-        ))
-    }
-
-    /// Returns the member (leaf declaration) part of the name.
-    ///
-    /// For `x` this returns the `DeclName` `x`; for `helpers.math.x` this also
-    /// returns `x`.
-    #[must_use]
-    pub fn member(&self) -> &DeclName {
-        &self.member
-    }
-
-    /// Returns the qualifier path segments. Empty means this name is local.
-    #[must_use]
-    pub fn qualifier(&self) -> &[ScopeSegment] {
-        &self.qualifier
+    pub fn classify_path(path: &NamePath) -> Self {
+        path.map_ref(
+            |segment| ScopeSegment::Named(ModuleAliasName::classify(segment.clone())),
+            |leaf| DeclName::classify(leaf.clone()),
+        )
     }
 
     /// Convert this semantic name to a validated syntactic path.
@@ -270,92 +171,17 @@ impl ScopedName {
     /// (and no module-resolver lookup) can denote it.
     #[must_use]
     pub fn to_name_path(&self) -> Option<NamePath> {
-        let qualifier = self
-            .qualifier
-            .iter()
-            .map(|segment| segment.alias().map(|alias| alias.atom().clone()))
-            .collect::<Option<Vec<_>>>()?;
-        Some(NamePath::from_parts(
-            crate::syntax::non_empty::NonEmpty::try_from_vec(qualifier).ok(),
-            self.member.atom().clone(),
-        ))
-    }
-
-    /// Returns whether this is a qualified name.
-    #[must_use]
-    pub fn is_qualified(&self) -> bool {
-        !self.qualifier.is_empty()
-    }
-}
-
-impl std::fmt::Display for ScopedName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.qualifier.is_empty() {
-            return std::fmt::Display::fmt(&self.member, f);
-        }
-        for (index, segment) in self.qualifier.iter().enumerate() {
-            if index > 0 {
-                f.write_str(".")?;
-            }
-            write!(f, "{segment}")?;
-        }
-        write!(f, "::{}", self.member)
-    }
-}
-
-impl std::str::FromStr for ScopedName {
-    type Err = ScopedNameParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-    }
-}
-
-impl TryFrom<String> for ScopedName {
-    type Error = ScopedNameParseError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl TryFrom<&str> for ScopedName {
-    type Error = ScopedNameParseError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl From<DeclName> for ScopedName {
-    /// Wrap a `DeclName` as a local `ScopedName`. Use this at the resolver → IR
-    /// boundary where local resolver keys become module-aware IR keys.
-    fn from(name: DeclName) -> Self {
-        Self::local(name)
-    }
-}
-
-impl From<&DeclName> for ScopedName {
-    fn from(name: &DeclName) -> Self {
-        Self::local(name.clone())
-    }
-}
-
-impl From<NamePath> for ScopedName {
-    fn from(path: NamePath) -> Self {
-        Self::from(&path)
-    }
-}
-
-impl From<&NamePath> for ScopedName {
-    fn from(path: &NamePath) -> Self {
-        Self::qualified_path(
-            path.qualifier()
-                .iter()
-                .cloned()
-                .map(ModuleAliasName::classify),
-            DeclName::classify(path.leaf().clone()),
-        )
+        let owner = match self.owner() {
+            None => None,
+            Some(owner) => Some(
+                owner
+                    .try_map_ref(|segment| {
+                        segment.alias().map(|alias| alias.atom().clone()).ok_or(())
+                    })
+                    .ok()?,
+            ),
+        };
+        Some(NamePath::from_parts(owner, self.leaf().atom().clone()))
     }
 }
 
@@ -375,9 +201,9 @@ mod tests {
 
     #[test]
     fn scoped_name_qualified_display_uses_member_boundary() {
-        let name = ScopedName::qualified(module("module"), member("x"));
+        let name = ScopedName::in_scope(module("module"), member("x"));
         assert_eq!(name.to_string(), "module::x");
-        assert_eq!(name.member().as_str(), "x");
+        assert_eq!(name.leaf().as_str(), "x");
         assert_eq!(
             name.qualifier()
                 .iter()
@@ -388,34 +214,16 @@ mod tests {
     }
 
     #[test]
-    fn scoped_name_parses_nested_boundary_text() {
-        let name = ScopedName::parse("helpers.math::G0").unwrap();
-        assert_eq!(name.to_string(), "helpers.math::G0");
-        assert_eq!(name.member().as_str(), "G0");
-        assert_eq!(
-            name.qualifier()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            ["helpers", "math"]
-        );
-    }
-
-    #[test]
     fn scoped_name_supports_nested_typed_qualifier_path() {
-        let name = ScopedName::qualified_path([module("helpers"), module("math")], member("G0"));
+        let name = ScopedName::qualified(
+            NonEmpty::new(module("helpers").into(), vec![module("math").into()]),
+            member("G0"),
+        );
         assert_eq!(name.to_string(), "helpers.math::G0");
-        assert_eq!(name.member().as_str(), "G0");
-    }
-
-    #[test]
-    fn scoped_name_rejects_empty_display_segments() {
-        for invalid in ["", "::x", "x::", "helpers..math::x", "helpers::math::x"] {
-            assert!(
-                ScopedName::parse(invalid).is_err(),
-                "`{invalid}` should be rejected"
-            );
-        }
+        assert_eq!(name.leaf().as_str(), "G0");
+        let path = name.to_name_path().unwrap();
+        assert_eq!(path.to_string(), "helpers.math::G0");
+        assert_eq!(ScopedName::classify_path(&path), name);
     }
 
     #[test]
@@ -446,10 +254,10 @@ mod tests {
         assert_ne!(first, spelled);
         assert_eq!(spelled.cmp(&first), std::cmp::Ordering::Less);
 
-        let name = ScopedName::qualified(first, member("x"));
+        let name = ScopedName::in_scope(first, member("x"));
         assert_eq!(name.to_string(), "<include@10>::x");
         assert_eq!(name.to_name_path(), None);
-        assert_ne!(name, ScopedName::qualified(spelled, member("x")));
+        assert_ne!(name, ScopedName::in_scope(spelled, member("x")));
     }
 
     #[test]
@@ -497,27 +305,17 @@ mod tests {
     fn distinct_scoped_names_have_distinct_canonical_renderings() {
         let names = [
             ScopedName::local(member("x")),
-            ScopedName::qualified(module("helpers"), member("x")),
-            ScopedName::qualified_path([module("helpers"), module("math")], member("x")),
-            ScopedName::qualified(module("math"), member("x")),
+            ScopedName::in_scope(module("helpers"), member("x")),
+            ScopedName::qualified(
+                NonEmpty::new(module("helpers").into(), vec![module("math").into()]),
+                member("x"),
+            ),
+            ScopedName::in_scope(module("math"), member("x")),
         ];
         let renderings = names
             .iter()
             .map(ToString::to_string)
             .collect::<HashSet<_>>();
         assert_eq!(renderings.len(), names.len());
-    }
-
-    #[test]
-    fn valid_scoped_names_round_trip_through_canonical_display() {
-        let names = [
-            ScopedName::local(member("x")),
-            ScopedName::qualified(module("helpers"), member("G0")),
-            ScopedName::qualified_path([module("helpers"), module("math")], member("G0")),
-        ];
-
-        for name in names {
-            assert_eq!(name.to_string().parse::<ScopedName>().unwrap(), name);
-        }
     }
 }
