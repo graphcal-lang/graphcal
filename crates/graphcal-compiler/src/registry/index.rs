@@ -70,6 +70,24 @@ pub enum IndexCardinalityError {
     TooLarge { value: usize, maximum: usize },
 }
 
+impl IndexCardinalityError {
+    /// Render this failure for a structural `Fin(N)` axis.
+    #[must_use]
+    pub fn describe_finite_index(self) -> String {
+        match self {
+            Self::Empty => {
+                "Fin(0) is not allowed; indexes must contain at least one element".to_string()
+            }
+            Self::DoesNotFitUsize { value } => {
+                format!("Fin cardinality {value} does not fit in usize on this target")
+            }
+            Self::TooLarge { value, maximum } => {
+                format!("Fin cardinality {value} exceeds the practical limit of {maximum} elements")
+            }
+        }
+    }
+}
+
 /// Direct coordinate-generation rule for a concrete coordinate index.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CoordinateSpacing {
@@ -601,18 +619,21 @@ pub enum IndexKind {
 }
 
 /// A concrete or required index with its ordered elements.
+///
+/// `name` is the definition's registry identity: a declared name, or the
+/// structural identity of a compiler-generated `Fin(N)` axis.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexDef {
-    pub name: IndexName,
+    pub name: IndexBindingTarget,
     pub kind: IndexKind,
 }
 
 impl IndexDef {
     /// Derive a structural definition from an already validated cardinality.
     #[must_use]
-    pub fn finite(index: FiniteIndex) -> Self {
+    pub const fn finite(index: FiniteIndex) -> Self {
         Self {
-            name: index.display_name(),
+            name: IndexBindingTarget::Finite(index),
             kind: IndexKind::Concrete(ConcreteIndexKind::Finite {
                 cardinality: index.cardinality(),
             }),
@@ -701,17 +722,6 @@ impl IndexDef {
 // Finite structural indexes
 // ---------------------------------------------------------------------------
 
-/// Error returned when `Fin(N)` cannot become a concrete structural index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum FiniteIndexError {
-    #[error("Fin(0) is not allowed; indexes must contain at least one element")]
-    Empty,
-    #[error("Fin cardinality {size} does not fit in usize on this target")]
-    DoesNotFitUsize { size: u64 },
-    #[error("Fin cardinality {size} exceeds the practical limit of {maximum} elements")]
-    TooLarge { size: usize, maximum: usize },
-}
-
 /// Typed identity for a concrete compiler-generated structural `Fin(N)` index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FiniteIndex {
@@ -731,19 +741,10 @@ impl FiniteIndex {
     ///
     /// Returns an error for zero, an unrepresentable value, or a value above
     /// the practical eager-allocation limit.
-    pub fn try_from_u64(size: u64) -> Result<Self, FiniteIndexError> {
-        IndexCardinality::try_from_u64(size)
-            .map(Self::new)
-            .map_err(|error| match error {
-                IndexCardinalityError::Empty => FiniteIndexError::Empty,
-                IndexCardinalityError::DoesNotFitUsize { value } => {
-                    FiniteIndexError::DoesNotFitUsize { size: value }
-                }
-                IndexCardinalityError::TooLarge { value, maximum } => FiniteIndexError::TooLarge {
-                    size: value,
-                    maximum,
-                },
-            })
+    /// Use [`IndexCardinalityError::describe_finite_index`] to render the
+    /// failure for a structural axis.
+    pub fn try_from_u64(size: u64) -> Result<Self, IndexCardinalityError> {
+        IndexCardinality::try_from_u64(size).map(Self::new)
     }
 
     /// Return the validated cardinality.
@@ -757,11 +758,12 @@ impl FiniteIndex {
     pub(crate) const fn size_u64(self) -> u64 {
         self.cardinality.get() as u64
     }
+}
 
-    /// Render this identity at a source/diagnostic boundary.
-    #[must_use]
-    pub fn display_name(self) -> IndexName {
-        IndexName::expect_valid(format!("Fin({})", self.size_u64()))
+/// Renders the source spelling `Fin(N)`.
+impl fmt::Display for FiniteIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Fin({})", self.cardinality.get())
     }
 }
 
@@ -793,7 +795,7 @@ impl fmt::Display for IndexBindingTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Declared(name) => name.fmt(formatter),
-            Self::Finite(index) => index.display_name().fmt(formatter),
+            Self::Finite(index) => index.fmt(formatter),
         }
     }
 }
@@ -821,12 +823,14 @@ impl IndexRegistry {
         self.indexes.get_defined(&IndexBindingTarget::Finite(index))
     }
 
-    /// Iterate over declared index definitions.
-    pub fn declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
+    /// Iterate over declared index definitions with their declared names.
+    pub fn declared_indexes(&self) -> impl Iterator<Item = (&IndexName, &IndexDef)> {
         self.indexes
             .iter()
-            .filter(|(key, _)| matches!(key, IndexBindingTarget::Declared(_)))
-            .map(|(_, definition)| definition)
+            .filter_map(|(key, definition)| match key {
+                IndexBindingTarget::Declared(name) => Some((name, definition)),
+                IndexBindingTarget::Finite(_) => None,
+            })
     }
 
     /// Iterate over compiler-generated structural index identities.
@@ -1096,13 +1100,44 @@ mod tests {
     }
 
     #[test]
+    fn finite_index_renders_its_source_spelling() {
+        let index = FiniteIndex::try_from_u64(3).unwrap();
+        assert_eq!(index.to_string(), "Fin(3)");
+        assert_eq!(IndexBindingTarget::Finite(index).to_string(), "Fin(3)");
+        assert_eq!(
+            FiniteIndex::try_from_u64(0),
+            Err(IndexCardinalityError::Empty)
+        );
+    }
+
+    #[test]
+    fn cardinality_errors_render_for_finite_indexes() {
+        assert_eq!(
+            IndexCardinalityError::Empty.describe_finite_index(),
+            "Fin(0) is not allowed; indexes must contain at least one element"
+        );
+        assert_eq!(
+            IndexCardinalityError::DoesNotFitUsize { value: 7 }.describe_finite_index(),
+            "Fin cardinality 7 does not fit in usize on this target"
+        );
+        assert_eq!(
+            IndexCardinalityError::TooLarge {
+                value: 1_000_001,
+                maximum: MAX_INDEX_CARDINALITY,
+            }
+            .describe_finite_index(),
+            "Fin cardinality 1000001 exceeds the practical limit of 1000000 elements"
+        );
+    }
+
+    #[test]
     fn required_indexes_have_no_concrete_elements() {
         for kind in [
             IndexKind::Required(RequiredIndexKind::Named),
             IndexKind::Required(RequiredIndexKind::Coordinate { dimension: time() }),
         ] {
             let definition = IndexDef {
-                name: IndexName::expect_valid("Axis"),
+                name: IndexBindingTarget::Declared(IndexName::expect_valid("Axis")),
                 kind,
             };
             assert!(definition.is_required());
@@ -1116,7 +1151,7 @@ mod tests {
     #[test]
     fn index_def_queries_follow_the_kind() {
         let named = IndexDef {
-            name: IndexName::expect_valid("Phase"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("Phase")),
             kind: named_kind(&["Burn", "Coast"]),
         };
         assert!(!named.is_required());
@@ -1136,7 +1171,7 @@ mod tests {
         assert_eq!(named.coordinate_dimension(), None);
 
         let required_coordinate = IndexDef {
-            name: IndexName::expect_valid("Step"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("Step")),
             kind: IndexKind::Required(RequiredIndexKind::Coordinate { dimension: time() }),
         };
         assert!(required_coordinate.is_coordinate());
@@ -1147,7 +1182,7 @@ mod tests {
         let data = CoordinateIndexData::try_range(0.0, 2.0, 1.0, time(), CoordinateDisplayUnit::SI)
             .unwrap();
         let coordinate = IndexDef {
-            name: IndexName::expect_valid("Clock"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("Clock")),
             kind: IndexKind::Concrete(ConcreteIndexKind::Coordinate(data.clone())),
         };
         assert!(coordinate.is_coordinate());
@@ -1167,7 +1202,7 @@ mod tests {
     fn binding_contract_accepts_compatible_required_forwarding() {
         let contract = IndexBindingContract::Coordinate { dimension: time() };
         let candidate = IndexDef {
-            name: IndexName::expect_valid("OuterStep"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("OuterStep")),
             kind: IndexKind::Required(RequiredIndexKind::Coordinate { dimension: time() }),
         };
 
@@ -1178,7 +1213,7 @@ mod tests {
     fn discrete_binding_contract_accepts_named_and_finite_axes() {
         let contract = IndexBindingContract::Discrete;
         let named = IndexDef {
-            name: IndexName::expect_valid("Phase"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("Phase")),
             kind: named_kind(&["Only"]),
         };
         let finite = IndexDef::finite(FiniteIndex::try_from_u64(3).unwrap());
@@ -1201,7 +1236,7 @@ mod tests {
         ));
         let contract = IndexBindingContract::Coordinate { dimension: time() };
         let named = IndexDef {
-            name: IndexName::expect_valid("Phase"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("Phase")),
             kind: named_kind(&["Only"]),
         };
         assert_eq!(
@@ -1213,7 +1248,7 @@ mod tests {
         );
 
         let coordinate = IndexDef {
-            name: IndexName::expect_valid("DistanceStep"),
+            name: IndexBindingTarget::Declared(IndexName::expect_valid("DistanceStep")),
             kind: IndexKind::Required(RequiredIndexKind::Coordinate {
                 dimension: length.clone(),
             }),
@@ -1236,7 +1271,7 @@ mod tests {
             ConcreteIndexKind::Coordinate(range(0.0, 2.0, 1.0).unwrap()),
         ] {
             let definition = IndexDef {
-                name: IndexName::expect_valid("Axis"),
+                name: IndexBindingTarget::Declared(IndexName::expect_valid("Axis")),
                 kind: IndexKind::Concrete(kind),
             };
             assert_eq!(

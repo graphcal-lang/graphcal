@@ -193,7 +193,7 @@ fn hir_index_name(
         Ok(name.to_unowned_def_name())
     } else {
         Err(GraphcalError::UnknownIndex {
-            name: name.to_unowned_def_name(),
+            name: name.to_unowned_def_name().into(),
             src: ctx.src.clone(),
             span: span.into(),
         })

@@ -2093,7 +2093,7 @@ param v: Dimensionless[Phase] = { Phase#A: 1.0 };
 node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.as_str() == "Phase" && found.as_str() == "TimeStep"),
+        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.to_string() == "Phase" && found.to_string() == "TimeStep"),
         "got: {err:?}"
     );
 }
@@ -2107,7 +2107,7 @@ param v: Dimensionless[LenGrid] = for x: LenGrid { 1.0 };
 node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.as_str() == "LenGrid" && found.as_str() == "TimeGrid"),
+        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.to_string() == "LenGrid" && found.to_string() == "TimeGrid"),
         "got: {err:?}"
     );
 }

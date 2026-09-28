@@ -237,12 +237,12 @@ pub fn specialize_index_ref(
     index: &IndexTypeRef,
     substitution: &StaticSubstitution,
 ) -> IndexTypeRef {
-    let Some(source) = index.declared_resolved() else {
+    let (Some(source), Some(leaf)) = (index.declared_resolved(), index.declared_name()) else {
         return index.clone();
     };
     match index_substitution(substitution, source) {
         Some(InstanceIndexBindingTarget::Declared(target)) => {
-            IndexTypeRef::with_display_leaf(index.display_name(), target.clone())
+            IndexTypeRef::with_display_leaf(leaf.clone(), target.clone())
         }
         Some(InstanceIndexBindingTarget::Finite(target)) => {
             IndexTypeRef::from_finite_index(*target)

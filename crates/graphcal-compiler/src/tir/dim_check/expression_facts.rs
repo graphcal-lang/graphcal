@@ -127,7 +127,7 @@ fn bind_index_nats(
             })?;
             let finite = crate::registry::index::FiniteIndex::try_from_u64(cardinality).map_err(
                 |error| GraphcalError::EvalError {
-                    message: error.to_string(),
+                    message: error.describe_finite_index(),
                     src: src.clone(),
                     span: span.into(),
                 },

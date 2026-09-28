@@ -13,6 +13,8 @@ use crate::dimension::Rational;
 #[cfg(test)]
 use crate::nat::Monomial;
 use crate::nat::NatPolyForm;
+#[cfg(test)]
+use crate::registry::declared_type::IndexDisplayName;
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 #[cfg(test)]
@@ -120,7 +122,7 @@ pub fn resolved_to_declared_type(
                         let finite_index =
                             crate::registry::types::FiniteIndex::try_from_u64(form.constant())
                                 .map_err(|err| GraphcalError::EvalError {
-                                    message: err.to_string(),
+                                    message: err.describe_finite_index(),
                                     src: src.clone(),
                                     span: (*span).into(),
                                 })?;
@@ -218,7 +220,7 @@ fn resolved_index_to_declared_ref(
         ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
         ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
             .map_err(|err| GraphcalError::EvalError {
-                message: err.to_string(),
+                message: err.describe_finite_index(),
                 src: src.clone(),
                 span: (*span).into(),
             }),
@@ -238,7 +240,7 @@ fn resolved_index_to_inferred(
         ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
         ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
             .map_err(|err| GraphcalError::EvalError {
-                message: err.to_string(),
+                message: err.describe_finite_index(),
                 src: src.clone(),
                 span: (*span).into(),
             })?,
@@ -266,13 +268,11 @@ fn resolved_index_matches_inferred(
 }
 
 #[cfg(test)]
-fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
+fn resolved_index_display_name(index: &ResolvedIndex) -> IndexDisplayName {
     match index {
-        ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name(),
-        ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()),
-        ResolvedIndex::Finite(form, _) => {
-            IndexName::expect_valid(format!("Fin({})", form.format()))
-        }
+        ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name().into(),
+        ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()).into(),
+        ResolvedIndex::Finite(form, _) => IndexDisplayName::Finite(form.clone()),
     }
 }
 
@@ -291,7 +291,7 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
     form: &NatPolyForm,
     target: u64,
     nat_sub: &mut HashMap<GenericParamName, u64>,
-    actual_idx: &IndexName,
+    actual_idx: &IndexDisplayName,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
@@ -326,7 +326,7 @@ fn unify_nat_generic_arg(
 #[cfg(test)]
 #[derive(Clone, Copy)]
 enum NatUnificationSite<'a> {
-    Index(&'a IndexName),
+    Index(&'a IndexDisplayName),
     GenericArgument(&'a NatPolyForm),
 }
 
@@ -340,7 +340,7 @@ impl NatUnificationSite<'_> {
     ) -> GraphcalError {
         match self {
             Self::Index(actual_idx) => GraphcalError::IndexMismatch {
-                expected: IndexName::expect_valid(format!("Fin({})", form.format())),
+                expected: IndexDisplayName::Finite(form.clone()),
                 found: actual_idx.clone(),
                 src: src.clone(),
                 span: span.into(),
@@ -369,16 +369,16 @@ impl NatUnificationSite<'_> {
         };
         let expected = match form.evaluate(nat_sub) {
             Some(value) => match crate::registry::types::FiniteIndex::try_from_u64(value) {
-                Ok(index) => index.display_name(),
+                Ok(_) => IndexDisplayName::Finite(NatPolyForm::from_constant(value)),
                 Err(err) => {
                     return GraphcalError::EvalError {
-                        message: err.to_string(),
+                        message: err.describe_finite_index(),
                         src: src.clone(),
                         span: span.into(),
                     };
                 }
             },
-            None => IndexName::expect_valid(format!("Fin({})", form.format())),
+            None => IndexDisplayName::Finite(form.clone()),
         };
         GraphcalError::IndexMismatch {
             expected,
@@ -399,14 +399,14 @@ impl NatUnificationSite<'_> {
             return self.mismatch(form, src, span);
         };
         match crate::registry::types::FiniteIndex::try_from_u64(previous) {
-            Ok(index) => GraphcalError::IndexMismatch {
-                expected: index.display_name(),
+            Ok(_) => GraphcalError::IndexMismatch {
+                expected: IndexDisplayName::Finite(NatPolyForm::from_constant(previous)),
                 found: actual_idx.clone(),
                 src: src.clone(),
                 span: span.into(),
             },
             Err(err) => GraphcalError::EvalError {
-                message: err.to_string(),
+                message: err.describe_finite_index(),
                 src: src.clone(),
                 span: span.into(),
             },
@@ -608,7 +608,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                     ResolvedIndex::Concrete(name, _) => {
                         if actual_idx.declared_resolved() != Some(name) {
                             return Err(GraphcalError::IndexMismatch {
-                                expected: name.to_unowned_def_name(),
+                                expected: name.to_unowned_def_name().into(),
                                 found: actual_idx.display_name(),
                                 src: src.clone(),
                                 span: span.into(),
@@ -622,10 +622,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                             .filter(NatPolyForm::is_constant)
                             .map(|actual_form| actual_form.constant())
                             .ok_or_else(|| GraphcalError::IndexMismatch {
-                                expected: IndexName::expect_valid(format!(
-                                    "Fin({})",
-                                    form.format()
-                                )),
+                                expected: IndexDisplayName::Finite(form.clone()),
                                 found: actual_idx.display_name(),
                                 src: src.clone(),
                                 span: span.into(),
@@ -788,7 +785,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                 ResolvedIndex::Concrete(name, _) => {
                     if actual_index.declared_resolved() != Some(name) {
                         return Err(GraphcalError::IndexMismatch {
-                            expected: name.to_unowned_def_name(),
+                            expected: name.to_unowned_def_name().into(),
                             found: actual_index.display_name(),
                             src: src.clone(),
                             span: span.into(),
@@ -802,7 +799,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                         .filter(NatPolyForm::is_constant)
                         .map(|actual_form| actual_form.constant())
                         .ok_or_else(|| GraphcalError::IndexMismatch {
-                            expected: IndexName::expect_valid(format!("Fin({})", form.format())),
+                            expected: IndexDisplayName::Finite(form.clone()),
                             found: actual_index.display_name(),
                             src: src.clone(),
                             span: span.into(),
@@ -1196,7 +1193,7 @@ fn substitute_resolved_index(
                 NatPolyForm::from_constant(value),
             )
             .map_err(|err| GraphcalError::EvalError {
-                message: err.to_string(),
+                message: err.describe_finite_index(),
                 src: src.clone(),
                 span: (*span).into(),
             })
@@ -1373,7 +1370,7 @@ pub fn substitute_resolved_type_with_types(
                             NatPolyForm::from_constant(n),
                         )
                         .map_err(|err| GraphcalError::EvalError {
-                            message: err.to_string(),
+                            message: err.describe_finite_index(),
                             src: src.clone(),
                             span: (*span).into(),
                         })?

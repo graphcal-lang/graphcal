@@ -1986,7 +1986,7 @@ pub(in crate::project_compiler) fn extract_index_binding_target(
             })?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
                 CompileError::Eval(GraphcalError::EvalError {
-                    message: error.to_string(),
+                    message: error.describe_finite_index(),
                     src: file_src.clone(),
                     span: expr.span.into(),
                 })

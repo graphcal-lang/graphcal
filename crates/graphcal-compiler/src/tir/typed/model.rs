@@ -271,7 +271,7 @@ pub fn normalize_nat_expr(
                 .iter()
                 .find(|p| p.as_str() == ident.name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: IndexName::from_atom(ident.name.clone()),
+                    name: IndexName::from_atom(ident.name.clone()).into(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })?;
@@ -515,9 +515,9 @@ impl ProjectTypeStore {
                 info,
             )?;
         }
-        for index in hir.registry.indexes.declared_indexes() {
+        for (name, index) in hir.registry.indexes.declared_indexes() {
             self.insert_index_definition(
-                ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
+                ResolvedIndexName::from_def(owner.clone(), name.clone()),
                 index,
             )?;
         }

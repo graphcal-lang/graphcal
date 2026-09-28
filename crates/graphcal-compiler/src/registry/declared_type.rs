@@ -8,7 +8,7 @@ use crate::syntax::type_name::StructTypeNameNamespace;
 
 use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{DimensionFormattingRegistry, FiniteIndex, FiniteIndexError};
+use crate::registry::types::{DimensionFormattingRegistry, FiniteIndex, IndexCardinalityError};
 
 /// A type-level reference to a named compiler entity.
 ///
@@ -107,62 +107,99 @@ impl<Ns: NameNamespace> std::fmt::Display for TypeNameRef<Ns> {
 
 /// Type-level reference to a compiler-generated structural `Fin(N)` index.
 ///
-/// Concrete forms carry validated cardinalities; symbolic forms carry the
-/// normalized Nat expression directly.
+/// The representation is private and canonical: a constant cardinality is
+/// always a validated concrete identity, and only a genuinely symbolic Nat
+/// form stays symbolic. Equality is therefore structural identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FiniteIndexRef {
+pub struct FiniteIndexRef(FiniteIndexRepr);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FiniteIndexRepr {
     Concrete(FiniteIndex),
     Symbolic(NatPolyForm),
 }
 
 impl FiniteIndexRef {
+    /// Reference a validated concrete structural identity.
+    #[must_use]
+    pub const fn concrete(index: FiniteIndex) -> Self {
+        Self(FiniteIndexRepr::Concrete(index))
+    }
+
     /// Create a finite structural reference from a normalized Nat form.
     ///
     /// # Errors
     ///
-    /// Returns an error when the form is a concrete invalid finite structural size.
-    fn from_form(form: NatPolyForm) -> Result<Self, FiniteIndexError> {
+    /// Returns an error when the form is a constant that is not a valid
+    /// finite cardinality.
+    pub(crate) fn from_form(form: NatPolyForm) -> Result<Self, IndexCardinalityError> {
         if form.is_constant() {
-            FiniteIndex::try_from_u64(form.constant()).map(Self::Concrete)
+            FiniteIndex::try_from_u64(form.constant()).map(Self::concrete)
         } else {
-            Ok(Self::Symbolic(form))
+            Ok(Self(FiniteIndexRepr::Symbolic(form)))
         }
     }
 
     /// Return the concrete finite structural identity, if this reference is concrete.
     #[must_use]
     pub(crate) const fn concrete_index(&self) -> Option<FiniteIndex> {
-        match self {
-            Self::Concrete(index) => Some(*index),
-            Self::Symbolic(_) => None,
+        match &self.0 {
+            FiniteIndexRepr::Concrete(index) => Some(*index),
+            FiniteIndexRepr::Symbolic(_) => None,
         }
     }
 
     /// Return the normalized Nat form for this reference.
     #[must_use]
     pub(crate) fn form(&self) -> NatPolyForm {
-        match self {
-            Self::Concrete(index) => NatPolyForm::from_constant(index.size_u64()),
-            Self::Symbolic(form) => form.clone(),
+        match &self.0 {
+            FiniteIndexRepr::Concrete(index) => NatPolyForm::from_constant(index.size_u64()),
+            FiniteIndexRepr::Symbolic(form) => form.clone(),
         }
     }
+}
 
-    /// Render this finite structural as a source-like display name for diagnostics.
+/// Renders the source spelling `Fin(N)` or `Fin(<Nat expression>)`.
+impl std::fmt::Display for FiniteIndexRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        IndexDisplayName::Finite(self.form()).fmt(f)
+    }
+}
+
+/// Source-facing spelling of an index for diagnostics and value display.
+///
+/// Declared indexes render by their definition-site leaf name; structural
+/// axes keep their Nat cardinality form and render as `Fin(...)` only through
+/// `Display`, never as a fabricated [`IndexName`]. The form is display-only
+/// and may describe a cardinality that failed validation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IndexDisplayName {
+    Declared(IndexName),
+    Finite(NatPolyForm),
+}
+
+impl IndexDisplayName {
+    /// The declared leaf name, when this spells a declared index.
     #[must_use]
-    fn display_name(&self) -> IndexName {
+    pub const fn declared_name(&self) -> Option<&IndexName> {
         match self {
-            Self::Concrete(index) => index.display_name(),
-            Self::Symbolic(form) => NameDef::expect_valid(format!("Fin({})", form.format())),
+            Self::Declared(name) => Some(name),
+            Self::Finite(_) => None,
         }
     }
+}
 
-    /// Compare finite structural references by typed identity.
-    #[must_use]
-    fn matches_ref(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Concrete(lhs), Self::Concrete(rhs)) => lhs == rhs,
-            (Self::Symbolic(lhs), Self::Symbolic(rhs)) => lhs == rhs,
-            _ => false,
+impl From<IndexName> for IndexDisplayName {
+    fn from(name: IndexName) -> Self {
+        Self::Declared(name)
+    }
+}
+
+impl std::fmt::Display for IndexDisplayName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Declared(name) => name.fmt(f),
+            Self::Finite(form) => write!(f, "Fin({})", form.format()),
         }
     }
 }
@@ -200,7 +237,7 @@ impl IndexTypeRef {
     /// Create a concrete compiler-generated finite structural reference.
     #[must_use]
     pub const fn from_finite_index(index: FiniteIndex) -> Self {
-        Self::Finite(FiniteIndexRef::Concrete(index))
+        Self::Finite(FiniteIndexRef::concrete(index))
     }
 
     /// Create a finite structural reference from a normalized Nat form.
@@ -208,7 +245,7 @@ impl IndexTypeRef {
     /// # Errors
     ///
     /// Returns an error when the form is a concrete invalid finite structural size.
-    pub(crate) fn from_finite_index_form(form: NatPolyForm) -> Result<Self, FiniteIndexError> {
+    pub(crate) fn from_finite_index_form(form: NatPolyForm) -> Result<Self, IndexCardinalityError> {
         FiniteIndexRef::from_form(form).map(Self::Finite)
     }
 
@@ -260,12 +297,12 @@ impl IndexTypeRef {
         self.finite_index_ref().map(FiniteIndexRef::form)
     }
 
-    /// Render a display-only leaf name for diagnostics and formatting.
+    /// The display-only spelling for diagnostics and formatting.
     #[must_use]
-    pub fn display_name(&self) -> IndexName {
+    pub fn display_name(&self) -> IndexDisplayName {
         match self {
-            Self::Declared(reference) => reference.to_unowned_name(),
-            Self::Finite(reference) => reference.display_name(),
+            Self::Declared(reference) => IndexDisplayName::Declared(reference.to_unowned_name()),
+            Self::Finite(reference) => IndexDisplayName::Finite(reference.form()),
         }
     }
 
@@ -274,15 +311,9 @@ impl IndexTypeRef {
     pub fn matches_ref(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Declared(lhs), Self::Declared(rhs)) => lhs.matches_ref(rhs),
-            (Self::Finite(lhs), Self::Finite(rhs)) => lhs.matches_ref(rhs),
+            (Self::Finite(lhs), Self::Finite(rhs)) => lhs == rhs,
             _ => false,
         }
-    }
-
-    /// Clone the leaf definition/display name for diagnostic/display boundaries.
-    #[must_use]
-    pub fn to_unowned_name(&self) -> IndexName {
-        self.display_name()
     }
 }
 
@@ -294,7 +325,10 @@ impl From<ResolvedIndexName> for IndexTypeRef {
 
 impl std::fmt::Display for IndexTypeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display_name().fmt(f)
+        match self {
+            Self::Declared(reference) => reference.fmt(f),
+            Self::Finite(reference) => reference.fmt(f),
+        }
     }
 }
 
@@ -304,7 +338,78 @@ pub type StructTypeRef = TypeNameRef<StructTypeNameNamespace>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::type_name::StructTypeName;
+    use crate::syntax::type_name::{GenericParamName, StructTypeName};
+
+    fn symbolic_n_plus_one() -> NatPolyForm {
+        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap()
+    }
+
+    #[test]
+    fn finite_index_ref_is_canonical_for_constant_forms() {
+        let three = FiniteIndex::try_from_u64(3).unwrap();
+        let from_form = FiniteIndexRef::from_form(NatPolyForm::from_constant(3)).unwrap();
+        assert_eq!(from_form, FiniteIndexRef::concrete(three));
+        assert_eq!(from_form.concrete_index(), Some(three));
+        assert_eq!(from_form.form(), NatPolyForm::from_constant(3));
+        assert_eq!(from_form.to_string(), "Fin(3)");
+        assert_eq!(
+            FiniteIndexRef::from_form(NatPolyForm::from_constant(0)),
+            Err(IndexCardinalityError::Empty)
+        );
+    }
+
+    #[test]
+    fn finite_index_ref_keeps_symbolic_forms() {
+        let symbolic = FiniteIndexRef::from_form(symbolic_n_plus_one()).unwrap();
+        assert_eq!(symbolic.concrete_index(), None);
+        assert_eq!(symbolic.form(), symbolic_n_plus_one());
+        assert_eq!(symbolic.to_string(), "Fin(N + 1)");
+        assert_ne!(
+            symbolic,
+            FiniteIndexRef::concrete(FiniteIndex::try_from_u64(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn index_display_names_render_declared_leaves_and_finite_forms() {
+        let phase = IndexName::expect_valid("Phase");
+        let declared = IndexDisplayName::from(phase.clone());
+        assert_eq!(declared.declared_name(), Some(&phase));
+        assert_eq!(declared.to_string(), "Phase");
+
+        let finite = IndexDisplayName::Finite(symbolic_n_plus_one());
+        assert_eq!(finite.declared_name(), None);
+        assert_eq!(finite.to_string(), "Fin(N + 1)");
+        // Display-only: an invalid cardinality still renders.
+        assert_eq!(
+            IndexDisplayName::Finite(NatPolyForm::from_constant(0)).to_string(),
+            "Fin(0)"
+        );
+    }
+
+    #[test]
+    fn index_type_ref_display_matches_its_display_name() {
+        let owner = DagId::root_in_package("test", "main");
+        let declared = IndexTypeRef::with_owner(owner, IndexName::expect_valid("Phase"));
+        assert_eq!(declared.to_string(), "Phase");
+        assert_eq!(
+            declared.display_name(),
+            IndexDisplayName::Declared(IndexName::expect_valid("Phase"))
+        );
+
+        let finite = IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(4).unwrap());
+        assert_eq!(finite.to_string(), "Fin(4)");
+        assert_eq!(
+            finite.display_name(),
+            IndexDisplayName::Finite(NatPolyForm::from_constant(4))
+        );
+        assert!(finite.matches_ref(
+            &IndexTypeRef::from_finite_index_form(NatPolyForm::from_constant(4)).unwrap()
+        ));
+        assert!(!finite.matches_ref(&declared));
+    }
 
     #[test]
     fn type_name_ref_equality_uses_canonical_identity_not_display_leaf() {

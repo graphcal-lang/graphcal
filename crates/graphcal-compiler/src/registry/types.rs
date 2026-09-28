@@ -17,7 +17,7 @@ pub use super::dag::DagRegistry;
 pub use super::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry, DimensionTable};
 pub use super::index::{
     ConcreteIndexKind, CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
-    CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory, IndexBindingContract,
+    CoordinateSpacing, FiniteIndex, IndexBindingCategory, IndexBindingContract,
     IndexBindingContractError, IndexBindingTarget, IndexCardinality, IndexCardinalityError,
     IndexCategory, IndexDef, IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY, RequiredIndexKind,
 };
@@ -333,10 +333,11 @@ impl RegistryBuilder {
         self.types.insert_alias(alias, target)
     }
 
-    /// Register an index definition.
-    pub fn register_index(&mut self, def: IndexDef) {
+    /// Register a declared index definition.
+    pub fn register_index(&mut self, name: IndexName, kind: IndexKind) {
+        let target = IndexBindingTarget::Declared(name);
         self.indexes
-            .insert(IndexBindingTarget::Declared(def.name.clone()), def);
+            .insert(target.clone(), IndexDef { name: target, kind });
     }
 
     /// Register a source-visible index alias to a declared or structural target.
@@ -814,16 +815,16 @@ mod tests {
     fn registry_index_register_and_lookup() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        b.register_index(IndexDef {
-            name: IndexName::expect_valid("Maneuver"),
-            kind: named_index_kind(["Departure", "Correction", "Insertion"]),
-        });
+        b.register_index(
+            IndexName::expect_valid("Maneuver"),
+            named_index_kind(["Departure", "Correction", "Insertion"]),
+        );
         let r = b.build();
         let def = r
             .indexes
             .get_index(&IndexName::expect_valid("Maneuver"))
             .unwrap();
-        assert_eq!(def.name.as_str(), "Maneuver");
+        assert_eq!(def.name.to_string(), "Maneuver");
         let entry_keys = def.entry_keys();
         let variant_strs: Vec<&str> = entry_keys
             .iter()
@@ -979,10 +980,7 @@ mod tests {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
         let axis = IndexName::expect_valid("Axis");
-        b.register_index(IndexDef {
-            name: axis.clone(),
-            kind: named_index_kind(["Only"]),
-        });
+        b.register_index(axis.clone(), named_index_kind(["Only"]));
         let pair = b.ensure_finite_index(IndexCardinality::try_from_u64(2).unwrap());
         let effective = IndexName::expect_valid("EffectiveAxis");
         let structural = IndexName::expect_valid("Pair");
@@ -1018,7 +1016,7 @@ mod tests {
         let r = b.build();
         assert_eq!(
             r.indexes.get_index(&effective).map(|d| &d.name),
-            Some(&axis)
+            Some(&IndexBindingTarget::Declared(axis))
         );
         assert_eq!(
             r.indexes.get_index(&structural),

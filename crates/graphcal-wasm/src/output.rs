@@ -316,7 +316,7 @@ impl ValueView {
                 index_name,
                 variant,
             } => {
-                let index = index_name.display_name().as_str().to_string();
+                let index = index_name.to_string();
                 let variant = variant.as_str().to_string();
                 Self::Label {
                     display: format!("{index}#{variant}"),
@@ -335,7 +335,7 @@ impl ValueView {
                 entries,
                 ..
             } => {
-                let index = index_name.display_name().as_str().to_string();
+                let index = index_name.to_string();
                 Self::Indexed {
                     display: format!("{index}[{}]", entries.len()),
                     index,

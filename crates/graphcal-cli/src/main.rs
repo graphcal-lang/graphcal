@@ -1254,7 +1254,7 @@ fn print_json(
                 index_name,
                 variant,
             } => Ok(serde_json::json!({
-                "index": index_name.display_name().as_str(),
+                "index": index_name.to_string(),
                 "variant": variant.as_str()
             })),
             Value::Struct {
@@ -1282,7 +1282,7 @@ fn print_json(
                 let mut map = serde_json::Map::new();
                 map.insert(
                     "index".to_string(),
-                    serde_json::json!(index_name.display_name().as_str()),
+                    serde_json::json!(index_name.to_string()),
                 );
                 let entries_map = entries
                     .iter()
