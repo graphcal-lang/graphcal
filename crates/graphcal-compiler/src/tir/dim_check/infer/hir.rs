@@ -841,15 +841,7 @@ fn infer_hir_type_inner(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inferred = match expr.kind() {
-        // Error nodes exist only in tolerant lowering for IDE consumers; the
-        // batch pipeline rejects them before TIR, so inference never sees one.
-        hir::ExprKind::Error { .. } => {
-            return Err(GraphcalError::InternalError {
-                message: "unresolved reference reached type inference".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
+        hir::ExprKind::Error(no_error) => no_error.absurd(),
         hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,
         hir::ExprKind::Bool(_) => InferredType::Bool,

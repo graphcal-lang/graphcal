@@ -8,17 +8,23 @@
 //! spelling. `super::expr_lower` produces these trees from the desugared
 //! syntax AST.
 //!
+//! - `completeness`: the [`Strict`] / tolerant parameter of every tree.
 //! - `model`: the node shapes and reference payloads.
+//! - `refine`: rebuilding a tree under another completeness.
 //! - `visit`: structural traversal and the queries built on it.
 //! - `checked`: finished bodies that carry occurrence identities.
 //! - `local_env`: the evaluation-time environment keyed by [`LocalId`].
 
 mod checked;
+mod completeness;
 mod local_env;
 mod model;
+mod refine;
 mod visit;
 
 pub use checked::{CheckedAssertBody, CheckedExpr};
+pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
+pub use completeness::{Completeness, NoErrorNode, Strict};
 pub use local_env::LocalEnv;
 pub use model::{
     AssertBody, ConstRef, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, ExternFnRef,
@@ -27,6 +33,7 @@ pub use model::{
     ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, TypeSystemRef, UnappliedFunctionRef,
     UnfoldRecurrence,
 };
+pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};
 pub(crate) use visit::find_extern_call;
 pub use visit::{
     ExprDependencies, collect_expr_dependencies, find_dag_call, visit_expr, visit_expr_children,

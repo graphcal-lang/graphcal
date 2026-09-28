@@ -201,9 +201,9 @@ impl ExpressionOperation {
         }
     }
 
-    fn from_expr(expr: &Expr) -> Result<Self, ExpressionFactsError> {
-        Ok(match expr.kind() {
-            ExprKind::Error { .. } => return Err(ExpressionFactsError::Unresolved),
+    fn from_expr(expr: &Expr) -> Self {
+        match expr.kind() {
+            ExprKind::Error(no_error) => no_error.absurd(),
             ExprKind::Number(_)
             | ExprKind::Integer(_)
             | ExprKind::Bool(_)
@@ -240,7 +240,7 @@ impl ExpressionOperation {
             ExprKind::Match { .. } => Self::Match,
             ExprKind::VariantLiteral(_) => Self::Variant,
             ExprKind::DagCall { target, .. } => Self::DagCall(target.value.clone()),
-        })
+        }
     }
 }
 
@@ -347,7 +347,7 @@ impl CheckedExpressionRecord {
         Ok(Box::new(Self {
             environment,
             fact,
-            operation: std::sync::Arc::new(ExpressionOperation::from_expr(expr)?),
+            operation: std::sync::Arc::new(ExpressionOperation::from_expr(expr)),
             children: share_nonempty(children.into_iter().collect::<Result<_, _>>()?),
             static_indexes: Vec::new(),
             unit_dependencies: share_nonempty(match expr.kind() {
@@ -526,8 +526,6 @@ pub enum ExpressionFactsError {
     Unassigned(#[from] UnassignedExprId),
     #[error(transparent)]
     Source(#[from] ExpressionSourceError),
-    #[error("unresolved expression cannot have checked facts")]
-    Unresolved,
     #[error("expression facts belong to another semantic environment or revision")]
     WrongEnvironment,
     #[error("missing checked expression: {0:?}")]

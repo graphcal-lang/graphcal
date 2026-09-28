@@ -1505,7 +1505,7 @@ impl HirPolicyChecker<'_> {
     ) -> Result<(), GraphcalError> {
         let recurse = |inner: &hir::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
         match expr.kind() {
-            hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
+            hir::ExprKind::Error(no_error) => no_error.absurd(),
             hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)

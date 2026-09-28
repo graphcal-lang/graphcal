@@ -12,6 +12,7 @@ use crate::syntax::span::{Span, Spanned};
 
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
+use super::tolerant::Tolerant;
 use crate::hir::expr::{Expr, ExprKind, FunctionRef, UnappliedFunctionRef};
 
 /// Arity that HIR lowering validates before lowering the arguments.
@@ -96,7 +97,7 @@ impl ExprLowerer<'_> {
         &mut self,
         function_ref: &FunctionRef,
         args: &[ast::Expr],
-    ) -> Result<Vec<Expr>, ExprLowerError> {
+    ) -> Result<Vec<Expr<Tolerant>>, ExprLowerError> {
         match (function_ref, args) {
             (FunctionRef::Builtin(builtin), [datetime, time_zone])
                 if builtin.function() == DATETIME =>
@@ -137,7 +138,7 @@ impl ExprLowerer<'_> {
         &mut self,
         datetime_arg: &ast::Expr,
         time_zone_arg: &ast::Expr,
-    ) -> Result<Vec<Expr>, ExprLowerError> {
+    ) -> Result<Vec<Expr<Tolerant>>, ExprLowerError> {
         let datetime = match &datetime_arg.kind {
             ast::ExprKind::StringLiteral(source) => Self::lower_civil_datetime_literal(
                 source,
@@ -233,7 +234,7 @@ impl ExprLowerer<'_> {
     pub(super) fn lower_offset_datetime_literal(
         source: &str,
         span: Span,
-    ) -> Result<Expr, ExprLowerError> {
+    ) -> Result<Expr<Tolerant>, ExprLowerError> {
         OffsetDateTimeLiteral::parse(source)
             .map(|literal| Expr::new(ExprKind::OffsetDateTimeLiteral(literal), span))
             .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {
@@ -247,7 +248,7 @@ impl ExprLowerer<'_> {
         source: &str,
         expectation: DatetimeLiteralExpectation,
         span: Span,
-    ) -> Result<Expr, ExprLowerError> {
+    ) -> Result<Expr<Tolerant>, ExprLowerError> {
         CivilDateTimeLiteral::parse(source)
             .map(|literal| Expr::new(ExprKind::CivilDateTimeLiteral(literal), span))
             .map_err(|error| ExprLowerError::InvalidDatetimeLiteral {

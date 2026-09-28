@@ -15,7 +15,6 @@ pub(super) struct ExprLowerer<'a> {
     pub(super) ctx: ExprLoweringContext<'a>,
     pub(super) local_scopes: Vec<HashMap<LocalName, LocalDef>>,
     pub(super) next_local: u32,
-    pub(super) diagnostics: Vec<ExprLowerError>,
 }
 
 impl<'a> ExprLowerer<'a> {
@@ -24,7 +23,6 @@ impl<'a> ExprLowerer<'a> {
             ctx,
             local_scopes: Vec::new(),
             next_local: 0,
-            diagnostics: Vec::new(),
         }
     }
 

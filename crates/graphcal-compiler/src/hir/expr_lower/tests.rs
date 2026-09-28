@@ -1,3 +1,4 @@
+use super::tolerant::Tolerant;
 use crate::resolved_name::ResolvedDeclName;
 use std::collections::{BTreeSet, HashMap};
 
@@ -446,7 +447,7 @@ fn collects_canonical_decl_dependencies_from_hir_expr() {
     );
 }
 
-fn lower_tolerant_node(source: &str, name: &str) -> (Expr, Vec<ExprLowerError>) {
+fn lower_tolerant_node(source: &str, name: &str) -> Expr<Tolerant> {
     let owner = DagId::root_in_package("test", "main");
     let file = desugared_source(source);
     let resolver =
@@ -458,7 +459,48 @@ fn lower_tolerant_node(source: &str, name: &str) -> (Expr, Vec<ExprLowerError>) 
     )
 }
 
-fn graph_dependency_names(expr: &Expr) -> BTreeSet<String> {
+fn lower_strict_node(source: &str, name: &str) -> Result<CheckedExpr, ExprLowerError> {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source(source);
+    let resolver =
+        ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
+    let scope = GenericScope::new();
+    lower_expr(
+        node_value(&file, name),
+        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+    )
+}
+
+#[test]
+fn strict_lowering_rejects_with_the_first_tolerant_diagnostic_in_source_order() {
+    for source in [
+        "node out: Dimensionless = mystery(also_missing);",
+        "node out: Dimensionless = first_missing + second_missing;",
+        "param a: Dimensionless; node out: Dimensionless = -(@a * (@missing + other_missing));",
+        "node out: Dimensionless = sin(first_missing) + mystery(second_missing);",
+    ] {
+        let tolerant = lower_tolerant_node(source, "out");
+        let diagnostics = tolerant.diagnostics();
+        assert!(diagnostics.len() >= 2, "source: {source}");
+        let strict = lower_strict_node(source, "out").unwrap_err();
+        assert_eq!(&strict, diagnostics[0], "source: {source}");
+    }
+}
+
+#[test]
+fn resolved_tolerant_tree_has_no_diagnostics_and_refines_to_the_same_shape() {
+    let source = "param a: Dimensionless; node out: Dimensionless = -(@a * 2.0);";
+    let tolerant = lower_tolerant_node(source, "out");
+    assert!(tolerant.diagnostics().is_empty());
+    let strict = lower_strict_node(source, "out").unwrap();
+    let mut tolerant_spans = Vec::new();
+    visit_expr(&tolerant, &mut |node| tolerant_spans.push(node.span));
+    let mut strict_spans = Vec::new();
+    visit_expr(&strict, &mut |node| strict_spans.push(node.span));
+    assert_eq!(tolerant_spans, strict_spans);
+}
+
+fn graph_dependency_names(expr: &Expr<Tolerant>) -> BTreeSet<String> {
     collect_expr_dependencies(expr)
         .graph_refs
         .into_iter()
@@ -506,10 +548,12 @@ fn failed_parent_nodes_retain_every_independent_expression_child() {
     ];
 
     for (source, expected_children, expected_dependencies) in cases {
-        let (expr, diagnostics) = lower_tolerant_node(source, "out");
-        let ExprKind::Error { children } = expr.kind() else {
+        let expr = lower_tolerant_node(source, "out");
+        let diagnostics = expr.diagnostics();
+        let ExprKind::Error(failure) = expr.kind() else {
             panic!("expected failed parent node, got {expr:?}");
         };
+        let children = failure.children();
         assert_eq!(children.len(), expected_children, "source: {source}");
         assert!(!diagnostics.is_empty(), "source: {source}");
         assert_eq!(
@@ -522,10 +566,10 @@ fn failed_parent_nodes_retain_every_independent_expression_child() {
 
 #[test]
 fn failed_parent_accumulates_nested_diagnostics_without_duplicates() {
-    let (expr, diagnostics) =
-        lower_tolerant_node("node out: Dimensionless = mystery(also_missing);", "out");
+    let expr = lower_tolerant_node("node out: Dimensionless = mystery(also_missing);", "out");
+    let diagnostics = expr.diagnostics();
 
-    assert!(matches!(expr.kind(), ExprKind::Error { .. }));
+    assert!(matches!(expr.kind(), ExprKind::Error(_)));
     assert_eq!(diagnostics.len(), 2, "diagnostics: {diagnostics:?}");
     assert!(matches!(
         diagnostics[0],
@@ -542,13 +586,14 @@ fn failed_parent_accumulates_nested_diagnostics_without_duplicates() {
 
 #[test]
 fn failed_binder_does_not_fabricate_lexical_locals_for_retained_body() {
-    let (expr, diagnostics) = lower_tolerant_node(
+    let expr = lower_tolerant_node(
         "param known: Dimensionless; \
          node out: Dimensionless = for item: Missing { item + @known };",
         "out",
     );
+    let diagnostics = expr.diagnostics();
 
-    assert!(matches!(expr.kind(), ExprKind::Error { .. }));
+    assert!(matches!(expr.kind(), ExprKind::Error(_)));
     assert!(diagnostics.iter().any(|error| matches!(
         error,
         ExprLowerError::ModuleResolve {

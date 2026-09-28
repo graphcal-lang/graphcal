@@ -38,15 +38,17 @@ pub mod types;
 
 pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
-    AssertBody, CheckedAssertBody, CheckedExpr, ConstRef, Expr, ExprDependencies, ExprKind,
-    ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr, ResolvedUnitExprItem,
-    ResolvedUnitRef, UnappliedFunctionRef, collect_expr_dependencies, find_dag_call,
+    AssertBody, CheckedAssertBody, CheckedExpr, Completeness, ConstRef, Expr, ExprDependencies,
+    ExprKind, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr,
+    ResolvedUnitExprItem, ResolvedUnitRef, Strict, UnappliedFunctionRef, collect_expr_dependencies,
+    find_dag_call,
 };
 pub(crate) use expr::{find_extern_call, visit_expr};
 pub use expr_lower::context::ExprLoweringContext;
 pub use expr_lower::error::ExprLowerError;
-pub use expr_lower::lower::lower_expr_tolerant;
 pub(crate) use expr_lower::lower::{lower_assert_body, lower_expr};
+pub use expr_lower::lower::{lower_expr_draft, lower_expr_tolerant};
+pub use expr_lower::tolerant::{LoweringFailure, Tolerant};
 pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
 pub(crate) use lower::{TypeLoweringContext, lower_decl_type};
 pub use nominal::{
