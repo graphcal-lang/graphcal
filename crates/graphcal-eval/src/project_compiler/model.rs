@@ -287,10 +287,10 @@ impl RuntimeUnitBoundary {
 pub(super) struct FrontendRegistryImport<'a> {
     pub(super) registry: &'a Registry,
     pub(super) external_surface: &'a ExternalDeclSurface,
-    /// Source declarations used to enforce per-member import capability.
+    /// Declared names a pure import may not bring across.
     /// `None` denotes a concrete include instance rather than a pure import.
-    pub(super) pure_import_declarations:
-        Option<&'a [graphcal_compiler::desugar::desugared_ast::Declaration]>,
+    pub(super) pure_import_rejections:
+        Option<graphcal_compiler::static_interface::StaticImportRejections>,
     pub(super) unit_alias: ModuleAliasName,
     pub(super) runtime_unit_boundary: RuntimeUnitBoundary,
     pub(super) import_span: Span,

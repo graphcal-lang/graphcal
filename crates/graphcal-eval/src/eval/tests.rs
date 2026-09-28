@@ -1065,6 +1065,35 @@ fn qualified_import_rejects_transitive_required_static_dependencies() {
 }
 
 #[test]
+fn qualified_import_resolves_ambiguous_static_dependencies_to_their_symbol() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) dim Basis;\n\
+                 pub type Reading { Reading(value: Basis) }",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\n\
+                 type Local { Local(value: lib::Reading) }\n\
+                 node output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+            ref dependency,
+            ..
+        }) if dependency == "Basis"
+    ));
+}
+
+#[test]
 fn selective_import_rejects_transitive_required_static_dependencies() {
     let (_directory, root) = write_pipeline_project(
         &[

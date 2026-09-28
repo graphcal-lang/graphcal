@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::dag_id::DagId;
-use crate::resolved_name::{ResolvedIndexName, ResolvedIndexVariant};
+use crate::resolved_name::{ResolvedIndexName, ResolvedIndexVariant, ResolvedStaticName};
 use crate::syntax::ast::{IdentPath, ModulePath, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
@@ -199,6 +199,30 @@ impl ModuleResolver {
         path: &NamePath,
     ) -> Result<SymbolRef<'_, UnitNameNamespace, UnitConstness>, ModuleResolveError> {
         self.resolve_symbol_path::<UnitNameNamespace>(owner, path)
+    }
+
+    /// Resolve a syntactic path in the Static slot, whichever of a
+    /// dimension, type, or index occupies it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the index lookup's [`ModuleResolveError`] when no Static
+    /// symbol resolves.
+    pub fn resolve_static_path(
+        &self,
+        owner: &DagId,
+        path: &NamePath,
+    ) -> Result<ResolvedStaticName, ModuleResolveError> {
+        self.resolve_dimension_path(owner, path)
+            .map(|symbol| ResolvedStaticName::Dimension(symbol.into_resolved()))
+            .or_else(|_| {
+                self.resolve_struct_type_path(owner, path)
+                    .map(|symbol| ResolvedStaticName::Type(symbol.into_resolved()))
+            })
+            .or_else(|_| {
+                self.resolve_index_path(owner, path)
+                    .map(|symbol| ResolvedStaticName::Index(symbol.into_resolved()))
+            })
     }
 
     /// Resolve a syntactic struct/tagged-union type path to the symbol it

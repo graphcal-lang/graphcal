@@ -4,10 +4,35 @@
 //! include binding construction all consume this module so their category and
 //! role inventories cannot drift.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::desugar::desugared_ast::{DeclKind, IndexDeclKind, TypeDeclBody};
-use crate::syntax::ast::BindableVisibility;
+use crate::syntax::ast::{BindableVisibility, ImportItemNamespace};
+use crate::syntax::names::NameAtom;
+
+/// Every declared name of one module that a pure import may not bring
+/// across, keyed by its import category.
+///
+/// Built by `ir::static_dependencies::static_import_rejections`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaticImportRejections {
+    rejected: HashSet<(ImportItemNamespace, NameAtom)>,
+}
+
+impl StaticImportRejections {
+    pub(crate) fn new(rejected: impl IntoIterator<Item = (ImportItemNamespace, NameAtom)>) -> Self {
+        Self {
+            rejected: rejected.into_iter().collect(),
+        }
+    }
+
+    /// Whether a pure import must not bring `name` across in `namespace`.
+    #[must_use]
+    pub fn rejects(&self, name: &NameAtom, namespace: ImportItemNamespace) -> bool {
+        self.rejected.contains(&(namespace, name.clone()))
+    }
+}
 
 /// Closed set of Static declaration categories accepted by typed DAG bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
