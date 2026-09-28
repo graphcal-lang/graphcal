@@ -380,6 +380,13 @@ jobs:
       - name: Check refactor metrics ratchet
         run: nu internals/refactor-metrics.nu check
 
+      - name: Check generated reading order
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          uv run --quiet -m unittest internals/test_reading_order.py
+          uv run --quiet internals/reading-order.py --check-guide
+
   typos:
     runs-on: ubuntu-latest
     steps:
