@@ -10,22 +10,6 @@ reason = "Observed compiler::hir::diagnostics -> compiler::hir (production) at .
 
 [[exception]]
 from_package = "compiler"
-from_path = ["hir", "expr"]
-to_package = "compiler"
-to_path = ["hir", "lower"]
-test_only = false
-reason = "Observed compiler::hir::expr -> compiler::hir::lower (production) at ./crates/graphcal-compiler/src/hir/expr.rs:53 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "expr"]
-to_package = "compiler"
-to_path = ["resolve"]
-test_only = false
-reason = "Observed compiler::hir::expr -> compiler::resolve (production) at ./crates/graphcal-compiler/src/hir/expr.rs:44 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["hir", "lower", "tests"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -47,6 +31,22 @@ to_package = "compiler"
 to_path = ["hir", "diagnostics"]
 test_only = false
 reason = "Observed compiler::hir::nominal -> compiler::hir::diagnostics (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:518 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
+
+[[exception]]
+from_package = "compiler"
+from_path = ["hir", "nominal"]
+to_package = "compiler"
+to_path = ["hir", "expr_lower", "context"]
+test_only = false
+reason = "Observed compiler::hir::nominal -> compiler::hir::expr_lower::context (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:574 (qualified path); roles are contracts -> checking. Exposed by the P5-0 split of the former contracts-labelled hir::expr (replaces its hir::expr -> hir::lower / resolve exceptions). Planned deletion seam: move nominal field/default lowering out of the nominal data module."
+
+[[exception]]
+from_package = "compiler"
+from_path = ["hir", "nominal"]
+to_package = "compiler"
+to_path = ["hir", "expr_lower", "lower"]
+test_only = false
+reason = "Observed compiler::hir::nominal -> compiler::hir::expr_lower::lower (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:589 (qualified path); roles are contracts -> checking. Exposed by the P5-0 split of the former contracts-labelled hir::expr. Planned deletion seam: move nominal field/default lowering out of the nominal data module."
 
 [[exception]]
 from_package = "compiler"

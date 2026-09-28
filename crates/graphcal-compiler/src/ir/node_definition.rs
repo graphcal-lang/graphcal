@@ -1,6 +1,8 @@
 //! Lower a node body without representing an unfinished marker as an expression.
 
-use crate::hir::expr::{ExprLowerError, ExprLoweringContext, lower_expr};
+use crate::hir::expr_lower::context::ExprLoweringContext;
+use crate::hir::expr_lower::error::ExprLowerError;
+use crate::hir::expr_lower::lower::{lower_expr, lower_graph_reference};
 use crate::hir::node_definition::NodeDefinition;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
@@ -20,7 +22,7 @@ pub(super) fn lower(
             let resolved = dependencies
                 .value
                 .iter()
-                .map(|reference| crate::hir::expr::lower_graph_reference(reference, context))
+                .map(|reference| lower_graph_reference(reference, context))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(NodeDefinition::Todo(Spanned::new(
                 resolved,
