@@ -64,8 +64,10 @@ pub(super) fn seed_imported_type_system(
             register_selected_resolved_dimensions_and_units(
                 builder,
                 artifact.frontend_registry(),
+                dep_dag_id,
                 names,
                 dep_loaded.named_source(),
+                file_src,
             )?;
             graphcal_compiler::ir::lower::register_selected_declarations(
                 dep_loaded.ast(),
@@ -85,8 +87,9 @@ pub(super) fn seed_imported_type_system(
             let inline_body = graphcal_compiler::desugar::desugared_ast::File {
                 declarations: inline_dag.body(owner_file).to_vec(),
             };
-            // Resolve the selected declarations in a scratch copy of this
-            // scope, then bind dimensions and units under their
+            // Resolve the selected declarations, together with the sibling
+            // dimensions their definitions reference, in a scratch copy of
+            // this scope. Then bind dimensions and units under their
             // importer-local names only (`dim Rate as R` binds `R`, never
             // `Rate`), exactly like a selective import from a file module.
             let mut scratch = builder.clone();
@@ -94,14 +97,16 @@ pub(super) fn seed_imported_type_system(
                 &inline_body,
                 &mut scratch,
                 owner_file.named_source(),
-                names,
+                &names.with_dimension_dependencies(&inline_body),
                 dep_dag_id,
             )?;
             register_selected_resolved_dimensions_and_units(
                 builder,
                 &scratch.build(),
+                dep_dag_id,
                 names,
                 owner_file.named_source(),
+                file_src,
             )?;
             graphcal_compiler::ir::lower::register_selected_declarations(
                 &inline_body,
@@ -161,8 +166,10 @@ pub(super) fn seed_imported_type_system(
 fn register_selected_resolved_dimensions_and_units(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
+    dep_dag_id: &graphcal_compiler::dag_id::DagId,
     selected: &graphcal_compiler::ir::lower::SelectedDeclarations,
     dep_src: &NamedSource<Arc<String>>,
+    importer_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     fn register_base_dimension_metadata(
         builder: &mut RegistryBuilder,
@@ -179,7 +186,8 @@ fn register_selected_resolved_dimensions_and_units(
         }
     }
 
-    for (local, source) in selected.dimensions() {
+    for (local, selected_dimension) in selected.dimensions() {
+        let source = selected_dimension.source();
         let dimension = dep_registry
             .dimensions
             .get_dimension(&DimRef::local(source.clone()))
@@ -193,6 +201,13 @@ fn register_selected_resolved_dimensions_and_units(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
+        let dimension = specialize_projected_dimension(
+            &dimension,
+            dep_dag_id,
+            selected_dimension,
+            builder,
+            importer_src,
+        )?;
         register_base_dimension_metadata(builder, dep_registry, &dimension);
         // Only the importer-local binding is source-visible (`dim Rate as R`
         // binds `R`, not `Rate`).
@@ -220,6 +235,44 @@ fn register_selected_resolved_dimensions_and_units(
     }
 
     Ok(())
+}
+
+/// Specialize a projected dimension through its include's dimension bindings.
+///
+/// A required dimension port is an opaque base dimension owned by the
+/// dependency, so a dimension defined over it (`QR = Q / Time`) keeps that
+/// base. Each such base bound by the projecting include is replaced with the
+/// importer's bound dimension (`dim Q: Length` makes `QR` `Length / Time`).
+/// An unknown binding target is left opaque here; the include's binding
+/// validation reports it.
+fn specialize_projected_dimension(
+    dimension: &graphcal_compiler::dimension::Dimension,
+    dep_dag_id: &graphcal_compiler::dag_id::DagId,
+    selected: &graphcal_compiler::ir::lower::SelectedDimension,
+    builder: &RegistryBuilder,
+    importer_src: &NamedSource<Arc<String>>,
+) -> Result<graphcal_compiler::dimension::Dimension, GraphcalError> {
+    use graphcal_compiler::dimension::{BaseDimId, Dimension};
+
+    dimension
+        .iter()
+        .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
+            let bound = match base {
+                BaseDimId::UserDefined(port) if port.owner() == dep_dag_id => selected
+                    .include_binding(&base.source_name())
+                    .and_then(|target| builder.get_dimension(&DimRef::local(target.clone()))),
+                BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
+            };
+            bound
+                .cloned()
+                .unwrap_or_else(|| Dimension::base(base.clone()))
+                .pow(*exponent)
+                .and_then(|factor| acc.checked_mul(&factor))
+        })
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: importer_src.clone(),
+            span: graphcal_compiler::syntax::span::Span::new(0, importer_src.inner().len()).into(),
+        })
 }
 
 /// Merge type-system declarations from a dependency's frozen registry into a
@@ -286,6 +339,9 @@ fn merge_registry_into_builder_filtered(
         if module_alias.is_some()
             || dim_bindings.contains_key(dimension_name.as_str())
             || pure_import_rejects(dimension_name.atom(), ImportItemNamespace::Dimension)
+            || builder
+                .get_dimension(&DimRef::local(dimension_name.clone()))
+                .is_some()
         {
             continue;
         }
@@ -321,6 +377,11 @@ fn merge_registry_into_builder_filtered(
             }
             None => reference.clone(),
         };
+        // The importer's own bindings (its declarations and specialized
+        // include projections) shadow the dependency's same-named scope.
+        if builder.get_dimension(&target).is_some() {
+            continue;
+        }
         builder.register_dimension(target, dim.clone());
     }
 

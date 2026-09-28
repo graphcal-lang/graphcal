@@ -878,6 +878,7 @@ fn record_include_projection(
     dag_id: &graphcal_compiler::dag_id::DagId,
     import_item: &graphcal_compiler::syntax::ast::ImportItem,
     projection: ProjectedStaticAlias,
+    dim_bindings: &DepToImporter<DimName>,
     unit_projection_aliases: &mut Vec<UnitProjectionAlias>,
 ) {
     if let ProjectedStaticAlias::Unit { alias, target } = &projection {
@@ -889,14 +890,25 @@ fn record_include_projection(
     if projection_uses_source_declaration(import_item, &projection)
         && projection_requires_source_registration(&projection)
     {
-        ctx.imported_type_system_names
+        let selected = ctx
+            .imported_type_system_names
             .entry(dag_id.clone())
-            .or_default()
-            .insert_as(
+            .or_default();
+        if import_item.namespace == ImportItemNamespace::Dimension {
+            // A projected dimension may be defined over the instance's
+            // dimension ports, so it carries this include's bindings.
+            selected.insert_dimension_projection(
+                DimName::from_atom(import_item.name.name.clone()),
+                DimName::from_atom(import_item.local_name_atom().clone()),
+                dim_bindings.clone(),
+            );
+        } else {
+            selected.insert_as(
                 import_item.namespace,
                 import_item.name.name.clone(),
                 import_item.local_name_atom().clone(),
             );
+        }
         if matches!(
             projection,
             ProjectedStaticAlias::Dimension { .. } | ProjectedStaticAlias::Unit { .. }
@@ -1171,6 +1183,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                         import_dag_id,
                         import_item,
                         projection,
+                        &dim_bindings,
                         &mut unit_projection_aliases,
                     );
                 }
@@ -1444,6 +1457,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                         dag_id,
                         import_item,
                         projection,
+                        &dim_bindings,
                         &mut unit_projection_aliases,
                     );
                 }

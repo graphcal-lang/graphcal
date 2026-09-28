@@ -37,7 +37,9 @@ pub use super::include::{
     IncludeOverrideReconciliations, SemanticInstanceInput, specialize_type_definition,
     substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
 };
-pub use super::registry_build::{SelectedDeclarations, register_selected_declarations};
+pub use super::registry_build::{
+    SelectedDeclarations, SelectedDimension, register_selected_declarations,
+};
 use super::registry_build::{extract_type_annotations, register_file_declarations};
 
 // ---------------------------------------------------------------------------

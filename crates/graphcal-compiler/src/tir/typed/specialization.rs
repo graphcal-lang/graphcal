@@ -6,8 +6,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use super::{
-    DagTIR, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr,
-    TIR,
+    DagTIR, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
+    ResolvedTypeExpr, TIR,
 };
 use crate::dag_id::{DescendantRebase, InstanceId};
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -49,7 +49,7 @@ fn type_substitution<'a>(
 fn specialize_dimension(
     dimension: &Dimension,
     substitution: &StaticSubstitution,
-    tir: &TIR,
+    types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
     dimension.iter().try_fold(
@@ -59,7 +59,7 @@ fn specialize_dimension(
                 BaseDimId::UserDefined(name) => dimension_substitution(substitution, name).map_or_else(
                     || Ok(Dimension::base(base.clone())),
                     |target| {
-                        tir.dimension(target).cloned().ok_or_else(|| {
+                        types.get_dimension(target).cloned().ok_or_else(|| {
                             GraphcalError::internal_error(
                                 format!(
                                     "semantic specialization dimension target `{target}` is unavailable"
@@ -110,18 +110,18 @@ fn specialize_index(index: &ResolvedIndex, substitution: &StaticSubstitution) ->
 fn specialize_dim_arg(
     dimension: &ResolvedDimArg,
     substitution: &StaticSubstitution,
-    tir: &TIR,
+    types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDimArg, GraphcalError> {
     match dimension {
         ResolvedDimArg::Concrete(dimension) => {
-            specialize_dimension(dimension, substitution, tir, src).map(ResolvedDimArg::Concrete)
+            specialize_dimension(dimension, substitution, types, src).map(ResolvedDimArg::Concrete)
         }
         ResolvedDimArg::Expr { terms, span } => terms
             .iter()
             .map(|term| match term {
                 ResolvedDimTerm::Concrete { dim, power, op } => {
-                    specialize_dimension(dim, substitution, tir, src).map(|dim| {
+                    specialize_dimension(dim, substitution, types, src).map(|dim| {
                         ResolvedDimTerm::Concrete {
                             dim,
                             power: *power,
@@ -137,19 +137,20 @@ fn specialize_dim_arg(
     }
 }
 
-fn specialize_type(
+pub fn specialize_type(
     resolved: &ResolvedTypeExpr,
     substitution: &StaticSubstitution,
-    tir: &TIR,
+    types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let recurse = |resolved: &ResolvedTypeExpr| specialize_type(resolved, substitution, tir, src);
+    let recurse = |resolved: &ResolvedTypeExpr| specialize_type(resolved, substitution, types, src);
     match resolved {
         ResolvedTypeExpr::Quantity(dimension) => {
-            specialize_dimension(dimension, substitution, tir, src).map(ResolvedTypeExpr::Quantity)
+            specialize_dimension(dimension, substitution, types, src)
+                .map(ResolvedTypeExpr::Quantity)
         }
         ResolvedTypeExpr::Complex { dimension, span } => {
-            specialize_dim_arg(dimension, substitution, tir, src).map(|dimension| {
+            specialize_dim_arg(dimension, substitution, types, src).map(|dimension| {
                 ResolvedTypeExpr::Complex {
                     dimension,
                     span: *span,
@@ -179,7 +180,7 @@ fn specialize_type(
                 .iter()
                 .map(|argument| match argument {
                     ResolvedGenericArg::Dim(dimension) => {
-                        specialize_dim_arg(dimension, substitution, tir, src)
+                        specialize_dim_arg(dimension, substitution, types, src)
                             .map(ResolvedGenericArg::Dim)
                     }
                     ResolvedGenericArg::Index(index) => Ok(ResolvedGenericArg::Index(
@@ -204,7 +205,7 @@ fn specialize_type(
                 .iter()
                 .map(|term| match term {
                     ResolvedDimTerm::Concrete { dim, power, op } => {
-                        specialize_dimension(dim, substitution, tir, src).map(|dim| {
+                        specialize_dimension(dim, substitution, types, src).map(|dim| {
                             ResolvedDimTerm::Concrete {
                                 dim,
                                 power: *power,
@@ -270,12 +271,18 @@ pub fn specialize_expression_type(
     use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType};
     let recurse = |ty: &DeclaredType| specialize_expression_type(ty, substitution, tir, src);
     Ok(match ty {
-        DeclaredType::Quantity(dimension) => {
-            DeclaredType::Quantity(specialize_dimension(dimension, substitution, tir, src)?)
-        }
-        DeclaredType::Complex(dimension) => {
-            DeclaredType::Complex(specialize_dimension(dimension, substitution, tir, src)?)
-        }
+        DeclaredType::Quantity(dimension) => DeclaredType::Quantity(specialize_dimension(
+            dimension,
+            substitution,
+            tir.project_type_store(),
+            src,
+        )?),
+        DeclaredType::Complex(dimension) => DeclaredType::Complex(specialize_dimension(
+            dimension,
+            substitution,
+            tir.project_type_store(),
+            src,
+        )?),
         DeclaredType::IndexArg(index) => {
             DeclaredType::IndexArg(specialize_index_ref(index, substitution))
         }
@@ -289,9 +296,14 @@ pub fn specialize_expression_type(
             args.iter()
                 .map(|arg| {
                     Ok(match arg {
-                        DeclaredGenericArg::Dim(dimension) => DeclaredGenericArg::Dim(
-                            specialize_dimension(dimension, substitution, tir, src)?,
-                        ),
+                        DeclaredGenericArg::Dim(dimension) => {
+                            DeclaredGenericArg::Dim(specialize_dimension(
+                                dimension,
+                                substitution,
+                                tir.project_type_store(),
+                                src,
+                            )?)
+                        }
                         DeclaredGenericArg::Index(index) => {
                             DeclaredGenericArg::Index(specialize_index_ref(index, substitution))
                         }
@@ -326,7 +338,7 @@ fn specialize_plot_channel(
             crate::plot_shape::PlotLeafKind::Quantity(specialize_dimension(
                 dimension,
                 substitution,
-                tir,
+                tir.project_type_store(),
                 src,
             )?)
         }
@@ -764,13 +776,13 @@ fn specialize_dynamic_unit_scales(
             entry.declared_dimension = specialize_dimension(
                 &entry.declared_dimension,
                 &specialization.substitution,
-                tir,
+                tir.project_type_store(),
                 src,
             )?;
             entry.base_unit_dimension = specialize_dimension(
                 &entry.base_unit_dimension,
                 &specialization.substitution,
-                tir,
+                tir.project_type_store(),
                 src,
             )?;
             Ok((unit, entry))
@@ -791,8 +803,13 @@ fn specialize_instance_semantics(
         .resolved_decl_types
         .iter()
         .map(|(name, resolved)| {
-            specialize_type(resolved, &specialization.substitution, tir, src)
-                .map(|resolved| (name.clone(), resolved))
+            specialize_type(
+                resolved,
+                &specialization.substitution,
+                tir.project_type_store(),
+                src,
+            )
+            .map(|resolved| (name.clone(), resolved))
         })
         .collect::<Result<_, _>>()?;
     instance.semantic.decl_bindings = instance
@@ -1122,7 +1139,7 @@ fn instantiate_semantic_edge(
             info.dimension = specialize_dimension(
                 &info.dimension,
                 &edge.instance.specialization.substitution,
-                tir,
+                tir.project_type_store(),
                 src,
             )?;
             Ok((ResolvedUnitName::from_def(owner.clone(), name), info))

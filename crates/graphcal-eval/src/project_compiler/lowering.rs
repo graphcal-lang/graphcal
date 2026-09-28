@@ -1620,11 +1620,6 @@ fn elaborate_include_instances(
                 selective,
                 &instance.pub_reexport_items,
                 &merge_prefix,
-                &AliasSubstitutions {
-                    index: &instance.index_bindings,
-                    r#type: &instance.type_bindings,
-                    dim: &instance.dim_bindings,
-                },
                 &AliasResolutionOwners {
                     r#type: &dep_resolution_owner,
                     body: importer_dag_id,
@@ -1842,46 +1837,31 @@ fn effective_index_binding_contract(
     }
 }
 
-/// Bindings that an alias's type annotation must be rewritten through before
-/// it is registered in the importer's HIR assembly. Shared by both inline-DAG and
-/// file-include alias paths so their type-substitution stays in lock-step.
-struct AliasSubstitutions<'a> {
-    pub index: &'a IndexBindings,
-    pub r#type: &'a HashMap<StructTypeName, StructTypeName>,
-    pub dim: &'a HashMap<DimName, DimName>,
-}
-
 struct AliasResolutionOwners<'a> {
     r#type: &'a graphcal_compiler::dag_id::DagId,
     body: &'a graphcal_compiler::dag_id::DagId,
 }
 
 /// Add `local_name = @prefix::orig_name` aliases (const or graph) for each
-/// selected item, rewriting the type annotation through `subs` so it lands
-/// in the importer's merged registry.
+/// selected item.
+///
+/// The alias keeps the template declaration's annotation, resolved in the
+/// template's scope: names it references (such as a dimension defined over a
+/// dimension port) need not be visible in the importer. TIR specializes the
+/// resolved type through the instance's Static substitution because every
+/// alias is an output projection of its semantic instance.
 ///
 /// `declarations` is the producer's effective HIR-facing value surface after
 /// its own includes have been elaborated. Type-system-only items are absent.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "selective alias materialization carries substitutions, ownership, visibility, and source provenance"
-)]
 fn add_selective_aliases_inner(
     declarations: &HashMap<DeclName, graphcal_compiler::ir::lower::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
     public_originals: &HashSet<DeclName>,
     prefix: &ModuleAliasName,
-    subs: &AliasSubstitutions<'_>,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
 ) {
-    let alias_type_resolution_owner =
-        if subs.index.is_empty() && subs.r#type.is_empty() && subs.dim.is_empty() {
-            owners.r#type.clone()
-        } else {
-            owners.body.clone()
-        };
     for alias in selective {
         let orig_name = &alias.original;
         let local_name = &alias.local;
@@ -1893,14 +1873,7 @@ fn add_selective_aliases_inner(
         let Some(declaration) = declarations.get(orig_name) else {
             continue;
         };
-        let mut type_ann = declaration.type_ann.clone();
-
-        graphcal_compiler::ir::lower::substitute_type_expr_indexes(&mut type_ann, subs.index);
-        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
-            &mut type_ann,
-            subs.r#type,
-        );
-        graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(&mut type_ann, subs.dim);
+        let type_ann = declaration.type_ann.clone();
 
         let alias_kind = if declaration.is_const {
             // A const alias body is a reference path to the prefixed target;
@@ -1931,7 +1904,7 @@ fn add_selective_aliases_inner(
             unfrozen.add_const_alias(
                 ScopedName::local(local_name.clone()),
                 type_ann,
-                alias_type_resolution_owner.clone(),
+                owners.r#type.clone(),
                 alias_expr,
                 owners.body.clone(),
                 import_span,
@@ -1940,7 +1913,7 @@ fn add_selective_aliases_inner(
             unfrozen.add_node_alias(
                 ScopedName::local(local_name.clone()),
                 type_ann,
-                alias_type_resolution_owner.clone(),
+                owners.r#type.clone(),
                 alias_expr,
                 owners.body.clone(),
                 import_span,

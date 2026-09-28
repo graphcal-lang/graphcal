@@ -1211,6 +1211,114 @@ fn selective_include_projects_specialized_adt_constructors() {
     assert_quantity_value(&result, "output", 2.0);
 }
 
+const DERIVED_FROM_BINDABLE_DIM_DAG: &str = "dag blib {\n\
+                                                   pub(bind) dim Q;\n\
+                                                   pub dim QR = Q / Time;\n\
+                                                   param q: Q;\n\
+                                                   pub node rate: QR = @q / 2.0 s;\n\
+                                               }\n";
+
+fn expect_annotation_mismatch(source: &str) {
+    match compile_and_eval(source) {
+        Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })) => {}
+        other => panic!("expected DimensionMismatchInAnnotation for\n{source}\ngot {other:?}"),
+    }
+}
+
+#[test]
+fn derived_dimension_over_bindable_dimension_is_accepted() {
+    compile_and_eval(DERIVED_FROM_BINDABLE_DIM_DAG)
+        .expect("a derived dimension may be defined over a required bindable dimension");
+
+    let with_default = "dag blib {\n\
+                            pub(bind) dim Q = Length;\n\
+                            pub dim QR = Q / Time;\n\
+                            pub unit per_two_seconds: QR = 0.5 m / s;\n\
+                            param q: QR = 3.0 per_two_seconds;\n\
+                            pub node rate: QR = @q;\n\
+                        }\n\
+                        include blib()::{rate, dim QR};\n\
+                        node x: QR = @rate;";
+    let result = compile_and_eval(with_default)
+        .expect("a derived dimension over a defaulted bindable dimension is accepted");
+    assert_quantity_value(&result, "x", 1.5);
+}
+
+#[test]
+fn derived_dimension_over_bindable_dimension_follows_the_include_binding() {
+    for include in [
+        "include blib(dim Q: Length, q: 4.0 m)::{dim QR, rate};",
+        "include blib(dim Q: Length, q: 4.0 m)::{rate};",
+    ] {
+        let source = format!(
+            "{DERIVED_FROM_BINDABLE_DIM_DAG}{include}\n\
+             node y: Length / Time = @rate;"
+        );
+        let result = compile_and_eval(&source)
+            .unwrap_or_else(|error| panic!("`{include}` was rejected: {error:?}"));
+        assert_quantity_value(&result, "y", 2.0);
+    }
+
+    for (projection, local) in [("dim QR", "QR"), ("dim QR as Speed", "Speed")] {
+        let prefix = format!(
+            "{DERIVED_FROM_BINDABLE_DIM_DAG}\
+             include blib(dim Q: Length, q: 4.0 m)::{{{projection}}};\n"
+        );
+        let result = compile_and_eval(&format!("{prefix}node x: {local} = 1.0 m/s;"))
+            .unwrap_or_else(|error| panic!("`{projection}` was not specialized: {error:?}"));
+        assert_quantity_value(&result, "x", 1.0);
+        expect_annotation_mismatch(&format!("{prefix}node x: {local} = 1.0 m;"));
+    }
+}
+
+#[test]
+fn derived_dimension_projection_from_file_module_follows_the_include_binding() {
+    let library = "pub(bind) dim Q;\n\
+                   pub dim QR = Q / Time;\n\
+                   param q: Q;\n\
+                   pub node rate: QR = @q / 2.0 s;\n";
+    for (main, expected) in [
+        (
+            "include pipeline.lib(dim Q: Mass, q: 4.0 kg)::{dim QR, rate};\n\
+             node x: QR = @rate;\n\
+             node y: Mass / Time = @x;\n",
+            Some(2.0),
+        ),
+        (
+            "include pipeline.lib(dim Q: Mass, q: 4.0 kg)::{dim QR};\n\
+             node y: QR = 1.0 m/s;\n",
+            None,
+        ),
+    ] {
+        let (_directory, root) =
+            write_pipeline_project(&[("lib.gcl", library), ("main.gcl", main)], "main.gcl");
+        let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
+        match (result, expected) {
+            (Ok(result), Some(value)) => assert_quantity_value(&result, "y", value),
+            (
+                Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })),
+                None,
+            ) => {}
+            (other, _) => panic!("unexpected result for\n{main}\n{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn included_dag_dimensions_do_not_shadow_importer_dimensions() {
+    let prefix = "dag blib {\n\
+                      pub dim R = Length;\n\
+                      param q: R;\n\
+                      pub node rate: R = @q;\n\
+                  }\n\
+                  dim R = Mass;\n\
+                  include blib(q: 4.0 m) as b;\n";
+    let result = compile_and_eval(&format!("{prefix}node x: R = 1.0 kg;"))
+        .expect("the importer's own dimension keeps its definition");
+    assert_quantity_value(&result, "x", 1.0);
+    expect_annotation_mismatch(&format!("{prefix}node x: R = 1.0 m;"));
+}
+
 #[test]
 fn constructor_empty_parentheses_are_rejected() {
     for (source, expected_constructor) in [

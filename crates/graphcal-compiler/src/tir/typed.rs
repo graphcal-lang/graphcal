@@ -214,8 +214,7 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
 ) -> Result<SignatureResolvedHirDag, GraphcalError> {
     cancellation.checkpoint()?;
     let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
-    let resolved_decl_types =
-        resolve_declared_type_exprs(&hir.consts, &hir.params, &hir.nodes, src, ctx, cancellation)?;
+    let resolved_decl_types = resolve_declared_type_exprs(&hir, src, ctx, cancellation)?;
     let declared_types = resolved_decl_types
         .iter()
         .map(|(name, resolved)| {
@@ -626,23 +625,50 @@ fn type_resolve_single_impl(
     Ok(dag)
 }
 
+/// Resolve every const/param/node annotation of one HIR DAG.
+///
+/// A value projected from a semantic include instance keeps the annotation of
+/// its template declaration, resolved in the template's scope. Its declared
+/// type is that annotation specialized through the instance's Static
+/// substitution, exactly as the instance output itself is specialized.
 fn resolve_declared_type_exprs(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
+    hir: &HirDag,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ScopedName, ResolvedTypeExpr>, GraphcalError> {
+    let projection_substitutions = hir
+        .semantic_instances
+        .iter()
+        .flat_map(|record| {
+            record.output_projections.iter().map(|projection| {
+                (
+                    &projection.exposed_name,
+                    &record.instance.specialization.substitution,
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
     let mut resolved = HashMap::new();
-    for (name, type_ann) in consts
+    for (name, type_ann) in hir
+        .consts
         .iter()
         .map(|entry| (&entry.name, &entry.type_ann))
-        .chain(params.iter().map(|entry| (&entry.name, &entry.type_ann)))
-        .chain(nodes.iter().map(|entry| (&entry.name, &entry.type_ann)))
+        .chain(
+            hir.params
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann)),
+        )
+        .chain(hir.nodes.iter().map(|entry| (&entry.name, &entry.type_ann)))
     {
         cancellation.checkpoint()?;
         let ty = resolve_hir_type_expr(&type_ann.type_expr, src, module_ctx)?;
+        let ty = match projection_substitutions.get(name) {
+            Some(substitution) => {
+                specialization::specialize_type(&ty, substitution, module_ctx.types, src)?
+            }
+            None => ty,
+        };
         resolved.insert(name.clone(), ty);
     }
     Ok(resolved)
