@@ -6,7 +6,7 @@
 //! semantic identity and source spelling in separate types prevents either
 //! case from being collapsed by a `HashMap<String, _>`.
 
-use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
+use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir;
 use graphcal_compiler::registry::time_scale::TimeScale;
@@ -182,7 +182,7 @@ pub enum SymbolId {
     GenericParam(GenericParamId),
     Local(LocalSymbolId),
     ExternFunction(ExternFunctionId),
-    BuiltinFunction(BuiltinFnName),
+    BuiltinFunction(BuiltinFn),
     BuiltinConstant(BuiltinConst),
     TimeScale(TimeScale),
 }

@@ -624,7 +624,7 @@ mod tests {
     fn reassigned_codes_survive_lsp_conversion_by_variant() {
         use std::sync::Arc;
 
-        use graphcal_compiler::builtin::BuiltinFnName;
+        use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
         use graphcal_compiler::datetime_literal::DatetimeLiteralExpectation;
         use graphcal_compiler::registry::error::GraphcalError;
         use graphcal_compiler::syntax::names::NameAtom;
@@ -642,7 +642,7 @@ mod tests {
             ),
             (
                 GraphcalError::AggregationCardinalityUnknown {
-                    function: BuiltinFnName::Product,
+                    function: AggregationFn::Value(ValueAggregation::Product),
                     src: src(),
                     span: span(),
                 },

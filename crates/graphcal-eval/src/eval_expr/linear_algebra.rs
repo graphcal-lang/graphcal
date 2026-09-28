@@ -57,7 +57,7 @@ pub(super) enum LinearAlgebraError {
     WorkAmount(#[from] WorkAmountError),
     #[error("`{function}()` {source}")]
     WorkBudget {
-        function: graphcal_compiler::builtin::BuiltinFnName,
+        function: LinearAlgebraFn,
         #[source]
         source: WorkBudgetError,
     },
@@ -98,10 +98,7 @@ fn kernel_control<'a>(
     let amount = WorkAmount::checked_product(factors, multiplier)?;
     ctx.work_budget
         .consume(amount)
-        .map_err(|source| LinearAlgebraError::WorkBudget {
-            function: function.builtin_name(),
-            source,
-        })?;
+        .map_err(|source| LinearAlgebraError::WorkBudget { function, source })?;
     Ok(KernelCheckpoint::new(&ctx.cancellation))
 }
 
@@ -312,7 +309,7 @@ fn one_argument(
         .map_err(|arguments| {
             LinearAlgebraError::ShapeInvariant(format!(
                 "{}() received {} arguments after type checking",
-                function.builtin_name(),
+                function,
                 arguments.len()
             ))
         })
@@ -325,7 +322,7 @@ fn two_arguments(
     <[RuntimeValue; 2]>::try_from(arguments).map_err(|arguments| {
         LinearAlgebraError::ShapeInvariant(format!(
             "{}() received {} arguments after type checking",
-            function.builtin_name(),
+            function,
             arguments.len()
         ))
     })

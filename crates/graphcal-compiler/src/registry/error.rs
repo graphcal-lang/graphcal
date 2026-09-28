@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
-use crate::builtin::BuiltinFnName;
+use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
@@ -768,7 +768,7 @@ pub enum GraphcalError {
     #[error("incompatible indexed shape for `{function}()`: expected {expected}, found {found}")]
     #[diagnostic(code(graphcal::D022), help("{help}"))]
     LinearAlgebraShapeMismatch {
-        function: BuiltinFnName,
+        function: LinearAlgebraFn,
         expected: String,
         found: String,
         help: String,
@@ -801,7 +801,7 @@ pub enum GraphcalError {
         )
     )]
     MultiAxisAggregation {
-        function: BuiltinFnName,
+        function: AggregationFn,
         rank: usize,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -834,7 +834,7 @@ pub enum GraphcalError {
         )
     )]
     AggregationCardinalityUnknown {
-        function: BuiltinFnName,
+        function: AggregationFn,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("axis cardinality is abstract here")]

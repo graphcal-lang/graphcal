@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName, KeyAggregation, ValueAggregation};
+use graphcal_compiler::builtin::{
+    AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
+    DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
+};
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
@@ -20,10 +23,6 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
 use super::arithmetic::{Comparison, OrderingOp};
-use super::builtin_call::{
-    DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
-    TypeConversionFn, eval_rule_for_builtin,
-};
 use super::{
     EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
@@ -661,19 +660,18 @@ fn eval_hir_unary(
 }
 
 fn expect_hir_builtin_arity(
-    name: BuiltinFnName,
+    function: BuiltinFn,
     args: &[hir::Expr],
-    expected: usize,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    if args.len() == expected {
+    let expected = function.entry().arity();
+    if expected.accepts(args.len()) {
         return Ok(());
     }
     Err(ctx.internal_error(
         format!(
-            "{}() received {} argument(s) after dim-check accepted arity {expected}",
-            name.as_str(),
+            "{function}() received {} argument(s) after dim-check accepted arity {expected}",
             args.len()
         ),
         span,
@@ -693,15 +691,15 @@ fn eval_hir_fn_call(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
-        FunctionRef::Builtin(builtin) => (builtin.name(), None),
-        FunctionRef::Epoch { scale } => (BuiltinFnName::Epoch, Some(scale.value)),
+        FunctionRef::Builtin(builtin) => (builtin.function(), None),
+        FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
         FunctionRef::External(ext) => {
             return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
         }
     };
-    match eval_rule_for_builtin(name) {
-        EvalBuiltinRule::Complex(function) => {
-            expect_hir_builtin_arity(name, args, function.arity(), callee.span, ctx)?;
+    match name {
+        BuiltinFn::Complex(function) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arguments = args
                 .iter()
                 .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
@@ -714,8 +712,8 @@ fn eval_hir_fn_call(
                 }
             })
         }
-        EvalBuiltinRule::CollectionAggregation(kind) => {
-            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
+        BuiltinFn::Aggregation(kind) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Indexed {
                 index_name,
@@ -736,8 +734,8 @@ fn eval_hir_fn_call(
                 }
             }
         }
-        EvalBuiltinRule::LinearAlgebra(function) => {
-            expect_hir_builtin_arity(name, args, function.arity(), callee.span, ctx)?;
+        BuiltinFn::LinearAlgebra(function) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arguments = args
                 .iter()
                 .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
@@ -755,11 +753,11 @@ fn eval_hir_fn_call(
                 )
             })
         }
-        EvalBuiltinRule::TypeConversion(kind) => {
+        BuiltinFn::Conversion(kind) => {
             eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
         }
-        EvalBuiltinRule::TimeScaleConversion(scale) => {
-            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
+        BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
@@ -768,14 +766,14 @@ fn eval_hir_fn_call(
                 ));
             };
             Ok(RuntimeValue::Datetime(
-                epoch.to_time_scale(scale.to_hifitime()),
+                epoch.to_time_scale(conversion.target().to_hifitime()),
             ))
         }
-        EvalBuiltinRule::DatetimeConstructor(kind) => {
+        BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => {
             eval_hir_datetime_constructor(kind, epoch_scale, expr.span, args, ctx.src)
         }
-        EvalBuiltinRule::DatetimeExtract(kind) => {
-            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
+        BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -790,19 +788,19 @@ fn eval_hir_fn_call(
                 )
             })?;
             let result = match kind {
-                DatetimeExtractFn::Year => fields.year(),
-                DatetimeExtractFn::Month => fields.month(),
-                DatetimeExtractFn::Day => fields.day(),
-                DatetimeExtractFn::Hour => fields.hour(),
-                DatetimeExtractFn::Minute => fields.minute(),
-                DatetimeExtractFn::Second => fields.second(),
-                DatetimeExtractFn::Weekday => fields.iso_weekday(),
-                DatetimeExtractFn::DayOfYear => fields.day_of_year(),
+                DatetimeField::Year => fields.year(),
+                DatetimeField::Month => fields.month(),
+                DatetimeField::Day => fields.day(),
+                DatetimeField::Hour => fields.hour(),
+                DatetimeField::Minute => fields.minute(),
+                DatetimeField::Second => fields.second(),
+                DatetimeField::Weekday => fields.iso_weekday(),
+                DatetimeField::DayOfYear => fields.day_of_year(),
             };
             Ok(RuntimeValue::Int(result))
         }
-        EvalBuiltinRule::DatetimeFromNumeric(kind) => {
-            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
+        BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Quantity(v) => v.get(),
@@ -817,16 +815,16 @@ fn eval_hir_fn_call(
                 }
             };
             let kind = match kind {
-                DatetimeFromFn::Jd => super::datetime::NumericEpochKind::JulianDate,
-                DatetimeFromFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
-                DatetimeFromFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
+                DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
+                DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
+                DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
             };
             super::datetime::checked_epoch_from_numeric(num, kind)
                 .map(RuntimeValue::Datetime)
                 .map_err(|error| ctx.eval_error(error.to_string(), args[0].span))
         }
-        EvalBuiltinRule::DatetimeToNumeric(kind) => {
-            expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
+        BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
+            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -835,14 +833,14 @@ fn eval_hir_fn_call(
                 ));
             };
             let result = match kind {
-                DatetimeToFn::Jd => epoch.to_jde_utc_days(),
-                DatetimeToFn::Mjd => epoch.to_mjd_utc_days(),
-                DatetimeToFn::Unix => epoch.to_unix_seconds(),
+                DatetimeToNumericFn::Jd => epoch.to_jde_utc_days(),
+                DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
+                DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
             };
             checked_finite_quantity(result, "datetime conversion", args[0].span, ctx)
         }
-        EvalBuiltinRule::RegistryFunction => {
-            eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
+        BuiltinFn::Scalar(function) => {
+            eval_hir_builtin_fn(expr, function, args, values, local_values, ctx)
         }
     }
 }
@@ -1056,21 +1054,16 @@ fn eval_hir_aggregation_fn(
 }
 
 fn eval_hir_conversion_fn(
-    kind: TypeConversionFn,
+    kind: ConversionFn,
     span: Span,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let name = match kind {
-        TypeConversionFn::ToFloat => BuiltinFnName::ToFloat,
-        TypeConversionFn::ToInt => BuiltinFnName::ToInt,
-        TypeConversionFn::Coord => BuiltinFnName::Coord,
-    };
-    expect_hir_builtin_arity(name, args, 1, span, ctx)?;
+    expect_hir_builtin_arity(BuiltinFn::Conversion(kind), args, span, ctx)?;
     match kind {
-        TypeConversionFn::ToFloat => {
+        ConversionFn::ToFloat => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(
@@ -1083,7 +1076,7 @@ fn eval_hir_conversion_fn(
             )]
             checked_finite_quantity(i as f64, "to_float()", args[0].span, ctx)
         }
-        TypeConversionFn::ToInt => {
+        ConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             // A Fin-axis key is represented as its position integer: to_int()
             // on a key is the identity at runtime, checked at the type level.
@@ -1107,7 +1100,7 @@ fn eval_hir_conversion_fn(
                     ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
                 })
         }
-        TypeConversionFn::Coord => {
+        ConversionFn::Coord => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::CoordinateLabel { value, .. } = arg else {
                 return Err(ctx.internal_error(
@@ -1692,15 +1685,13 @@ fn eval_hir_extern_fn(
 
 fn eval_hir_builtin_fn(
     expr: &hir::Expr,
-    name: BuiltinFnName,
+    name: ScalarFn,
     args: &[hir::Expr],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let builtin = graphcal_compiler::registry::builtins::builtin_functions()
-        .get(&name)
-        .ok_or_else(|| ctx.eval_error(format!("unknown function `{name}`"), expr.span))?;
+    let builtin = graphcal_compiler::registry::builtins::scalar_function(name);
     let arg_values: Vec<f64> = args
         .iter()
         .map(|arg| {

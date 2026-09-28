@@ -6,7 +6,6 @@
 //! domain bounds) gained a stored HIR form (#765). Closed external binding
 //! values are lowered independently and checked through the same HIR rules.
 
-mod builtin_call;
 mod complex;
 pub(super) mod hir;
 mod linear_algebra;

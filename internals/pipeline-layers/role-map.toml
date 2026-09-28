@@ -1112,16 +1112,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "dim_check", "infer", "builtin_call"]
-role = "checking"
-
-[[module]]
-package = "compiler"
-path = ["tir", "dim_check", "infer", "builtin_call", "tests"]
-role = "checking"
-
-[[module]]
-package = "compiler"
 path = ["tir", "dim_check", "infer", "complex"]
 role = "checking"
 
@@ -1384,16 +1374,6 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "arithmetic", "tests"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
-path = ["eval_expr", "builtin_call"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
-path = ["eval_expr", "builtin_call", "tests"]
 role = "interpreter"
 
 [[module]]
