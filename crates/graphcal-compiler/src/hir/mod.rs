@@ -29,6 +29,7 @@ pub mod const_expr;
 pub(crate) mod const_lower;
 pub(crate) mod diagnostics;
 pub mod expr;
+pub(crate) mod expr_lower;
 pub mod lower;
 pub mod node_definition;
 pub mod nominal;
@@ -38,11 +39,14 @@ pub mod types;
 pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
     AssertBody, CheckedAssertBody, CheckedExpr, ConstRef, Expr, ExprDependencies, ExprKind,
-    ExprLowerError, ExprLoweringContext, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId,
-    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, UnappliedFunctionRef,
-    collect_expr_dependencies, find_dag_call, lower_expr_tolerant,
+    ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr, ResolvedUnitExprItem,
+    ResolvedUnitRef, UnappliedFunctionRef, collect_expr_dependencies, find_dag_call,
 };
-pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr, visit_expr};
+pub(crate) use expr::{find_extern_call, visit_expr};
+pub use expr_lower::context::ExprLoweringContext;
+pub use expr_lower::error::ExprLowerError;
+pub use expr_lower::lower::lower_expr_tolerant;
+pub(crate) use expr_lower::lower::{lower_assert_body, lower_expr};
 pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
 pub(crate) use lower::{TypeLoweringContext, lower_decl_type};
 pub use nominal::{

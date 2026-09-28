@@ -362,8 +362,63 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["hir", "expr", "tests"]
+path = ["hir", "expr", "checked"]
 role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "local_env"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "model"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr", "visit"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "call"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "context"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "error"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "lowerer"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "resolve"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "expr_lower", "tests"]
+role = "checking"
 
 [[module]]
 package = "compiler"
