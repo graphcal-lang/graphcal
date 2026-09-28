@@ -7,7 +7,9 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-use super::static_dependencies::{StaticImportRejection, static_import_rejection};
+use super::static_dependencies::{
+    ModuleDeclarations, StaticImportRejection, StaticScope, static_import_rejection,
+};
 use super::static_interface::{
     StaticInputKind, StaticInterface, StaticProjectionError, StaticProjectionIdentity, StaticRole,
     project_static_identity, static_binding_valid,
@@ -158,7 +160,22 @@ fn run_import(source: OracleRole, dependency: Option<OracleRole>) -> OracleDecis
         .unwrap_or_else(|error| panic!("oracle scenario rendered invalid Graphcal: {error}"));
     let file = crate::desugar::desugared_ast::File::from(parsed);
     let subject = NameAtom::parse("Subject").expect("valid test identifier");
-    match static_import_rejection(&file.declarations, &subject, ImportItemNamespace::Type) {
+    let owner =
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("oracle.gcl"))
+            .expect("valid oracle module path");
+    let mut tables = crate::resolve::builder::SymbolTables::default();
+    tables
+        .add_file(owner.clone(), &file.declarations)
+        .expect("oracle scenario declares distinct names");
+    let resolver = tables
+        .scopes(&crate::resolve::builder::NoModuleTargets)
+        .and_then(crate::resolve::builder::ScopeBuilder::freeze)
+        .expect("oracle scenario has no imports");
+    match static_import_rejection(
+        ModuleDeclarations::new(&file.declarations, StaticScope::new(&owner, &resolver)),
+        &subject,
+        ImportItemNamespace::Type,
+    ) {
         None => OracleDecision::Accepted,
         Some(StaticImportRejection::RequiredInput { .. }) => OracleDecision::Rejected {
             rule: OracleRule::DeclarationNotImportable,

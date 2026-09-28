@@ -137,6 +137,40 @@ pub type ResolvedConstructorName = ResolvedName<ConstructorNameNamespace>;
 /// Module-resolved index name.
 pub type ResolvedIndexName = ResolvedName<IndexNameNamespace>;
 
+/// A module-resolved name in the Static slot: a dimension, a
+/// struct/tagged-union type, or an index.
+///
+/// A module's Static slot holds at most one of these per leaf, so a Static
+/// path position that the parser cannot classify still resolves uniquely.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ResolvedStaticName {
+    Dimension(ResolvedDimName),
+    Type(ResolvedStructTypeName),
+    Index(ResolvedIndexName),
+}
+
+impl ResolvedStaticName {
+    /// Canonical module that defines the name.
+    #[must_use]
+    pub const fn owner(&self) -> &DagId {
+        match self {
+            Self::Dimension(name) => name.owner(),
+            Self::Type(name) => name.owner(),
+            Self::Index(name) => name.owner(),
+        }
+    }
+
+    /// Declared leaf name inside [`Self::owner`].
+    #[must_use]
+    pub const fn atom(&self) -> &NameAtom {
+        match self {
+            Self::Dimension(name) => name.atom(),
+            Self::Type(name) => name.atom(),
+            Self::Index(name) => name.atom(),
+        }
+    }
+}
+
 impl ResolvedDeclName {
     /// The `dag` declaration that names an inline DAG module in its parent,
     /// or `None` for a file root or a concrete instance.

@@ -10,6 +10,7 @@ use graphcal_compiler::ir::instance::{
     StaticSubstitution, instance_declaration, template_declaration,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
+use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
 use graphcal_compiler::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
@@ -731,7 +732,10 @@ fn process_dag_body_import_declarations<'a>(
             project,
             target,
             import_decl,
-            dag_body,
+            ModuleDeclarations::new(
+                dag_body,
+                StaticScope::new(loaded_dag.dag_id(), module_resolver),
+            ),
             file_src,
             module_artifacts,
             module_resolver,
@@ -1598,6 +1602,7 @@ fn elaborate_include_instances(
         )?;
         check_generics_leakage(
             body_decls_for_aliases,
+            StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
             &instance.index_bindings,
             &instance.type_bindings,

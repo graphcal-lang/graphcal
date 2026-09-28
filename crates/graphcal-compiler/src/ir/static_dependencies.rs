@@ -1,275 +1,351 @@
 //! Pure transitive Static dependency analysis for external declaration surfaces.
+//!
+//! A declaration's Static dependencies are the dimensions, types, and indexes
+//! its semantic signature names. Each name is resolved by the
+//! [`ModuleResolver`] in the declaring module's scope, so a bare type-position
+//! name that the parser cannot classify (`x: Foo` may name a type or a
+//! dimension) has exactly one resolved target: a module's Static slot holds at
+//! most one symbol per leaf.
 
 use std::collections::{HashMap, HashSet};
 
+use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{DeclKind, Declaration, IndexExpr, TypeExpr, TypeExprKind};
-use crate::ir::static_interface::{StaticInputKind, StaticRole, static_interface};
+use crate::ir::static_interface::{
+    StaticImportRejections, StaticInputKind, StaticRole, static_interface,
+};
+use crate::resolve::ModuleResolver;
+use crate::resolved_name::ResolvedStaticName;
 use crate::syntax::ast::{GenericArg, ImportItemNamespace};
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::phase::never;
 
-/// Namespace candidates carried by one unresolved Static reference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StaticReferenceNamespaces {
-    Exact(StaticInputKind),
-    TypeOrDimension,
-    IndexTypeOrDimension,
+/// The module scope in which a declaration's Static references resolve.
+#[derive(Debug, Clone, Copy)]
+pub struct StaticScope<'a> {
+    owner: &'a DagId,
+    resolver: &'a ModuleResolver,
 }
 
-/// One structured Static name reference retained before module-aware resolution.
+impl<'a> StaticScope<'a> {
+    /// Resolve references of declarations owned by `owner`.
+    #[must_use]
+    pub const fn new(owner: &'a DagId, resolver: &'a ModuleResolver) -> Self {
+        Self { owner, resolver }
+    }
+
+    /// The module whose declarations are analyzed.
+    #[must_use]
+    pub const fn owner(&self) -> &'a DagId {
+        self.owner
+    }
+}
+
+/// A module's declarations paired with the scope their references resolve in.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleDeclarations<'a> {
+    declarations: &'a [Declaration],
+    scope: StaticScope<'a>,
+}
+
+impl<'a> ModuleDeclarations<'a> {
+    /// Pair `declarations` with the module scope that declares them.
+    #[must_use]
+    pub const fn new(declarations: &'a [Declaration], scope: StaticScope<'a>) -> Self {
+        Self {
+            declarations,
+            scope,
+        }
+    }
+
+    /// The declarations in source order.
+    #[must_use]
+    pub const fn declarations(&self) -> &'a [Declaration] {
+        self.declarations
+    }
+
+    /// The scope the declarations resolve in.
+    #[must_use]
+    pub const fn scope(&self) -> StaticScope<'a> {
+        self.scope
+    }
+}
+
+/// One Static name referenced by a declaration signature, with its source
+/// spelling and its resolved target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticReference {
     path: NamePath,
-    namespaces: StaticReferenceNamespaces,
+    target: ResolvedStaticName,
 }
 
 impl StaticReference {
-    #[must_use]
-    pub const fn exact(name: NameAtom, kind: StaticInputKind) -> Self {
-        Self {
-            path: NamePath::local(name),
-            namespaces: StaticReferenceNamespaces::Exact(kind),
-        }
-    }
-
-    #[must_use]
-    pub const fn exact_path(path: NamePath, kind: StaticInputKind) -> Self {
-        Self {
-            path,
-            namespaces: StaticReferenceNamespaces::Exact(kind),
-        }
-    }
-
-    #[must_use]
-    pub const fn ambiguous(name: NameAtom, namespaces: StaticReferenceNamespaces) -> Self {
-        Self {
-            path: NamePath::local(name),
-            namespaces,
-        }
-    }
-
-    #[must_use]
-    pub const fn ambiguous_path(path: NamePath, namespaces: StaticReferenceNamespaces) -> Self {
-        Self { path, namespaces }
-    }
-
+    /// The source spelling of the reference.
     #[must_use]
     pub const fn path(&self) -> &NamePath {
         &self.path
     }
 
+    /// The resolved Static symbol.
     #[must_use]
-    pub const fn bare_name(&self) -> Option<&NameAtom> {
-        self.path.as_bare()
+    pub const fn target(&self) -> &ResolvedStaticName {
+        &self.target
     }
 
+    /// The Static input kind of the resolved symbol.
     #[must_use]
-    pub const fn namespaces(&self) -> StaticReferenceNamespaces {
-        self.namespaces
+    pub const fn kind(&self) -> StaticInputKind {
+        static_input_kind(&self.target)
     }
 }
 
-fn collect_path(path: &NamePath, kind: StaticInputKind, references: &mut Vec<StaticReference>) {
-    references.push(StaticReference::exact_path(path.clone(), kind));
-}
-
-fn collect_ambiguous_path(
-    path: &NamePath,
-    namespaces: StaticReferenceNamespaces,
-    references: &mut Vec<StaticReference>,
-) {
-    references.push(StaticReference::ambiguous_path(path.clone(), namespaces));
-}
-
-/// Collect every bare Static name referenced by a type expression.
-pub fn collect_type_expr_static_references(
-    type_expr: &TypeExpr,
-    references: &mut Vec<StaticReference>,
-) {
-    match &type_expr.kind {
-        TypeExprKind::DimExpr(dim_expr) => match dim_expr.terms.as_slice() {
-            [item] if item.term.power.is_none() => collect_ambiguous_path(
-                &item.term.name.value,
-                StaticReferenceNamespaces::TypeOrDimension,
-                references,
-            ),
-            terms => {
-                for item in terms {
-                    collect_path(
-                        &item.term.name.value,
-                        StaticInputKind::Dimension,
-                        references,
-                    );
-                }
-            }
-        },
-        TypeExprKind::Indexed { base, indexes } => {
-            collect_type_expr_static_references(base, references);
-            for index in indexes {
-                if let IndexExpr::Name(path) = index {
-                    collect_path(&path.value, StaticInputKind::Index, references);
-                }
-            }
-        }
-        TypeExprKind::TypeApplication { name, generic_args } => {
-            collect_path(&name.value, StaticInputKind::Type, references);
-            for argument in generic_args {
-                collect_generic_arg_static_references(argument, references);
-            }
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            for argument in generic_args {
-                collect_generic_arg_static_references(argument, references);
-            }
-        }
-        TypeExprKind::DatetimeApplication { type_args } => {
-            for argument in type_args {
-                collect_type_expr_static_references(argument, references);
-            }
-        }
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime => {}
-    }
-}
-
-/// Collect every bare Static name referenced by a generic argument.
-pub fn collect_generic_arg_static_references(
-    argument: &GenericArg<crate::syntax::phase::Desugared>,
-    references: &mut Vec<StaticReference>,
-) {
-    match argument {
-        GenericArg::Type(type_expr) => collect_type_expr_static_references(type_expr, references),
-        GenericArg::Index(IndexExpr::Name(path)) => {
-            collect_path(&path.value, StaticInputKind::Index, references);
-        }
-        GenericArg::Index(IndexExpr::Finite { .. } | IndexExpr::BareNat(_))
-        | GenericArg::Nat(_) => {}
-        GenericArg::Ambiguous(ambiguous) => {
-            collect_ambiguous_generic_static_references(ambiguous, references);
-        }
-    }
-}
-
-fn collect_ambiguous_generic_static_references(
-    argument: &crate::desugar::desugared_ast::AmbiguousGenericArg,
-    references: &mut Vec<StaticReference>,
-) {
-    match argument {
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(identifier) => {
-            references.push(StaticReference::ambiguous(
-                identifier.name.atom().clone(),
-                StaticReferenceNamespaces::IndexTypeOrDimension,
-            ));
-        }
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
-            for operand in operands {
-                collect_ambiguous_generic_static_references(operand, references);
-            }
-        }
-    }
-}
-
-/// Collect Static dependencies from one declaration's semantic signature.
+/// The Static input kind of a resolved Static symbol.
 #[must_use]
-pub fn declaration_static_references(kind: &DeclKind) -> Vec<StaticReference> {
-    let mut references = Vec::new();
-    match kind {
-        DeclKind::Param(param) => {
-            collect_type_expr_static_references(&param.type_ann, &mut references);
+pub const fn static_input_kind(target: &ResolvedStaticName) -> StaticInputKind {
+    match target {
+        ResolvedStaticName::Dimension(_) => StaticInputKind::Dimension,
+        ResolvedStaticName::Type(_) => StaticInputKind::Type,
+        ResolvedStaticName::Index(_) => StaticInputKind::Index,
+    }
+}
+
+/// Which Static symbols a syntactic reference position admits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaticPosition {
+    /// A multi-term dimension expression or a dimension-only position.
+    Dimension,
+    /// A type-application head.
+    Type,
+    /// An index position in an indexed type.
+    Index,
+    /// A single-name type annotation: a type or a dimension.
+    TypeOrDimension,
+    /// A bare generic argument: an index, a type, or a dimension.
+    Any,
+}
+
+impl StaticPosition {
+    const fn admits(self, target: &ResolvedStaticName) -> bool {
+        matches!(
+            (self, target),
+            (Self::Any, _)
+                | (
+                    Self::Dimension | Self::TypeOrDimension,
+                    ResolvedStaticName::Dimension(_)
+                )
+                | (
+                    Self::Type | Self::TypeOrDimension,
+                    ResolvedStaticName::Type(_)
+                )
+                | (Self::Index, ResolvedStaticName::Index(_))
+        )
+    }
+}
+
+/// Collects resolved references while walking one declaration signature.
+struct Collector<'a> {
+    scope: StaticScope<'a>,
+    /// Generic parameters of the enclosing `type` declaration; they are
+    /// lexical binders, not module Static symbols.
+    generic_parameters: HashSet<NameAtom>,
+    references: Vec<StaticReference>,
+}
+
+impl Collector<'_> {
+    fn path(&mut self, path: &NamePath, position: StaticPosition) {
+        if path
+            .as_bare()
+            .is_some_and(|name| self.generic_parameters.contains(name))
+        {
+            return;
         }
-        DeclKind::Node(node) => {
-            collect_type_expr_static_references(&node.type_ann, &mut references);
+        // An unresolvable name is diagnosed where the signature is lowered;
+        // it contributes no dependency here.
+        if let Ok(target) = self
+            .scope
+            .resolver
+            .resolve_static_path(self.scope.owner, path)
+            && position.admits(&target)
+        {
+            self.references.push(StaticReference {
+                path: path.clone(),
+                target,
+            });
         }
-        DeclKind::ConstNode(constant) => {
-            collect_type_expr_static_references(&constant.type_ann, &mut references);
-        }
-        DeclKind::Unit(unit) => {
-            for item in &unit.dim_type.terms {
-                collect_path(
-                    &item.term.name.value,
-                    StaticInputKind::Dimension,
-                    &mut references,
-                );
-            }
-        }
-        DeclKind::Dimension(dimension) => {
-            if let Some(definition) = &dimension.definition {
-                for item in &definition.terms {
-                    collect_path(
-                        &item.term.name.value,
-                        StaticInputKind::Dimension,
-                        &mut references,
-                    );
+    }
+
+    fn type_expr(&mut self, type_expr: &TypeExpr) {
+        match &type_expr.kind {
+            TypeExprKind::DimExpr(dim_expr) => match dim_expr.terms.as_slice() {
+                [item] if item.term.power.is_none() => {
+                    self.path(&item.term.name.value, StaticPosition::TypeOrDimension);
                 }
-            }
-        }
-        DeclKind::Type(type_decl) => {
-            if let crate::desugar::desugared_ast::TypeDeclBody::Constructors(members) =
-                &type_decl.body
-            {
-                for member in members {
-                    for field in member.payload.iter().flatten() {
-                        collect_type_expr_static_references(&field.type_ann, &mut references);
+                terms => {
+                    for item in terms {
+                        self.path(&item.term.name.value, StaticPosition::Dimension);
+                    }
+                }
+            },
+            TypeExprKind::Indexed { base, indexes } => {
+                self.type_expr(base);
+                for index in indexes {
+                    if let IndexExpr::Name(path) = index {
+                        self.path(&path.value, StaticPosition::Index);
                     }
                 }
             }
-            for default in type_decl
-                .generic_params
-                .iter()
-                .filter_map(|parameter| parameter.default.as_ref())
-            {
-                collect_generic_arg_static_references(default, &mut references);
+            TypeExprKind::TypeApplication { name, generic_args } => {
+                self.path(&name.value, StaticPosition::Type);
+                for argument in generic_args {
+                    self.generic_arg(argument);
+                }
             }
-            let generic_parameters = type_decl
-                .generic_params
-                .iter()
-                .map(|parameter| parameter.name.value.atom().clone())
-                .collect::<HashSet<_>>();
-            references.retain(|reference| {
-                reference
-                    .bare_name()
-                    .is_none_or(|name| !generic_parameters.contains(name))
-            });
+            TypeExprKind::ComplexApplication { generic_args }
+            | TypeExprKind::KeyApplication { generic_args } => {
+                for argument in generic_args {
+                    self.generic_arg(argument);
+                }
+            }
+            TypeExprKind::DatetimeApplication { type_args } => {
+                for argument in type_args {
+                    self.type_expr(argument);
+                }
+            }
+            TypeExprKind::IndexLabel { .. }
+            | TypeExprKind::Dimensionless
+            | TypeExprKind::Bool
+            | TypeExprKind::Int
+            | TypeExprKind::Datetime => {}
         }
-        DeclKind::Index(index) => {
-            if let crate::desugar::desugared_ast::IndexDeclKind::RequiredCoordinate { dimension } =
-                &index.kind
-            {
-                for item in &dimension.terms {
-                    collect_path(
-                        &item.term.name.value,
-                        StaticInputKind::Dimension,
-                        &mut references,
-                    );
+    }
+
+    fn generic_arg(&mut self, argument: &GenericArg<crate::syntax::phase::Desugared>) {
+        match argument {
+            GenericArg::Type(type_expr) => self.type_expr(type_expr),
+            GenericArg::Index(IndexExpr::Name(path)) => {
+                self.path(&path.value, StaticPosition::Index);
+            }
+            GenericArg::Index(IndexExpr::Finite { .. } | IndexExpr::BareNat(_))
+            | GenericArg::Nat(_) => {}
+            GenericArg::Ambiguous(ambiguous) => self.ambiguous_generic_arg(ambiguous),
+        }
+    }
+
+    fn ambiguous_generic_arg(
+        &mut self,
+        argument: &crate::desugar::desugared_ast::AmbiguousGenericArg,
+    ) {
+        match argument {
+            crate::desugar::desugared_ast::AmbiguousGenericArg::Name(identifier) => {
+                self.path(
+                    &NamePath::local(identifier.name.atom().clone()),
+                    StaticPosition::Any,
+                );
+            }
+            crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+                for operand in operands {
+                    self.ambiguous_generic_arg(operand);
                 }
             }
         }
-        DeclKind::Dag(dag) => {
-            references.extend(
-                dag.body
-                    .iter()
-                    .flat_map(|declaration| declaration_static_references(&declaration.kind)),
-            );
-        }
-        DeclKind::BaseDimension(_)
-        | DeclKind::Assert(_)
-        | DeclKind::Plot(_)
-        | DeclKind::Figure(_)
-        | DeclKind::Layer(_)
-        | DeclKind::Import(_)
-        | DeclKind::PluginImport(_)
-        | DeclKind::Include(_) => {}
-        #[expect(
-            clippy::uninhabited_references,
-            reason = "Sugar(Infallible) proves this arm unreachable"
-        )]
-        DeclKind::Sugar(s) => never(*s),
     }
-    references
+
+    fn dim_expr(&mut self, dim_expr: &crate::desugar::desugared_ast::DimExpr) {
+        for item in &dim_expr.terms {
+            self.path(&item.term.name.value, StaticPosition::Dimension);
+        }
+    }
+
+    fn declaration(&mut self, kind: &DeclKind) {
+        match kind {
+            DeclKind::Param(param) => self.type_expr(&param.type_ann),
+            DeclKind::Node(node) => self.type_expr(&node.type_ann),
+            DeclKind::ConstNode(constant) => self.type_expr(&constant.type_ann),
+            DeclKind::Unit(unit) => self.dim_expr(&unit.dim_type),
+            DeclKind::Dimension(dimension) => {
+                if let Some(definition) = &dimension.definition {
+                    self.dim_expr(definition);
+                }
+            }
+            DeclKind::Type(type_decl) => {
+                let enclosing = std::mem::replace(
+                    &mut self.generic_parameters,
+                    type_decl
+                        .generic_params
+                        .iter()
+                        .map(|parameter| parameter.name.value.atom().clone())
+                        .collect(),
+                );
+                if let crate::desugar::desugared_ast::TypeDeclBody::Constructors(members) =
+                    &type_decl.body
+                {
+                    for member in members {
+                        for field in member.payload.iter().flatten() {
+                            self.type_expr(&field.type_ann);
+                        }
+                    }
+                }
+                for default in type_decl
+                    .generic_params
+                    .iter()
+                    .filter_map(|parameter| parameter.default.as_ref())
+                {
+                    self.generic_arg(default);
+                }
+                self.generic_parameters = enclosing;
+            }
+            DeclKind::Index(index) => {
+                if let crate::desugar::desugared_ast::IndexDeclKind::RequiredCoordinate {
+                    dimension,
+                } = &index.kind
+                {
+                    self.dim_expr(dimension);
+                }
+            }
+            DeclKind::Dag(dag) => {
+                // An inline DAG body resolves in its own module scope.
+                let owner = self.scope.owner.inline_dag_child(dag.name.value.clone());
+                let mut body = Collector {
+                    scope: StaticScope::new(&owner, self.scope.resolver),
+                    generic_parameters: HashSet::new(),
+                    references: Vec::new(),
+                };
+                for declaration in &dag.body {
+                    body.declaration(&declaration.kind);
+                }
+                self.references.extend(body.references);
+            }
+            DeclKind::BaseDimension(_)
+            | DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_)
+            | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Include(_) => {}
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
+        }
+    }
+}
+
+/// Collect the resolved Static references of one declaration's semantic
+/// signature, in source order.
+#[must_use]
+pub fn declaration_static_references(
+    kind: &DeclKind,
+    scope: StaticScope<'_>,
+) -> Vec<StaticReference> {
+    let mut collector = Collector {
+        scope,
+        generic_parameters: HashSet::new(),
+        references: Vec::new(),
+    };
+    collector.declaration(kind);
+    collector.references
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -324,34 +400,18 @@ fn static_declaration(declaration: &Declaration) -> Option<(StaticDeclarationKey
     ))
 }
 
-fn reference_candidates(
+/// The module-local Static declaration a resolved reference names, if any.
+///
+/// References that resolve into another module are external semantic
+/// identities and are outside this module-local closure.
+fn local_candidate(
     reference: &StaticReference,
+    scope: StaticScope<'_>,
     interfaces: &HashMap<StaticDeclarationKey, StaticRole>,
-) -> Vec<StaticDeclarationKey> {
-    let kinds: &[StaticInputKind] = match reference.namespaces {
-        StaticReferenceNamespaces::Exact(StaticInputKind::Type) => &[StaticInputKind::Type],
-        StaticReferenceNamespaces::Exact(StaticInputKind::Dimension) => {
-            &[StaticInputKind::Dimension]
-        }
-        StaticReferenceNamespaces::Exact(StaticInputKind::Index) => &[StaticInputKind::Index],
-        StaticReferenceNamespaces::TypeOrDimension => {
-            &[StaticInputKind::Type, StaticInputKind::Dimension]
-        }
-        StaticReferenceNamespaces::IndexTypeOrDimension => &[
-            StaticInputKind::Index,
-            StaticInputKind::Type,
-            StaticInputKind::Dimension,
-        ],
-    };
-    kinds
-        .iter()
-        .filter_map(|kind| {
-            reference
-                .bare_name()
-                .map(|name| StaticDeclarationKey::new(*kind, name.clone()))
-        })
+) -> Option<StaticDeclarationKey> {
+    (reference.target().owner() == scope.owner())
+        .then(|| StaticDeclarationKey::new(reference.kind(), reference.target().atom().clone()))
         .filter(|candidate| interfaces.contains_key(candidate))
-        .collect()
 }
 
 /// Typed reason a declaration cannot cross a blueprint-only import boundary.
@@ -367,11 +427,11 @@ pub enum StaticImportRejection {
 /// Classify Static-input reasons that reject one direct or qualified import.
 #[must_use]
 pub fn static_import_rejection(
-    declarations: &[Declaration],
+    module: ModuleDeclarations<'_>,
     selected_name: &NameAtom,
     selected_namespace: ImportItemNamespace,
 ) -> Option<StaticImportRejection> {
-    if let Some(interface) = declarations.iter().find_map(|declaration| {
+    if let Some(interface) = module.declarations.iter().find_map(|declaration| {
         if !declaration_name_in_namespace(declaration, selected_name, selected_namespace) {
             return None;
         }
@@ -383,18 +443,34 @@ pub fn static_import_rejection(
             name: selected_name.clone(),
         });
     }
-    first_required_static_dependency(declarations, selected_name, selected_namespace)
+    first_required_static_dependency(module, selected_name, selected_namespace)
         .map(StaticImportRejection::UnresolvedDependency)
+}
+
+/// Classify every name `module` declares for pure-import capability.
+#[must_use]
+pub fn static_import_rejections(module: ModuleDeclarations<'_>) -> StaticImportRejections {
+    StaticImportRejections::new(
+        module
+            .declarations
+            .iter()
+            .flat_map(|declaration| declaration.kind.introduced_names())
+            .filter(|introduced| {
+                static_import_rejection(module, introduced.atom(), introduced.namespace()).is_some()
+            })
+            .map(|introduced| (introduced.namespace(), introduced.atom().clone())),
+    )
 }
 
 fn visit_references(
     references: impl IntoIterator<Item = StaticReference>,
+    scope: StaticScope<'_>,
     interfaces: &HashMap<StaticDeclarationKey, StaticRole>,
     declarations: &HashMap<StaticDeclarationKey, &Declaration>,
     visited: &mut HashSet<StaticDeclarationKey>,
 ) -> Option<RequiredStaticDependency> {
     for reference in references {
-        for candidate in reference_candidates(&reference, interfaces) {
+        if let Some(candidate) = local_candidate(&reference, scope, interfaces) {
             if !visited.insert(candidate.clone()) {
                 continue;
             }
@@ -407,7 +483,8 @@ fn visit_references(
             }
             if let Some(declaration) = declarations.get(&candidate)
                 && let Some(required) = visit_references(
-                    declaration_static_references(&declaration.kind),
+                    declaration_static_references(&declaration.kind, scope),
+                    scope,
                     interfaces,
                     declarations,
                     visited,
@@ -422,15 +499,20 @@ fn visit_references(
 
 /// Find the first transitive required Static input in one selected declaration.
 ///
-/// The traversal is fail-closed for syntactically ambiguous bare names: every
-/// locally matching Static namespace is visited. Qualified references are
-/// external semantic identities and are outside this module-local closure.
+/// Every reference is resolved in `scope`, so a syntactically ambiguous bare
+/// name visits exactly the Static declaration it denotes. References into
+/// other modules are external semantic identities and are outside this
+/// module-local closure.
 #[must_use]
 pub fn first_required_static_dependency(
-    declarations: &[Declaration],
+    module: ModuleDeclarations<'_>,
     selected_name: &NameAtom,
     selected_namespace: ImportItemNamespace,
 ) -> Option<RequiredStaticDependency> {
+    let ModuleDeclarations {
+        declarations,
+        scope,
+    } = module;
     let interfaces = declarations
         .iter()
         .filter_map(static_declaration)
@@ -444,7 +526,8 @@ pub fn first_required_static_dependency(
     })?;
 
     visit_references(
-        declaration_static_references(&selected.kind),
+        declaration_static_references(&selected.kind, scope),
+        scope,
         &interfaces,
         &declaration_by_key,
         &mut HashSet::new(),
@@ -461,16 +544,42 @@ mod tests {
         crate::desugar::desugared_ast::File::from(file)
     }
 
+    fn owner() -> DagId {
+        DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap()
+    }
+
+    fn resolver(file: &crate::desugar::desugared_ast::File) -> ModuleResolver {
+        let mut tables = crate::resolve::builder::SymbolTables::default();
+        tables.add_file(owner(), &file.declarations).unwrap();
+        tables
+            .scopes(&crate::resolve::builder::NoModuleTargets)
+            .unwrap()
+            .freeze()
+            .unwrap()
+    }
+
+    fn first_required(
+        source: &str,
+        name: &str,
+        namespace: ImportItemNamespace,
+    ) -> Option<RequiredStaticDependency> {
+        let file = parse(source);
+        let resolver = resolver(&file);
+        let owner = owner();
+        first_required_static_dependency(
+            ModuleDeclarations::new(&file.declarations, StaticScope::new(&owner, &resolver)),
+            &NameAtom::parse(name).unwrap(),
+            namespace,
+        )
+    }
+
     #[test]
     fn finds_required_inputs_through_transitive_static_signatures() {
-        let file = parse(
+        let required = first_required(
             "pub(bind) type Element;\n\
              pub type Box { Box(value: Element) }\n\
              pub type Wrapper { Wrapper(value: Box) }",
-        );
-        let required = first_required_static_dependency(
-            &file.declarations,
-            &NameAtom::parse("Wrapper").unwrap(),
+            "Wrapper",
             ImportItemNamespace::Type,
         )
         .expect("required dependency");
@@ -480,26 +589,20 @@ mod tests {
 
     #[test]
     fn finds_required_dimensions_and_indexes_by_exact_category() {
-        let dimensions = parse(
+        let required_dimension = first_required(
             "pub(bind) dim Basis;\n\
              pub dim Derived = Basis / Time;",
-        );
-        let required_dimension = first_required_static_dependency(
-            &dimensions.declarations,
-            &NameAtom::parse("Derived").unwrap(),
+            "Derived",
             ImportItemNamespace::Dimension,
         )
         .expect("required dimension dependency");
         assert_eq!(required_dimension.kind(), StaticInputKind::Dimension);
         assert_eq!(required_dimension.name().as_str(), "Basis");
 
-        let indexes = parse(
+        let required_index = first_required(
             "pub(bind) index Axis;\n\
              pub type Samples { Samples(value: Dimensionless[Axis]) }",
-        );
-        let required_index = first_required_static_dependency(
-            &indexes.declarations,
-            &NameAtom::parse("Samples").unwrap(),
+            "Samples",
             ImportItemNamespace::Type,
         )
         .expect("required index dependency");
@@ -508,15 +611,38 @@ mod tests {
     }
 
     #[test]
-    fn optional_inputs_are_closed_through_their_defaults() {
-        let file = parse(
-            "pub(bind) type Element { Element }\n\
-             pub type Box { Box(value: Element) }",
-        );
+    fn ambiguous_type_position_names_resolve_to_their_static_symbol() {
+        let required = first_required(
+            "pub(bind) dim Basis;\n\
+             pub type Reading { Reading(value: Basis) }",
+            "Reading",
+            ImportItemNamespace::Type,
+        )
+        .expect("required dimension dependency");
+        assert_eq!(required.kind(), StaticInputKind::Dimension);
+        assert_eq!(required.name().as_str(), "Basis");
+    }
+
+    #[test]
+    fn generic_parameters_shadow_module_static_symbols() {
         assert!(
-            first_required_static_dependency(
-                &file.declarations,
-                &NameAtom::parse("Box").unwrap(),
+            first_required(
+                "pub(bind) dim T;\n\
+                 pub type Holder<T: Dim> { Holder(value: T) }",
+                "Holder",
+                ImportItemNamespace::Type,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn optional_inputs_are_closed_through_their_defaults() {
+        assert!(
+            first_required(
+                "pub(bind) type Element { Element }\n\
+                 pub type Box { Box(value: Element) }",
+                "Box",
                 ImportItemNamespace::Type,
             )
             .is_none()

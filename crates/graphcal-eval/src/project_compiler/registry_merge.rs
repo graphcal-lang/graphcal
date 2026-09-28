@@ -1,7 +1,7 @@
 //! Frontend registry seeding and concrete-instance registry composition.
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::ir::static_dependencies::static_import_rejection;
+use graphcal_compiler::static_interface::StaticImportRejections;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::dimension::DimRef;
 
@@ -291,7 +291,7 @@ fn merge_registry_into_builder_export_filtered(
         Some(import.external_surface),
         Some(&import.unit_alias),
         import.runtime_unit_boundary,
-        import.pure_import_declarations,
+        import.pure_import_rejections.as_ref(),
     )
 }
 
@@ -320,13 +320,11 @@ fn merge_registry_into_builder_filtered(
     external_surface: Option<&ExternalDeclSurface>,
     module_alias: Option<&ModuleAliasName>,
     runtime_unit_boundary: RuntimeUnitBoundary,
-    pure_import_declarations: Option<&[graphcal_compiler::desugar::desugared_ast::Declaration]>,
+    pure_import_rejections: Option<&StaticImportRejections>,
 ) -> Result<(), UnitMergeConflict> {
     let pure_import_rejects = |name: &graphcal_compiler::syntax::names::NameAtom,
                                namespace: ImportItemNamespace| {
-        pure_import_declarations.is_some_and(|declarations| {
-            static_import_rejection(declarations, name, namespace).is_some()
-        })
+        pure_import_rejections.is_some_and(|rejections| rejections.rejects(name, namespace))
     };
     // Import base-dimension metadata (canonical units, affine policy). This
     // includes private transitive dependencies of exported dimensions and

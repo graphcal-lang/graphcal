@@ -14,8 +14,8 @@ use graphcal_compiler::ir::module_interface::{
     ModuleInterface, PureImportRejection, PureImportTermDisposition,
 };
 use graphcal_compiler::ir::static_dependencies::{
-    StaticImportRejection, StaticReferenceNamespaces, declaration_static_references,
-    static_import_rejection,
+    ModuleDeclarations, StaticImportRejection, StaticScope, declaration_static_references,
+    static_import_rejection, static_import_rejections,
 };
 use graphcal_compiler::ir::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
@@ -115,7 +115,10 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             project,
             target,
             import,
-            &loaded_file.ast().declarations,
+            ModuleDeclarations::new(
+                &loaded_file.ast().declarations,
+                StaticScope::new(file_dag_id, module_resolver),
+            ),
             file_src,
             module_artifacts,
             module_resolver,
@@ -236,13 +239,13 @@ fn ensure_include_item_selectable(
 }
 
 fn validate_static_import_capability(
-    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    dependency: ModuleDeclarations<'_>,
     name: &NameAtom,
     namespace: ImportItemNamespace,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
-    match static_import_rejection(declarations, name, namespace) {
+    match static_import_rejection(dependency, name, namespace) {
         None => Ok(()),
         Some(StaticImportRejection::RequiredInput { kind, name }) => Err(CompileError::Eval(
             GraphcalError::ImportRequiredStaticInput {
@@ -264,54 +267,38 @@ fn validate_static_import_capability(
     }
 }
 
+/// The import category that selects a Static symbol of `kind`.
+const fn static_import_namespace(kind: StaticInputKind) -> ImportItemNamespace {
+    match kind {
+        StaticInputKind::Type => ImportItemNamespace::Type,
+        StaticInputKind::Dimension => ImportItemNamespace::Dimension,
+        StaticInputKind::Index => ImportItemNamespace::Index,
+    }
+}
+
 fn validate_qualified_static_import_references(
-    consumer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-    dependency_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    consumer: ModuleDeclarations<'_>,
+    dependency: ModuleDeclarations<'_>,
     dependency_interface: &ModuleInterface,
     module_name: &ModuleAliasName,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
-    consumer_declarations
+    consumer
+        .declarations()
         .iter()
-        .flat_map(|declaration| declaration_static_references(&declaration.kind))
+        .flat_map(|declaration| declaration_static_references(&declaration.kind, consumer.scope()))
         .filter_map(|reference| {
             let (owner, leaf) = reference.path().qualifier_and_leaf()?;
             (owner.as_slice() == [module_name.atom().clone()])
-                .then_some((leaf.clone(), reference.namespaces()))
+                .then(|| (leaf.clone(), static_import_namespace(reference.kind())))
         })
-        .try_for_each(|(name, namespaces)| {
-            let candidate_namespaces: &[ImportItemNamespace] = match namespaces {
-                StaticReferenceNamespaces::Exact(StaticInputKind::Type) => {
-                    &[ImportItemNamespace::Type]
-                }
-                StaticReferenceNamespaces::Exact(StaticInputKind::Dimension) => {
-                    &[ImportItemNamespace::Dimension]
-                }
-                StaticReferenceNamespaces::Exact(StaticInputKind::Index) => {
-                    &[ImportItemNamespace::Index]
-                }
-                StaticReferenceNamespaces::TypeOrDimension => {
-                    &[ImportItemNamespace::Type, ImportItemNamespace::Dimension]
-                }
-                StaticReferenceNamespaces::IndexTypeOrDimension => &[
-                    ImportItemNamespace::Index,
-                    ImportItemNamespace::Type,
-                    ImportItemNamespace::Dimension,
-                ],
-            };
-            candidate_namespaces
-                .iter()
-                .find(|namespace| dependency_interface.has_item(&name, **namespace))
-                .map_or(Ok(()), |namespace| {
-                    validate_static_import_capability(
-                        dependency_declarations,
-                        &name,
-                        *namespace,
-                        src,
-                        span,
-                    )
-                })
+        .try_for_each(|(name, namespace)| {
+            if dependency_interface.has_item(&name, namespace) {
+                validate_static_import_capability(dependency, &name, namespace, src, span)
+            } else {
+                Ok(())
+            }
         })
 }
 
@@ -1137,7 +1124,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 .push(super::FrontendRegistryImport {
                     registry: artifact.frontend_registry(),
                     external_surface: artifact.external_surface(),
-                    pure_import_declarations: None,
+                    pure_import_rejections: None,
                     unit_alias: module_alias,
                     runtime_unit_boundary: RuntimeUnitBoundary::ConcreteInstance,
                     import_span: include_decl.path.span(),
@@ -1437,7 +1424,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
     project: &'a crate::loader::LoadedProject,
     resolved_module: &crate::loader::ResolvedModuleTarget,
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
-    importer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    importer: ModuleDeclarations<'_>,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
@@ -1460,6 +1447,10 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
         })
     })?;
     let declarations = dep_module.declarations();
+    let dependency = ModuleDeclarations::new(
+        declarations,
+        StaticScope::new(module_target, module_resolver),
+    );
     let dep_interface = dep_module.interface();
     let exported_bindings = module_resolver
         .exported_bindings(module_target)
@@ -1513,7 +1504,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 }
 
                 validate_static_import_capability(
-                    declarations,
+                    dependency,
                     orig_name.atom(),
                     import_item.namespace,
                     file_src,
@@ -1654,8 +1645,8 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 }));
             }
             validate_qualified_static_import_references(
-                importer_declarations,
-                declarations,
+                importer,
+                dependency,
                 dep_interface,
                 &module_name,
                 file_src,
@@ -1689,7 +1680,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 .push(super::FrontendRegistryImport {
                     registry: dep.frontend_registry(),
                     external_surface: dep.external_surface(),
-                    pure_import_declarations: Some(declarations),
+                    pure_import_rejections: Some(static_import_rejections(dependency)),
                     unit_alias: module_name.clone(),
                     runtime_unit_boundary: RuntimeUnitBoundary::PureImport,
                     import_span,
