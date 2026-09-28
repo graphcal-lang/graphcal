@@ -14,8 +14,6 @@ use crate::registry::declared_type::IndexTypeRef;
 /// A linear-algebra call cannot be typed from the supplied argument shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum LinearAlgebraTypeError {
-    /// The caller supplied the wrong number of arguments.
-    WrongArity { expected: usize, found: usize },
     /// An argument is not an indexed quantity of the required rank.
     ExpectedIndexedQuantity { argument: usize, rank: usize },
     /// Two axis positions that participate in one contraction do not have the
@@ -124,17 +122,15 @@ fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebr
 ///
 /// `cardinality` supplies concrete axis sizes from the caller's semantic
 /// registry. It is consulted only by fixed-size operations such as `cross`.
+///
+/// The caller has already checked `arguments` against the function's static
+/// entry (`check_builtin_arity`), so it holds exactly `function.arity()`
+/// types; this rule does not re-check the count.
 pub(super) fn infer_linear_algebra_type(
     function: LinearAlgebraFn,
     arguments: &[InferredType],
     mut cardinality: impl FnMut(&IndexTypeRef) -> Option<usize>,
 ) -> Result<InferredType, LinearAlgebraTypeError> {
-    if arguments.len() != function.arity() {
-        return Err(LinearAlgebraTypeError::WrongArity {
-            expected: function.arity(),
-            found: arguments.len(),
-        });
-    }
     match function {
         LinearAlgebraFn::Dot => {
             let lhs = indexed_quantity(0, &arguments[0], 1)?;

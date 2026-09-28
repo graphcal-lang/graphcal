@@ -1351,6 +1351,9 @@ fn infer_arg(
 }
 
 /// Check a built-in call's argument count against its static entry.
+///
+/// This is the only arity check for built-in calls: `infer_hir_fn_call` runs
+/// it once, before inferring any argument, and the family rules rely on it.
 fn check_builtin_arity(
     function: BuiltinFn,
     got: usize,
@@ -1388,12 +1391,6 @@ fn infer_hir_linear_algebra_call(
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    check_builtin_arity(
-        BuiltinFn::LinearAlgebra(function),
-        args.len(),
-        callee_span,
-        src,
-    )?;
     let argument_types = args
         .iter()
         .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
@@ -1403,13 +1400,6 @@ fn infer_hir_linear_algebra_call(
         super::concrete_cardinality_for_inferred(index, tir)
     })
     .map_err(|error| match error {
-        LinearAlgebraTypeError::WrongArity { expected, found } => GraphcalError::WrongArity {
-            name: crate::syntax::function_name::FnName::expect_valid(function.as_str()),
-            expected,
-            got: found,
-            src: src.clone(),
-            span: callee_span.into(),
-        },
         LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
             GraphcalError::DimensionMismatch {
                 expected: format!("rank-{rank} indexed quantity"),
@@ -1499,10 +1489,13 @@ fn infer_hir_fn_call(
             );
         }
     };
+    // The single arity check for every built-in family, driven by its static
+    // entry and run before any argument is inferred. Family rules below may
+    // rely on the accepted argument count.
+    check_builtin_arity(builtin, args.len(), callee.span, src)?;
     match builtin {
         BuiltinFn::Complex(function) => infer_hir_complex_call(
             function,
-            callee.span,
             args,
             declared_types,
             local_types,
@@ -1512,7 +1505,6 @@ fn infer_hir_fn_call(
             src,
         ),
         BuiltinFn::Aggregation(kind) => {
-            check_builtin_arity(builtin, args.len(), callee.span, src)?;
             let arg_type = infer_arg(
                 &args[0],
                 declared_types,
@@ -1609,7 +1601,6 @@ fn infer_hir_fn_call(
         ),
         BuiltinFn::Conversion(kind) => infer_hir_type_conversion(
             kind,
-            callee.span,
             args,
             declared_types,
             local_types,
@@ -1622,7 +1613,6 @@ fn infer_hir_fn_call(
             infer_hir_timescale_conversion(
                 builtin,
                 conversion.target(),
-                callee.span,
                 args,
                 declared_types,
                 local_types,
@@ -1646,7 +1636,6 @@ fn infer_hir_fn_call(
         ),
         BuiltinFn::Datetime(DatetimeFn::Field(_)) => infer_hir_datetime_unary(
             builtin,
-            callee.span,
             args,
             declared_types,
             local_types,
@@ -1657,7 +1646,6 @@ fn infer_hir_fn_call(
             InferredType::Int,
         ),
         BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
-            check_builtin_arity(builtin, args.len(), callee.span, src)?;
             let arg_type = infer_arg(
                 &args[0],
                 declared_types,
@@ -1691,7 +1679,6 @@ fn infer_hir_fn_call(
         }
         BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => infer_hir_datetime_unary(
             builtin,
-            callee.span,
             args,
             declared_types,
             local_types,
@@ -1718,7 +1705,6 @@ fn infer_hir_fn_call(
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_complex_call(
     function: crate::builtin::ComplexFn,
-    callee_span: Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -1734,13 +1720,6 @@ fn infer_hir_complex_call(
         .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
         .collect::<Result<Vec<_>, _>>()?;
     super::complex::infer(function, &inferred).map_err(|error| match error {
-        ComplexTypeError::WrongArity { expected, got } => GraphcalError::WrongArity {
-            name: crate::syntax::function_name::FnName::expect_valid(function.as_str()),
-            expected,
-            got,
-            src: src.clone(),
-            span: callee_span.into(),
-        },
         ComplexTypeError::ExpectedQuantity { argument } => GraphcalError::DimensionMismatch {
             expected: "quantity type".to_string(),
             found: format_inferred_type(&inferred[argument], registry),
@@ -2040,7 +2019,6 @@ fn infer_hir_builtin_fn(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let func = crate::registry::builtins::scalar_function(name);
-    check_builtin_arity(BuiltinFn::Scalar(name), args.len(), callee_span, src)?;
     let dimension_args = args
         .iter()
         .map(|arg| {
@@ -2063,7 +2041,6 @@ fn infer_hir_builtin_fn(
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_type_conversion(
     kind: ConversionFn,
-    span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -2072,7 +2049,6 @@ fn infer_hir_type_conversion(
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    check_builtin_arity(BuiltinFn::Conversion(kind), args.len(), span, src)?;
     let arg_type = infer_arg(
         &args[0],
         declared_types,
@@ -2176,7 +2152,6 @@ fn infer_hir_type_conversion(
 fn infer_hir_timescale_conversion(
     name: BuiltinFn,
     scale: crate::registry::time_scale::TimeScale,
-    span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -2185,7 +2160,6 @@ fn infer_hir_timescale_conversion(
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    check_builtin_arity(name, args.len(), span, src)?;
     let arg_type = infer_arg(
         &args[0],
         declared_types,
@@ -2222,12 +2196,6 @@ fn infer_hir_datetime_constructor(
 ) -> Result<InferredType, GraphcalError> {
     match kind {
         DatetimeConstructorFn::Datetime => {
-            check_builtin_arity(
-                BuiltinFn::Datetime(DatetimeFn::Constructor(kind)),
-                args.len(),
-                span,
-                src,
-            )?;
             let first_is_valid = match args.len() {
                 1 => matches!(args[0].kind(), hir::ExprKind::OffsetDateTimeLiteral(_)),
                 2 => matches!(args[0].kind(), hir::ExprKind::ZonedDateTimeLiteral(_)),
@@ -2292,7 +2260,6 @@ fn infer_hir_datetime_constructor(
             ))
         }
         DatetimeConstructorFn::Epoch => {
-            check_builtin_arity(BuiltinFn::EPOCH, args.len(), span, src)?;
             if !matches!(args[0].kind(), hir::ExprKind::CivilDateTimeLiteral(_)) {
                 let found = infer_arg(
                     &args[0],
@@ -2326,7 +2293,6 @@ fn infer_hir_datetime_constructor(
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_datetime_unary(
     name: BuiltinFn,
-    span: crate::syntax::span::Span,
     args: &[hir::Expr],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -2336,7 +2302,6 @@ fn infer_hir_datetime_unary(
     src: &NamedSource<Arc<String>>,
     result: InferredType,
 ) -> Result<InferredType, GraphcalError> {
-    check_builtin_arity(name, args.len(), span, src)?;
     let arg_type = infer_arg(
         &args[0],
         declared_types,
