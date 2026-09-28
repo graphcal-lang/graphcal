@@ -177,6 +177,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["desugar", "multi"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["desugar", "multi", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["diagnostic_anchor"]
 role = "contracts"
 
@@ -769,11 +779,6 @@ role = "contracts"
 package = "compiler"
 path = ["syntax", "decl_name"]
 role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["syntax", "desugar"]
-role = "checking"
 
 [[module]]
 package = "compiler"

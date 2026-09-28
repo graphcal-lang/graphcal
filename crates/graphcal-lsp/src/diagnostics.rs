@@ -393,8 +393,7 @@ mod tests {
         parser
             .parse_file()
             .map(|raw_ast| {
-                let desugared =
-                    graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+                let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
                 let ast = desugared;
                 build_for_buffer(&ast, source)
             })

@@ -2774,7 +2774,7 @@ mod tests {
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
         let table = build_for_buffer(&file, source);
 
@@ -2895,7 +2895,7 @@ node y: Dimensionless[Step] = unfold(
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let table = build_for_buffer(&file, source);
 
         let axis_offset = source.find("unfold(\n    Step").unwrap() + "unfold(\n    ".len();
@@ -2930,7 +2930,7 @@ type Sized<N: Nat, I: Index = Component, M: Nat = N + 1> {
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let table = build_for_buffer(&file, source);
         let n_key = definition_key(&table, SymbolCategory::GenericParam, "N");
         let i_key = definition_key(&table, SymbolCategory::GenericParam, "I");
@@ -2968,7 +2968,7 @@ param q: Int[I]
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
         let table = build_for_buffer(&file, source);
 
@@ -3003,7 +3003,7 @@ param q: Int[I]
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
         let table = build_for_buffer(&file, source);
 
@@ -3048,7 +3048,7 @@ node total: Velocity = @dv[Maneuver#Departure];
         let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         build_for_buffer(&desugared, source)
     }
 

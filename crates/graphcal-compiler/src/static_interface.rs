@@ -216,7 +216,7 @@ mod tests {
 
     fn interfaces(source: &str) -> Vec<StaticInterface> {
         let file = Parser::new(source).parse_file().expect("source parses");
-        crate::syntax::desugar::desugar_multi_decls_in_file(file)
+        crate::desugar::desugared_ast::File::from(file)
             .declarations
             .iter()
             .filter_map(|declaration| static_interface(&declaration.kind))

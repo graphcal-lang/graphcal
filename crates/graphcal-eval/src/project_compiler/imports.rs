@@ -2026,7 +2026,7 @@ mod tests {
         )
         .parse_file()
         .unwrap();
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
+        let file = graphcal_compiler::desugar::desugared_ast::File::from(raw);
         let index = build_dep_decl_index(&file.declarations);
 
         assert_eq!(index.other["fixed"], DeclarationKind::ConstNode);

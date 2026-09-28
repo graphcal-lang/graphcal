@@ -1,4 +1,5 @@
-//! `#[derive(PhaseLift)]`: structural `From<T<Source>> for T<Target>`.
+//! `#[derive(PhaseLift)]`: structural `From<T<Source>> for T<Target>`, or
+//! `TryFrom` when a variant is left to the caller as a residual.
 //!
 //! The pipeline is attribute parsing (`ContainerAttr`, `FieldAttr`,
 //! `VariantAttr`) → per-field conversion plan (`FieldLift`) → emission. See
@@ -23,27 +24,39 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let target_ty = &container.to;
     let source = format_ident!("__phase_lift_source");
 
-    let body = match &input.data {
+    let (body, residual) = match &input.data {
         Data::Struct(data) => {
             let shape = FieldsShape::plan(&data.fields, &phase)?;
             let pattern = shape.pattern(quote!(#name));
             let construct = shape.construct(quote!(Self));
-            quote! {
+            let body = quote! {
                 let #pattern = #source;
                 #construct
-            }
+            };
+            (body, None)
         }
         Data::Enum(data) => {
-            let arms = data
-                .variants
-                .iter()
-                .map(|variant| variant_arm(name, variant, &phase))
-                .collect::<syn::Result<Vec<_>>>()?;
-            quote! {
+            let mut residual: Option<Box<Type>> = None;
+            let mut arms = Vec::with_capacity(data.variants.len());
+            for variant in &data.variants {
+                let arm = variant_arm(name, variant, &phase)?;
+                if let Some(ty) = arm.residual {
+                    if residual.is_some() {
+                        return Err(syn::Error::new(
+                            variant.span(),
+                            "at most one variant can be `#[phase_lift(residual = ..)]`",
+                        ));
+                    }
+                    residual = Some(ty);
+                }
+                arms.push(arm.tokens);
+            }
+            let body = quote! {
                 match #source {
                     #(#arms)*
                 }
-            }
+            };
+            (body, residual)
         }
         Data::Union(data) => {
             return Err(syn::Error::new(
@@ -53,14 +66,31 @@ pub fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     };
 
-    Ok(quote! {
-        #[automatically_derived]
-        impl ::core::convert::From<#name<#source_ty>> for #name<#target_ty> {
-            fn from(#source: #name<#source_ty>) -> Self {
-                #body
+    let total = || {
+        quote! {
+            #[automatically_derived]
+            impl ::core::convert::From<#name<#source_ty>> for #name<#target_ty> {
+                fn from(#source: #name<#source_ty>) -> Self {
+                    #body
+                }
             }
         }
-    })
+    };
+    let partial = |error: Box<Type>| {
+        quote! {
+            #[automatically_derived]
+            impl ::core::convert::TryFrom<#name<#source_ty>> for #name<#target_ty> {
+                type Error = #error;
+
+                fn try_from(
+                    #source: #name<#source_ty>,
+                ) -> ::core::result::Result<Self, Self::Error> {
+                    ::core::result::Result::Ok(#body)
+                }
+            }
+        }
+    };
+    Ok(residual.map_or_else(total, partial))
 }
 
 fn phase_lift_attrs(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
@@ -136,10 +166,12 @@ impl FieldAttr {
     }
 }
 
-/// Variant attribute: `#[phase_lift(from_payload)]`.
+/// Variant attribute: `#[phase_lift(from_payload)]` or
+/// `#[phase_lift(residual = <payload type>)]`.
 enum VariantAttr {
     Structural,
     FromPayload,
+    Residual(Box<Type>),
 }
 
 impl VariantAttr {
@@ -147,13 +179,21 @@ impl VariantAttr {
         let mut parsed = Self::Structural;
         for attr in phase_lift_attrs(&variant.attrs) {
             attr.parse_nested_meta(|meta| {
-                if !meta.path.is_ident("from_payload") {
-                    return Err(meta.error("expected `from_payload` on an enum variant"));
-                }
+                let next = if meta.path.is_ident("from_payload") {
+                    Self::FromPayload
+                } else if meta.path.is_ident("residual") {
+                    Self::Residual(Box::new(meta.value()?.parse::<Type>()?))
+                } else {
+                    return Err(meta.error(
+                        "expected `from_payload` or `residual = <type>` on an enum variant",
+                    ));
+                };
                 match parsed {
-                    Self::FromPayload => Err(meta.error("duplicate `phase_lift` key")),
+                    Self::FromPayload | Self::Residual(_) => {
+                        Err(meta.error("duplicate `phase_lift` key"))
+                    }
                     Self::Structural => {
-                        parsed = Self::FromPayload;
+                        parsed = next;
                         Ok(())
                     }
                 }
@@ -278,26 +318,56 @@ impl<'a> FieldsShape<'a> {
     }
 }
 
-fn variant_arm(enum_name: &Ident, variant: &Variant, phase: &Ident) -> syn::Result<TokenStream> {
+/// One `match` arm of an enum conversion.
+struct VariantArm {
+    tokens: TokenStream,
+    /// The payload type handed back as the `TryFrom` error, for a residual
+    /// variant.
+    residual: Option<Box<Type>>,
+}
+
+fn variant_arm(enum_name: &Ident, variant: &Variant, phase: &Ident) -> syn::Result<VariantArm> {
     let variant_name = &variant.ident;
     let source_path = quote!(#enum_name::#variant_name);
+    let payload = format_ident!("__payload");
     match VariantAttr::parse(variant)? {
         VariantAttr::Structural => {
             let shape = FieldsShape::plan(&variant.fields, phase)?;
             let pattern = shape.pattern(source_path);
             let construct = shape.construct(quote!(Self::#variant_name));
-            Ok(quote!(#pattern => #construct,))
+            Ok(VariantArm {
+                tokens: quote!(#pattern => #construct,),
+                residual: None,
+            })
         }
-        VariantAttr::FromPayload => match &variant.fields {
-            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                let payload = format_ident!("__payload");
-                Ok(quote!(#source_path(#payload) => ::core::convert::From::from(#payload),))
-            }
-            Fields::Named(_) | Fields::Unnamed(_) | Fields::Unit => Err(syn::Error::new(
-                variant.span(),
-                "`#[phase_lift(from_payload)]` requires a tuple variant with exactly one field",
-            )),
-        },
+        VariantAttr::FromPayload => {
+            single_payload(variant, "from_payload")?;
+            Ok(VariantArm {
+                tokens: quote!(#source_path(#payload) => ::core::convert::From::from(#payload),),
+                residual: None,
+            })
+        }
+        VariantAttr::Residual(ty) => {
+            single_payload(variant, "residual")?;
+            Ok(VariantArm {
+                tokens: quote!(
+                    #source_path(#payload) => return ::core::result::Result::Err(#payload),
+                ),
+                residual: Some(ty),
+            })
+        }
+    }
+}
+
+/// Reject a payload-forwarding attribute on anything but a one-field tuple
+/// variant.
+fn single_payload(variant: &Variant, key: &str) -> syn::Result<()> {
+    match &variant.fields {
+        Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => Ok(()),
+        Fields::Named(_) | Fields::Unnamed(_) | Fields::Unit => Err(syn::Error::new(
+            variant.span(),
+            format!("`#[phase_lift({key})]` requires a tuple variant with exactly one field"),
+        )),
     }
 }
 
@@ -606,6 +676,64 @@ mod tests {
             }
         };
         assert!(error_of(&field_key_on_variant).contains("expected `from_payload`"));
+    }
+
+    #[test]
+    fn residual_variant_derives_try_from_returning_the_payload() {
+        let input: DeriveInput = parse_quote! {
+            #[phase_lift(from = Raw, to = Desugared)]
+            enum Kind<P: Phase> {
+                Plain(Decl<P>),
+                #[phase_lift(residual = RawSugar)]
+                Sugar(P::Sugar),
+            }
+        };
+        let expected = quote! {
+            #[automatically_derived]
+            impl ::core::convert::TryFrom<Kind<Raw>> for Kind<Desugared> {
+                type Error = RawSugar;
+
+                fn try_from(
+                    __phase_lift_source: Kind<Raw>,
+                ) -> ::core::result::Result<Self, Self::Error> {
+                    ::core::result::Result::Ok(match __phase_lift_source {
+                        Kind::Plain(__field0) => Self::Plain(::core::convert::From::from(__field0)),
+                        Kind::Sugar(__payload) => return ::core::result::Result::Err(__payload),
+                    })
+                }
+            }
+        };
+        assert_eq!(expand_str(&input), expected.to_string());
+    }
+
+    #[test]
+    fn residual_is_unique_and_takes_a_single_payload() {
+        let two: DeriveInput = parse_quote! {
+            #[phase_lift(from = A, to = B)]
+            enum E<P> {
+                #[phase_lift(residual = X)]
+                One(X),
+                #[phase_lift(residual = Y)]
+                Two(Y),
+            }
+        };
+        assert!(error_of(&two).contains("at most one variant"));
+        let named: DeriveInput = parse_quote! {
+            #[phase_lift(from = A, to = B)]
+            enum E<P> {
+                #[phase_lift(residual = X)]
+                Sugar { a: X<P> },
+            }
+        };
+        assert!(error_of(&named).contains("`#[phase_lift(residual)]` requires a tuple variant"));
+        let both: DeriveInput = parse_quote! {
+            #[phase_lift(from = A, to = B)]
+            enum E<P> {
+                #[phase_lift(from_payload, residual = X)]
+                Sugar(X),
+            }
+        };
+        assert_eq!(error_of(&both), "duplicate `phase_lift` key");
     }
 
     #[test]

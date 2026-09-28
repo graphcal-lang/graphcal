@@ -3053,7 +3053,7 @@ mod tests {
 
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();
-        crate::syntax::desugar::desugar_multi_decls_in_file(raw)
+        crate::desugar::desugared_ast::File::from(raw)
     }
 
     #[test]

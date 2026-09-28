@@ -332,7 +332,7 @@ mod tests {
         let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
             .parse_file()
             .unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
         let ast = desugared;
         let symbol_table = symbol_table::build_for_buffer(&ast, source);
         AnalysisResult {

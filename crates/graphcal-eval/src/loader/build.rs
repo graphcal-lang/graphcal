@@ -295,7 +295,7 @@ mod tests {
         ParsedFile {
             source,
             named_source,
-            ast: graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw),
+            ast: graphcal_compiler::desugar::desugared_ast::File::from(raw),
         }
     }
 

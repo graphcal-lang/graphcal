@@ -383,7 +383,7 @@ mod tests {
 
     fn tir_from_source(source: &str) -> TIR {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = lower(&file, &src).unwrap();
         let mut resolver = ModuleResolver::default();

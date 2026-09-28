@@ -10,7 +10,7 @@ fn make_src(source: &str) -> NamedSource<Arc<String>> {
 
 fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    crate::syntax::desugar::desugar_multi_decls_in_file(raw_file)
+    crate::desugar::desugared_ast::File::from(raw_file)
 }
 
 fn parse_and_resolve(source: &str) -> Result<CollectedFile, GraphcalError> {

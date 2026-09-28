@@ -1130,7 +1130,7 @@ mod tests {
 
     fn parse_and_lower(source: &str) -> Result<HirDag, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = crate::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
         lower(&file, &make_src(source))
     }
@@ -1435,7 +1435,7 @@ mod tests {
         let source = "const unit wrong: Length = 1.0 h;";
         let src = make_src(source);
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let file = crate::desugar::desugared_ast::File::from(raw_file);
         let mut builder = RegistryBuilder::new();
         load_prelude(&mut builder).unwrap();
 
