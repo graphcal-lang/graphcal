@@ -80,7 +80,7 @@ impl Parser<'_> {
         let start_span = path.span();
         if self.lexer.peek() == Some(&Token::Hash) {
             self.lexer.next_token();
-            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let variant: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
             let span = start_span.merge(variant.span);
             return Ok(MatchPattern::IndexLabel {
                 index: path.into_spanned_name_path(),
@@ -111,7 +111,7 @@ impl Parser<'_> {
     /// - `field_name: _` (wildcard)
     fn parse_pattern_binding(&mut self) -> Result<PatternBinding, ParseError> {
         let field_ident = self.parse_any_ident()?;
-        let field = field_ident.into_spanned::<FieldName>();
+        let field: Spanned<FieldName> = field_ident.classify();
 
         self.expect(Token::Colon)?;
         // Check for wildcard `_`
@@ -131,7 +131,7 @@ impl Parser<'_> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
         loop {
-            let var = self.parse_any_ident()?.into_spanned();
+            let var = self.parse_any_ident()?.classify();
             self.expect(Token::Colon)?;
             let index = self.parse_for_binding_index()?;
             bindings.push(ForBinding { var, index });
@@ -320,9 +320,9 @@ impl Parser<'_> {
         self.expect(Token::Comma)?;
         // Parse lambda: |acc, item| body
         self.expect(Token::Pipe)?;
-        let acc_name = self.parse_any_ident()?.into_spanned();
+        let acc_name = self.parse_any_ident()?.classify();
         self.expect(Token::Comma)?;
-        let val_name = self.parse_any_ident()?.into_spanned();
+        let val_name = self.parse_any_ident()?.classify();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
@@ -378,11 +378,11 @@ impl Parser<'_> {
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
         self.expect(Token::Pipe)?;
-        let prev_state_name = self.parse_any_ident()?.into_spanned();
+        let prev_state_name = self.parse_any_ident()?.classify();
         self.expect(Token::Comma)?;
-        let prev_index_name = self.parse_any_ident()?.into_spanned();
+        let prev_index_name = self.parse_any_ident()?.classify();
         self.expect(Token::Comma)?;
-        let index_name = self.parse_any_ident()?.into_spanned();
+        let index_name = self.parse_any_ident()?.classify();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;

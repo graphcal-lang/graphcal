@@ -112,7 +112,7 @@ pub fn preprocess_dag_body_self_imports(
             graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
                 for item in items {
                     let orig_name = &item.name.name;
-                    let local_name = DeclName::from_atom(item.local_name_atom().clone());
+                    let local_name = DeclName::classify(item.local_name_atom().clone());
                     let span = item.name.span;
 
                     match file_import_item_presence(parent_ast, orig_name.as_str(), item.namespace)
@@ -176,7 +176,7 @@ pub fn preprocess_dag_body_self_imports(
                                         scoped,
                                         graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
                                             parent_dag_id.clone(),
-                                            DeclName::from_atom(orig_name.atom().clone()),
+                                            DeclName::classify(orig_name.atom().clone()),
                                         ),
                                     );
                                 }

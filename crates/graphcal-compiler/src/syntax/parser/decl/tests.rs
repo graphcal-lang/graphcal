@@ -1242,7 +1242,7 @@ fn parse_attribute_with_one_arg() {
     let AttributeArg::Path { path } = &attr.args[0] else {
         panic!("expected attribute path arg");
     };
-    assert_eq!(path.value.as_bare().unwrap(), "pressure_safe");
+    assert_eq!(path.value.as_bare().unwrap().as_str(), "pressure_safe");
 }
 
 #[test]
@@ -1259,8 +1259,8 @@ fn parse_attribute_with_multiple_args() {
     let AttributeArg::Path { path: second } = &attr.args[1] else {
         panic!("expected second attribute path arg");
     };
-    assert_eq!(first.value.as_bare().unwrap(), "pressure_safe");
-    assert_eq!(second.value.as_bare().unwrap(), "temp_bounded");
+    assert_eq!(first.value.as_bare().unwrap().as_str(), "pressure_safe");
+    assert_eq!(second.value.as_bare().unwrap().as_str(), "temp_bounded");
 }
 
 #[test]
@@ -1334,7 +1334,7 @@ fn parse_attribute_qualified_path() {
     let AttributeArg::IndexLabel { index, label, .. } = &attr.args[0] else {
         panic!("expected IndexLabel, got {:?}", attr.args[0]);
     };
-    assert_eq!(index.value.as_bare().unwrap(), "Mode");
+    assert_eq!(index.value.as_bare().unwrap().as_str(), "Mode");
     assert_eq!(label.value.as_str(), "Boost");
 }
 
@@ -1353,7 +1353,7 @@ fn parse_attribute_multiple_qualified_paths() {
     else {
         panic!("expected IndexLabel, got {:?}", attr.args[0]);
     };
-    assert_eq!(i0.value.as_bare().unwrap(), "Mode");
+    assert_eq!(i0.value.as_bare().unwrap().as_str(), "Mode");
     assert_eq!(l0.value.as_str(), "Boost");
     let AttributeArg::IndexLabel {
         index: i1,
@@ -1363,7 +1363,7 @@ fn parse_attribute_multiple_qualified_paths() {
     else {
         panic!("expected IndexLabel, got {:?}", attr.args[1]);
     };
-    assert_eq!(i1.value.as_bare().unwrap(), "Mode");
+    assert_eq!(i1.value.as_bare().unwrap().as_str(), "Mode");
     assert_eq!(l1.value.as_str(), "Eco");
 }
 
@@ -1386,7 +1386,7 @@ fn parse_attribute_group_arg() {
     else {
         panic!("expected IndexLabel, got {:?}", elements[0]);
     };
-    assert_eq!(i0.value.as_bare().unwrap(), "Mode");
+    assert_eq!(i0.value.as_bare().unwrap().as_str(), "Mode");
     assert_eq!(l0.value.as_str(), "Boost");
     let AttributeArg::IndexLabel {
         index: i1,
@@ -1396,7 +1396,7 @@ fn parse_attribute_group_arg() {
     else {
         panic!("expected IndexLabel, got {:?}", elements[1]);
     };
-    assert_eq!(i1.value.as_bare().unwrap(), "Phase");
+    assert_eq!(i1.value.as_bare().unwrap().as_str(), "Phase");
     assert_eq!(l1.value.as_str(), "Launch");
 }
 

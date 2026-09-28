@@ -213,7 +213,8 @@ pub(super) struct IncludeInstanceRequest {
     pub(super) include_span: Span,
     pub(super) import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    pub(super) pub_reexport_items: HashSet<DeclName>,
+    /// Namespace-agnostic surface atoms selected with `{ pub name }`.
+    pub(super) pub_reexport_items: HashSet<graphcal_compiler::syntax::names::NameAtom>,
 }
 
 /// Canonical routing metadata for one module alias.

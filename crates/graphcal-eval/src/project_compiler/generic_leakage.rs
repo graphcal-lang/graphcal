@@ -103,15 +103,15 @@ fn reference_substitution(
     };
     match reference.namespaces() {
         StaticReferenceNamespaces::Exact(StaticInputKind::Index) => Ok(index_bindings
-            .get(&IndexName::from_atom(name.clone()))
+            .get(&IndexName::classify(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, index_substitution)),
         StaticReferenceNamespaces::Exact(StaticInputKind::Type) => Ok(type_bindings
-            .get(&StructTypeName::from_atom(name.clone()))
+            .get(&StructTypeName::classify(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, |target| {
                 ReferenceSubstitution::ImporterLocal(target.atom().clone())
             })),
         StaticReferenceNamespaces::Exact(StaticInputKind::Dimension) => Ok(dim_bindings
-            .get(&DimName::from_atom(name.clone()))
+            .get(&DimName::classify(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, |target| {
                 ReferenceSubstitution::ImporterLocal(target.atom().clone())
             })),
@@ -119,16 +119,16 @@ fn reference_substitution(
         | StaticReferenceNamespaces::IndexTypeOrDimension) => {
             let index = if namespaces == StaticReferenceNamespaces::IndexTypeOrDimension {
                 index_bindings
-                    .get(&IndexName::from_atom(name.clone()))
+                    .get(&IndexName::classify(name.clone()))
                     .map(index_substitution)
             } else {
                 None
             };
             let type_name = type_bindings
-                .get(&StructTypeName::from_atom(name.clone()))
+                .get(&StructTypeName::classify(name.clone()))
                 .map(|target| ReferenceSubstitution::ImporterLocal(target.atom().clone()));
             let dimension = dim_bindings
-                .get(&DimName::from_atom(name.clone()))
+                .get(&DimName::classify(name.clone()))
                 .map(|target| ReferenceSubstitution::ImporterLocal(target.atom().clone()));
             match (index, type_name, dimension) {
                 (None, None, None) => Ok(ReferenceSubstitution::Unbound),
@@ -151,28 +151,18 @@ const fn namespace_diagnostic_name(namespace: ImportItemNamespace) -> &'static s
     }
 }
 
-fn reexported_declaration_identity(kind: &DeclKind) -> Option<(DeclName, &'static str)> {
+/// The namespace-agnostic surface atom an include brace item (`{ pub name }`)
+/// can select, plus the declaration kind for diagnostics.
+const fn reexported_declaration_identity(kind: &DeclKind) -> Option<(&NameAtom, &'static str)> {
     match kind {
-        DeclKind::Param(param) => Some((param.name.value.clone(), "param")),
-        DeclKind::Node(node) => Some((node.name.value.clone(), "node")),
-        DeclKind::ConstNode(constant) => Some((constant.name.value.clone(), "const node")),
-        DeclKind::BaseDimension(dimension) => Some((
-            DeclName::from_atom(dimension.name.value.atom().clone()),
-            "dim",
-        )),
-        DeclKind::Dimension(dimension) => Some((
-            DeclName::from_atom(dimension.name.value.atom().clone()),
-            "dim",
-        )),
-        DeclKind::Unit(unit) => Some((DeclName::from_atom(unit.name.value.atom().clone()), "unit")),
-        DeclKind::Index(index) => Some((
-            DeclName::from_atom(index.name.value.atom().clone()),
-            "index",
-        )),
-        DeclKind::Type(type_decl) => Some((
-            DeclName::from_atom(type_decl.name.value.atom().clone()),
-            "type",
-        )),
+        DeclKind::Param(param) => Some((param.name.value.atom(), "param")),
+        DeclKind::Node(node) => Some((node.name.value.atom(), "node")),
+        DeclKind::ConstNode(constant) => Some((constant.name.value.atom(), "const node")),
+        DeclKind::BaseDimension(dimension) => Some((dimension.name.value.atom(), "dim")),
+        DeclKind::Dimension(dimension) => Some((dimension.name.value.atom(), "dim")),
+        DeclKind::Unit(unit) => Some((unit.name.value.atom(), "unit")),
+        DeclKind::Index(index) => Some((index.name.value.atom(), "index")),
+        DeclKind::Type(type_decl) => Some((type_decl.name.value.atom(), "type")),
         _ => None,
     }
 }
@@ -191,7 +181,7 @@ fn reexported_declaration_identity(kind: &DeclKind) -> Option<(DeclName, &'stati
 )]
 pub(super) fn check_generics_leakage(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-    pub_reexport_items: &HashSet<DeclName>,
+    pub_reexport_items: &HashSet<NameAtom>,
     index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
@@ -210,7 +200,7 @@ pub(super) fn check_generics_leakage(
         let Some((decl_name, decl_kind_str)) = reexported_declaration_identity(&decl.kind) else {
             continue;
         };
-        if !pub_reexport_items.contains(&decl_name) {
+        if !pub_reexport_items.contains(decl_name) {
             continue;
         }
 
@@ -291,7 +281,7 @@ mod tests {
         let declarations = parse_declarations(
             "type Inner { Inner(value: Int), } node output: Inner = Inner(value: 1);",
         );
-        let reexports = HashSet::from([DeclName::expect_valid("output")]);
+        let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
         let importer_names =
             HashMap::from([(NameAtom::parse("Inner").unwrap(), ImportItemNamespace::Type)]);
 
@@ -313,7 +303,7 @@ mod tests {
     fn missing_required_substitution_is_an_internal_error() {
         let declarations =
             parse_declarations("pub(bind) type Element; node output: Element = Missing;");
-        let reexports = HashSet::from([DeclName::expect_valid("output")]);
+        let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
 
         let error = check_generics_leakage(
             &declarations,

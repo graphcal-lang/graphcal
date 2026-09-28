@@ -2,9 +2,7 @@
 
 use std::fmt;
 
-use crate::syntax::names::{
-    NameAtom, NameDef, NameNamespace, NamePath, NamespacePath, ResolvedName,
-};
+use crate::syntax::names::{NameDef, NameNamespace, NamePath, NamespacePath, ResolvedName};
 
 /// Dimension namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -80,7 +78,7 @@ impl UnitRef {
         let (owner, name) = path.into_parts();
         Self {
             owner,
-            name: UnitName::from_atom(name),
+            name: UnitName::classify(name),
         }
     }
 
@@ -118,15 +116,6 @@ impl From<UnitName> for UnitRef {
     /// via [`UnitRef::qualified`].
     fn from(name: UnitName) -> Self {
         Self::local(name)
-    }
-}
-
-impl From<NameAtom> for UnitRef {
-    /// Wrap a bare atom as a local unit reference. This is what
-    /// `crate::syntax::ast::Ident::into_spanned` uses to lift parser
-    /// identifiers into the typed reference.
-    fn from(atom: NameAtom) -> Self {
-        Self::local(UnitName::from_atom(atom))
     }
 }
 
@@ -175,7 +164,7 @@ impl DimRef {
         let (owner, name) = path.into_parts();
         Self {
             owner,
-            name: DimName::from_atom(name),
+            name: DimName::classify(name),
         }
     }
 

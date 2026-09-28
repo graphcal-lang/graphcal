@@ -233,9 +233,7 @@ impl Parser<'_> {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned(index),
                     additional_index_spans: Vec::new(),
-                    variant: Self::named_entry_key_spanned(
-                        label.into_spanned::<IndexVariantName>(),
-                    ),
+                    variant: Self::named_entry_key_spanned(label.classify()),
                 }),
                 value,
             });
@@ -315,9 +313,7 @@ impl Parser<'_> {
                 let mut labels = Vec::new();
                 loop {
                     let label = self.parse_any_ident()?;
-                    labels.push(Self::named_entry_key_spanned(
-                        label.into_spanned::<IndexVariantName>(),
-                    ));
+                    labels.push(Self::named_entry_key_spanned(label.classify()));
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.lexer.next_token();
                     } else {
@@ -344,9 +340,7 @@ impl Parser<'_> {
                 TableIndexSpec::Named(_) => {
                     let row_label_ident = self.parse_any_ident()?;
                     let span = row_label_ident.span;
-                    let label = Self::named_entry_key_spanned(
-                        row_label_ident.into_spanned::<IndexVariantName>(),
-                    );
+                    let label = Self::named_entry_key_spanned(row_label_ident.classify());
                     self.expect(Token::Colon)?;
                     (label, span)
                 }

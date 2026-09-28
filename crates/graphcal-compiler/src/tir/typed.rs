@@ -17,7 +17,7 @@ pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
@@ -1665,7 +1665,7 @@ impl HirPolicyChecker<'_> {
         };
         if matches!(kind, crate::syntax::module_resolve::DeclSymbolKind::Assert) {
             return Err(GraphcalError::GraphRefToAssert {
-                name: DeclName::expect_valid(target.value.as_str()),
+                name: target.value.to_unowned_def_name(),
                 src: self.src.clone(),
                 span: ref_span.into(),
             });
@@ -1697,11 +1697,7 @@ impl HirPolicyChecker<'_> {
             .resolver
             .modules()
             .get(self.ctx.owner)
-            .and_then(|symbols| {
-                symbols
-                    .indexes()
-                    .get(&IndexName::expect_valid(index.as_str()))
-            })
+            .and_then(|symbols| symbols.indexes().get(&index.to_unowned_def_name()))
             .is_some_and(|symbol| {
                 symbol.visibility().is_bindable() && !symbol.variants().is_empty()
             });

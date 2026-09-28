@@ -3230,8 +3230,7 @@ mod tests {
     }
 
     fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {
-        let constructor =
-            graphcal_compiler::syntax::type_name::ConstructorName::expect_valid(type_name.as_str());
+        let constructor = graphcal_compiler::syntax::type_name::record_constructor_name(&type_name);
         Value::struct_with_owner(test_owner(), type_name, constructor, fields)
     }
 

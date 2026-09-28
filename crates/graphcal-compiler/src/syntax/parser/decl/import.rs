@@ -3,6 +3,7 @@ use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
@@ -74,7 +75,7 @@ impl Parser<'_> {
         // The alias is mandatory: extern functions are only callable
         // qualified through it.
         self.expect(Token::As)?;
-        let alias = self.parse_any_ident()?.into_spanned::<ModuleAliasName>();
+        let alias: Spanned<ModuleAliasName> = self.parse_any_ident()?.classify();
 
         self.expect(Token::LBrace)?;
         let mut functions = Vec::new();
@@ -120,7 +121,7 @@ impl Parser<'_> {
 
         let name = self
             .parse_any_ident()?
-            .into_spanned::<crate::syntax::function_name::FnName>();
+            .classify::<crate::syntax::function_name::FnNameNamespace>();
 
         // Optional explicit generic binders: `<D: Dim, I: Index>`. The
         // `name: constraint` form mirrors `generic_params` on `type`
@@ -135,15 +136,13 @@ impl Parser<'_> {
                 let binder = match constraint.name.as_str() {
                     "Dim" => crate::syntax::ast::ExternGenericBinder::Dim(
                         crate::syntax::span::Spanned::new(
-                            crate::syntax::dimension::DimVarName::from_atom(var.name.into_atom()),
+                            crate::syntax::dimension::DimVarName::classify(var.name.into_atom()),
                             var.span,
                         ),
                     ),
                     "Index" => crate::syntax::ast::ExternGenericBinder::Index(
                         crate::syntax::span::Spanned::new(
-                            crate::syntax::index_name::IndexVarName::from_atom(
-                                var.name.into_atom(),
-                            ),
+                            crate::syntax::index_name::IndexVarName::classify(var.name.into_atom()),
                             var.span,
                         ),
                     ),
@@ -173,7 +172,7 @@ impl Parser<'_> {
         let params = self.parse_comma_separated(Token::RParen, |p| {
             let name = p
                 .parse_any_ident()?
-                .into_spanned::<crate::syntax::function_name::FnParamName>();
+                .classify::<crate::syntax::function_name::FnParamNameNamespace>();
             p.expect(Token::Colon)?;
             let type_ann = p.parse_type_expr()?;
             Ok(crate::syntax::ast::ExternFnParam { name, type_ann })
@@ -286,7 +285,7 @@ impl Parser<'_> {
             }
             Some(Token::As) => {
                 self.lexer.next_token(); // consume `as`
-                let alias = self.parse_any_ident()?.into_spanned::<ModuleAliasName>();
+                let alias: Spanned<ModuleAliasName> = self.parse_any_ident()?.classify();
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Module { alias: Some(alias) }, end_span))
             }

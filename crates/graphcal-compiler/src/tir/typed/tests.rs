@@ -4,7 +4,7 @@ use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{FormattingRegistry, RegistryBuilder};
 use crate::syntax::dimension::{ResolvedUnitName, UnitName};
-use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::parser::Parser;
 use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 

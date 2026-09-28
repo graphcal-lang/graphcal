@@ -499,7 +499,7 @@ impl<P: Phase> IncludeDecl<P> {
     #[must_use]
     pub fn module_form_alias(&self, alias: Option<&Spanned<ModuleAliasName>>) -> ModuleAliasName {
         alias.map_or_else(
-            || ModuleAliasName::from_atom(self.path.leaf().name.atom().clone()),
+            || ModuleAliasName::classify(self.path.leaf().name.atom().clone()),
             |alias| alias.value.clone(),
         )
     }

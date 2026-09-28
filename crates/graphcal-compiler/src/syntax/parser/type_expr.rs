@@ -37,7 +37,7 @@ impl Parser<'_> {
             let path_span = path.span();
             if self.lexer.peek() == Some(&Token::Hash) {
                 self.lexer.next_token();
-                let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                let label: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
                 TypeExpr {
                     span: path_span.merge(label.span),
                     kind: TypeExprKind::IndexLabel { index: path, label },
@@ -888,7 +888,7 @@ impl Parser<'_> {
     pub(super) fn parse_generic_params(&mut self) -> Result<NonEmpty<GenericParam>, ParseError> {
         self.expect(Token::Lt)?;
         let params = self.parse_non_empty_comma_separated(Token::Gt, |parser| {
-            let name = parser.parse_any_ident()?.into_spanned::<GenericParamName>();
+            let name: Spanned<GenericParamName> = parser.parse_any_ident()?.classify();
             parser.expect(Token::Colon)?;
             let constraint_ident = parser.parse_any_ident()?;
             let constraint = match constraint_ident.name.as_str() {

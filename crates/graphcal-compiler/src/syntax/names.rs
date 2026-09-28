@@ -89,12 +89,6 @@ impl NameAtom {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Consume and return the inner `String`.
-    #[must_use]
-    pub(crate) fn into_inner(self) -> String {
-        self.0
-    }
 }
 
 impl std::fmt::Debug for NameAtom {
@@ -106,74 +100,6 @@ impl std::fmt::Debug for NameAtom {
 impl std::fmt::Display for NameAtom {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl std::ops::Deref for NameAtom {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-impl PartialEq<str> for NameAtom {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<&str> for NameAtom {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl PartialEq<String> for NameAtom {
-    fn eq(&self, other: &String) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl PartialEq<NameAtom> for str {
-    fn eq(&self, other: &NameAtom) -> bool {
-        self == other.as_str()
-    }
-}
-
-impl PartialEq<NameAtom> for &str {
-    fn eq(&self, other: &NameAtom) -> bool {
-        *self == other.as_str()
-    }
-}
-
-impl AsRef<str> for NameAtom {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl std::borrow::Borrow<str> for NameAtom {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl From<NameAtom> for String {
-    fn from(atom: NameAtom) -> Self {
-        atom.into_inner()
-    }
-}
-
-impl From<&NameAtom> for String {
-    fn from(atom: &NameAtom) -> Self {
-        atom.as_str().to_string()
-    }
-}
-
-impl From<NameAtom> for std::borrow::Cow<'_, str> {
-    fn from(atom: NameAtom) -> Self {
-        Self::Owned(atom.into_inner())
     }
 }
 
@@ -236,7 +162,7 @@ impl<Ns: NameNamespace> NameDef<Ns> {
     /// Returns [`NameAtomError`] when the string is empty or contains a path
     /// separator.
     pub fn try_new(s: impl Into<String>) -> Result<Self, NameAtomError> {
-        NameAtom::parse(s).map(Self::from_atom)
+        NameAtom::parse(s).map(Self::classify)
     }
 
     /// Create a leaf name from trusted text, panicking if invalid.
@@ -253,9 +179,16 @@ impl<Ns: NameNamespace> NameDef<Ns> {
         Self::try_new(s).expect("trusted leaf name must be valid")
     }
 
-    /// Create this namespace-specific name from an existing atom.
+    /// Classify an unnamespaced atom into this namespace.
+    ///
+    /// This is the only way to attach a namespace to an existing
+    /// [`NameAtom`]. Call it where the grammar position or a resolver lookup
+    /// fixes the namespace of a source identifier. `NameAtom` and `NameDef`
+    /// deliberately have no implicit `&str` view (`Deref`, `Borrow`,
+    /// `PartialEq<str>`) or `From` conversion, so a namespace can neither be
+    /// erased for a string-keyed lookup nor silently swapped for another.
     #[must_use]
-    pub const fn from_atom(atom: NameAtom) -> Self {
+    pub const fn classify(atom: NameAtom) -> Self {
         Self {
             atom,
             _ns: PhantomData,
@@ -284,36 +217,6 @@ impl<Ns: NameNamespace> NameDef<Ns> {
 impl<Ns: NameNamespace> std::fmt::Display for NameDef<Ns> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
-    }
-}
-
-impl<Ns: NameNamespace> PartialEq<str> for NameDef<Ns> {
-    fn eq(&self, other: &str) -> bool {
-        self.as_str() == other
-    }
-}
-
-impl<Ns: NameNamespace> PartialEq<&str> for NameDef<Ns> {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl<Ns: NameNamespace> AsRef<str> for NameDef<Ns> {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl<Ns: NameNamespace> std::borrow::Borrow<str> for NameDef<Ns> {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl<Ns: NameNamespace> From<NameAtom> for NameDef<Ns> {
-    fn from(atom: NameAtom) -> Self {
-        Self::from_atom(atom)
     }
 }
 
@@ -397,7 +300,7 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// cannot yet carry [`ResolvedName`] itself.
     #[must_use]
     pub fn to_unowned_def_name(&self) -> NameDef<Ns> {
-        NameDef::from_atom(self.name.clone())
+        NameDef::classify(self.name.clone())
     }
 
     /// Consume this value and return the canonical owner plus leaf atom.
@@ -705,10 +608,12 @@ mod tests {
     }
 
     #[test]
-    fn newtype_hash_map_borrow_lookup() {
+    fn newtype_hash_map_lookup_uses_classified_key() {
         let mut map = HashMap::new();
         map.insert(TestDeclName::expect_valid("x"), 42);
-        assert_eq!(map.get("x"), Some(&42));
+        let atom = NameAtom::parse("x").unwrap();
+        assert_eq!(map.get(&TestDeclName::classify(atom.clone())), Some(&42));
+        assert_eq!(TestIndexName::classify(atom).as_str(), "x");
     }
 
     #[test]

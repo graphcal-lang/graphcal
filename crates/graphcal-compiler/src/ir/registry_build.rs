@@ -24,7 +24,7 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::{DuplicateItemError, NonEmptyUnique};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{ConstructorName, GenericParamName};
+use crate::syntax::type_name::GenericParamName;
 use crate::syntax::visitor::ExprVisitor;
 
 use super::lower::UnfrozenDynamicUnitScaleEntry;
@@ -122,19 +122,19 @@ impl SelectedDeclarations {
             }
             crate::syntax::ast::ImportItemNamespace::Type => {
                 self.types
-                    .insert(crate::syntax::type_name::StructTypeName::from_atom(name));
+                    .insert(crate::syntax::type_name::StructTypeName::classify(name));
             }
             crate::syntax::ast::ImportItemNamespace::Dimension => {
-                let name = crate::syntax::dimension::DimName::from_atom(name);
+                let name = crate::syntax::dimension::DimName::classify(name);
                 self.insert_dimension_as(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Unit => {
-                let name = crate::syntax::dimension::UnitName::from_atom(name);
+                let name = crate::syntax::dimension::UnitName::classify(name);
                 self.units.insert(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Index => {
                 self.indexes
-                    .insert(crate::syntax::index_name::IndexName::from_atom(name));
+                    .insert(crate::syntax::index_name::IndexName::classify(name));
             }
         }
     }
@@ -152,12 +152,12 @@ impl SelectedDeclarations {
     ) {
         match namespace {
             crate::syntax::ast::ImportItemNamespace::Dimension => self.insert_dimension_as(
-                crate::syntax::dimension::DimName::from_atom(source),
-                crate::syntax::dimension::DimName::from_atom(local),
+                crate::syntax::dimension::DimName::classify(source),
+                crate::syntax::dimension::DimName::classify(local),
             ),
             crate::syntax::ast::ImportItemNamespace::Unit => self.insert_unit_as(
-                crate::syntax::dimension::UnitName::from_atom(source),
-                crate::syntax::dimension::UnitName::from_atom(local),
+                crate::syntax::dimension::UnitName::classify(source),
+                crate::syntax::dimension::UnitName::classify(local),
             ),
             crate::syntax::ast::ImportItemNamespace::Term
             | crate::syntax::ast::ImportItemNamespace::Type
@@ -251,7 +251,7 @@ impl SelectedDeclarations {
                         .name
                         .value
                         .as_bare()
-                        .map(|atom| crate::syntax::dimension::DimName::from_atom(atom.clone()))
+                        .map(|atom| crate::syntax::dimension::DimName::classify(atom.clone()))
                 })
             }));
         }
@@ -339,21 +339,26 @@ fn register_declarations_impl(
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
-    let should_register_term = |name: &str| filter.is_none_or(|names| names.terms.contains(name));
-    let should_register_dimension = |name: &str| {
+    let should_register_term = |name: &crate::syntax::decl_name::DeclName| {
+        filter.is_none_or(|names| names.terms.contains(name.atom()))
+    };
+    let should_register_dimension = |name: &crate::syntax::dimension::DimName| {
         filter.is_none_or(|names| {
             names
                 .dimensions
                 .values()
-                .any(|dimension| dimension.source.as_str() == name)
+                .any(|dimension| dimension.source == *name)
         })
     };
-    let should_register_unit = |name: &str| {
-        filter.is_none_or(|names| names.units.values().any(|source| source.as_str() == name))
+    let should_register_unit = |name: &crate::syntax::dimension::UnitName| {
+        filter.is_none_or(|names| names.units.values().any(|source| source == name))
     };
-    let should_register_index =
-        |name: &str| filter.is_none_or(|names| names.indexes.contains(name));
-    let should_register_type = |name: &str| filter.is_none_or(|names| names.types.contains(name));
+    let should_register_index = |name: &crate::syntax::index_name::IndexName| {
+        filter.is_none_or(|names| names.indexes.contains(name))
+    };
+    let should_register_type = |name: &crate::syntax::type_name::StructTypeName| {
+        filter.is_none_or(|names| names.types.contains(name))
+    };
 
     // Collect declarations by kind for phased registration.
     let mut derived_dims: Vec<&DimDecl> = Vec::new();
@@ -365,10 +370,10 @@ fn register_declarations_impl(
     // Also collect derived dims, units, and dependent indexes for later phases.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::BaseDimension(d) if should_register_dimension(d.name.value.as_str()) => {
+            DeclKind::BaseDimension(d) if should_register_dimension(&d.name.value) => {
                 register_base_dimension_decl(d, registry, dag_id);
             }
-            DeclKind::Dimension(d) if should_register_dimension(d.name.value.as_str()) => {
+            DeclKind::Dimension(d) if should_register_dimension(&d.name.value) => {
                 if d.definition.is_some() {
                     derived_dims.push(d);
                 } else {
@@ -379,26 +384,24 @@ fn register_declarations_impl(
                     register_required_dimension_decl(d, registry, dag_id);
                 }
             }
-            DeclKind::Unit(u) if should_register_unit(u.name.value.as_str()) => {
+            DeclKind::Unit(u) if should_register_unit(&u.name.value) => {
                 units.push(u);
             }
-            DeclKind::Index(idx) if should_register_index(idx.name.value.as_str()) => {
-                match &idx.kind {
-                    IndexDeclKind::RequiredCoordinate { .. } => {
-                        required_coordinate_indexes.push((idx, decl.span));
-                    }
-                    IndexDeclKind::Range { .. } | IndexDeclKind::Linspace { .. } => {
-                        coordinate_indexes.push((idx, decl.span));
-                    }
-                    IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
-                        register_index_decl(idx, registry, src, decl.span)?;
-                    }
+            DeclKind::Index(idx) if should_register_index(&idx.name.value) => match &idx.kind {
+                IndexDeclKind::RequiredCoordinate { .. } => {
+                    required_coordinate_indexes.push((idx, decl.span));
                 }
-            }
-            DeclKind::Type(t) if should_register_type(t.name.value.as_str()) => {
+                IndexDeclKind::Range { .. } | IndexDeclKind::Linspace { .. } => {
+                    coordinate_indexes.push((idx, decl.span));
+                }
+                IndexDeclKind::Named { .. } | IndexDeclKind::RequiredNamed => {
+                    register_index_decl(idx, registry, src, decl.span)?;
+                }
+            },
+            DeclKind::Type(t) if should_register_type(&t.name.value) => {
                 register_type_decl(t, registry, src)?;
             }
-            DeclKind::Dag(d) if should_register_term(d.name.value.as_str()) => {
+            DeclKind::Dag(d) if should_register_term(&d.name.value) => {
                 registry.register_dag(d.name.value.clone(), d.clone());
             }
             _ => {}
@@ -1178,7 +1181,7 @@ fn register_type_decl(
                         })
                         .collect();
                     types::UnionMemberDef::try_new(
-                        ConstructorName::expect_valid(member.name.value.as_str()),
+                        member.name.value.clone(),
                         fields,
                     )
                     .map_err(|error| match error {

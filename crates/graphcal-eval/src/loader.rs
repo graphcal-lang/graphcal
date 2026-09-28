@@ -2802,7 +2802,7 @@ fn resolve_project_module<F: FileSystemReader>(
         }
         let inline_path = segments[file_segment_count..]
             .iter()
-            .map(|segment| DeclName::from_atom(segment.name.atom().clone()))
+            .map(|segment| DeclName::classify(segment.name.atom().clone()))
             .collect();
         return ModuleResolution::Resolved(ResolvedFile {
             file: canonical,

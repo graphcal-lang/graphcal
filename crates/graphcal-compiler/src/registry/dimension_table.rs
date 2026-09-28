@@ -365,12 +365,12 @@ impl DimensionFormattingRegistry {
         self.bases.insert(
             base.clone(),
             BaseDimensionInfo {
-                canonical_unit: Some(UnitName::from_atom(name.atom().clone())),
+                canonical_unit: Some(UnitName::classify(name.atom().clone())),
                 affine_prone: false,
             },
         );
         self.display_aliases.insert(
-            DimRef::local(DimName::from_atom(name.atom().clone())),
+            DimRef::local(DimName::classify(name.atom().clone())),
             Dimension::base(base),
         );
     }

@@ -970,7 +970,7 @@ fn build_ir_from_resolved(
             .plots
             .into_iter()
             .map(|entry| {
-                let visibility = if resolved.hidden_plots.contains(entry.name.as_str()) {
+                let visibility = if resolved.hidden_plots.contains(&entry.name) {
                     PlotVisibility::CompositionOnly
                 } else {
                     PlotVisibility::Standalone

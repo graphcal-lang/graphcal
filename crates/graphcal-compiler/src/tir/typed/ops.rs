@@ -266,7 +266,7 @@ fn resolved_index_matches_inferred(
 fn resolved_index_display_name(index: &ResolvedIndex) -> IndexDisplayName {
     match index {
         ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name().into(),
-        ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()).into(),
+        ResolvedIndex::GenericParam(name, _) => IndexName::classify(name.atom().clone()).into(),
         ResolvedIndex::Finite(form, _) => IndexDisplayName::Finite(form.clone()),
     }
 }

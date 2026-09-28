@@ -123,7 +123,7 @@ pub fn extract_external_decl_surface_from_declarations(
     ) {
         match namespace {
             ImportItemNamespace::Term => {
-                surface.insert_explicit_export(DeclName::from_atom(name.clone()));
+                surface.insert_explicit_export(DeclName::classify(name.clone()));
             }
             ImportItemNamespace::Type
             | ImportItemNamespace::Dimension
@@ -153,7 +153,7 @@ pub fn extract_external_decl_surface_from_declarations(
                         || d.path.leaf().name.atom().clone(),
                         |alias| alias.value.atom().clone(),
                     );
-                    surface.insert_explicit_export(DeclName::from_atom(name));
+                    surface.insert_explicit_export(DeclName::classify(name));
                 }
                 graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {}
             },
@@ -191,7 +191,7 @@ pub fn extract_external_decl_surface_from_declarations(
                         | ProjectDeclKind::Figure
                         | ProjectDeclKind::Layer
                         | ProjectDeclKind::Dag => surface
-                            .insert_explicit_export(DeclName::from_atom(identity.name.clone())),
+                            .insert_explicit_export(DeclName::classify(identity.name.clone())),
                     }
                 }
             }
@@ -471,7 +471,7 @@ fn decl_import_item_presence(
         | DeclKind::PluginImport(_)
         | DeclKind::Dag(_) => decl_identity(decl)
             .is_some_and(|identity| {
-                import_namespace_matches(identity.kind, namespace) && identity.name == name
+                import_namespace_matches(identity.kind, namespace) && identity.name.as_str() == name
             })
             .then(|| {
                 if decl_is_explicit_export(decl) {

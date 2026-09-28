@@ -220,7 +220,7 @@ impl ScopedName {
 
         let display = display.as_ref();
         let Some((owner, member)) = display.split_once("::") else {
-            return parse_segment(display, 1).map(Self::from);
+            return parse_segment(display, 1).map(|atom| Self::local(DeclName::classify(atom)));
         };
         if member.contains("::") {
             return Err(ScopedNameParseError::InvalidSegment {
@@ -243,8 +243,8 @@ impl ScopedName {
         })?;
         let member = parse_segment(member, owner.len() + 1)?;
         Ok(Self::qualified_path(
-            owner.into_iter().map(ModuleAliasName::from_atom),
-            DeclName::from_atom(member),
+            owner.into_iter().map(ModuleAliasName::classify),
+            DeclName::classify(member),
         ))
     }
 
@@ -327,13 +327,6 @@ impl TryFrom<&str> for ScopedName {
     }
 }
 
-impl From<NameAtom> for ScopedName {
-    /// Promote a bare atom into the declaration namespace as a local name.
-    fn from(atom: NameAtom) -> Self {
-        Self::local(DeclName::from_atom(atom))
-    }
-}
-
 impl From<DeclName> for ScopedName {
     /// Wrap a `DeclName` as a local `ScopedName`. Use this at the resolver → IR
     /// boundary where local resolver keys become module-aware IR keys.
@@ -358,8 +351,8 @@ impl From<&NamePath> for ScopedName {
     fn from(path: &NamePath) -> Self {
         let (qualifier, member) = path.split_last();
         Self::qualified_path(
-            qualifier.iter().cloned().map(ModuleAliasName::from_atom),
-            DeclName::from_atom(member.clone()),
+            qualifier.iter().cloned().map(ModuleAliasName::classify),
+            DeclName::classify(member.clone()),
         )
     }
 }

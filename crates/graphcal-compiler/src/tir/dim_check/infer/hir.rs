@@ -5193,7 +5193,10 @@ fn infer_hir_dag_call(
             span: output.span.into(),
         })?;
     let output_name = output_key.as_str();
-    if !dag_tir.projectable_outputs.contains(output_name) {
+    if !dag_tir
+        .projectable_outputs
+        .contains(&output_key.to_unowned_def_name())
+    {
         return Err(GraphcalError::ImportPrivateItem {
             name: output_name.to_string(),
             file_path: display_path,

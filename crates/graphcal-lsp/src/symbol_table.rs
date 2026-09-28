@@ -20,7 +20,7 @@ use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{
-    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
+    GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
 };
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
@@ -2137,7 +2137,7 @@ fn collect_include_decl(
                 span: binding.name.span,
                 target: SymbolKey::Declaration(ResolvedDeclName::from_def(
                     target.clone(),
-                    DeclName::from_atom(binding.name.name.atom().clone()),
+                    DeclName::classify(binding.name.name.atom().clone()),
                 ))
                 .into(),
             });
@@ -2150,7 +2150,7 @@ fn collect_include_decl(
                     span: item.name.span,
                     target: SymbolKey::Declaration(ResolvedDeclName::from_def(
                         target.clone(),
-                        DeclName::from_atom(item.name.name.atom().clone()),
+                        DeclName::classify(item.name.name.atom().clone()),
                     ))
                     .into(),
                 });
@@ -2394,7 +2394,7 @@ fn generic_param_symbol(
     generic_scope: Option<&GenericParamSymbolScope>,
 ) -> Option<SymbolKey> {
     generic_scope?
-        .get(&GenericParamName::from_atom(name.clone()))
+        .get(&GenericParamName::classify(name.clone()))
         .cloned()
 }
 
@@ -2682,14 +2682,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
         };
         for member in members {
             for field in member.fields() {
-                let constructor = ResolvedConstructorName::from_def(
-                    dag_id.clone(),
-                    ConstructorName::expect_valid(member.name().to_string()),
-                );
-                let field_key = SymbolKey::Field(FieldId::new(
-                    constructor,
-                    FieldName::expect_valid(field.name().to_string()),
-                ));
+                let constructor =
+                    ResolvedConstructorName::from_def(dag_id.clone(), member.name().clone());
+                let field_key = SymbolKey::Field(FieldId::new(constructor, field.name().clone()));
                 if !table.definitions.contains_key(&field_key) {
                     table.insert_definition(
                         field_key,

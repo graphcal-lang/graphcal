@@ -1,9 +1,9 @@
-use crate::syntax::ast::PlotPropertyName;
 use crate::syntax::ast::{
     DeclKind, Declaration, Encoding, EncodingChannel, MarkSpec, MarkType, PlotDecl, PlotField,
     Visibility,
 };
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
@@ -12,7 +12,7 @@ impl Parser<'_> {
     /// Parse a plot declaration: `plot name = { mark: type, encode: { ... }, title: "..." };`
     pub(super) fn parse_plot(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Plot)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Eq)?;
 
         // Parse the block: { mark: ..., encode: { ... }, ... }
@@ -68,7 +68,7 @@ impl Parser<'_> {
                     let value = self.parse_expr()?;
                     let field_end = value.span;
                     properties.push(PlotField {
-                        name: field_name.into_spanned::<PlotPropertyName>(),
+                        name: field_name.classify(),
                         value,
                         span: field_start.merge(field_end),
                     });
@@ -157,7 +157,7 @@ impl Parser<'_> {
                 let value = self.parse_expr()?;
                 let prop_end = value.span;
                 properties.push(PlotField {
-                    name: prop_name.into_spanned::<PlotPropertyName>(),
+                    name: prop_name.classify(),
                     value,
                     span: prop_start.merge(prop_end),
                 });

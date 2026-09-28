@@ -345,7 +345,7 @@ fn resolve_extern_result_kind(
         && registry
             .dimensions
             .get_dimension(&crate::syntax::dimension::DimRef::local(
-                crate::syntax::dimension::DimName::from_atom(atom.clone()),
+                crate::syntax::dimension::DimName::classify(atom.clone()),
             ))
             .is_none()
     {
@@ -410,14 +410,15 @@ pub(super) fn resolve_extern_struct_return(
              this phase"
         )));
     }
-    let Some(fields) = type_def.record_fields() else {
+    let Some(record) = type_def.record_member() else {
         return Err(invalid(format!(
             "`{leaf}` is not a record type; extern struct returns need a single constructor \
              named after the type"
         )));
     };
 
-    let shape_fields = fields
+    let shape_fields = record
+        .fields()
         .iter()
         .map(|field| {
             let kind = resolve_extern_struct_field(field, registry, src)?;
@@ -430,7 +431,7 @@ pub(super) fn resolve_extern_struct_return(
     let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
     Ok(ResultKind::Struct(ExternStructResult {
         resolved: resolved_type,
-        constructor: crate::syntax::type_name::ConstructorName::from_atom(leaf.atom().clone()),
+        constructor: record.name().clone(),
         shape,
     }))
 }
@@ -605,9 +606,12 @@ fn resolve_extern_dim_monomial(
                 span: term.span.into(),
             });
         };
-        let Some(dim) = registry
-            .dimensions
-            .get_dimension(&crate::syntax::dimension::DimRef::local(leaf.clone()))
+        let Some(dim) =
+            registry
+                .dimensions
+                .get_dimension(&crate::syntax::dimension::DimRef::local(
+                    crate::syntax::dimension::DimName::classify(leaf.clone()),
+                ))
         else {
             return Err(GraphcalError::UnknownDimension {
                 name: NamePath::from(leaf.clone()),

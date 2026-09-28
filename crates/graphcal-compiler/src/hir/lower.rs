@@ -17,7 +17,7 @@ use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
-use crate::syntax::names::{NameAtom, NamePath, ResolvedName};
+use crate::syntax::names::{NameAtom, NameDef, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 
@@ -151,7 +151,7 @@ impl PreludeTypeScope {
     pub fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
         let atom = path.as_bare()?;
         self.dimensions
-            .contains(atom.as_str())
+            .contains(&NameDef::classify(atom.clone()))
             .then(|| ResolvedName::new(self.owner.clone(), atom.clone()))
     }
 
@@ -234,7 +234,7 @@ impl GenericScope {
     }
 
     fn get_atom(&self, atom: &NameAtom) -> Option<&GenericParamBinding> {
-        let name = GenericParamName::from_atom(atom.clone());
+        let name = GenericParamName::classify(atom.clone());
         self.get(&name)
     }
 }
@@ -738,7 +738,7 @@ fn lower_single_term_nominal_type(
             }
             GenericConstraint::Nat => {
                 return Err(HirLowerError::GenericConstraintMismatch {
-                    name: GenericParamName::from_atom(atom.clone()),
+                    name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
                     expected: "Dim or Type",
                     span: item.term.name.span,
@@ -835,7 +835,7 @@ fn lower_dim_term(
             }),
             GenericConstraint::Index | GenericConstraint::Nat | GenericConstraint::Type => {
                 Err(HirLowerError::GenericConstraintMismatch {
-                    name: GenericParamName::from_atom(atom.clone()),
+                    name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
                     expected: "Dim",
                     span: term.name.span,
@@ -901,7 +901,7 @@ fn lower_index_expr_name(
             }),
             GenericConstraint::Dim | GenericConstraint::Type => {
                 Err(HirLowerError::GenericConstraintMismatch {
-                    name: GenericParamName::from_atom(atom.clone()),
+                    name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
                     expected: "Index",
                     span: path.span,

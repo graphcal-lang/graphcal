@@ -15,7 +15,7 @@ use graphcal_compiler::dimension::Rational;
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_resolve::ModuleResolver;
-use graphcal_compiler::syntax::type_name::{ConstructorName, ResolvedConstructorName};
+use graphcal_compiler::syntax::type_name::ResolvedConstructorName;
 
 use crate::symbol_identity::FieldId;
 
@@ -149,6 +149,8 @@ fn nominal_constructor(
     };
     Some(ResolvedConstructorName::from_def(
         type_name.owner().clone(),
-        ConstructorName::from_atom(type_name.atom().clone()),
+        graphcal_compiler::syntax::type_name::record_constructor_name(
+            &type_name.to_unowned_def_name(),
+        ),
     ))
 }

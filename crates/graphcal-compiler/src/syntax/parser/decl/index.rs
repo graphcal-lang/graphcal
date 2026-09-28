@@ -1,6 +1,6 @@
 use crate::syntax::ast::{BindableVisibility, DeclKind, Declaration, IndexDecl, IndexDeclKind};
-use crate::syntax::index_name::{IndexName, IndexVariantName};
-use crate::syntax::span::Span;
+use crate::syntax::index_name::IndexName;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
@@ -14,7 +14,7 @@ impl Parser<'_> {
     /// - `index Foo: Time;` (required coordinate — bound via parameterized include)
     pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
-        let name = self.parse_any_ident()?.into_spanned::<IndexName>();
+        let name: Spanned<IndexName> = self.parse_any_ident()?.classify();
         let (kind, end_span) = match self.lexer.peek() {
             Some(&Token::Semicolon) => {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
@@ -62,7 +62,7 @@ impl Parser<'_> {
     fn parse_named_index_kind(&mut self) -> Result<(IndexDeclKind, Span), ParseError> {
         self.expect(Token::LBrace)?;
         let variants = self.parse_non_empty_comma_separated(Token::RBrace, |parser| {
-            Ok(parser.parse_any_ident()?.into_spanned::<IndexVariantName>())
+            Ok(parser.parse_any_ident()?.classify())
         })?;
         self.expect(Token::RBrace)?;
         let (_, end_span) = self.expect(Token::Semicolon)?;
