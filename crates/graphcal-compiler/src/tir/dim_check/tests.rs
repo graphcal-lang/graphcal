@@ -357,7 +357,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         tir.root().nodes()[0].definition.formula().unwrap(),
         &mut |expr| {
             if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
-                ids.push(expr.id().unwrap().clone());
+                ids.push(expr.id().clone());
             }
         },
     );

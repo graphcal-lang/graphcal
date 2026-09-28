@@ -14,6 +14,9 @@ use super::model::{
 pub trait Refinement<A: Completeness, B: Completeness> {
     type Failure;
 
+    /// Translate one node identity. Called for a node before its children.
+    fn id(&mut self, id: A::Id) -> Result<B::Id, Self::Failure>;
+
     /// Translate an error node. This is where a refinement to a tree without
     /// error nodes rejects the input.
     fn error_node(&mut self, error: A::Error) -> Result<B::Error, Self::Failure>;
@@ -28,6 +31,7 @@ where
 {
     crate::stack::with_stack_growth(|| {
         let Expr { kind, span, id } = expr;
+        let id = refinement.id(id)?;
         let kind = refine_kind(*kind, refinement)?;
         Ok(Expr {
             kind: Box::new(kind),

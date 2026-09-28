@@ -83,6 +83,7 @@ pub fn visit_expr_children<'a, C: Completeness>(
     expression_children!(expr.kind(), iter, error_children, visitor, [&]);
 }
 
+#[cfg(test)]
 pub(super) fn visit_expr_children_mut<C: Completeness>(
     expr: &mut Expr<C>,
     visitor: &mut impl FnMut(&mut Expr<C>),

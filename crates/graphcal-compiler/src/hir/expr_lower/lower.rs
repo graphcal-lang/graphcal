@@ -18,13 +18,13 @@ use super::context::ExprLoweringContext;
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
 use super::resolve::{ResolvedCallable, spanned};
-use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_strict, into_strict};
+use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_draft, into_draft};
 use crate::hir::expr::{
     AssertBody, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, FieldInit, ForBinding,
     ForBindingIndex, IndexArg, IndexVariantRef, MapEntry, MapEntryKey, MatchArm, MatchPattern,
     ParamBinding, PatternBinding, UnfoldRecurrence,
 };
-use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Strict};
+use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
 use crate::hir::lower::{lower_generic_args, lower_nat_expr};
 
 /// Lower a syntax expression into tolerant HIR.
@@ -40,8 +40,8 @@ pub fn lower_expr_tolerant(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Ex
 
 /// Lower a syntax expression into strict HIR, rejecting unresolved references.
 ///
-/// The tree is [`Strict`], so it cannot contain an error node, but it is not
-/// yet a finished body: callers that splice lowered subtrees into a larger
+/// The tree is a [`Draft`]: it cannot contain an error node, but it is not
+/// yet a finished body. Callers that splice lowered subtrees into a larger
 /// synthesized tree finish the result themselves.
 ///
 /// # Errors
@@ -52,8 +52,8 @@ pub fn lower_expr_tolerant(expr: &ast::Expr, ctx: ExprLoweringContext<'_>) -> Ex
 pub fn lower_expr_draft(
     expr: &ast::Expr,
     ctx: ExprLoweringContext<'_>,
-) -> Result<Expr<Strict>, ExprLowerError> {
-    into_strict(lower_expr_tolerant(expr, ctx))
+) -> Result<Expr<Draft>, ExprLowerError> {
+    into_draft(lower_expr_tolerant(expr, ctx))
 }
 
 /// Lower a syntax expression into a finished strict HIR body.
@@ -117,7 +117,7 @@ pub fn lower_assert_body(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<CheckedAssertBody, ExprLowerError> {
-    let lowered = assert_body_into_strict(lower_assert_body_tolerant(body, ctx))?;
+    let lowered = assert_body_into_draft(lower_assert_body_tolerant(body, ctx))?;
     let span = match &lowered {
         AssertBody::Expr(expr) => expr.span,
         AssertBody::Tolerance { actual, .. } => actual.span,

@@ -1,4 +1,5 @@
 use super::tolerant::Tolerant;
+use crate::hir::expr::Draft;
 use crate::resolved_name::ResolvedDeclName;
 use std::collections::{BTreeSet, HashMap};
 
@@ -90,11 +91,7 @@ fn local_env_bind_rebinds_in_place() {
 #[test]
 fn body_identity_and_source_map_do_not_depend_on_unique_spans() {
     let span = Span::new(0, 1);
-    let leaf = Expr::new(ExprKind::Bool(true), span);
-    assert!(
-        leaf.id().is_err(),
-        "tolerant/unpublished HIR has no body identity"
-    );
+    let leaf = Expr::<Draft>::new(ExprKind::Bool(true), span);
     let body = CheckedExpr::finish(Expr::new(
         ExprKind::If {
             condition: Box::new(leaf.clone()),
@@ -106,17 +103,17 @@ fn body_identity_and_source_map_do_not_depend_on_unique_spans() {
     .unwrap();
     let mut ids = std::collections::HashSet::new();
     visit_expr(&body, &mut |expr| {
-        assert!(ids.insert(expr.id().unwrap().clone()));
-        assert_eq!(body.source_map().span(expr.id().unwrap()).unwrap(), span);
+        assert!(ids.insert(expr.id().clone()));
+        assert_eq!(body.source_map().span(expr.id()).unwrap(), span);
     });
     assert_eq!(ids.len(), 4);
     let mut shifted = (*body).clone();
     shifted.span = Span::new(99, 1);
-    assert_eq!(shifted.id().unwrap(), body.id().unwrap());
-    assert_eq!(body.source_map().span(shifted.id().unwrap()).unwrap(), span);
-    let rebuilt = CheckedExpr::finish(shifted).unwrap();
-    assert_ne!(rebuilt.id().unwrap(), body.id().unwrap());
-    assert!(rebuilt.source_map().span(body.id().unwrap()).is_err());
+    assert_eq!(shifted.id(), body.id());
+    assert_eq!(body.source_map().span(shifted.id()).unwrap(), span);
+    let rebuilt = CheckedExpr::finish(shifted.into_draft_for_test()).unwrap();
+    assert_ne!(rebuilt.id(), body.id());
+    assert!(rebuilt.source_map().span(body.id()).is_err());
 }
 
 #[test]
@@ -130,7 +127,7 @@ fn tolerance_operands_have_distinct_ids_even_with_identical_source_coordinates()
     .unwrap();
     let ids = body
         .expressions()
-        .map(|expr| expr.id().unwrap().clone())
+        .map(|expr| expr.id().clone())
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(ids.len(), 3);
     assert!(ids.iter().all(|id| body.source_map().span(id).is_ok()));
@@ -150,10 +147,7 @@ fn strict_lowering_publishes_identity_and_source_coverage_for_every_child() {
     .unwrap();
     let mut count = 0;
     visit_expr(&body, &mut |expr| {
-        assert_eq!(
-            body.source_map().span(expr.id().unwrap()).unwrap(),
-            expr.span
-        );
+        assert_eq!(body.source_map().span(expr.id()).unwrap(), expr.span);
         count += 1;
     });
     assert_eq!(count, 3);

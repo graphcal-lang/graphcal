@@ -108,7 +108,7 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
             let mut ids = std::collections::HashSet::new();
             dag.owned_expression_roots().for_each(|root| {
                 graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
-                    let id = expr.id().unwrap();
+                    let id = expr.id();
                     assert_eq!(facts.span(id).unwrap(), expr.span);
                     facts.get(id).unwrap();
                     ids.insert(id.clone());
@@ -534,7 +534,7 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     let mut shifted = (**original).clone();
     shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
     assert_ne!(shifted.span, original.span);
-    assert_eq!(shifted.id().unwrap(), original.id().unwrap());
+    assert_eq!(shifted.id(), original.id());
     let value = crate::eval_expr::eval_hir_expr(
         &shifted,
         &crate::execution_facts::RuntimeValueMap::new(),
@@ -564,18 +564,8 @@ fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shar
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut revised, &src).unwrap();
     assert_eq!(revised.root_dag_id(), tir.root_dag_id());
     assert_eq!(
-        revised.root().nodes()[0]
-            .definition
-            .formula()
-            .unwrap()
-            .id()
-            .unwrap(),
-        tir.root().nodes()[0]
-            .definition
-            .formula()
-            .unwrap()
-            .id()
-            .unwrap()
+        revised.root().nodes()[0].definition.formula().unwrap().id(),
+        tir.root().nodes()[0].definition.formula().unwrap().id()
     );
     assert_ne!(revised.root().body_revision(), tir.root().body_revision());
     assert!(matches!(

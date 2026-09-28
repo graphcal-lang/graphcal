@@ -1,13 +1,19 @@
-//! Finished HIR bodies: error-free trees with assigned occurrence identities.
+//! Finished HIR bodies: strict trees whose every node carries an occurrence identity.
 
+use super::completeness::{Draft, NoErrorNode, Strict};
 #[cfg(test)]
 use super::model::ExprKind;
 use super::model::{AssertBody, Expr};
-use super::visit::{visit_expr, visit_expr_children_mut};
+use super::refine::{Refinement, refine_assert_body, refine_expr};
+use super::visit::visit_expr;
+#[cfg(test)]
+use super::visit::visit_expr_children_mut;
+use crate::expression_id::{ExprId, ExprIdExhausted, ExprIds};
+use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 #[cfg(test)]
 use crate::syntax::span::Span;
 
-/// An HIR assertion body proven not to contain tolerant-lowering error nodes.
+/// A finished HIR assertion body: strict operands numbered in one revision.
 #[derive(Debug, Clone)]
 pub struct CheckedAssertBody {
     data: std::sync::Arc<FinishedAssertion>,
@@ -16,7 +22,7 @@ pub struct CheckedAssertBody {
 #[derive(Debug)]
 struct FinishedAssertion {
     body: AssertBody,
-    source_map: crate::expression_source::ExpressionSourceMap,
+    source_map: ExpressionSourceMap,
 }
 
 impl std::ops::Deref for CheckedAssertBody {
@@ -29,12 +35,12 @@ impl std::ops::Deref for CheckedAssertBody {
 
 #[cfg(test)]
 impl CheckedAssertBody {
-    pub(crate) fn from_assert_body_for_test(body: AssertBody) -> Self {
+    pub(crate) fn from_assert_body_for_test(body: AssertBody<Draft>) -> Self {
         Self::finish(body).unwrap()
     }
 }
 
-/// An HIR expression proven not to contain tolerant-lowering error nodes.
+/// A finished HIR expression: a strict tree numbered in a fresh revision.
 #[derive(Debug, Clone)]
 pub struct CheckedExpr {
     data: std::sync::Arc<FinishedExpression>,
@@ -45,7 +51,7 @@ pub struct CheckedExpr {
 #[derive(Debug)]
 struct FinishedExpression {
     expr: Expr,
-    source_map: crate::expression_source::ExpressionSourceMap,
+    source_map: ExpressionSourceMap,
 }
 
 impl std::ops::Deref for CheckedExpr {
@@ -58,11 +64,15 @@ impl std::ops::Deref for CheckedExpr {
 
 #[cfg(test)]
 impl CheckedExpr {
+    pub(crate) fn from_draft_for_test(expr: Expr<Draft>) -> Self {
+        Self::finish(expr).unwrap()
+    }
+
     pub(crate) fn into_expr_for_test(self) -> Expr {
         self.data.expr.clone()
     }
 
-    pub(crate) fn replace_kind_for_test(&mut self, kind: ExprKind) {
+    pub(crate) fn replace_kind_for_test(&mut self, kind: ExprKind<Draft>) {
         *self = Self::finish(Expr::new(kind, self.data.expr.span)).unwrap();
     }
 
@@ -82,10 +92,9 @@ impl CheckedExpr {
 }
 
 impl CheckedExpr {
-    pub(in crate::hir) fn finish(
-        mut expr: Expr,
-    ) -> Result<Self, crate::expression_source::ExpressionSourceError> {
-        assign_expression_ids(&mut expr, &mut crate::expression_id::ExprIds::default())?;
+    /// Number a complete tree in a fresh revision and seal its source map.
+    pub(in crate::hir) fn finish(expr: Expr<Draft>) -> Result<Self, ExpressionSourceError> {
+        let expr = refine_expr(expr, &mut NumberNodes(ExprIds::default()))?;
         let source_map = expression_source_map(std::iter::once(&expr))?;
         Ok(Self {
             data: std::sync::Arc::new(FinishedExpression { expr, source_map }),
@@ -93,18 +102,15 @@ impl CheckedExpr {
     }
 
     #[must_use]
-    pub fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+    pub fn source_map(&self) -> &ExpressionSourceMap {
         &self.data.source_map
     }
 }
 
 impl CheckedAssertBody {
-    pub(in crate::hir) fn finish(
-        mut body: AssertBody,
-    ) -> Result<Self, crate::expression_source::ExpressionSourceError> {
-        let mut ids = crate::expression_id::ExprIds::default();
-        body.expressions_mut()
-            .try_for_each(|expr| assign_expression_ids(expr, &mut ids))?;
+    /// Number every operand in one fresh revision and seal their source map.
+    pub(in crate::hir) fn finish(body: AssertBody<Draft>) -> Result<Self, ExpressionSourceError> {
+        let body = refine_assert_body(body, &mut NumberNodes(ExprIds::default()))?;
         let source_map = expression_source_map(body.expressions())?;
         Ok(Self {
             data: std::sync::Arc::new(FinishedAssertion { body, source_map }),
@@ -112,40 +118,57 @@ impl CheckedAssertBody {
     }
 
     #[must_use]
-    pub fn source_map(&self) -> &crate::expression_source::ExpressionSourceMap {
+    pub fn source_map(&self) -> &ExpressionSourceMap {
         &self.data.source_map
     }
 }
 
-pub(super) fn expression_source_map<'a>(
+#[cfg(test)]
+impl Expr {
+    /// Drop occurrence identities so a finished tree can be finished again.
+    pub(crate) fn into_draft_for_test(self) -> Expr<Draft> {
+        struct ForgetIds;
+        impl Refinement<Strict, Draft> for ForgetIds {
+            type Failure = std::convert::Infallible;
+
+            fn id(&mut self, _: ExprId) -> Result<(), Self::Failure> {
+                Ok(())
+            }
+
+            fn error_node(&mut self, error: NoErrorNode) -> Result<NoErrorNode, Self::Failure> {
+                error.absurd()
+            }
+        }
+        match refine_expr(self, &mut ForgetIds) {
+            Ok(draft) => draft,
+            Err(never) => match never {},
+        }
+    }
+}
+
+/// Assigns occurrence identities in pre-order while refining a draft to strict HIR.
+struct NumberNodes(ExprIds);
+
+impl Refinement<Draft, Strict> for NumberNodes {
+    type Failure = ExprIdExhausted;
+
+    fn id(&mut self, (): ()) -> Result<ExprId, ExprIdExhausted> {
+        self.0.allocate()
+    }
+
+    fn error_node(&mut self, error: NoErrorNode) -> Result<NoErrorNode, ExprIdExhausted> {
+        error.absurd()
+    }
+}
+
+fn expression_source_map<'a>(
     roots: impl Iterator<Item = &'a Expr>,
-) -> Result<
-    crate::expression_source::ExpressionSourceMap,
-    crate::expression_source::ExpressionSourceError,
-> {
+) -> Result<ExpressionSourceMap, ExpressionSourceError> {
     let mut entries = Vec::new();
     roots.for_each(|root| {
         visit_expr(root, &mut |expr| {
-            entries.push(expr.id().map(|id| (id.clone(), expr.span)));
+            entries.push((expr.id().clone(), expr.span));
         });
     });
-    crate::expression_source::ExpressionSourceMap::try_new(
-        entries.into_iter().collect::<Result<Vec<_>, _>>()?,
-    )
-}
-
-pub(super) fn assign_expression_ids(
-    expr: &mut Expr,
-    ids: &mut crate::expression_id::ExprIds,
-) -> Result<(), crate::expression_id::ExprIdExhausted> {
-    crate::stack::with_stack_growth(|| {
-        expr.id = Some(ids.allocate()?);
-        let mut result = Ok(());
-        visit_expr_children_mut(expr, &mut |child| {
-            if result.is_ok() {
-                result = assign_expression_ids(child, ids);
-            }
-        });
-        result
-    })
+    ExpressionSourceMap::try_new(entries)
 }

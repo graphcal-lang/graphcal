@@ -24,7 +24,7 @@ mod visit;
 
 pub use checked::{CheckedAssertBody, CheckedExpr};
 pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
-pub use completeness::{Completeness, NoErrorNode, Strict};
+pub use completeness::{Completeness, Draft, NoErrorNode, Strict};
 pub use local_env::LocalEnv;
 pub use model::{
     AssertBody, ConstRef, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, ExternFnRef,

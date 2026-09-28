@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::body_revision::BodyRevision;
 use crate::dag_id::DagId;
-use crate::expression_id::{ExprId, UnassignedExprId};
+use crate::expression_id::ExprId;
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, visit_expr_children};
 use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType, IndexTypeRef};
@@ -324,7 +324,7 @@ impl CheckedExpressionRecord {
         let mut children = self.children().iter();
         let mut matched = true;
         visit_expr_children(expr, &mut |child| {
-            matched &= child.id().is_ok_and(|id| children.next() == Some(id));
+            matched &= children.next() == Some(child.id());
         });
         let units_match = match expr.kind() {
             ExprKind::QuantityLiteral { unit, .. } | ExprKind::Convert { target: unit, .. } => unit
@@ -341,14 +341,14 @@ impl CheckedExpressionRecord {
         expr: &Expr,
         fact: ExpressionFact,
         environment: std::sync::Arc<CheckingEnvironment>,
-    ) -> Result<Box<Self>, ExpressionFactsError> {
+    ) -> Box<Self> {
         let mut children = Vec::new();
-        visit_expr_children(expr, &mut |child| children.push(child.id().cloned()));
-        Ok(Box::new(Self {
+        visit_expr_children(expr, &mut |child| children.push(child.id().clone()));
+        Box::new(Self {
             environment,
             fact,
             operation: std::sync::Arc::new(ExpressionOperation::from_expr(expr)),
-            children: share_nonempty(children.into_iter().collect::<Result<_, _>>()?),
+            children: share_nonempty(children),
             static_indexes: Vec::new(),
             unit_dependencies: share_nonempty(match expr.kind() {
                 ExprKind::QuantityLiteral { unit, .. } | ExprKind::Convert { target: unit, .. } => {
@@ -362,7 +362,7 @@ impl CheckedExpressionRecord {
             constructor_matches: HashMap::new(),
             nat_parameters: None,
             nominal_observations: None,
-        }))
+        })
     }
 }
 
@@ -446,7 +446,7 @@ fn value_type<'a>(
     records: &'a HashMap<ExprId, Box<CheckedExpressionRecord>>,
     expr: &Expr,
 ) -> Result<&'a DeclaredType, ExpressionFactsError> {
-    let id = expr.id()?;
+    let id = expr.id();
     match &records
         .get(id)
         .ok_or_else(|| ExpressionFactsError::Missing(id.clone()))?
@@ -481,7 +481,7 @@ fn static_requirement_coverage(
             let DeclaredType::Key(axis) = value_type(records, expr)? else {
                 return Ok(false);
             };
-            consume_requirement(arg.id()?, axis, StaticIndexUse::Key)
+            consume_requirement(arg.id(), axis, StaticIndexUse::Key)
         }
         ExprKind::IndexAccess { expr: inner, args } => {
             let mut ty = value_type(records, inner)?;
@@ -491,7 +491,7 @@ fn static_requirement_coverage(
                 };
                 if let crate::hir::expr::IndexArg::Expr(operand) = arg
                     && matches!(value_type(records, operand)?, DeclaredType::Int)
-                    && !consume_requirement(operand.id()?, index, StaticIndexUse::Selection)
+                    && !consume_requirement(operand.id(), index, StaticIndexUse::Selection)
                 {
                     return Ok(false);
                 }
@@ -522,8 +522,6 @@ struct PublishedExpressionFacts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExpressionFactsError {
-    #[error(transparent)]
-    Unassigned(#[from] UnassignedExprId),
     #[error(transparent)]
     Source(#[from] ExpressionSourceError),
     #[error("expression facts belong to another semantic environment or revision")]
@@ -568,7 +566,7 @@ impl CheckedExpressionFacts {
                     return;
                 }
                 error = (|| {
-                    let id = expr.id()?.clone();
+                    let id = expr.id().clone();
                     let record = records
                         .get(&id)
                         .ok_or_else(|| ExpressionFactsError::Missing(id.clone()))?;

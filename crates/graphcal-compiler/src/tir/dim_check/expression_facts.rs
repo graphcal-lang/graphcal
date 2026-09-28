@@ -48,12 +48,11 @@ pub fn specialize_bound_expression_facts(
         .expression_facts()
         .map_err(|error| diagnostic(error.to_string()))?;
     let mut ids = Vec::new();
-    visit_expr(root, &mut |expr| ids.push(expr.id().cloned()));
+    visit_expr(root, &mut |expr| ids.push(expr.id().clone()));
     let no_parameters = HashMap::new();
     let records = ids
         .into_iter()
         .map(|id| {
-            let id = id.map_err(|error| diagnostic(error.to_string()))?;
             let record = facts
                 .get(&id)
                 .map_err(|error| diagnostic(error.to_string()))?;
@@ -78,7 +77,7 @@ pub fn specialize_bound_expression_facts(
         &|index| checked_index_cardinality(tir, index),
     )
     .and_then(|facts| {
-        facts.executable_value(root.id()?)?;
+        facts.executable_value(root.id())?;
         Ok(facts)
     })
     .map_err(|error| match error {
@@ -283,13 +282,7 @@ fn check_instance_defaults(
         let Some(default) = &entry.default else {
             continue;
         };
-        let id = default.expr.id().map_err(|error| {
-            GraphcalError::internal_error(
-                error.to_string(),
-                ctx.src,
-                DiagnosticAnchor::Source(default.expr.span),
-            )
-        })?;
+        let id = default.expr.id();
         // Compare this parameter's authoritative default, not every body root.
         let template_declaration = template.require_bound_decl_identity(
             &entry.name,
@@ -299,14 +292,6 @@ fn check_instance_defaults(
         let inherited = template
             .runtime_expr(&template_declaration)
             .map(crate::hir::expr::Expr::id)
-            .transpose()
-            .map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    ctx.src,
-                    DiagnosticAnchor::Source(default.expr.span),
-                )
-            })?
             == Some(id);
         if !inherited {
             check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
@@ -533,13 +518,7 @@ pub(super) fn install_instance_expression_facts(
         });
         for expr in inventory {
             let span = expr.span;
-            let id = expr.id().map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::Source(span),
-                )
-            })?;
+            let id = expr.id();
             if records.contains_key(id) {
                 continue;
             }

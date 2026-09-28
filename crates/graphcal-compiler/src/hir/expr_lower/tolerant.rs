@@ -2,11 +2,11 @@
 //!
 //! Each error node owns the diagnostic that produced it, so a tolerant tree
 //! is its own diagnostic list: IDE consumers read [`Expr::diagnostics`], and
-//! strict lowering refines the tree into [`Strict`] HIR, rejecting it at the
+//! strict lowering refines the tree into [`Draft`] HIR, rejecting it at the
 //! first error node in source order.
 
 use crate::hir::expr::{
-    AssertBody, Completeness, CompletenessSealed, Expr, ExprKind, NoErrorNode, Refinement, Strict,
+    AssertBody, Completeness, CompletenessSealed, Draft, Expr, ExprKind, NoErrorNode, Refinement,
     refine_assert_body, refine_expr, visit_expr,
 };
 
@@ -20,6 +20,7 @@ pub enum Tolerant {}
 impl CompletenessSealed for Tolerant {}
 
 impl Completeness for Tolerant {
+    type Id = ();
     type Error = LoweringFailure;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
@@ -70,25 +71,29 @@ impl Expr<Tolerant> {
     }
 }
 
-/// Refines a tolerant tree into strict HIR, failing on its first error node.
+/// Refines a tolerant tree into draft HIR, failing on its first error node.
 struct RejectErrorNodes;
 
-impl Refinement<Tolerant, Strict> for RejectErrorNodes {
+impl Refinement<Tolerant, Draft> for RejectErrorNodes {
     type Failure = ExprLowerError;
+
+    fn id(&mut self, (): ()) -> Result<(), ExprLowerError> {
+        Ok(())
+    }
 
     fn error_node(&mut self, error: LoweringFailure) -> Result<NoErrorNode, ExprLowerError> {
         Err(error.error)
     }
 }
 
-/// Refine a tolerant expression into strict HIR.
-pub(super) fn into_strict(expr: Expr<Tolerant>) -> Result<Expr<Strict>, ExprLowerError> {
+/// Refine a tolerant expression into complete, unnumbered HIR.
+pub(super) fn into_draft(expr: Expr<Tolerant>) -> Result<Expr<Draft>, ExprLowerError> {
     refine_expr(expr, &mut RejectErrorNodes)
 }
 
-/// Refine a tolerant assertion body into strict HIR.
-pub(super) fn assert_body_into_strict(
+/// Refine a tolerant assertion body into complete, unnumbered HIR.
+pub(super) fn assert_body_into_draft(
     body: AssertBody<Tolerant>,
-) -> Result<AssertBody<Strict>, ExprLowerError> {
+) -> Result<AssertBody<Draft>, ExprLowerError> {
     refine_assert_body(body, &mut RejectErrorNodes)
 }

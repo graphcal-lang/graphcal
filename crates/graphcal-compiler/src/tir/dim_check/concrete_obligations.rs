@@ -263,13 +263,7 @@ fn check_bound(
         nats,
         &bound.src,
     )?;
-    let id = bound.value.id().map_err(|error| {
-        GraphcalError::internal_error(
-            error.to_string(),
-            &bound.src,
-            DiagnosticAnchor::Source(bound.span),
-        )
-    })?;
+    let id = bound.value.id();
     let record = facts.executable_value(id).map_err(|error| {
         GraphcalError::internal_error(
             error.to_string(),
