@@ -37,13 +37,14 @@ use crate::datetime_literal::{
     ResolveZonedDateTimeLiteralError, ZonedDateTimeLiteral,
 };
 use crate::desugar::desugared_ast as ast;
-use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
+use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
 use crate::resolve::ModuleResolver;
 use crate::resolve::category::DeclSymbolKind;
 use crate::resolve::error::ModuleResolveError;
+use crate::resolve::namespace::Namespace;
 use crate::resolve::scope::ModuleAliasRole;
 use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
@@ -3014,12 +3015,11 @@ impl<'a> ExprLowerer<'a> {
                 });
             }
             let atom = binding.name.atom();
-            let builtin_occupied =
-                validate_reserved_name(ReservedNameNamespace::Term, atom).is_err();
+            let builtin_occupied = validate_reserved_name(Namespace::Term, atom).is_err();
             let visible = self
                 .ctx
                 .resolver
-                .visible_term_span(self.ctx.owner, atom)
+                .visible_span(self.ctx.owner, Namespace::Term, atom)
                 .map_err(|source| ExprLowerError::ModuleResolve {
                     source,
                     span: binding.span,

@@ -13,12 +13,13 @@ use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::error::GraphcalError;
-use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
+use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::type_def::{
     StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind, TypeGenericParam,
 };
 use crate::registry::types::Registry;
 use crate::resolve::ModuleResolver;
+use crate::resolve::namespace::Namespace;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
@@ -502,7 +503,7 @@ fn lower_generic_params(
             let atom = param.name.atom();
             let visible = ctx
                 .resolver
-                .visible_static_span(identity.owner(), atom)
+                .visible_span(identity.owner(), Namespace::Static, atom)
                 .map_err(|error| {
                     GraphcalError::internal_error(
                         format!("failed to inspect Static scope for `{atom}`: {error}"),
@@ -510,9 +511,7 @@ fn lower_generic_params(
                         DiagnosticAnchor::Source(param.span),
                     )
                 })?;
-            if validate_reserved_name(ReservedNameNamespace::Static, atom).is_err()
-                || visible.is_some()
-            {
+            if validate_reserved_name(Namespace::Static, atom).is_err() || visible.is_some() {
                 return Err(super::diagnostics::hir_lower_error_to_graphcal(
                     &super::HirLowerError::GenericParamShadowsStatic {
                         name: param.name.clone(),
