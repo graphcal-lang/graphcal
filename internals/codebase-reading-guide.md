@@ -867,9 +867,10 @@ Use these newtypes for actual definition leaves only. Reference positions that
 may be qualified stay as `IdentPath`/`NamePath` until module-aware resolution
 produces `ResolvedName<Ns>` or `ResolvedIndexVariant`. `ResolvedName<Ns>` is the
 core owner-qualified identity: a canonical `DagId` owner plus a namespace-typed
-leaf atom. `DagId` keeps package identity, path segments, and each typed
-`DagHierarchyEdge` (`SourceModule` versus `ConcreteInstance`) structurally;
-its dotted `Display` output is not canonical identity. `ResolvedIndexVariant`
+leaf atom. `DagId` keeps package identity plus one sequence of typed
+`DagSegment`s (`SourceModule`, `NamedInstance`, or the spelling-free
+`IncludeInstance` of a selective include) structurally; its dotted `Display`
+output is not canonical identity. `ResolvedIndexVariant`
 stores the resolved index identity plus the variant leaf. Diagnostics for
 unresolved qualified dimensions also retain `NamePath`; dotted rendering occurs
 only at the diagnostic boundary and is never smuggled through `DimName`.
@@ -880,9 +881,11 @@ then renders semantic names only as labels; display collisions can therefore
 never merge vertices or edge endpoints.
 
 `ScopedName` carries legacy declaration lookup/display paths structurally as
-qualifier segments plus a member. Its dotted `Display` form is a boundary
-representation for diagnostics and protocols, not a string to split in the
-functional core.
+qualifier segments plus a member. A qualifier `ScopeSegment` is either a
+source-visible `Named` module alias or the opaque `IncludeInstance` namespace
+of a selective include, which has no source path. Its dotted `Display` form is
+a boundary representation for diagnostics and protocols, not a string to split
+in the functional core.
 
 ### 3.2 Module Resolver and HIR
 
@@ -922,7 +925,9 @@ HIR is the first layer where references are intended to be truly semantic:
 
 `dag_id.rs` defines `DagId`, the canonical identity for file roots and
 inline DAGs. It is an opaque package identity plus a non-empty sequence of
-module segments, not a path string. Virtual single-file projects,
+typed segments, not a path string: file-path components and inline DAG names
+are source-module segments, and include instances are named or anonymous
+instance segments. Virtual single-file projects,
 manifest-backed packages, locked dependency instances, and synthetic test
 contexts all receive package ids at the loader/test boundary; there is no
 package-less DAG, and the compiler core does not inspect the package id's

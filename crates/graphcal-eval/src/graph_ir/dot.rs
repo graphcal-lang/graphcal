@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 
-use graphcal_compiler::dag_id::{DagHierarchyEdge, DagId};
+use graphcal_compiler::dag_id::DagId;
 
 use super::{GraphCluster, GraphClusterKind, GraphIr, GraphNode, GraphNodeId, GraphNodeKind};
 
@@ -608,7 +608,7 @@ fn cluster_label_text(cluster: &GraphCluster) -> String {
         }
         GraphClusterKind::Instance { template } => format!(
             "include {}\ntemplate {}",
-            cluster.dag_id.name(),
+            cluster.dag_id.leaf(),
             qualified_dag_label(template)
         ),
         GraphClusterKind::ExternalModule => {
@@ -670,16 +670,9 @@ fn qualified_dag_label(identity: &DagId) -> String {
 
 fn dag_path_label(identity: &DagId) -> String {
     let mut label = identity.segments().first().to_string();
-    for (edge, segment) in identity
-        .hierarchy_edges()
-        .iter()
-        .zip(identity.segments().iter().skip(1))
-    {
-        label.push(match edge {
-            DagHierarchyEdge::SourceModule => '.',
-            DagHierarchyEdge::ConcreteInstance => '@',
-        });
-        label.push_str(segment);
+    for segment in identity.segments().iter().skip(1) {
+        label.push(if segment.is_instance() { '@' } else { '.' });
+        label.push_str(&segment.to_string());
     }
     label
 }
@@ -703,7 +696,6 @@ fn escape(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
@@ -829,8 +821,8 @@ mod tests {
         let package_a = DagId::root_in_package("package-a", "lib");
         let package_b = DagId::root_in_package("package-b", "lib");
         let source_child = DagId::root_in_package("package-a", "model").child("defaults");
-        let instance_child = DagId::root_in_package("package-a", "model")
-            .instance_child(Arc::<str>::from("defaults"));
+        let instance_child =
+            DagId::root_in_package("package-a", "model").named_instance_child("defaults");
         let external = [package_a, package_b, source_child, instance_child]
             .into_iter()
             .map(|owner| GraphNode {

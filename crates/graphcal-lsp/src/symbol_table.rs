@@ -14,7 +14,7 @@ use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
 use graphcal_compiler::syntax::index_name::ResolvedIndexName;
-use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
+use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::phase::never;
@@ -172,13 +172,16 @@ impl<'a> HirRefCollector<'a> {
     fn record_unresolved(err: &hir::ExprLowerError, table: &mut SymbolTable) {
         let (target, span) = match err {
             hir::ExprLowerError::UnknownGraphRef { name, span } => {
-                let path = SourceSymbolPath::module_member(
-                    name.qualifier()
-                        .iter()
-                        .map(|segment| segment.atom().clone())
-                        .collect(),
-                    name.member().atom().clone(),
-                );
+                // A name under an anonymous include scope has no written spelling.
+                let Some(qualifier) = name
+                    .qualifier()
+                    .iter()
+                    .map(|segment| segment.alias().map(|alias| alias.atom().clone()))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    return;
+                };
+                let path = SourceSymbolPath::module_member(qualifier, name.member().atom().clone());
                 (UnresolvedSymbol::Declaration(path), *span)
             }
             hir::ExprLowerError::UnknownLocalRef { name, span } => (
@@ -579,15 +582,8 @@ impl<'a> HirRefCollector<'a> {
                 output,
                 ..
             } => {
-                if let Some(parent) = target.value.parent() {
-                    Self::reference(
-                        table,
-                        target.span,
-                        SymbolKey::Declaration(ResolvedDeclName::from_def(
-                            parent,
-                            DeclName::expect_valid(target.value.name()),
-                        )),
-                    );
+                if let Some(declaration) = dag_declaration_name(&target.value) {
+                    Self::reference(table, target.span, SymbolKey::Declaration(declaration));
                 }
                 Self::reference(
                     table,
@@ -1043,11 +1039,13 @@ impl SymbolTable {
             let Some(parent) = current.parent() else {
                 return true;
             };
-            let dag_key = SymbolKey::Declaration(ResolvedDeclName::from_def(
-                parent.clone(),
-                DeclName::expect_valid(current.name()),
-            ));
-            match self.definitions.get(&dag_key) {
+            let Some(dag_declaration) = dag_declaration_name(&current) else {
+                return true;
+            };
+            match self
+                .definitions
+                .get(&SymbolKey::Declaration(dag_declaration))
+            {
                 Some(dag) if dag.visibility == Some(BindableVisibility::Private) => return false,
                 Some(_) => owner = Some(parent),
                 None => return true,
@@ -1317,7 +1315,7 @@ impl SymbolTable {
             .segments()
             .iter()
             .skip(self.owner.segments().len())
-            .map(|segment| ModuleAliasName::try_new(segment.to_string()))
+            .map(ScopeSegment::try_from_dag_segment)
             .collect::<Result<Vec<_>, _>>()
             .ok()?;
         Some(ScopedName::qualified_path(qualifier, member))
@@ -1337,7 +1335,10 @@ impl SymbolTable {
                     && owner_segments[owner_segments.len() - qualifier.len()..]
                         .iter()
                         .zip(qualifier)
-                        .all(|(segment, qualifier)| segment.as_ref() == qualifier.as_str())
+                        .all(|(segment, qualifier)| {
+                            ScopeSegment::try_from_dag_segment(segment)
+                                .is_ok_and(|segment| &segment == qualifier)
+                        })
             };
             (owner_matches && resolved.as_str() == name.member().as_str()).then_some(definition)
         })
@@ -1651,9 +1652,11 @@ fn collect_node_decl(
         graphcal_compiler::node_definition::NodeDefinition::Todo(dependencies) => {
             table
                 .references
-                .extend(dependencies.value.iter().map(|reference| ReferenceInfo {
-                    span: reference.span,
-                    target: refs.declaration_target(&reference.value.to_name_path()),
+                .extend(dependencies.value.iter().filter_map(|reference| {
+                    reference.value.to_name_path().map(|path| ReferenceInfo {
+                        span: reference.span,
+                        target: refs.declaration_target(&path),
+                    })
                 }));
         }
     }
@@ -2003,9 +2006,12 @@ fn collect_figure_decl(
         visibility,
     );
     for plot in &f.plot_names {
+        let Some(path) = plot.value.to_name_path() else {
+            continue;
+        };
         table.references.push(ReferenceInfo {
             span: plot.span,
-            target: refs.declaration_target(&plot.value.to_name_path()),
+            target: refs.declaration_target(&path),
         });
     }
     for field in &f.fields {
@@ -2032,9 +2038,12 @@ fn collect_layer_decl(
         visibility,
     );
     for plot in &l.plot_names {
+        let Some(path) = plot.value.to_name_path() else {
+            continue;
+        };
         table.references.push(ReferenceInfo {
             span: plot.span,
-            target: refs.declaration_target(&plot.value.to_name_path()),
+            target: refs.declaration_target(&path),
         });
     }
     for field in &l.fields {
@@ -2117,14 +2126,10 @@ fn collect_include_decl(
         .resolve_module_path(refs.dag_id, &include.path)
         .ok();
     if let Some(target) = &target {
-        if let Some(parent) = target.parent() {
+        if let Some(declaration) = dag_declaration_name(target) {
             table.references.push(ReferenceInfo {
                 span: include.path.segments.last().span,
-                target: SymbolKey::Declaration(ResolvedDeclName::from_def(
-                    parent,
-                    DeclName::expect_valid(target.name()),
-                ))
-                .into(),
+                target: SymbolKey::Declaration(declaration).into(),
             });
         }
         for binding in &include.param_bindings {
@@ -2427,6 +2432,15 @@ fn collect_dim_expr_refs_in_scope(
             ),
         });
     }
+}
+
+/// The declaration that names `dag` inside its parent module, when `dag` is a
+/// spelled child of another DAG. Root modules and anonymous include instances
+/// have no such declaration.
+fn dag_declaration_name(dag: &DagId) -> Option<ResolvedDeclName> {
+    let parent = dag.parent()?;
+    let name = DeclName::try_new(dag.leaf().spelling()?).ok()?;
+    Some(ResolvedDeclName::from_def(parent, name))
 }
 
 /// Collect references from a syntax-layer unit expression.

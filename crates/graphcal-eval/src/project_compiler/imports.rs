@@ -181,7 +181,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             && target.source_file() != file_dag_id
         {
             return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
-                name: target.target().name().to_string(),
+                name: target.target().leaf().to_string(),
                 file_path: include.path.display_path(),
                 src: file_src.clone(),
                 span: include.path.leaf().span.into(),
@@ -191,7 +191,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             &InlineDagIncludeTarget {
                 dag_def: target_dag.declaration(target_loaded),
                 dag_id: target.target(),
-                dag_name: target.target().name(),
+                dag_name: target_dag.declaration(target_loaded).name.value.as_str(),
                 parent_dag_id: target.source_file(),
             },
             include,
@@ -377,7 +377,7 @@ fn value_decl_identity(
 /// named by the including DAG.
 fn include_surface_outputs(
     declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-    prefix: &ModuleAliasName,
+    prefix: &ScopeSegment,
     selective: Option<&[ImportAlias]>,
 ) -> Vec<ScopedName> {
     selective.map_or_else(
@@ -1083,7 +1083,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     // only its selected local declarations, so give its merged implementation
     // an opaque private instance scope instead (#1132).
     let instance_scope = include_decl.instance_scope();
-    if let IncludeInstanceScope::Named(prefix) = &instance_scope {
+    if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
             return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                 name: prefix.to_string(),
@@ -1101,7 +1101,6 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             },
         );
     }
-    let prefix = instance_scope.merge_scope_name();
 
     // Classify and validate bindings against the dependency's AST. Each
     // binding lands in one of params/types/dims/indexes, or is rejected as
@@ -1242,12 +1241,13 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             }
             Some(selective)
         }
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+            let module_alias = include_decl.module_form_alias(alias.as_ref());
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast().declarations {
                 if let Some((name, is_const)) = include_value_decl(dep_decl) {
-                    let scoped = ScopedName::qualified(prefix.clone(), name);
+                    let scoped = ScopedName::qualified(module_alias.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -1271,7 +1271,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     registry: artifact.frontend_registry(),
                     external_surface: artifact.external_surface(),
                     pure_import_declarations: None,
-                    unit_alias: prefix.clone(),
+                    unit_alias: module_alias,
                     runtime_unit_boundary: RuntimeUnitBoundary::ConcreteInstance,
                     import_span: include_decl.path.span(),
                 });
@@ -1280,7 +1280,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     };
     let surface_outputs = include_surface_outputs(
         &dep_loaded.ast().declarations,
-        &prefix,
+        &instance_scope,
         selective_names.as_deref(),
     );
 
@@ -1363,7 +1363,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     // As for file-root includes, only the module form introduces an alias.
     // Selective inline-DAG includes receive an opaque private merge scope.
     let instance_scope = include_decl.instance_scope();
-    if let IncludeInstanceScope::Named(prefix) = &instance_scope {
+    if let ScopeSegment::Named(prefix) = &instance_scope {
         if let Some(first) = ctx.module_map.get(prefix) {
             return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                 name: prefix.to_string(),
@@ -1381,7 +1381,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             },
         );
     }
-    let prefix = instance_scope.merge_scope_name();
 
     let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
@@ -1535,7 +1534,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             let import_span = include_decl.path.span();
             for dep_decl in &dag_body.declarations {
                 if let Some((name, is_const)) = include_value_decl(dep_decl) {
-                    let scoped = ScopedName::qualified(prefix.clone(), name);
+                    let scoped = ScopedName::qualified(instance_scope.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -1546,8 +1545,11 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             None
         }
     };
-    let surface_outputs =
-        include_surface_outputs(&dag_body.declarations, &prefix, selective_names.as_deref());
+    let surface_outputs = include_surface_outputs(
+        &dag_body.declarations,
+        &instance_scope,
+        selective_names.as_deref(),
+    );
 
     validate_required_static_bindings(
         &dep_index,

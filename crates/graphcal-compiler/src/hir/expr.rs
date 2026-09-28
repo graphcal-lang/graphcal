@@ -43,7 +43,7 @@ use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::module_resolve::{
     DeclSymbolKind, ModuleAliasRole, ModuleResolveError, ModuleResolver,
 };
@@ -2152,7 +2152,6 @@ impl<'a> ExprLowerer<'a> {
             }
         }
 
-        let path = name.to_name_path();
         let mut first_error = None;
 
         if let Some(resolved) = self
@@ -2181,31 +2180,35 @@ impl<'a> ExprLowerer<'a> {
             };
         }
 
-        match self
-            .ctx
-            .resolver
-            .resolve_const_decl_path(self.ctx.owner, &path)
-        {
-            Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
-            Err(err) => first_error.get_or_insert(err),
-        };
-        if let Some(resolved) = self.resolve_synthetic_child_decl_path(&path)
-            && self
+        // An anonymous include qualifier has no source path; such a name is
+        // only reachable through `decl_bindings` above.
+        if let Some(path) = name.to_name_path() {
+            match self
                 .ctx
                 .resolver
-                .decl_symbol_kind(&resolved)
-                .is_ok_and(DeclSymbolKind::is_const)
-        {
-            return Ok(ConstRef::Decl(resolved));
+                .resolve_const_decl_path(self.ctx.owner, &path)
+            {
+                Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
+                Err(err) => first_error.get_or_insert(err),
+            };
+            if let Some(resolved) = self.resolve_synthetic_child_decl_path(&path)
+                && self
+                    .ctx
+                    .resolver
+                    .decl_symbol_kind(&resolved)
+                    .is_ok_and(DeclSymbolKind::is_const)
+            {
+                return Ok(ConstRef::Decl(resolved));
+            }
+            match self
+                .ctx
+                .resolver
+                .resolve_constructor_path(self.ctx.owner, &path)
+            {
+                Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
+                Err(err) => first_error.get_or_insert(err),
+            };
         }
-        match self
-            .ctx
-            .resolver
-            .resolve_constructor_path(self.ctx.owner, &path)
-        {
-            Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
-            Err(err) => first_error.get_or_insert(err),
-        };
 
         first_error.map_or_else(
             || {
@@ -2231,19 +2234,19 @@ impl<'a> ExprLowerer<'a> {
         name: &Spanned<ScopedName>,
     ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
-        let kind_identity = match self
-            .ctx
-            .resolver
-            .resolve_decl_path(self.ctx.owner, &name.value.to_name_path())
+        let kind_identity = match name
+            .value
+            .to_name_path()
+            .map(|path| self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path))
         {
-            Ok(identity) => identity,
-            Err(source @ ModuleResolveError::PrivateName { .. }) => {
+            Some(Ok(identity)) => identity,
+            Some(Err(source @ ModuleResolveError::PrivateName { .. })) => {
                 return Err(ExprLowerError::ModuleResolve {
                     source,
                     span: name.span,
                 });
             }
-            Err(_) => resolved.clone(),
+            Some(Err(_)) | None => resolved.clone(),
         };
         let kind = match self.ctx.resolver.decl_symbol_kind(&kind_identity) {
             Ok(kind) => kind,
@@ -2266,6 +2269,7 @@ impl<'a> ExprLowerer<'a> {
             .value
             .qualifier()
             .first()
+            .and_then(ScopeSegment::alias)
             .and_then(|alias| self.ctx.resolver.module_alias_role(self.ctx.owner, alias));
         let permitted = match role {
             Some(ModuleAliasRole::ImportedDag) => kind == DeclSymbolKind::Const,
@@ -2297,7 +2301,6 @@ impl<'a> ExprLowerer<'a> {
         name: &ScopedName,
         span: Span,
     ) -> Result<ResolvedDeclName, ExprLowerError> {
-        let path = name.to_name_path();
         if let Some(resolved) = self
             .ctx
             .decl_bindings
@@ -2307,6 +2310,14 @@ impl<'a> ExprLowerer<'a> {
             self.ensure_bound_decl_access(name, &resolved, span)?;
             return Ok(resolved);
         }
+        // An anonymous include qualifier has no source path; such a name is
+        // only reachable through `decl_bindings` above.
+        let Some(path) = name.to_name_path() else {
+            return Err(ExprLowerError::UnknownGraphRef {
+                name: name.clone(),
+                span,
+            });
+        };
         let resolved = match self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path) {
             Ok(resolved) => Ok(resolved),
             // Synthetic include-instance children intentionally are not module
@@ -2336,16 +2347,17 @@ impl<'a> ExprLowerer<'a> {
             return Ok(());
         }
 
-        match self
-            .ctx
-            .resolver
-            .resolve_decl_path(self.ctx.owner, &name.to_name_path())
+        match name
+            .to_name_path()
+            .map(|path| self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path))
         {
-            Ok(_) => Ok(()),
-            Err(
+            Some(Ok(_)) => Ok(()),
+            // An anonymous include qualifier is never a module alias.
+            None
+            | Some(Err(
                 ModuleResolveError::UnknownModuleAlias { .. }
                 | ModuleResolveError::UnknownName { .. },
-            ) => {
+            )) => {
                 let Some(template) = self
                     .ctx
                     .instance_templates
@@ -2383,7 +2395,7 @@ impl<'a> ExprLowerer<'a> {
                     })
                 }
             }
-            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
+            Some(Err(source)) => Err(ExprLowerError::ModuleResolve { source, span }),
         }
     }
 

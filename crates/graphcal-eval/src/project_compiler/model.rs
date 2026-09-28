@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::dag_id::IncludeInstanceId;
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
@@ -16,7 +17,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
@@ -29,7 +30,7 @@ pub(super) type DepToImporter<T> = HashMap<T, T>;
 pub(super) type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
 
 /// Presentation aliases for private selective-include scopes.
-pub type IncludeDebugNameMap = HashMap<ModuleAliasName, ModuleAliasName>;
+pub type IncludeDebugNameMap = HashMap<IncludeInstanceId, ModuleAliasName>;
 
 /// A selective import/include alias with explicit source and local roles.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,7 +197,7 @@ pub(super) struct UnitProjectionAlias {
 /// Typed request for one concrete file-root or inline-DAG instance.
 pub(super) struct IncludeInstanceRequest {
     pub(super) template: ModuleTemplateRef,
-    pub(super) instance_scope: IncludeInstanceScope,
+    pub(super) instance_scope: ScopeSegment,
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,
     pub(super) index_bindings: IndexBindings,

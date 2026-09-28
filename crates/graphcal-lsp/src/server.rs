@@ -2362,7 +2362,8 @@ fn selective_import_spelling(
             id.owner().owner() == target_module && id.owner().as_str() == original
         }
         SymbolKey::Declaration(name) => {
-            name.owner().parent().as_ref() == Some(target_module) && name.owner().name() == original
+            name.owner().parent().as_ref() == Some(target_module)
+                && name.owner().leaf().spelling() == Some(original)
         }
         _ => false,
     };
@@ -2434,7 +2435,7 @@ fn module_import_spelling(
     // local module alias (`@alias(...)`).
     if let SymbolKey::Declaration(name) = key
         && target_module.parent().as_ref() == Some(name.owner())
-        && name.as_str() == target_module.name()
+        && target_module.leaf().spelling() == Some(name.as_str())
     {
         return Some(SourceSymbolPath::local(module_name.clone()));
     }
@@ -2479,9 +2480,12 @@ fn module_relative_qualifier(
         .segments()
         .iter()
         .skip(target_module.segments().len())
-        .map(|segment| NameAtom::parse(segment.to_string()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .ok()?;
+        .map(|segment| {
+            segment
+                .spelling()
+                .and_then(|name| NameAtom::parse(name).ok())
+        })
+        .collect::<Option<Vec<_>>>()?;
     let mut qualifier = Vec::with_capacity(relative.len() + 1);
     qualifier.push(module_name.clone());
     qualifier.extend(relative);

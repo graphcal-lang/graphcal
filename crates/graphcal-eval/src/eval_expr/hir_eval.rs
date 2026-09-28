@@ -2818,7 +2818,7 @@ fn check_inline_dag_asserts(
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` failed in inline call of dag `{}` ({message})",
-                        target.value.name()
+                        target.value.leaf()
                     ),
                     call_span,
                 ));
@@ -2834,7 +2834,7 @@ fn check_inline_dag_asserts(
                 return Err(ctx.eval_error(
                     format!(
                         "assertion `{name}` errored in inline call of dag `{}` ({message})",
-                        target.value.name()
+                        target.value.leaf()
                     ),
                     call_span,
                 ));
