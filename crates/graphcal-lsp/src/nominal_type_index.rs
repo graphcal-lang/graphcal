@@ -161,9 +161,10 @@ fn nominal_constructor(
         TypeExprKind::Indexed { base, .. } => {
             return nominal_constructor(base, owner, resolver);
         }
-        TypeExprKind::TypeApplication { name, .. } => {
-            resolver.resolve_struct_type_path(owner, &name.value).ok()?
-        }
+        TypeExprKind::TypeApplication { name, .. } => resolver
+            .resolve_struct_type_path(owner, &name.value)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            .ok()?,
         TypeExprKind::DimExpr(dimension) => {
             let [term] = dimension.terms.as_slice() else {
                 return None;
@@ -173,6 +174,7 @@ fn nominal_constructor(
             }
             resolver
                 .resolve_struct_type_path(owner, &term.term.name.value)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                 .ok()?
         }
         _ => return None,

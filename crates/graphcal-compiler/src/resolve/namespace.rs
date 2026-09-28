@@ -56,7 +56,7 @@ impl Namespace {
 
 /// A symbol-table namespace marker together with the slot its names occupy
 /// and the category diagnostics report for them.
-pub(super) trait Namespaced: NameNamespace {
+pub trait Namespaced: NameNamespace {
     /// The collision / lookup unit of names in this namespace.
     const NAMESPACE: Namespace;
     /// The category reported when a name is found in the wrong universe.

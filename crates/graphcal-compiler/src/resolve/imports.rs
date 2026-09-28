@@ -4,7 +4,6 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::resolved_name::ResolvedName;
 use crate::syntax::ast::{BindableVisibility, ImportItem, ImportKind, ModulePath, Visibility};
 use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
@@ -17,7 +16,7 @@ use crate::syntax::span::Spanned;
 use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
 
 use super::ModuleResolver;
-use super::category::{ExportedImportItemKind, include_projection};
+use super::category::include_projection;
 use super::error::{ModuleResolveError, NameCategory};
 use super::scope::{Access, ImportAddition, ImportTarget, ModuleAliasRole, module_alias};
 use super::symbols::Symbol;
@@ -118,7 +117,7 @@ impl ModuleResolver {
                     let additions = self.import_item_additions(target, item, access)?;
                     if role == ModuleAliasRole::IncludedInstance {
                         for addition in &additions {
-                            let Some(kind) = self.import_target_kind(&addition.target)? else {
+                            let Some(kind) = addition.target.item_kind() else {
                                 continue;
                             };
                             if include_projection(kind).is_none() {
@@ -136,22 +135,6 @@ impl ModuleResolver {
                 .collect::<Result<Vec<_>, _>>()
                 .map(|chunks| chunks.into_iter().flatten().collect()),
         }
-    }
-
-    /// Selective-import category of an import target; module aliases have none.
-    pub(super) fn import_target_kind(
-        &self,
-        target: &ImportTarget,
-    ) -> Result<Option<ExportedImportItemKind>, ModuleResolveError> {
-        Ok(Some(match target {
-            ImportTarget::ModuleAlias { .. } => return Ok(None),
-            ImportTarget::Decl(target) => ExportedImportItemKind::Decl(*self.declared(target)?),
-            ImportTarget::Unit(target) => ExportedImportItemKind::Unit(*self.declared(target)?),
-            ImportTarget::Dimension(_) => ExportedImportItemKind::Dimension,
-            ImportTarget::StructType(_) => ExportedImportItemKind::Type,
-            ImportTarget::Index(_) => ExportedImportItemKind::Index,
-            ImportTarget::Constructor(_) => ExportedImportItemKind::Constructor,
-        }))
     }
 
     pub(super) fn import_item_additions(
@@ -259,7 +242,7 @@ impl ModuleResolver {
         source_atom: &NameAtom,
         access: Access,
         item: &ImportItem,
-    ) -> Result<ResolvedName<Ns>, ModuleResolveError> {
+    ) -> Result<Symbol<Ns, Ns::Declared>, ModuleResolveError> {
         match self.exported_symbol_for_import::<Ns>(target, source_atom, access)? {
             ExportLookup::Public(target_name) => Ok(target_name),
             ExportLookup::Private => Err(ModuleResolveError::PrivateName {
@@ -295,7 +278,7 @@ impl ModuleResolver {
         target: &DagId,
         atom: &NameAtom,
         access: Access,
-    ) -> Result<ExportLookup<Ns>, ModuleResolveError> {
+    ) -> Result<ExportLookup<Ns, Ns::Declared>, ModuleResolveError> {
         match exported_symbol(Ns::declared(self.module_symbols(target)?), atom, access) {
             ExportLookup::Missing => Ok(exported_symbol(
                 Ns::selected(self.module_scope(target)?),
@@ -402,16 +385,17 @@ impl<'a> ImportTail<'a> {
     }
 }
 
-/// Outcome of looking a name up on a module's public surface.
+/// Outcome of looking a name up on a module's public surface: the binding
+/// found there (its canonical target and the target's declaration payload).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ExportLookup<Ns: NameNamespace> {
-    Public(ResolvedName<Ns>),
+pub(super) enum ExportLookup<Ns: NameNamespace, X> {
+    Public(Symbol<Ns, X>),
     Private,
     Missing,
 }
 
-impl<Ns: NameNamespace> ExportLookup<Ns> {
-    fn public(self) -> Option<ResolvedName<Ns>> {
+impl<Ns: NameNamespace, X> ExportLookup<Ns, X> {
+    fn public(self) -> Option<Symbol<Ns, X>> {
         match self {
             Self::Public(resolved) => Some(resolved),
             Self::Private | Self::Missing => None,
@@ -423,16 +407,16 @@ impl<Ns: NameNamespace> ExportLookup<Ns> {
     }
 }
 
-fn exported_symbol<Ns: NameNamespace, X>(
+fn exported_symbol<Ns: NameNamespace, X: Clone>(
     table: &HashMap<NameDef<Ns>, Symbol<Ns, X>>,
     atom: &NameAtom,
     access: Access,
-) -> ExportLookup<Ns> {
+) -> ExportLookup<Ns, X> {
     table
         .get(&NameDef::classify(atom.clone()))
         .map_or(ExportLookup::Missing, |symbol| {
             if !access.requires_public() || symbol.visibility().is_public() {
-                ExportLookup::Public(symbol.resolved().clone())
+                ExportLookup::Public(symbol.clone())
             } else {
                 ExportLookup::Private
             }

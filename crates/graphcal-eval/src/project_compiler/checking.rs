@@ -50,9 +50,11 @@ fn resolve_imported_bindings(
                         DiagnosticAnchor::WholeFile,
                     ))
                 })?;
-            let kind = match module_resolver.decl_symbol_kind(target).map_err(|error| {
+            let kind = match module_resolver.symbol(target).map(|symbol| *symbol.kind()).ok_or_else(|| {
                 CompileError::Eval(GraphcalError::internal_error(
-                    error.to_string(), src, DiagnosticAnchor::WholeFile,
+                    format!("HIR imported value `{target}` has no declaration"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
                 ))
             })? {
                 DeclSymbolKind::Const => ImportedValueKind::Constant,

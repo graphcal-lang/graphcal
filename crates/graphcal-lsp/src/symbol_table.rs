@@ -130,6 +130,7 @@ impl<'a> HirRefCollector<'a> {
     fn declaration_target(&self, path: &NamePath) -> ReferenceTarget {
         self.resolver
             .resolve_decl_path(self.dag_id, path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
             .map_or_else(
                 |_| {
                     ReferenceTarget::Unresolved(UnresolvedSymbol::Declaration(

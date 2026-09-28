@@ -75,15 +75,101 @@ impl<Ns: NameNamespace, X> Symbol<Ns, X> {
     pub(crate) const fn data(&self) -> &X {
         &self.data
     }
+
+    /// The same canonical target and payload, bound at another site.
+    ///
+    /// A selective import binds its local name to exactly what the source
+    /// module's binding denotes, including the payload of the target's
+    /// declaration.
+    pub(super) fn rebind(&self, visibility: BindableVisibility, span: Span) -> Self
+    where
+        X: Clone,
+    {
+        Self::new(self.resolved.clone(), visibility, span, self.data.clone())
+    }
+}
+
+/// A name resolved to the symbol it denotes, with the facts the resolver
+/// knows about its target.
+///
+/// `Kind` is the payload of the target's declaration (for example a
+/// declaration's [`DeclSymbolKind`] or a type's generic signature), so a
+/// consumer never looks the resolved name up again to learn it.
+#[derive(Debug)]
+pub struct SymbolRef<'r, Ns: NameNamespace, Kind> {
+    symbol: &'r Symbol<Ns, Kind>,
+}
+
+impl<Ns: NameNamespace, Kind> Clone for SymbolRef<'_, Ns, Kind> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Ns: NameNamespace, Kind> Copy for SymbolRef<'_, Ns, Kind> {}
+
+impl<'r, Ns: NameNamespace, Kind> SymbolRef<'r, Ns, Kind> {
+    pub(super) const fn new(symbol: &'r Symbol<Ns, Kind>) -> Self {
+        Self { symbol }
+    }
+
+    /// Canonical identity of the target.
+    #[must_use]
+    pub const fn resolved(self) -> &'r ResolvedName<Ns> {
+        &self.symbol.resolved
+    }
+
+    /// The payload of the target's declaration.
+    #[must_use]
+    pub const fn kind(self) -> &'r Kind {
+        &self.symbol.data
+    }
+
+    /// Visibility of the binding the name was resolved through.
+    #[must_use]
+    pub const fn visibility(self) -> BindableVisibility {
+        self.symbol.visibility
+    }
+
+    /// Source span of the binding the name was resolved through.
+    #[must_use]
+    pub const fn span(self) -> Span {
+        self.symbol.span
+    }
+
+    /// The canonical identity of the target, owned.
+    #[must_use]
+    pub fn into_resolved(self) -> ResolvedName<Ns> {
+        self.symbol.resolved.clone()
+    }
+
+    /// The same target and payload, bound at another site.
+    pub(super) fn rebind(self, visibility: BindableVisibility, span: Span) -> Symbol<Ns, Kind>
+    where
+        Kind: Clone,
+    {
+        self.symbol.rebind(visibility, span)
+    }
+}
+
+impl SymbolRef<'_, DeclNameNamespace, DeclSymbolKind> {
+    /// Whether an instantiated declaration may be referenced by its consumer.
+    ///
+    /// Parameters are explicit instance inputs even when they are not declared
+    /// `pub`; other declaration kinds require public visibility.
+    #[must_use]
+    pub fn is_instance_accessible(self) -> bool {
+        *self.kind() == DeclSymbolKind::Param || self.visibility().is_public()
+    }
 }
 
 /// One symbol table: leaf name to binding.
-pub(super) type Table<Ns, X = ()> = HashMap<NameDef<Ns>, Symbol<Ns, X>>;
+pub type Table<Ns, X = ()> = HashMap<NameDef<Ns>, Symbol<Ns, X>>;
 
 /// Source signature of one generic parameter, retained by name resolution so
 /// HIR can sort application arguments after resolving the callee.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GenericParamSignature {
+pub struct GenericParamSignature {
     pub(crate) name: crate::syntax::type_name::GenericParamName,
     pub(crate) constraint: ast::GenericConstraint,
     pub(crate) has_default: bool,
@@ -101,9 +187,17 @@ impl GenericParamSignature {
 
 /// The identity and generic signature of a constructor's owning type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConstructorSignature {
+pub struct ConstructorSignature {
     pub(super) owner_type: StructTypeName,
     pub(super) generic_params: Vec<GenericParamSignature>,
+}
+
+impl ConstructorSignature {
+    /// Source signature of the owning type's generic parameters.
+    #[must_use]
+    pub(crate) fn generic_params(&self) -> &[GenericParamSignature] {
+        &self.generic_params
+    }
 }
 
 /// Symbols declared by a single DAG/module.

@@ -431,6 +431,7 @@ fn selective_type_alias_resolves_to_original_owner_and_leaf() {
 
     let resolved_name = resolver
         .resolve_struct_type_path(&main_id, &path(&["Vector"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
 
     assert_eq!(resolved_name.owner(), &lib_id);
@@ -467,12 +468,14 @@ fn type_import_in_child_dag_does_not_import_same_named_constructor() {
 
     let resolved_type = resolver
         .resolve_struct_type_path(&child_id, &path(&["TransferResult"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
     assert_eq!(resolved_type.owner(), &main_id);
     assert_eq!(resolved_type.as_str(), "TransferResult");
 
     let err = resolver
         .resolve_constructor_path(&child_id, &path(&["TransferResult"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap_err();
     assert!(matches!(
         err,
@@ -584,6 +587,7 @@ fn qualified_private_type_is_rejected() {
 
     let err = resolver
         .resolve_struct_type_path(&main_id, &path(&["hidden", "Secret"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap_err();
 
     assert!(matches!(
@@ -727,6 +731,7 @@ fn selective_include_constructor_keeps_source_canonical_identity() {
 
     let constructor_target = resolver
         .resolve_constructor_path(&main_id, &path(&["Selected"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
     assert_eq!(constructor_target.owner(), &lib_id);
     assert_eq!(constructor_target.as_str(), "Pick");
@@ -866,26 +871,32 @@ fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace
             .unwrap_err(),
         resolver
             .resolve_decl_path(&main_id, &path(&["imported", "result"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
         resolver
             .resolve_dimension_path(&main_id, &path(&["imported", "Distance"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
         resolver
             .resolve_unit_path(&main_id, &path(&["imported", "tick"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
         resolver
             .resolve_struct_type_path(&main_id, &path(&["imported", "Shape"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
         resolver
             .resolve_constructor_path(&main_id, &path(&["imported", "Shape"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
         resolver
             .resolve_index_path(&main_id, &path(&["imported", "Axis"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
     ];
@@ -973,6 +984,7 @@ fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
             .unwrap_err(),
         resolver
             .resolve_decl_path(&main_id, &path(&["child", "result"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|_| ())
             .unwrap_err(),
     ] {
@@ -1285,6 +1297,7 @@ fn qualified_symbol_path_through_private_dag_is_rejected() {
 
     let err = resolver
         .resolve_decl_path(&main_id, &path(&["lib", "helper", "shown"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap_err();
 
     assert!(
@@ -1316,6 +1329,7 @@ fn qualified_constructor_resolves_to_canonical_owner() {
 
     let resolved_name = resolver
         .resolve_constructor_path(&main_id, &path(&["mission", "Impulsive"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
 
     assert_eq!(resolved_name.owner(), &lib_id);
@@ -1352,6 +1366,7 @@ fn selective_pub_reexport_resolves_to_original_owner() {
 
     let resolved_name = resolver
         .resolve_dimension_path(&main_id, &path(&["Acceleration"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
 
     assert_eq!(resolved_name.owner(), &leaf_id);
@@ -1542,7 +1557,9 @@ fn alias_qualifier_does_not_reach_a_file_submodule() {
 
     // `l.x` names an inline `dag x` of `lib`, never the file `lib/x.gcl`.
     assert_eq!(
-        resolver.resolve_decl_path(&main_id, &path(&["l", "x", "a"])),
+        resolver
+            .resolve_decl_path(&main_id, &path(&["l", "x", "a"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved),
         Err(ModuleResolveError::UnknownModule {
             owner: lib_id.inline_dag_child(decl("x")),
         })
@@ -1550,9 +1567,91 @@ fn alias_qualifier_does_not_reach_a_file_submodule() {
     assert_eq!(
         resolver
             .resolve_decl_path(&main_id, &path(&["l", "b"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|name| name.owner().clone()),
         Ok(lib_id)
     );
+}
+
+#[test]
+fn resolved_symbols_carry_their_target_declaration_facts() {
+    let lib = desugared_source(
+        "pub const node k: Dimensionless = 1.0;
+         pub node n: Dimensionless = 2.0;
+         pub type T<D: Dim> { T }
+         pub base unit u: Dimensionless;",
+    );
+    let main = desugared_source(
+        "import lib::{ k, n as renamed, type T, unit u };
+         param p: Dimensionless;
+         node hidden: Dimensionless = 1.0;
+         pub node shown: Dimensionless = 1.0;",
+    );
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, first_import(&main), &lib_id);
+    let resolver = modules.build().unwrap();
+
+    // A selective import carries the kind of the target's declaration.
+    let k = resolver.resolve_decl_path(&main_id, &path(&["k"])).unwrap();
+    assert_eq!(*k.kind(), DeclSymbolKind::Const);
+    assert_eq!(k.resolved().owner(), &lib_id);
+    let renamed = resolver
+        .resolve_decl_path(&main_id, &path(&["renamed"]))
+        .unwrap();
+    assert_eq!(*renamed.kind(), DeclSymbolKind::Node);
+    assert_eq!(renamed.resolved().as_str(), "n");
+    assert_eq!(
+        resolver
+            .resolve_struct_type_path(&main_id, &path(&["T"]))
+            .unwrap()
+            .kind()
+            .len(),
+        1
+    );
+    assert_eq!(
+        *resolver
+            .resolve_unit_path(&main_id, &path(&["u"]))
+            .unwrap()
+            .kind(),
+        UnitConstness::Const
+    );
+
+    // Const-only resolution rejects a non-const target by its carried kind.
+    assert!(
+        resolver
+            .resolve_const_decl_path(&main_id, &path(&["k"]))
+            .is_ok()
+    );
+    assert!(matches!(
+        resolver.resolve_const_decl_path(&main_id, &path(&["renamed"])),
+        Err(ModuleResolveError::UnexpectedDeclKind {
+            expected: ExpectedDeclKind::Const,
+            actual: DeclSymbolKind::Node,
+            ..
+        })
+    ));
+
+    // An identity carried past resolution finds its declaration's facts.
+    let n = resolver
+        .symbol(renamed.resolved())
+        .expect("the target is declared in `lib`");
+    assert_eq!(*n.kind(), DeclSymbolKind::Node);
+    assert!(n.visibility().is_public());
+
+    // Parameters are instance inputs even without `pub`.
+    let accessible = |name: &str| {
+        resolver
+            .resolve_decl_path(&main_id, &path(&[name]))
+            .unwrap()
+            .is_instance_accessible()
+    };
+    assert!(accessible("p"));
+    assert!(!accessible("hidden"));
+    assert!(accessible("shown"));
 }
 
 #[test]
@@ -1598,7 +1697,10 @@ fn include_of_a_later_sibling_sees_its_completed_scope() {
     modules.edge(&b, &module_path(&["lib"]), &lib_id);
     let resolver = modules.build().unwrap();
 
-    let k = resolver.resolve_decl_path(&a, &path(&["k"])).unwrap();
+    let k = resolver
+        .resolve_decl_path(&a, &path(&["k"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
+        .unwrap();
     assert_eq!((k.owner(), k.as_str()), (&lib_id, "k"));
 
     // The instance carries `b`'s completed scope as well.
@@ -1608,7 +1710,12 @@ fn include_of_a_later_sibling_sees_its_completed_scope() {
     .clone();
     let instance = a.instance_child(include.instance_scope());
     assert!(resolver.symbols(&instance).is_some());
-    assert_eq!(resolver.resolve_decl_path(&instance, &path(&["k"])), Ok(k));
+    assert_eq!(
+        resolver
+            .resolve_decl_path(&instance, &path(&["k"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved),
+        Ok(k)
+    );
 }
 
 #[test]
@@ -1646,6 +1753,7 @@ fn include_instances_are_expanded_through_nested_templates() {
     );
     let value = resolver
         .resolve_decl_path(&inner, &path(&["value"]))
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
     assert_eq!(value.owner(), &inner);
 }
@@ -1670,6 +1778,7 @@ fn file_submodule_does_not_inherit_the_visibility_of_a_parent_file_dag() {
     assert_eq!(
         resolver
             .resolve_decl_path(&main_id, &path(&["a"]))
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map(|name| name.owner().clone()),
         Ok(lib_x_id)
     );
