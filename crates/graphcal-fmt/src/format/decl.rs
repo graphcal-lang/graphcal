@@ -2,7 +2,7 @@ use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
     IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MapEntryIndex, MapEntryKey, MultiDecl,
-    MultiHeaderCell, MultiSlotAxis, MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
+    MultiHeaderCell, MultiSlotAxis, NodeDecl, ParamBinding, ParamDecl, PlotDecl, SlotKind,
     TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, UnionMember, UnitConstness, UnitDecl,
     UnitDef, Visibility,
 };
@@ -900,12 +900,12 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .slots()
         .iter()
         .map(|s| {
-            let kind = match s.kind {
-                MultiSlotKind::Param => "param",
-                MultiSlotKind::Node => "node",
-                MultiSlotKind::ConstNode => "const node",
+            let (kind, visibility) = match s.kind {
+                SlotKind::Param => ("param", Visibility::Private),
+                SlotKind::Node(visibility) => ("node", visibility),
+                SlotKind::ConstNode(visibility) => ("const node", visibility),
             };
-            match s.visibility {
+            match visibility {
                 Visibility::Private => kind.to_string(),
                 Visibility::Public => format!("pub {kind}"),
             }
@@ -958,9 +958,9 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .collect::<Vec<_>>()
         .join(", ");
     let slot_axes_str = info
-        .slot_axes()
+        .slots()
         .iter()
-        .map(|a| match a {
+        .map(|slot| match &slot.axis {
             MultiSlotAxis::Underscore => "_".to_string(),
             MultiSlotAxis::Axis(s) => s.value.to_string(),
         })

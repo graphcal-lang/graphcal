@@ -90,6 +90,59 @@ impl<T> AtLeastTwo<T> {
     }
 }
 
+impl<T> AtLeastTwo<T> {
+    /// Borrow the elements as a slice.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        &self.items
+    }
+
+    /// The first element.
+    #[must_use]
+    pub fn first(&self) -> &T {
+        &self.items[0]
+    }
+
+    /// Map owned items while preserving the two-or-more invariant.
+    #[must_use]
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> AtLeastTwo<U> {
+        AtLeastTwo {
+            items: self.items.into_iter().map(f).collect(),
+        }
+    }
+
+    /// Pair every item with the element at the same position of `other`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `other` unchanged when its length differs from `self`'s.
+    pub fn zip_exact<U>(self, other: Vec<U>) -> Result<AtLeastTwo<(T, U)>, Vec<U>> {
+        if other.len() != self.items.len() {
+            return Err(other);
+        }
+        Ok(AtLeastTwo {
+            items: self.items.into_iter().zip(other).collect(),
+        })
+    }
+}
+
+impl<T> Index<usize> for AtLeastTwo<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.items[index]
+    }
+}
+
+impl<T> IntoIterator for AtLeastTwo<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.into_iter()
+    }
+}
+
 impl<'a, T> IntoIterator for &'a AtLeastTwo<T> {
     type Item = &'a T;
     type IntoIter = std::slice::Iter<'a, T>;
@@ -386,6 +439,19 @@ impl<'a, T> IntoIterator for &'a NonEmptyUnique<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn at_least_two_zip_exact_pairs_equal_lengths_and_returns_mismatches() {
+        let pair = AtLeastTwo::new(1, 2);
+        assert_eq!(pair.clone().zip_exact(vec![3]), Err(vec![3]));
+        assert_eq!(pair.clone().zip_exact(vec![3, 4, 5]), Err(vec![3, 4, 5]));
+        let zipped = pair.zip_exact(vec!['a', 'b']).unwrap();
+        assert_eq!(zipped.as_slice(), &[(1, 'a'), (2, 'b')]);
+        let mapped = zipped.map(|(n, _)| n * 10);
+        assert_eq!(*mapped.first(), 10);
+        assert_eq!(mapped[1], 20);
+        assert_eq!(mapped.into_iter().collect::<Vec<_>>(), vec![10, 20]);
+    }
 
     #[test]
     fn non_empty_unique_preserves_order_and_length() {

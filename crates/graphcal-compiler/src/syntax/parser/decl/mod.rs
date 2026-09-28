@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
     Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, PlotField,
-    PlotPropertyName, Visibility,
+    PlotPropertyName, SlotKind, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
@@ -9,7 +9,6 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::{ParseError, Parser};
-use multi::SlotKind;
 
 mod dag;
 mod dim_unit;
@@ -173,25 +172,11 @@ impl Parser<'_> {
         // Optional `pub` or `pub(bind)` visibility modifier.
         let (visibility, visibility_span) = self.parse_visibility_prefix()?;
 
-        // Reject `pub` / `pub(bind)` on `param` at parse time. The `param`
-        // declaration kind itself creates a named input port, so export and
-        // bindability annotations do not apply. Catching this here keeps the
-        // grammar surface compliant without deferring to the resolver.
         let found = match visibility {
             BindableVisibility::Private => None,
             BindableVisibility::Public => Some("`pub`"),
             BindableVisibility::PublicBind => Some("`pub(bind)`"),
         };
-        if let Some(found) = found
-            && self.lexer.peek() == Some(&Token::Param)
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(self.unexpected_token(
-                "no visibility annotation (`param` declares a named input port)",
-                found,
-                vis_span,
-            ));
-        }
 
         // Includes have no blanket visibility. Whole-DAG imports accept
         // leading `pub`; selective imports still use per-item `pub` and are
@@ -207,102 +192,59 @@ impl Parser<'_> {
             ));
         }
 
-        // Reject `pub(bind)` on `node` / `const node`. Nodes are computed
-        // values, not input ports; `param` already declares that role.
-        // `pub` on `node` is legal and controls projection visibility from
-        // inline-dag call sites.
-        let is_node_decl = match self.lexer.peek() {
-            Some(Token::Node) => true,
-            Some(Token::Const) => matches!(self.lexer.peek_second(), Some(Token::Node)),
-            _ => false,
-        };
-        if visibility == BindableVisibility::PublicBind
-            && is_node_decl
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(self.unexpected_token(
-                "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a named input port)",
-                "`pub(bind)`",
-                vis_span,
-            ));
-        }
-
         let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `const unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
 
         // Value-declaration paths (`param`, `node`, `const node`) can be
         // either a single declaration or a multi-decl (issue #481). We
-        // consume the kind keyword(s), parse the slot header, then peek
-        // at the next token to decide.
-        match self.lexer.peek() {
-            Some(Token::Param) => {
-                let (_, kind_span) = self.advance()?;
-                return self.finish_value_decl_or_multi(
-                    SlotKind::Param,
-                    kind_span,
-                    attributes,
-                    visibility,
-                    visibility_span,
-                );
-            }
-            Some(Token::Node) => {
-                let (_, kind_span) = self.advance()?;
-                return self.finish_value_decl_or_multi(
-                    SlotKind::Node,
-                    kind_span,
-                    attributes,
-                    visibility,
-                    visibility_span,
-                );
-            }
-            Some(Token::Const) => {
-                let (_, const_span) = self.advance()?;
-                match self.lexer.peek() {
-                    Some(Token::Node) => {
-                        let (_, node_span) = self.advance()?;
-                        return self.finish_value_decl_or_multi(
-                            SlotKind::ConstNode,
-                            const_span.merge(node_span),
-                            attributes,
-                            visibility,
-                            visibility_span,
-                        );
-                    }
-                    Some(Token::Unit) => {
-                        // `const unit`: single declaration only (no multi-decl sugar).
-                        let mut decl = self.parse_const_unit(const_span)?;
-                        if visibility == BindableVisibility::PublicBind
-                            && let Some(vis_span) = visibility_span
-                        {
-                            return Err(self.unexpected_token(
+        // consume the kind keyword(s) — which also checks the visibility
+        // prefix against the kind — parse the slot header, then peek at the
+        // next token to decide.
+        let is_value_decl = match self.lexer.peek() {
+            Some(Token::Param | Token::Node) => true,
+            Some(Token::Const) => self.lexer.peek_second() == Some(&Token::Node),
+            _ => false,
+        };
+        if is_value_decl {
+            let (kind, kind_span) = self.parse_slot_kind(visibility, visibility_span)?;
+            return self.finish_value_decl_or_multi(kind, kind_span, attributes, visibility_span);
+        }
+        if self.lexer.peek() == Some(&Token::Const) {
+            let (_, const_span) = self.advance()?;
+            match self.lexer.peek() {
+                Some(Token::Unit) => {
+                    // `const unit`: single declaration only (no multi-decl sugar).
+                    let mut decl = self.parse_const_unit(const_span)?;
+                    if visibility == BindableVisibility::PublicBind
+                        && let Some(vis_span) = visibility_span
+                    {
+                        return Err(self.unexpected_token(
                                 "`pub` (`pub(bind)` is only valid on bindable declaration kinds: `dim`, `type`, and `index`)",
                                 "`pub(bind)`",
                                 vis_span,
                             ));
-                        }
-                        set_decl_visibility(&mut decl, visibility);
-                        if let Some(ps) = visibility_span {
-                            decl.span = ps.merge(decl.span);
-                        }
-                        if let Some(first_attr) = attributes.first() {
-                            decl.span = first_attr.span.merge(decl.span);
-                        }
-                        decl.attributes = attributes;
-                        return Ok(decl);
                     }
-                    Some(_) => {
-                        let (tok, span) = self.advance()?;
-                        return Err(self.unexpected_token(
-                            "`node` or `unit` after `const`",
-                            &tok.to_string(),
-                            span,
-                        ));
+                    set_decl_visibility(&mut decl, visibility);
+                    if let Some(ps) = visibility_span {
+                        decl.span = ps.merge(decl.span);
                     }
-                    None => {
-                        return Err(self.unexpected_eof("`node` or `unit` after `const`"));
+                    if let Some(first_attr) = attributes.first() {
+                        decl.span = first_attr.span.merge(decl.span);
                     }
+                    decl.attributes = attributes;
+                    return Ok(decl);
+                }
+                Some(_) => {
+                    let (tok, span) = self.advance()?;
+                    return Err(self.unexpected_token(
+                        "`node` or `unit` after `const`",
+                        &tok.to_string(),
+                        span,
+                    ));
+                }
+                None => {
+                    return Err(self.unexpected_eof("`node` or `unit` after `const`"));
                 }
             }
-            _ => {}
         }
 
         let mut decl = match self.lexer.peek() {
@@ -393,10 +335,9 @@ impl Parser<'_> {
         kind: SlotKind,
         kind_span: Span,
         attributes: Vec<Attribute>,
-        visibility: BindableVisibility,
         visibility_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
-        let header = self.parse_slot_header_tail(visibility, kind, kind_span)?;
+        let header = self.parse_slot_header_tail(kind, kind_span)?;
 
         if self.lexer.peek() == Some(&Token::Comma) {
             // Multi-decl. Attributes are still forbidden; visibility now
@@ -409,12 +350,11 @@ impl Parser<'_> {
                     first_attr.span,
                 ));
             }
-            return self.parse_multi_decl_rest(header, visibility, visibility_span);
+            return self.parse_multi_decl_rest(header);
         }
 
         // Single decl. Continue with the existing param/node/const-node path.
         let mut decl = self.finish_single_value_decl(header)?;
-        set_decl_visibility(&mut decl, visibility);
         if let Some(ps) = visibility_span {
             decl.span = ps.merge(decl.span);
         }

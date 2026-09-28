@@ -712,17 +712,22 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "ast", "decl", "multi_decl_shape_tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["syntax", "ast", "format_equivalent"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["syntax", "ast", "format_equivalent", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "multi_decl"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "multi_decl", "tests"]
 role = "contracts"
 
 [[module]]

@@ -25,7 +25,7 @@
 
 use crate::syntax::ast::{
     ConstNodeDecl, Expr, ExprKind, File, MapEntry, MapEntryIndex, MapEntryKey, MultiDecl,
-    MultiHeaderCell, MultiSlotColumnSpan, MultiSlotKind, NodeDecl, ParamDecl, TableIndexSpec,
+    MultiHeaderCell, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind, TableIndexSpec,
 };
 #[cfg(test)]
 use crate::syntax::ast::{DeclKind, Declaration};
@@ -145,20 +145,16 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                     if extra_axis_name.is_none() {
                         extra_axis_name = Some(extra_axis.clone());
                     }
-                    let col_variants: Vec<(Spanned<NamePath>, Spanned<IndexVariantName>)> = slice
-                        .header_cells()[*start..*end]
+                    let col_variants: Vec<Spanned<IndexVariantName>> = slice.header_cells()
+                        [*start..*end]
                         .iter()
                         .filter_map(|c| match c {
-                            MultiHeaderCell::Variant { axis, variant, .. } => {
-                                Some((axis.clone(), variant.clone()))
-                            }
+                            MultiHeaderCell::Variant { variant, .. } => Some(variant.clone()),
                             MultiHeaderCell::Underscore { .. } => None,
                         })
                         .collect();
                     for row in slice.rows() {
-                        for (local_col, (column_axis, col_variant)) in
-                            col_variants.iter().enumerate()
-                        {
+                        for (local_col, col_variant) in col_variants.iter().enumerate() {
                             let global_col = start + local_col;
                             let row_key = MapEntryKey {
                                 index: row_index_name.clone(),
@@ -167,8 +163,8 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                             };
                             let extra_key = MapEntryKey {
                                 index: Spanned::new(
-                                    MapEntryIndex::Named(column_axis.value.clone()),
-                                    column_axis.span,
+                                    MapEntryIndex::Named(extra_axis.value.clone()),
+                                    extra_axis.span,
                                 ),
                                 additional_index_spans: vec![extra_axis.span],
                                 variant: Spanned::new(
@@ -207,7 +203,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
         let decl_span = slot.header_span.merge(multi.span);
 
         out.push(match slot.kind {
-            MultiSlotKind::Param => ExpandedSlotDecl::Param(
+            SlotKind::Param => ExpandedSlotDecl::Param(
                 ParamDecl {
                     name: slot.name.clone(),
                     type_ann: slot.type_ann.clone(),
@@ -215,18 +211,18 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                 },
                 decl_span,
             ),
-            MultiSlotKind::Node => ExpandedSlotDecl::Node(
+            SlotKind::Node(visibility) => ExpandedSlotDecl::Node(
                 NodeDecl {
-                    visibility: slot.visibility,
+                    visibility,
                     name: slot.name.clone(),
                     type_ann: slot.type_ann.clone(),
                     definition: crate::node_definition::NodeDefinition::Formula(table_expr),
                 },
                 decl_span,
             ),
-            MultiSlotKind::ConstNode => ExpandedSlotDecl::ConstNode(
+            SlotKind::ConstNode(visibility) => ExpandedSlotDecl::ConstNode(
                 ConstNodeDecl {
-                    visibility: slot.visibility,
+                    visibility,
                     name: slot.name.clone(),
                     type_ann: slot.type_ann.clone(),
                     value: table_expr,
