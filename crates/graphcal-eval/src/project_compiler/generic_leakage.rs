@@ -22,9 +22,9 @@ use graphcal_compiler::syntax::names::NameAtom;
 /// symbol (V = private at the importer) from a builtin or cross-file
 /// symbol for the V006 check.
 pub(super) fn collect_local_type_names(
-    file: &graphcal_compiler::desugar::desugared_ast::File,
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
 ) -> HashMap<NameAtom, ImportItemNamespace> {
-    file.declarations
+    declarations
         .iter()
         .filter_map(|declaration| declaration.kind.declared_name())
         .filter(|introduced| introduced.namespace() != ImportItemNamespace::Term)

@@ -10,19 +10,17 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
+use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::ImportItemNamespace;
+use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 
-use crate::import_surface::{
-    ImportItemPresence, PureImportTermDisposition, file_import_item_presence,
-    import_item_not_found_error, pure_import_term_disposition, validate_constructor_alias,
-};
+use crate::import_surface::{import_item_not_found_error, validate_constructor_alias};
 
 /// Pre-process `import <self>::{...}` declarations inside a dag body.
 ///
@@ -30,7 +28,7 @@ use crate::import_surface::{
 /// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved
 /// the path back to the dag's own enclosing parent DAG. For each
 /// self-import, every brace-list item is classified in the namespace it
-/// requested against the parent AST.
+/// requested against the parent's declared interface.
 ///
 /// - Marked `type`, `dim`, `unit`, and `index` items are visibility-checked in
 ///   exactly that namespace. A type item does not import a same-named constructor.
@@ -64,7 +62,7 @@ use crate::import_surface::{
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
-    parent_ast: &File,
+    parent_interface: &ModuleInterface,
     body_resolved_imports: &HashMap<
         crate::loader::ModulePathKey,
         crate::loader::InlineBodyImportResolution,
@@ -115,11 +113,10 @@ pub fn preprocess_dag_body_self_imports(
                     let local_name = DeclName::classify(item.local_name_atom().clone());
                     let span = item.name.span;
 
-                    match file_import_item_presence(parent_ast, orig_name.as_str(), item.namespace)
-                    {
-                        ImportItemPresence::Missing => {
+                    match parent_interface.exposure(orig_name.atom(), item.namespace) {
+                        None => {
                             return Err(import_item_not_found_error(
-                                parent_ast,
+                                parent_interface,
                                 orig_name.atom(),
                                 item.namespace,
                                 &import_decl.path().display_path(),
@@ -127,7 +124,7 @@ pub fn preprocess_dag_body_self_imports(
                                 span,
                             ));
                         }
-                        ImportItemPresence::Private => {
+                        Some(DeclExposure::Private) => {
                             return Err(GraphcalError::ImportPrivateItem {
                                 name: orig_name.to_string(),
                                 file_path: import_decl.path().display_path(),
@@ -135,7 +132,7 @@ pub fn preprocess_dag_body_self_imports(
                                 span: span.into(),
                             });
                         }
-                        ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => {}
+                        Some(DeclExposure::ExplicitExport | DeclExposure::InputPort) => {}
                     }
                     if let Some(binding) = exported_bindings.iter().find(|binding| {
                         &binding.name == orig_name.atom()
@@ -154,20 +151,18 @@ pub fn preprocess_dag_body_self_imports(
                             // bare term item.
                         }
                         ImportItemNamespace::Term => {
-                            let disposition = pure_import_term_disposition(
-                                &parent_ast.declarations,
-                                orig_name.as_str(),
-                            )
-                            .ok_or_else(|| {
-                                import_item_not_found_error(
-                                    parent_ast,
-                                    orig_name.atom(),
-                                    item.namespace,
-                                    &import_decl.path().display_path(),
-                                    src,
-                                    span,
-                                )
-                            })?;
+                            let disposition = parent_interface
+                                .pure_import_term_disposition(orig_name.atom())
+                                .ok_or_else(|| {
+                                    import_item_not_found_error(
+                                        parent_interface,
+                                        orig_name.atom(),
+                                        item.namespace,
+                                        &import_decl.path().display_path(),
+                                        src,
+                                        span,
+                                    )
+                                })?;
                             match disposition {
                                 PureImportTermDisposition::BindConstant => {
                                     let scoped = ScopedName::local(local_name);

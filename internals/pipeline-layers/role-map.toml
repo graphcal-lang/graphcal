@@ -402,6 +402,16 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "module_interface"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "module_interface", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["ir", "lower", "tests"]
 role = "checking"
 
@@ -1644,12 +1654,12 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["import_surface"]
-role = "contracts"
+role = "checking"
 
 [[module]]
 package = "eval"
 path = ["import_surface", "tests"]
-role = "contracts"
+role = "checking"
 
 [[module]]
 package = "eval"

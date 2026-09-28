@@ -9,6 +9,7 @@ use graphcal_compiler::ir::instance::{
     InstancePlotProjection, InstanceRecord, InstanceValueProjection, StaticSpecializationId,
     StaticSubstitution,
 };
+use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::ResolvedDimName;
 use graphcal_compiler::syntax::index_name::ResolvedIndexName;
@@ -20,7 +21,7 @@ use graphcal_compiler::syntax::type_name::ResolvedStructTypeName;
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, File};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind};
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
@@ -31,7 +32,7 @@ use super::registry_merge::{merge_registry_into_builder, seed_imported_type_syst
 struct DirectDagCallValidator<'a> {
     project: &'a crate::loader::LoadedProject,
     owner: &'a graphcal_compiler::dag_id::DagId,
-    importer_declarations: &'a [Declaration],
+    importer: &'a ModuleInterface,
     resolver: &'a graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &'a NamedSource<Arc<String>>,
 }
@@ -47,33 +48,29 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
         let ExprKind::InlineDagRef { path, .. } = &expr.kind else {
             return Ok(());
         };
-        if let Ok(target) = self.resolver.resolve_module_path(self.owner, path) {
-            let declarations = self.project.files().get(&target).map_or_else(
-                || {
-                    self.project
-                        .inline_dag(&target)
-                        .map(|(file, dag)| dag.body(file))
-                },
-                |file| Some(file.ast().declarations.as_slice()),
-            );
-            if let Some(declarations) = declarations {
-                imports::validate_direct_dag_call_bindings(
-                    args,
-                    declarations,
-                    self.importer_declarations,
-                    &target.to_string(),
-                    self.src,
-                    expr.span,
-                )?;
-            }
+        if let Ok(target) = self.resolver.resolve_module_path(self.owner, path)
+            && let Some(dependency) = self.project.module(&target)
+        {
+            imports::validate_direct_dag_call_bindings(
+                args,
+                dependency.interface(),
+                self.importer,
+                &target.to_string(),
+                self.src,
+                expr.span,
+            )?;
         }
         args.iter()
             .try_for_each(|binding| self.visit_expr(&binding.value))
     }
 }
 
+/// Validate the direct DAG calls (`@dag(args)::out`) in one module's value
+/// and assertion bodies. Self-imports carry no expressions, so a module's
+/// full loaded body and its self-import-stripped lowering body are equivalent
+/// here.
 fn validate_direct_dag_calls(
-    ast: &File,
+    module: crate::loader::LoadedModule<'_>,
     project: &crate::loader::LoadedProject,
     owner: &graphcal_compiler::dag_id::DagId,
     resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
@@ -82,12 +79,12 @@ fn validate_direct_dag_calls(
     let mut validator = DirectDagCallValidator {
         project,
         owner,
-        importer_declarations: &ast.declarations,
+        importer: module.interface(),
         resolver,
         src,
     };
     let mut visit = |expr: &Expr| validator.visit_expr(expr);
-    for declaration in &ast.declarations {
+    for declaration in module.declarations() {
         match &declaration.kind {
             DeclKind::Param(param) => {
                 if let Some(value) = &param.value {
@@ -273,7 +270,8 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         module_resolver,
         module_templates,
     } = semantic_context;
-    validate_direct_dag_calls(file_ast, project, file_dag_id, module_resolver, file_src)?;
+    let importer = loaded_file.module();
+    validate_direct_dag_calls(importer, project, file_dag_id, module_resolver, file_src)?;
     let include_debug_names = include_debug_name_map(&ctx);
 
     let mut registry_seed = |builder: &mut RegistryBuilder| {
@@ -322,7 +320,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         module_resolver,
         module_templates,
         file_src,
-        file_ast,
+        importer,
         &mut builder,
         &mut unfrozen,
         cancellation,
@@ -498,7 +496,7 @@ fn compile_loaded_dag_module_ir<'a>(
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         dag_body,
         loaded_dag.parent_dag_id(),
-        parent_loaded.ast(),
+        parent_loaded.interface(),
         loaded_dag.resolved_imports(),
         module_resolver,
         file_src,
@@ -546,7 +544,7 @@ fn compile_loaded_dag_module_ir<'a>(
         declarations: self_imports.stripped_body,
     };
     validate_direct_dag_calls(
-        &dag_ast,
+        loaded_dag.module(parent_loaded),
         project,
         loaded_dag.dag_id(),
         module_resolver,
@@ -583,7 +581,7 @@ fn compile_loaded_dag_module_ir<'a>(
         module_resolver,
         module_templates,
         file_src,
-        &dag_ast,
+        loaded_dag.module(parent_loaded),
         &mut builder,
         &mut unfrozen,
         cancellation,
@@ -750,7 +748,7 @@ fn process_dag_body_include_declarations<'a>(
                 target.source_file(),
                 include_decl,
                 decl,
-                dag_body,
+                loaded_dag.interface(),
                 file_src,
                 module_artifacts,
                 module_resolver,
@@ -765,14 +763,14 @@ fn process_dag_body_include_declarations<'a>(
         let target_file_id = target.source_file();
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
-                dag_def: target_dag.declaration(target_file),
+                interface: target_dag.interface(),
                 dag_id: target.target(),
                 dag_name: target_dag.declaration(target_file).name.value.as_str(),
                 parent_dag_id: target_file_id,
             },
             include_decl,
             decl,
-            dag_body,
+            loaded_dag.interface(),
             file_src,
             module_resolver,
             ctx,
@@ -1307,13 +1305,13 @@ fn elaborate_include_instances(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
-    importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    importer: crate::loader::LoadedModule<'_>,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    let importer_external_surface = super::extract_external_decl_surface(importer_ast);
-    let importer_local_type_names = collect_local_type_names(importer_ast);
+    let importer_external_surface = importer.interface().external_surface();
+    let importer_local_type_names = collect_local_type_names(importer.declarations());
     for instance in include_instances {
         cancellation.checkpoint()?;
         // ---- 1. Resolve and assemble source body -----------------------------
@@ -1364,7 +1362,13 @@ fn elaborate_include_instances(
                 cancellation,
             )?;
             let dep_body = dep_loaded.ast();
-            validate_direct_dag_calls(dep_body, project, dep_dag_id, module_resolver, dep_src)?;
+            validate_direct_dag_calls(
+                dep_loaded.module(),
+                project,
+                dep_dag_id,
+                module_resolver,
+                dep_src,
+            )?;
             let mut registry_seed = |builder: &mut RegistryBuilder| {
                 seed_imported_type_system(
                     builder,
@@ -1393,7 +1397,7 @@ fn elaborate_include_instances(
                 module_resolver,
                 module_templates,
                 dep_src,
-                dep_body,
+                dep_loaded.module(),
                 &mut dep_builder,
                 &mut dep_unfrozen,
                 cancellation,
@@ -1404,7 +1408,7 @@ fn elaborate_include_instances(
                 ElaboratedModuleTemplate {
                     unfrozen: dep_unfrozen,
                     frontend_registry: dep_registry,
-                    external_surface: super::extract_external_decl_surface(dep_loaded.ast()),
+                    external_surface: dep_loaded.interface().external_surface().clone(),
                 },
             );
             (
@@ -1431,7 +1435,7 @@ fn elaborate_include_instances(
             let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
                 inline_body,
                 parent_dag_id,
-                parent_loaded.ast(),
+                parent_loaded.interface(),
                 loaded_inline.resolved_imports(),
                 module_resolver,
                 importer_src,
@@ -1477,7 +1481,7 @@ fn elaborate_include_instances(
                 declarations: self_imports.stripped_body,
             };
             validate_direct_dag_calls(
-                &stripped_body,
+                loaded_inline.module(parent_loaded),
                 project,
                 dag_id,
                 module_resolver,
@@ -1513,7 +1517,7 @@ fn elaborate_include_instances(
                 module_resolver,
                 module_templates,
                 importer_src,
-                &stripped_body,
+                loaded_inline.module(parent_loaded),
                 &mut dag_builder,
                 &mut dag_unfrozen,
                 cancellation,
@@ -1524,7 +1528,7 @@ fn elaborate_include_instances(
                 ElaboratedModuleTemplate {
                     unfrozen: dag_unfrozen,
                     frontend_registry: dag_registry,
-                    external_surface: super::extract_external_decl_surface(importer_ast),
+                    external_surface: importer.interface().external_surface().clone(),
                 },
             );
             (template, dag_id.clone(), inline_body)
@@ -1589,7 +1593,7 @@ fn elaborate_include_instances(
             &instance.index_bindings,
             &instance.type_bindings,
             &instance.dim_bindings,
-            &importer_external_surface,
+            importer_external_surface,
             &importer_local_type_names,
             importer_src,
             instance.include_span,

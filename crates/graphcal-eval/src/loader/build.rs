@@ -150,6 +150,9 @@ impl<K: SourceKey> Builder<K> {
             path: file.path().to_path_buf(),
             dag_id,
             source,
+            interface: graphcal_compiler::ir::module_interface::ModuleInterface::new(
+                &ast.declarations,
+            ),
             ast,
             named_source,
             resolved_imports,
