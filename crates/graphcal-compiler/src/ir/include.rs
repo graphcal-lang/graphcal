@@ -873,9 +873,9 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
     ) -> Result<(), Self::Error> {
         for entry in entries {
             for key in &entry.keys {
-                if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
-                    let index = IndexName::classify(index_name.leaf().clone());
-                    self.check_label(&index, format!("`{}#{}`", index_name, key.variant.value))?;
+                if let crate::syntax::ast::MapEntryKey::Named { index, .. } = key {
+                    let index_name = IndexName::classify(index.value.leaf().clone());
+                    self.check_label(&index_name, format!("`{key}`"))?;
                 }
             }
             self.visit_expr(&entry.value)?;

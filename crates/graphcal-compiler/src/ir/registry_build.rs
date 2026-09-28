@@ -1054,12 +1054,14 @@ fn collect_finite_indexes_from_expr(
                 ExprKind::MapLiteral { entries } => {
                     for entry in entries {
                         for key in &entry.keys {
-                            if let crate::syntax::ast::MapEntryIndex::Finite(cardinality) =
-                                &key.index.value
+                            if let crate::syntax::ast::MapEntryKey::Finite {
+                                axis_span,
+                                position,
+                            } = key
                             {
                                 ensure_concrete_finite_index(
-                                    *cardinality,
-                                    key.index.span,
+                                    position.value.cardinality(),
+                                    *axis_span,
                                     self.registry,
                                     self.src,
                                 )?;

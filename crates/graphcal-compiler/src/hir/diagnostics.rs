@@ -485,7 +485,6 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::TooManyLocals { span }
         | hir::ExprLowerError::ExpressionIdentity { span, .. }
         | hir::ExprLowerError::EmptyMapEntry { span }
-        | hir::ExprLowerError::InvalidMapEntryKey { span }
         | hir::ExprLowerError::ExtraMapVariant { span, .. }
         | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }

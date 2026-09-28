@@ -43,6 +43,7 @@ pub use graphcal_ast_derive::FormatEquivalent;
 
 use crate::dimension::Rational;
 use crate::exact_rational::ExactRational;
+use crate::syntax::fin_position::FinPosition;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::module_name::ScopeSegment;
@@ -95,6 +96,7 @@ format_equivalent_via_eq!(
     SourceIdentifier,
     ScopeSegment,
     IndexEntryKey,
+    FinPosition,
     PluginPath,
     ImportItemNamespace,
 );

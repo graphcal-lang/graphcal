@@ -41,7 +41,7 @@ use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
 use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::module_resolve::{
@@ -103,9 +103,6 @@ pub enum ExprLowerError {
     /// A map literal entry unexpectedly had no keys after syntax lowering.
     #[error("map literal entry has no keys")]
     EmptyMapEntry { span: Span },
-    /// A syntax map key paired a named axis with a position or a Fin axis with a name.
-    #[error("map entry key category does not match its index category")]
-    InvalidMapEntryKey { span: Span },
     /// A map literal used a key variant that is not declared by its index.
     #[error("extra variant `{variant_name}` in map literal for index `{index_name}`")]
     ExtraMapVariant {
@@ -2756,17 +2753,18 @@ impl<'a> ExprLowerer<'a> {
         key: &ast::MapEntryKey,
         map_span: Span,
     ) -> Result<MapEntryKey, ExprLowerError> {
-        match (&key.index.value, &key.variant.value) {
-            (
-                crate::syntax::ast::MapEntryIndex::Named(index_path),
-                IndexEntryKey::Named(variant_name),
-            ) => {
-                let variant = self
+        match key {
+            ast::MapEntryKey::Named {
+                index,
+                additional_index_spans,
+                variant,
+            } => {
+                let resolved = self
                     .resolve_index_variant_parts(
-                        index_path,
-                        variant_name,
-                        key.index.span,
-                        key.variant.span,
+                        &index.value,
+                        &variant.value,
+                        index.span,
+                        variant.span,
                     )
                     .map_err(|err| match err {
                         ExprLowerError::ModuleResolve {
@@ -2780,25 +2778,16 @@ impl<'a> ExprLowerer<'a> {
                         err => err,
                     })?;
                 Ok(MapEntryKey::IndexVariant(IndexVariantRef {
-                    variant,
-                    index_span: Some(key.index.span),
-                    additional_index_spans: key.additional_index_spans.clone(),
-                    variant_span: key.variant.span,
+                    variant: resolved,
+                    index_span: Some(index.span),
+                    additional_index_spans: additional_index_spans.clone(),
+                    variant_span: variant.span,
                 }))
             }
-            (
-                crate::syntax::ast::MapEntryIndex::Finite(size),
-                IndexEntryKey::Position(position),
-            ) => Ok(MapEntryKey::FinitePosition {
-                size: *size,
-                position: Spanned::new(*position, key.variant.span),
+            ast::MapEntryKey::Finite { position, .. } => Ok(MapEntryKey::FinitePosition {
+                size: position.value.cardinality(),
+                position: Spanned::new(position.value.position(), position.span),
             }),
-            (crate::syntax::ast::MapEntryIndex::Named(_), IndexEntryKey::Position(_))
-            | (crate::syntax::ast::MapEntryIndex::Finite(_), IndexEntryKey::Named(_)) => {
-                Err(ExprLowerError::InvalidMapEntryKey {
-                    span: key.variant.span,
-                })
-            }
         }
     }
 

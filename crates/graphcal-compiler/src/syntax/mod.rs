@@ -7,6 +7,7 @@ pub mod comments;
 pub mod decl_name;
 pub mod dimension;
 pub(crate) mod doc_attach;
+pub mod fin_position;
 pub mod format_equivalent;
 pub mod function_name;
 pub mod import_category;

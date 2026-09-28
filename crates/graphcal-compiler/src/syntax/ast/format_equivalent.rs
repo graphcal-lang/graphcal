@@ -13,9 +13,11 @@
 
 use std::collections::HashMap;
 
-use crate::syntax::ast::{Expr, MapEntry, RawExprSugar};
+use crate::syntax::ast::{Expr, MapEntry, MapEntryKey, RawExprSugar};
+use crate::syntax::fin_position::FinPosition;
 use crate::syntax::format_equivalent::FormatEquivalent;
-use crate::syntax::index_name::IndexEntryKey;
+use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::names::NamePath;
 
 impl FormatEquivalent for RawExprSugar {
     fn format_equivalent(&self, other: &Self) -> bool {
@@ -30,18 +32,24 @@ impl FormatEquivalent for RawExprSugar {
 }
 
 #[derive(PartialEq, Eq, Hash)]
-struct SpanFreeMapEntryKey<'a> {
-    index: &'a crate::syntax::ast::MapEntryIndex,
-    variant: &'a IndexEntryKey,
+enum SpanFreeMapEntryKey<'a> {
+    Named {
+        index: &'a NamePath,
+        variant: &'a IndexVariantName,
+    },
+    Finite(FinPosition),
 }
 
 fn span_free_table_entry_key(entry: &MapEntry) -> Vec<SpanFreeMapEntryKey<'_>> {
     entry
         .keys
         .iter()
-        .map(|key| SpanFreeMapEntryKey {
-            index: &key.index.value,
-            variant: &key.variant.value,
+        .map(|key| match key {
+            MapEntryKey::Named { index, variant, .. } => SpanFreeMapEntryKey::Named {
+                index: &index.value,
+                variant: &variant.value,
+            },
+            MapEntryKey::Finite { position, .. } => SpanFreeMapEntryKey::Finite(position.value),
         })
         .collect()
 }

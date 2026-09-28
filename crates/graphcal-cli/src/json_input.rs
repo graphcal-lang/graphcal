@@ -26,10 +26,10 @@ use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde_json::value::RawValue;
 
 use graphcal_compiler::syntax::ast::{
-    Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
+    Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryKey,
 };
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
@@ -763,21 +763,20 @@ fn convert_indexed(obj: &ExactJsonObject, param_name: &str) -> Result<Expr, Json
             // Overrides are lowered to HIR (which carries resolution inline),
             // so synthetic spans need no uniqueness tricks here.
             Ok(MapEntry {
-                keys: NonEmpty::singleton(MapEntryKey {
-                    index: Spanned::new(MapEntryIndex::Named(index_path.clone()), SYNTH_SPAN),
-                    additional_index_spans: Vec::new(),
-                    variant: Spanned::new(
-                        IndexEntryKey::named(IndexVariantName::try_new(variant.clone()).map_err(
-                            |reason| JsonInputError::InvalidName {
+                keys: NonEmpty::singleton(MapEntryKey::named(
+                    Spanned::new(index_path.clone(), SYNTH_SPAN),
+                    Spanned::new(
+                        IndexVariantName::try_new(variant.clone()).map_err(|reason| {
+                            JsonInputError::InvalidName {
                                 param: format!("{param_name}[{variant}]"),
                                 role: "index variant",
                                 value: variant.clone(),
                                 reason,
-                            },
-                        )?),
+                            }
+                        })?,
                         SYNTH_SPAN,
                     ),
-                }),
+                )),
                 value: value_expr,
             })
         })
@@ -942,7 +941,9 @@ mod tests {
         match &expr.kind {
             ExprKind::MapLiteral { entries } => {
                 assert_eq!(entries.len(), 3);
-                assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
+                assert!(
+                    matches!(&entries[0].keys[0], MapEntryKey::Named { index, .. } if index.value.to_string() == "Maneuver")
+                );
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }
@@ -1004,7 +1005,9 @@ mod tests {
 
         match &overrides[&DeclName::expect_valid("series")].kind {
             ExprKind::MapLiteral { entries } => {
-                assert_eq!(entries[0].keys[0].index.value.to_string(), "lib::Phase");
+                assert!(
+                    matches!(&entries[0].keys[0], MapEntryKey::Named { index, .. } if index.value.to_string() == "lib::Phase")
+                );
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }

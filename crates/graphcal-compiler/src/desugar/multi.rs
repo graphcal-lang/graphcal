@@ -22,12 +22,10 @@ use std::iter;
 
 use crate::node_definition::NodeDefinition;
 use crate::syntax::ast::{
-    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey,
-    MultiDataRow, MultiDecl, MultiDeclSlice, MultiHeaderCell, MultiSlotColumnSpan, NodeDecl,
-    ParamDecl, SlotKind, TableIndexSpec,
+    ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, MultiDataRow,
+    MultiDecl, MultiDeclSlice, MultiHeaderCell, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind,
 };
 use crate::syntax::comments::DocComment;
-use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::Desugared;
@@ -39,15 +37,6 @@ pub(super) fn expand_multi_decl(
     multi: &MultiDecl,
     doc: Option<&DocComment>,
 ) -> Vec<Declaration<Desugared>> {
-    let row_index = match multi.shared_axes().row_axis() {
-        TableIndexSpec::Named(axis) => {
-            Spanned::new(MapEntryIndex::Named(axis.value.clone()), axis.span)
-        }
-        TableIndexSpec::Finite { cardinality, span } => {
-            Spanned::new(MapEntryIndex::Finite(*cardinality), *span)
-        }
-    };
-
     multi
         .slots()
         .iter()
@@ -56,7 +45,7 @@ pub(super) fn expand_multi_decl(
             let entries = multi
                 .slices()
                 .iter()
-                .flat_map(|slice| slot_entries(slice, slot_index, &row_index))
+                .flat_map(|slice| slot_entries(slice, slot_index))
                 .collect();
             let value = Expr::new(ExprKind::MapLiteral { entries }, multi.table_expr_span);
             let name = slot.name.clone();
@@ -94,16 +83,8 @@ pub(super) fn expand_multi_decl(
 }
 
 /// The map entries one slice contributes to the slot at `slot_index`.
-fn slot_entries(
-    slice: &MultiDeclSlice,
-    slot_index: usize,
-    row_index: &Spanned<MapEntryIndex>,
-) -> Vec<MapEntry<Desugared>> {
-    let row_key = |row: &MultiDataRow| MapEntryKey {
-        index: row_index.clone(),
-        additional_index_spans: Vec::new(),
-        variant: row.label().clone(),
-    };
+fn slot_entries(slice: &MultiDeclSlice, slot_index: usize) -> Vec<MapEntry<Desugared>> {
+    let row_key = |row: &MultiDataRow| row.row_key().clone();
     match &slice.column_layout()[slot_index] {
         MultiSlotColumnSpan::Single(column) => slice
             .rows()
@@ -144,13 +125,10 @@ fn extra_axis_key(
     extra_axis: &Spanned<NamePath>,
     variant: &Spanned<crate::syntax::index_name::IndexVariantName>,
 ) -> MapEntryKey {
-    MapEntryKey {
-        index: Spanned::new(
-            MapEntryIndex::Named(extra_axis.value.clone()),
-            extra_axis.span,
-        ),
+    MapEntryKey::Named {
+        index: extra_axis.clone(),
         additional_index_spans: vec![extra_axis.span],
-        variant: Spanned::new(IndexEntryKey::named(variant.value.clone()), variant.span),
+        variant: variant.clone(),
     }
 }
 
@@ -177,6 +155,7 @@ fn entry_keys(
 mod tests {
     use super::*;
     use crate::syntax::ast::{File, RawDeclSugar, Visibility};
+    use crate::syntax::index_name::IndexEntryKey;
     use crate::syntax::parser::Parser;
     use crate::syntax::phase::Raw;
     use crate::syntax::span::Span;
@@ -209,18 +188,14 @@ mod tests {
     }
 
     fn key_indexes(entry: &MapEntry<Desugared>) -> Vec<String> {
-        entry
-            .keys
-            .iter()
-            .map(|key| key.index.value.to_string())
-            .collect()
+        entry.keys.iter().map(MapEntryKey::axis_text).collect()
     }
 
     fn key_labels(entry: &MapEntry<Desugared>) -> String {
         entry
             .keys
             .iter()
-            .map(|key| key.variant.value.to_string())
+            .map(|key| key.entry_key().to_string())
             .collect::<Vec<_>>()
             .join("/")
     }
@@ -361,7 +336,7 @@ param y: Dimensionless[Fin(2)]
         assert_eq!(
             entries
                 .iter()
-                .map(|e| e.keys.first().variant.value.clone())
+                .map(|e| e.keys.first().entry_key())
                 .collect::<Vec<_>>(),
             [IndexEntryKey::Position(0), IndexEntryKey::Position(1)]
         );

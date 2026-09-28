@@ -7,8 +7,9 @@ use crate::exact_rational::ExactRational;
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
+use crate::syntax::fin_position::FinPosition;
 use crate::syntax::format_equivalent::FormatEquivalent;
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NamePath, Qualified};
@@ -775,40 +776,6 @@ pub enum TableIndexSpec {
     },
 }
 
-/// An index key in a map literal entry.
-///
-/// Plain map literals use named indexes. Tables over `Fin(N)` axes desugar to
-/// map entries with an explicitly typed structural key, so downstream passes
-/// never recover index structure from a fabricated name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
-pub enum MapEntryIndex {
-    /// A declared named index.
-    Named(NamePath),
-    /// A finite structural index, `Fin(N)`.
-    Finite(u64),
-}
-
-impl From<IndexName> for MapEntryIndex {
-    fn from(value: IndexName) -> Self {
-        Self::Named(NamePath::local(value.into_atom()))
-    }
-}
-
-impl From<NamePath> for MapEntryIndex {
-    fn from(value: NamePath) -> Self {
-        Self::Named(value)
-    }
-}
-
-impl std::fmt::Display for MapEntryIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Named(name) => write!(f, "{name}"),
-            Self::Finite(size) => write!(f, "Fin({size})"),
-        }
-    }
-}
-
 impl TableIndexSpec {
     /// Get the source span of this table index specification.
     #[must_use]
@@ -826,18 +793,89 @@ impl TableIndexSpec {
     }
 }
 
-/// A single key in a map literal entry: `Index#Variant`.
+/// One key of a map entry.
 ///
-/// Table sugar can mention the same semantic index more than once for one
-/// desugared key: once in `table[...]` and again in a qualified slice or
-/// heterogeneous header label. `additional_index_spans` preserves those
-/// source references for editor features without duplicating the key value.
+/// A key either names a variant of a declared index or addresses a position
+/// on a structural `Fin(N)` axis; a named axis with a position (or a `Fin`
+/// axis with a variant name) is unrepresentable.
 #[derive(Debug, Clone, FormatEquivalent)]
-pub struct MapEntryKey {
-    pub index: Spanned<MapEntryIndex>,
-    #[fe(skip)]
-    pub additional_index_spans: Vec<Span>,
-    pub variant: Spanned<IndexEntryKey>,
+pub enum MapEntryKey {
+    /// `Index#Variant` on a declared index.
+    Named {
+        index: Spanned<NamePath>,
+        /// Table sugar can mention the same semantic index more than once for
+        /// one desugared key: once in `table[...]` and again in a qualified
+        /// slice or heterogeneous header label. These spans preserve those
+        /// source references for editor features without duplicating the key.
+        #[fe(skip)]
+        additional_index_spans: Vec<Span>,
+        variant: Spanned<IndexVariantName>,
+    },
+    /// A position on a structural `Fin(N)` axis (table sugar only).
+    Finite {
+        /// Span of the `Fin(N)` axis the position belongs to.
+        #[fe(skip)]
+        axis_span: Span,
+        position: Spanned<FinPosition>,
+    },
+}
+
+impl MapEntryKey {
+    /// A named key with no additional index references.
+    #[must_use]
+    pub const fn named(index: Spanned<NamePath>, variant: Spanned<IndexVariantName>) -> Self {
+        Self::Named {
+            index,
+            additional_index_spans: Vec::new(),
+            variant,
+        }
+    }
+
+    /// Span of the key's axis reference.
+    #[must_use]
+    pub const fn index_span(&self) -> Span {
+        match self {
+            Self::Named { index, .. } => index.span,
+            Self::Finite { axis_span, .. } => *axis_span,
+        }
+    }
+
+    /// Span of the variant label or position.
+    #[must_use]
+    pub const fn variant_span(&self) -> Span {
+        match self {
+            Self::Named { variant, .. } => variant.span,
+            Self::Finite { position, .. } => position.span,
+        }
+    }
+
+    /// Source spelling of the key's axis: the index path or `Fin(N)`.
+    #[cfg(test)]
+    pub(crate) fn axis_text(&self) -> String {
+        match self {
+            Self::Named { index, .. } => index.value.to_string(),
+            Self::Finite { position, .. } => format!("Fin({})", position.value.cardinality()),
+        }
+    }
+
+    /// The axis-independent entry key: the variant name or the position.
+    #[must_use]
+    pub fn entry_key(&self) -> IndexEntryKey {
+        match self {
+            Self::Named { variant, .. } => IndexEntryKey::named(variant.value.clone()),
+            Self::Finite { position, .. } => IndexEntryKey::position(position.value.position()),
+        }
+    }
+}
+
+/// Renders the source spelling: `Index#Variant` or `#N`.
+impl std::fmt::Display for MapEntryKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named { index, variant, .. } => write!(f, "{}#{}", index.value, variant.value),
+            Self::Finite { position, .. } => position.value.fmt(f),
+        }
+    }
 }
 
 /// An entry in a map literal.
@@ -1297,4 +1335,55 @@ pub enum BinOp {
 pub enum UnaryOp {
     Neg,
     Not,
+}
+
+#[cfg(test)]
+mod map_entry_key_tests {
+    use super::*;
+    use crate::syntax::names::NameAtom;
+
+    fn named_key() -> MapEntryKey {
+        let index = NamePath::local(NameAtom::parse("Phase").expect("valid name atom"));
+        let variant = IndexVariantName::try_new("Launch").expect("valid variant name");
+        MapEntryKey::named(
+            Spanned::new(index, Span::new(1, 5)),
+            Spanned::new(variant, Span::new(7, 6)),
+        )
+    }
+
+    fn finite_key() -> MapEntryKey {
+        MapEntryKey::Finite {
+            axis_span: Span::new(2, 6),
+            position: Spanned::new(
+                FinPosition::try_new(3, 1).expect("inside Fin(3)"),
+                Span::new(10, 2),
+            ),
+        }
+    }
+
+    #[test]
+    fn keys_render_their_source_spelling() {
+        assert_eq!(named_key().to_string(), "Phase#Launch");
+        assert_eq!(finite_key().to_string(), "#1");
+    }
+
+    #[test]
+    fn keys_expose_axis_and_variant_spans() {
+        assert_eq!(named_key().index_span(), Span::new(1, 5));
+        assert_eq!(named_key().variant_span(), Span::new(7, 6));
+        assert_eq!(finite_key().index_span(), Span::new(2, 6));
+        assert_eq!(finite_key().variant_span(), Span::new(10, 2));
+    }
+
+    #[test]
+    fn keys_project_to_axis_independent_entry_keys() {
+        assert_eq!(named_key().entry_key().to_string(), "Launch");
+        assert_eq!(finite_key().entry_key(), IndexEntryKey::position(1));
+        assert_eq!(named_key().axis_text(), "Phase");
+        assert_eq!(finite_key().axis_text(), "Fin(3)");
+        assert!(matches!(
+            named_key(),
+            MapEntryKey::Named { additional_index_spans, .. } if additional_index_spans.is_empty()
+        ));
+    }
 }

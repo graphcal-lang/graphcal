@@ -1,12 +1,10 @@
 use graphcal_compiler::syntax::ast::{
     AssertBody, AssertDecl, Attribute, BaseDimDecl, DagDecl, DeclKind, Declaration, DimDecl,
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
-    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MapEntryIndex, MapEntryKey, MultiDecl,
-    MultiHeaderCell, MultiSlotAxis, NodeDecl, ParamBinding, ParamDecl, PlotDecl, SlotKind,
-    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, UnionMember, UnitConstness, UnitDecl,
-    UnitDef, Visibility,
+    IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
+    NodeDecl, ParamBinding, ParamDecl, PlotDecl, SlotKind, TableIndexSpec, TypeDecl, TypeDeclBody,
+    TypeExpr, UnionMember, UnitConstness, UnitDecl, UnitDef, Visibility,
 };
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use pretty::RcDoc;
 
 use super::{
@@ -985,7 +983,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             let labels = slice
                 .prefix_keys()
                 .iter()
-                .map(format_multi_decl_key)
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push('\n');
@@ -1026,7 +1024,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
                 let _ = write!(
                     out,
                     "{}: {};",
-                    pad_right_to_width(&row.label().value.to_string(), max_row_label),
+                    pad_right_to_width(&row.row_key().entry_key().to_string(), max_row_label),
                     cells.join(", "),
                 );
             }
@@ -1038,18 +1036,6 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     out.push_str("};");
 
     text_with_hardlines(&out)
-}
-
-fn format_multi_decl_key(key: &MapEntryKey) -> String {
-    match (&key.index.value, &key.variant.value) {
-        (MapEntryIndex::Named(index), IndexEntryKey::Named(variant)) => {
-            format!("{index}#{variant}")
-        }
-        (MapEntryIndex::Finite(_), IndexEntryKey::Position(position)) => {
-            format!("#{position}")
-        }
-        (index, variant) => format!("{index}#{variant}"),
-    }
 }
 
 fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
@@ -1111,7 +1097,7 @@ fn compute_multi_decl_layout(
         info.slices()
             .iter()
             .flat_map(|slice| slice.rows().iter())
-            .map(|row| display_width(&row.label().value.to_string()))
+            .map(|row| display_width(&row.row_key().entry_key().to_string()))
             .max()
             .unwrap_or(0)
     };
