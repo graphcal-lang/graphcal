@@ -520,7 +520,7 @@ mod tests {
         source: &str,
     ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
         let raw_file = Parser::new(source).parse_file().unwrap();
-        let desugared = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();

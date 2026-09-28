@@ -155,7 +155,7 @@ fn run_import(source: OracleRole, dependency: Option<OracleRole>) -> OracleDecis
     let parsed = Parser::new(&source_text)
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle scenario rendered invalid Graphcal: {error}"));
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(parsed);
+    let file = crate::desugar::desugared_ast::File::from(parsed);
     let subject = NameAtom::parse("Subject").expect("valid test identifier");
     match static_import_rejection(&file.declarations, &subject, ImportItemNamespace::Type) {
         None => OracleDecision::Accepted,

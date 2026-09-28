@@ -75,13 +75,13 @@ pub fn duplicate_include_producer_to_graphcal(
 #[cfg(test)]
 mod tests {
     use crate::desugar::desugared_ast::{DeclKind, ImportKind};
-    use crate::syntax::desugar::desugar_multi_decls_in_file;
     use crate::syntax::parser::Parser;
 
     use super::*;
 
     fn include_items(source: &str) -> Vec<ImportItem> {
-        let file = desugar_multi_decls_in_file(Parser::new(source).parse_file().unwrap());
+        let file =
+            crate::desugar::desugared_ast::File::from(Parser::new(source).parse_file().unwrap());
         let DeclKind::Include(include) = &file.declarations[0].kind else {
             panic!("expected include declaration")
         };

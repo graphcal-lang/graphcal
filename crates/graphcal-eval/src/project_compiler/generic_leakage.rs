@@ -279,7 +279,7 @@ mod tests {
         let raw = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
-        graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw).declarations
+        graphcal_compiler::desugar::desugared_ast::File::from(raw).declarations
     }
 
     fn source() -> NamedSource<Arc<String>> {

@@ -502,7 +502,7 @@ mod tests {
 
     fn parse(source: &str) -> crate::desugar::desugared_ast::File {
         let file = Parser::new(source).parse_file().expect("source parses");
-        crate::syntax::desugar::desugar_multi_decls_in_file(file)
+        crate::desugar::desugared_ast::File::from(file)
     }
 
     #[test]

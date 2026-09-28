@@ -148,7 +148,7 @@ fn parse_and_resolve_case(source: &str) -> Result<CollectedFile, GraphcalError> 
     let raw_file = Parser::new(source)
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle rendered invalid Graphcal `{source}`: {error}"));
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::desugar::desugared_ast::File::from(raw_file);
     let src = NamedSource::new("lean-oracle-case.gcl", Arc::new(source.to_string()));
     resolve(&file, &src)
 }

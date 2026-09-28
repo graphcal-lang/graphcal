@@ -26,14 +26,6 @@ reason = "Observed compiler::hir::expr -> compiler::syntax::module_resolve (prod
 
 [[exception]]
 from_package = "compiler"
-from_path = ["hir", "expr", "tests"]
-to_package = "compiler"
-to_path = ["syntax", "desugar"]
-test_only = true
-reason = "Observed compiler::hir::expr::tests -> compiler::syntax::desugar (test-only) at ./crates/graphcal-compiler/src/hir/expr.rs:2994 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["hir", "lower", "tests"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -135,22 +127,6 @@ to_package = "compiler"
 to_path = ["syntax", "module_resolve"]
 test_only = false
 reason = "Observed compiler::registry::error -> compiler::syntax::module_resolve (production) at ./crates/graphcal-compiler/src/registry/error.rs:19 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["static_interface", "tests"]
-to_package = "compiler"
-to_path = ["syntax", "desugar"]
-test_only = true
-reason = "Observed compiler::static_interface::tests -> compiler::syntax::desugar (test-only) at ./crates/graphcal-compiler/src/static_interface.rs:219 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["syntax", "parser", "decl", "multi", "tests"]
-to_package = "compiler"
-to_path = ["syntax", "desugar"]
-test_only = true
-reason = "Observed compiler::syntax::parser::decl::multi::tests -> compiler::syntax::desugar (test-only) at ./crates/graphcal-compiler/src/syntax/parser/decl/multi.rs:725 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "compiler"
@@ -380,14 +356,6 @@ reason = "Observed eval::graph_ir::tests -> compiler::ir::lower (test-only) at .
 from_package = "eval"
 from_path = ["graph_ir", "tests"]
 to_package = "compiler"
-to_path = ["syntax", "desugar"]
-test_only = true
-reason = "Observed eval::graph_ir::tests -> compiler::syntax::desugar (test-only) at ./crates/graphcal-eval/src/graph_ir/mod.rs:378 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["graph_ir", "tests"]
-to_package = "compiler"
 to_path = ["syntax", "module_resolve"]
 test_only = true
 reason = "Observed eval::graph_ir::tests -> compiler::syntax::module_resolve (test-only) at ./crates/graphcal-eval/src/graph_ir/mod.rs:370 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
@@ -479,14 +447,6 @@ to_package = "compiler"
 to_path = ["syntax", "module_resolve"]
 test_only = false
 reason = "Observed eval::import_surface -> compiler::syntax::module_resolve (production) at ./crates/graphcal-eval/src/import_surface.rs:17 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["import_surface", "tests"]
-to_package = "compiler"
-to_path = ["syntax", "desugar"]
-test_only = true
-reason = "Observed eval::import_surface::tests -> compiler::syntax::desugar (test-only) at ./crates/graphcal-eval/src/import_surface.rs:631 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "eval"

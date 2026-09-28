@@ -115,7 +115,14 @@ pub struct Declaration<P: Phase = Raw> {
     pub doc: Option<crate::syntax::comments::DocComment>,
 }
 
-#[derive(Debug, Clone, FormatEquivalent)]
+/// The kind of a declaration.
+///
+/// The `Raw` → `Desugared` lift is a derived `TryFrom`: every ordinary
+/// variant converts structurally, and declaration sugar comes back as the
+/// error for the desugar pass to expand (one multi-decl becomes many
+/// declarations, so it has no single-value lowering).
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
+#[phase_lift(from = Raw, to = Desugared)]
 #[fe(phase = Raw)]
 pub enum DeclKind<P: Phase = Raw> {
     Param(ParamDecl<P>),
@@ -142,6 +149,7 @@ pub enum DeclKind<P: Phase = Raw> {
     /// payload is [`core::convert::Infallible`] — the variant is statically
     /// unreachable, so post-desugar consumers handle it with
     /// `crate::syntax::phase::never`.
+    #[phase_lift(residual = RawDeclSugar)]
     Sugar(P::DeclSugar),
 }
 

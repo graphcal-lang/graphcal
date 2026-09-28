@@ -285,7 +285,7 @@ fn field_constraint_hir_error_uses_definition_source() {
     let schema_source = "pub base dim Currency;\n\
                          pub type Price { Price(amount: Currency(min: 0.0 missing)) }\n";
     let raw_file = Parser::new(schema_source).parse_file().unwrap();
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::desugar::desugared_ast::File::from(raw_file);
     let schema_src = NamedSource::new("schema.gcl", Arc::new(schema_source.to_string()));
 
     // Nominal field bounds now cross into HIR with their definition. An
@@ -362,7 +362,7 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
 fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let source = "pub index Axis = { A };\npub type Item { Item(value: Dimensionless) }\n";
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::desugar::desugared_ast::File::from(raw_file);
     let src = NamedSource::new("store.gcl", Arc::new(source.to_string()));
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
     let owner = ir.dag_id().clone();
@@ -502,7 +502,7 @@ fn publication_rejects_runtime_units_without_a_defining_body() {
 
 fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
     let raw = Parser::new(source).parse_file().unwrap();
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
+    let file = crate::desugar::desugared_ast::File::from(raw);
     let src = NamedSource::new("same.gcl", Arc::new(source.to_string()));
     crate::ir::lower::lower(&file, &src).unwrap()
 }
@@ -637,7 +637,7 @@ fn parse_and_type_resolve_builder_named(
     path: &str,
 ) -> Result<TirBuilder, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = NamedSource::new(path, Arc::new(source.to_string()));
     let (ir, parent_registry) =
@@ -775,7 +775,7 @@ fn compile_inline_dag_bodies_test(
 fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     let source = "node value: Dimensionless = 1.0;";
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let file = crate::desugar::desugared_ast::File::from(raw_file);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let root_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
@@ -838,7 +838,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
                   param p: Dimensionless;\n\
                   node x: Dimensionless = @p + @D;";
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let dag_id =

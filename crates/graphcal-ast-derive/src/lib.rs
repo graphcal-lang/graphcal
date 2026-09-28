@@ -56,6 +56,12 @@ mod phase_lift;
 ///   hook for sugar variants whose lowering produces a different variant of
 ///   the target type; the `From<Payload> for T<Target>` impl carrying that
 ///   lowering is written by hand where the lowering belongs.
+/// - Enum variant: `#[phase_lift(residual = <payload type>)]` on a
+///   single-field tuple variant (at most one per enum) derives
+///   `TryFrom<T<Source>> for T<Target>` instead of `From`, with the payload
+///   type as the error: every other variant converts, and this one is handed
+///   back to the caller. This is the hook for sugar whose lowering does not
+///   produce a single target value (one declaration expanding into many).
 ///
 /// Types whose conversion needs real logic (one-to-many expansion, stack
 /// growth guards, private constructors) keep a hand-written `From` impl.

@@ -612,8 +612,7 @@ impl Parser<'_> {
 mod tests {
     use super::*;
     use crate::syntax::ast;
-    use crate::syntax::ast::{ExprKind, SlotKind, Visibility};
-    use crate::syntax::desugar::expand_multi_decl;
+    use crate::syntax::ast::{SlotKind, Visibility};
     use crate::syntax::parser::Parser;
 
     /// Extract the `MultiDecl` from a file that contains exactly one
@@ -626,13 +625,6 @@ mod tests {
                 _ => None,
             })
             .expect("file has one multi-decl")
-    }
-
-    fn node_visibility(decl: &ast::Declaration) -> Visibility {
-        match &decl.kind {
-            DeclKind::Node(node) => node.visibility,
-            other => panic!("expected Node, got {other:?}"),
-        }
     }
 
     #[test]
@@ -657,9 +649,6 @@ param y: Dimensionless[Fin(2)]
                 .collect::<Vec<_>>(),
             vec![IndexEntryKey::Position(0), IndexEntryKey::Position(1)]
         );
-
-        let expanded = expand_multi_decl(multi);
-        assert_eq!(expanded.len(), 2);
     }
 
     #[test]
@@ -716,27 +705,6 @@ param n_installed:       Int[Component]
         ));
         assert_eq!(multi.slices().len(), 1);
         assert_eq!(multi.slices()[0].rows().len(), 2);
-
-        // The desugar pass expands this to two separate Param decls each
-        // carrying a 1-D TableLiteral.
-        let desugared: Vec<_> = expand_multi_decl(multi)
-            .into_iter()
-            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
-            .collect();
-        assert_eq!(desugared.len(), 2);
-        let DeclKind::Param(first) = &desugared[0].kind else {
-            panic!("expected Param")
-        };
-        match &first.value.as_ref().unwrap().kind {
-            ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
-                indexes,
-                entries,
-            }) => {
-                assert_eq!(indexes.len(), 1);
-                assert_eq!(entries.len(), 2);
-            }
-            other => panic!("expected TableLiteral, got {other:?}"),
-        }
     }
 
     #[test]
@@ -889,13 +857,6 @@ pub node a: Int[Component], node b: Int[Component]
         let multi = sole_multi_decl(&file);
         assert_eq!(multi.slots()[0].kind, SlotKind::Node(Visibility::Public));
         assert_eq!(multi.slots()[1].kind, SlotKind::Node(Visibility::Private));
-
-        let desugared: Vec<_> = expand_multi_decl(multi)
-            .into_iter()
-            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
-            .collect();
-        assert_eq!(node_visibility(&desugared[0]), Visibility::Public);
-        assert_eq!(node_visibility(&desugared[1]), Visibility::Private);
     }
 
     #[test]
@@ -915,13 +876,6 @@ node a: Int[Component], pub node b: Int[Component]
         let multi = sole_multi_decl(&file);
         assert_eq!(multi.slots()[0].kind, SlotKind::Node(Visibility::Private));
         assert_eq!(multi.slots()[1].kind, SlotKind::Node(Visibility::Public));
-
-        let desugared: Vec<_> = expand_multi_decl(multi)
-            .into_iter()
-            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
-            .collect();
-        assert_eq!(node_visibility(&desugared[0]), Visibility::Private);
-        assert_eq!(node_visibility(&desugared[1]), Visibility::Public);
     }
 
     #[test]
@@ -979,29 +933,6 @@ param      power_mode:        Bool[Component, OperationMode]
         let multi = sole_multi_decl(&file);
         assert_eq!(multi.slots().len(), 4);
         assert!(matches!(multi.slots()[3].axis, ast::MultiSlotAxis::Axis(_)));
-
-        // After desugar, the 4th slot (`power_mode`) becomes a Param with a
-        // 2-D TableLiteral over Component × OperationMode.
-        let desugared: Vec<_> = expand_multi_decl(multi)
-            .into_iter()
-            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
-            .collect();
-        assert_eq!(desugared.len(), 4);
-        match &desugared[3].kind {
-            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
-                    indexes,
-                    entries,
-                }) => {
-                    assert_eq!(indexes.len(), 2);
-                    assert_eq!(entries.len(), 4); // 2 components × 2 modes
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Component");
-                    assert_eq!(entries[0].keys[1].index.value.to_string(), "OperationMode");
-                }
-                other => panic!("expected TableLiteral, got {other:?}"),
-            },
-            other => panic!("expected Param, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1050,32 +981,6 @@ param q: Int[Phase, Component]
             multi.slices()[0].prefix_keys()[0].index.value.to_string(),
             "Phase"
         );
-
-        // Desugared: each slot becomes a Param with a 2-D TableLiteral
-        // keyed by (Phase, Component).
-        let desugared: Vec<_> = expand_multi_decl(multi)
-            .into_iter()
-            .map(crate::syntax::desugar::ExpandedSlotDecl::into_declaration)
-            .collect();
-        assert_eq!(desugared.len(), 2);
-        match &desugared[0].kind {
-            DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::Sugar(crate::syntax::ast::RawExprSugar::TableLiteral {
-                    indexes,
-                    entries,
-                }) => {
-                    assert_eq!(indexes.len(), 2);
-                    assert_eq!(entries.len(), 2); // 2 phases × 1 component
-                    for e in entries {
-                        assert_eq!(e.keys.len(), 2);
-                        assert_eq!(e.keys[0].index.value.to_string(), "Phase");
-                        assert_eq!(e.keys[1].index.value.to_string(), "Component");
-                    }
-                }
-                other => panic!("expected TableLiteral, got {other:?}"),
-            },
-            other => panic!("expected Param, got {other:?}"),
-        }
     }
 
     #[test]

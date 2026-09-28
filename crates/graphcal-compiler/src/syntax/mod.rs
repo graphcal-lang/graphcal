@@ -4,7 +4,6 @@ pub mod ast;
 pub mod attribute;
 pub mod comments;
 pub mod decl_name;
-pub mod desugar;
 pub mod dimension;
 pub(crate) mod doc_attach;
 pub mod format_equivalent;

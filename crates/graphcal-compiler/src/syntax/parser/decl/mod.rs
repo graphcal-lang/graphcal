@@ -153,7 +153,7 @@ impl Parser<'_> {
     }
 
     /// Parse one declaration surface form. A multi-decl is represented as
-    /// `DeclKind::Multi(MultiDecl)` and expanded later by the desugar pass.
+    /// `DeclKind::Sugar(RawDeclSugar::Multi(_))` and expanded later by the desugar pass.
     pub(super) fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
         self.with_nesting_budget(Self::parse_declaration_inner)
     }

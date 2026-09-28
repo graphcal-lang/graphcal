@@ -6,9 +6,9 @@
 //! `#[derive(PhaseLift)]` (crate `graphcal-ast-derive`). This module holds
 //! only the conversions that make a decision:
 //!
-//! - [`File`] and [`DagDecl`] bodies expand one declaration into many, because
-//!   `DeclKind::Sugar(RawDeclSugar::Multi(_))` is expanded via
-//!   `crate::syntax::desugar::expand_multi_decl` (see `convert_decl`).
+//! - [`File`] and [`DagDecl`] bodies expand one declaration into many: the
+//!   derived `TryFrom<DeclKind<Raw>>` hands `DeclKind::Sugar(_)` back, and
+//!   `convert_decl` expands a multi-decl through `super::multi`.
 //! - [`Expr`] routes each tree level through the stack-growth guard and its
 //!   private-marker constructor.
 //! - [`RawExprSugar`] lowers to an ordinary [`ExprKind`]; the derived
@@ -25,13 +25,9 @@
 //! `MatchPattern`, etc.) are used as-is in both phases — no conversion
 //! needed.
 //!
-//! # `MultiDecl` family
-//!
-//! `MultiDecl`, `MultiDeclSlot`, `MultiDeclSlice`, `MultiDataRow` are
-//! parameterized over `<P>` for symmetry but only ever instantiated with
-//! `<Raw>` (they live exclusively inside `RawDeclSugar::Multi`). They have
-//! no `From<…<Raw>> for …<Desugared>` impl because the desugar pass
-//! eliminates them entirely via `expand_multi_decl`.
+//! The `MultiDecl` family is raw-only (it lives exclusively inside
+//! `RawDeclSugar::Multi`) and carries no phase parameter; the desugar pass
+//! eliminates it.
 
 use crate::syntax::ast::{DagDecl, DeclKind, Declaration, Expr, ExprKind, File};
 use crate::syntax::ast::{RawDeclSugar, RawExprSugar};
@@ -60,62 +56,16 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
         span,
         doc,
     } = d;
-    let kind = match kind {
-        DeclKind::Sugar(RawDeclSugar::Multi(multi)) => {
-            // `expand_multi_decl` produces one `ExpandedSlotDecl` per slot
-            // (Param/Node/ConstNode only — never `Sugar`). Lift each to
-            // `Declaration<Desugared>` so the rest of the pass sees a uniform
-            // post-desugar type. A doc block above the multi-decl documents
-            // every expanded slot.
-            return crate::syntax::desugar::expand_multi_decl(&multi)
-                .into_iter()
-                .map(|slot| lift_slot_decl(slot, doc.clone()))
-                .collect();
-        }
-        DeclKind::Param(p) => DeclKind::Param(p.into()),
-        DeclKind::Node(n) => DeclKind::Node(n.into()),
-        DeclKind::ConstNode(c) => DeclKind::ConstNode(c.into()),
-        DeclKind::BaseDimension(d) => DeclKind::BaseDimension(d),
-        DeclKind::Dimension(d) => DeclKind::Dimension(d),
-        DeclKind::Unit(u) => DeclKind::Unit(u.into()),
-        DeclKind::Type(t) => DeclKind::Type(t.into()),
-        DeclKind::Index(i) => DeclKind::Index(i.into()),
-        DeclKind::Import(i) => DeclKind::Import(i),
-        DeclKind::PluginImport(p) => DeclKind::PluginImport(p.into()),
-        DeclKind::Include(i) => DeclKind::Include(i.into()),
-        DeclKind::Dag(d) => DeclKind::Dag(d.into()),
-        DeclKind::Assert(a) => DeclKind::Assert(a.into()),
-        DeclKind::Plot(p) => DeclKind::Plot(p.into()),
-        DeclKind::Figure(f) => DeclKind::Figure(f.into()),
-        DeclKind::Layer(l) => DeclKind::Layer(l.into()),
-    };
-    vec![Declaration {
-        attributes,
-        kind,
-        span,
-        doc,
-    }]
-}
-
-/// Lift one multi-decl expansion slot to a `Declaration<Desugared>`.
-///
-/// [`ExpandedSlotDecl`] can only hold `Param` / `Node` / `ConstNode`, so no
-/// unreachable `Sugar` arm (and no panic) is needed here.
-fn lift_slot_decl(
-    d: crate::syntax::desugar::ExpandedSlotDecl,
-    doc: Option<crate::syntax::comments::DocComment>,
-) -> Declaration<Desugared> {
-    use crate::syntax::desugar::ExpandedSlotDecl;
-    let (kind, span) = match d {
-        ExpandedSlotDecl::Param(p, span) => (DeclKind::Param(p.into()), span),
-        ExpandedSlotDecl::Node(n, span) => (DeclKind::Node(n.into()), span),
-        ExpandedSlotDecl::ConstNode(c, span) => (DeclKind::ConstNode(c.into()), span),
-    };
-    Declaration {
-        attributes: vec![],
-        kind,
-        span,
-        doc,
+    match DeclKind::try_from(kind) {
+        Ok(kind) => vec![Declaration {
+            attributes,
+            kind,
+            span,
+            doc,
+        }],
+        // The parser rejects attributes on a multi-decl; its doc block
+        // documents every expanded slot.
+        Err(RawDeclSugar::Multi(multi)) => super::multi::expand_multi_decl(&multi, doc.as_ref()),
     }
 }
 

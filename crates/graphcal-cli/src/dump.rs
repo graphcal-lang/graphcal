@@ -159,7 +159,7 @@ fn run_desugared(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
     let source_name = source.path.to_string_lossy();
     let raw = Parser::with_name(&source.text, &source_name).parse_file()?;
-    let artifact = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
+    let artifact = graphcal_compiler::desugar::desugared_ast::File::from(raw);
     write_debug(&artifact)?;
     Ok(DumpStatus::Success)
 }

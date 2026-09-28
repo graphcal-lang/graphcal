@@ -646,7 +646,7 @@ mod tests {
 
     fn parse(source: &str) -> File {
         let parsed = Parser::new(source).parse_file().expect("source parses");
-        graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(parsed)
+        graphcal_compiler::desugar::desugared_ast::File::from(parsed)
     }
 
     #[test]

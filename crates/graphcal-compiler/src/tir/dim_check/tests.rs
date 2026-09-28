@@ -24,7 +24,7 @@ fn test_index_ref(name: &str) -> IndexTypeRef {
 
 fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
     let (ir, parent_registry) =
@@ -88,7 +88,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
 
 fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
     let raw_file = Parser::new(source).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src).unwrap();

@@ -1241,7 +1241,7 @@ impl LoadedProject {
             .parse_file_with_cancellation(cancellation)
             .map_err(parse_outcome_error)?;
         cancellation.checkpoint()?;
-        let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+        let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         let stem = file_stem(&path);
@@ -2229,7 +2229,7 @@ fn read_source_file(
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
         .parse_file_with_cancellation(cancellation)
         .map_err(parse_outcome_error)?;
-    let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+    let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
     Ok(ParsedFile {
         source,
         named_source,
@@ -4121,7 +4121,7 @@ node result: Dimensionless = @calculation()::out;
                 Ok(raw) => ParsedFile {
                     named_source: NamedSource::new(name.as_str(), Arc::clone(&source)),
                     source,
-                    ast: graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw),
+                    ast: graphcal_compiler::desugar::desugared_ast::File::from(raw),
                 },
                 Err(error) => return Ok(Err(error.into())),
             };
