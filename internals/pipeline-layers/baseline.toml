@@ -434,22 +434,6 @@ reason = "Observed eval::host_fns::tests -> eval::project_compiler::session (tes
 
 [[exception]]
 from_package = "eval"
-from_path = ["import_surface"]
-to_package = "compiler"
-to_path = ["registry", "resolve_types"]
-test_only = false
-reason = "Observed eval::import_surface -> compiler::registry::resolve_types (production) at ./crates/graphcal-eval/src/import_surface.rs:13 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["import_surface"]
-to_package = "compiler"
-to_path = ["syntax", "module_resolve"]
-test_only = false
-reason = "Observed eval::import_surface -> compiler::syntax::module_resolve (production) at ./crates/graphcal-eval/src/import_surface.rs:17 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
 from_path = ["inline_dag"]
 to_package = "eval"
 to_path = ["loader"]

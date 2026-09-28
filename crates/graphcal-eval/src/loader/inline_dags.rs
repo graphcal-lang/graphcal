@@ -66,6 +66,7 @@ fn lift_inline_dags_from_declarations<ResolveExternal>(
             parent_dag_id: context.file_dag_id.clone(),
             body_locator: DagBodyLocator::at_child(parent_path, index),
             resolved_imports,
+            interface: graphcal_compiler::ir::module_interface::ModuleInterface::new(&dag.body),
         });
         lift_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
     });

@@ -338,33 +338,6 @@ impl ExternalDeclSurface {
         );
     }
 
-    /// Record an explicitly exported Static entity.
-    pub fn insert_static_export(&mut self, name: NameAtom) {
-        self.insert(
-            ExternalNamespace::Static,
-            name,
-            ExternalDeclRole::ExplicitExport,
-        );
-    }
-
-    /// Record an explicitly exported Unit entity.
-    pub fn insert_unit_export(&mut self, name: NameAtom) {
-        self.insert(
-            ExternalNamespace::Unit,
-            name,
-            ExternalDeclRole::ExplicitExport,
-        );
-    }
-
-    /// Record a `param` as a named Term input port.
-    pub fn insert_input_port(&mut self, name: DeclName) {
-        self.insert(
-            ExternalNamespace::Term,
-            name.into_atom(),
-            ExternalDeclRole::InputPort,
-        );
-    }
-
     fn insert(&mut self, namespace: ExternalNamespace, name: NameAtom, role: ExternalDeclRole) {
         let slot = ExternalDeclSlot { namespace, name };
         match self.roles.entry(slot) {

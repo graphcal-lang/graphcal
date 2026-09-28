@@ -27,11 +27,6 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
 use crate::eval::types::CompileError;
-pub(in crate::project_compiler) use crate::import_surface::{
-    ImportItemPresence, decl_has_external_role, declarations_expose_import_item,
-    declarations_have_import_item, extract_external_decl_surface, file_import_item_presence,
-    import_item_not_found_error_from_declarations,
-};
 
 mod checking;
 mod entry_interface;

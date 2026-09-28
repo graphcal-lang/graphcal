@@ -11,6 +11,7 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::registry::error::GraphcalError;
@@ -572,9 +573,26 @@ pub struct LoadedDag {
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
     resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
+    /// Declared interface of the body, computed once at load.
+    interface: ModuleInterface,
 }
 
 impl LoadedDag {
+    /// Declared interface of this inline DAG's body.
+    #[must_use]
+    pub(crate) const fn interface(&self) -> &ModuleInterface {
+        &self.interface
+    }
+
+    /// This inline DAG's body paired with its declared interface.
+    #[must_use]
+    pub(crate) fn module<'a>(&'a self, file: &'a LoadedFile) -> LoadedModule<'a> {
+        LoadedModule {
+            declarations: self.body(file),
+            interface: &self.interface,
+        }
+    }
+
     #[must_use]
     pub(crate) const fn dag_id(&self) -> &DagId {
         &self.dag_id
@@ -608,6 +626,27 @@ impl LoadedDag {
     }
 }
 
+/// One loaded DAG module (a file root or an inline `dag`): its authoritative
+/// declarations paired with the interface computed from exactly those
+/// declarations at load time.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LoadedModule<'a> {
+    declarations: &'a [Declaration],
+    interface: &'a ModuleInterface,
+}
+
+impl<'a> LoadedModule<'a> {
+    #[must_use]
+    pub(crate) const fn declarations(self) -> &'a [Declaration] {
+        self.declarations
+    }
+
+    #[must_use]
+    pub(crate) const fn interface(self) -> &'a ModuleInterface {
+        self.interface
+    }
+}
+
 /// A single loaded and parsed file.
 #[derive(Debug)]
 pub struct LoadedFile {
@@ -630,9 +669,26 @@ pub struct LoadedFile {
     /// pre-resolved imports. Entries retain source preorder and borrow their
     /// authoritative bodies from `ast` through validated locators.
     inline_dags: Vec<LoadedDag>,
+    /// Declared interface of the file root, computed once at load.
+    interface: ModuleInterface,
 }
 
 impl LoadedFile {
+    /// Declared interface of this file root module.
+    #[must_use]
+    pub(crate) const fn interface(&self) -> &ModuleInterface {
+        &self.interface
+    }
+
+    /// This file root's declarations paired with its declared interface.
+    #[must_use]
+    pub(crate) fn module(&self) -> LoadedModule<'_> {
+        LoadedModule {
+            declarations: &self.ast.declarations,
+            interface: &self.interface,
+        }
+    }
+
     /// Canonical path used for I/O and diagnostic URI mapping.
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -1175,6 +1231,15 @@ impl LoadedProject {
         self.files.get(dag_id)
     }
 
+    /// The file root or inline DAG module `dag_id`.
+    #[must_use]
+    pub(crate) fn module(&self, dag_id: &DagId) -> Option<LoadedModule<'_>> {
+        self.file(dag_id).map_or_else(
+            || self.inline_dag(dag_id).map(|(file, dag)| dag.module(file)),
+            |file| Some(file.module()),
+        )
+    }
+
     pub(crate) fn inline_dag(&self, dag_id: &DagId) -> Option<(&LoadedFile, &LoadedDag)> {
         let file = self.files.owner(dag_id)?;
         file.inline_dags
@@ -1290,6 +1355,7 @@ impl LoadedProject {
             path,
             dag_id,
             source,
+            interface: ModuleInterface::new(&ast.declarations),
             ast,
             named_source,
             resolved_imports: HashMap::new(),
@@ -1647,12 +1713,7 @@ fn module_declarations<'a>(
     target: &DagId,
     project: &'a LoadedProject,
 ) -> Option<&'a [Declaration]> {
-    if let Some(file) = project.file(target) {
-        return Some(file.ast.declarations.as_slice());
-    }
-    project
-        .inline_dag(target)
-        .map(|(file, inline)| inline.body(file))
+    project.module(target).map(LoadedModule::declarations)
 }
 
 fn register_module_imports(

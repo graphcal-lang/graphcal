@@ -5,6 +5,7 @@ pub mod imported_binding;
 pub(crate) mod include;
 pub mod instance;
 pub mod lower;
+pub mod module_interface;
 mod node_definition;
 pub(crate) mod override_reconciliation;
 pub(crate) mod registry_build;
