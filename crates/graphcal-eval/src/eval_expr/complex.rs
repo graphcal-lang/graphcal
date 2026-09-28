@@ -39,8 +39,6 @@ pub(super) enum ComplexEvalError {
     NonFinite { operation: &'static str },
     #[error("{operation} produced a non-finite (NaN or infinite) quantity")]
     NonFiniteQuantity { operation: &'static str },
-    #[error("internal complex call expected {expected} argument(s), got {got}")]
-    WrongArity { expected: usize, got: usize },
     #[error("internal complex operation expected {expected}, got {actual}")]
     TypeMismatch {
         expected: &'static str,
@@ -55,21 +53,19 @@ impl ComplexEvalError {
     pub(super) const fn is_internal_invariant(&self) -> bool {
         matches!(
             self,
-            Self::WrongArity { .. } | Self::TypeMismatch { .. } | Self::UnsupportedOperands { .. }
+            Self::TypeMismatch { .. } | Self::UnsupportedOperands { .. }
         )
     }
 }
 
+/// Evaluate one complex built-in call.
+///
+/// The caller has already checked the call against the function's static
+/// entry, so `arguments` holds exactly `function.arity()` values.
 pub(super) fn evaluate_builtin(
     function: ComplexFn,
     arguments: &[RuntimeValue],
 ) -> Result<RuntimeValue, ComplexEvalError> {
-    if arguments.len() != function.arity() {
-        return Err(ComplexEvalError::WrongArity {
-            expected: function.arity(),
-            got: arguments.len(),
-        });
-    }
     match function {
         ComplexFn::Rectangular => {
             let re = quantity(&arguments[0])?;

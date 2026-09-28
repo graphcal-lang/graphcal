@@ -697,9 +697,11 @@ fn eval_hir_fn_call(
             return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
         }
     };
+    // The single arity re-check for every built-in family; family kernels
+    // below rely on the accepted argument count.
+    expect_hir_builtin_arity(name, args, callee.span, ctx)?;
     match name {
         BuiltinFn::Complex(function) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arguments = args
                 .iter()
                 .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
@@ -713,7 +715,6 @@ fn eval_hir_fn_call(
             })
         }
         BuiltinFn::Aggregation(kind) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Indexed {
                 index_name,
@@ -735,7 +736,6 @@ fn eval_hir_fn_call(
             }
         }
         BuiltinFn::LinearAlgebra(function) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arguments = args
                 .iter()
                 .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
@@ -757,7 +757,6 @@ fn eval_hir_fn_call(
             eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
         }
         BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
@@ -773,7 +772,6 @@ fn eval_hir_fn_call(
             eval_hir_datetime_constructor(kind, epoch_scale, expr.span, args, ctx.src)
         }
         BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -800,7 +798,6 @@ fn eval_hir_fn_call(
             Ok(RuntimeValue::Int(result))
         }
         BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Quantity(v) => v.get(),
@@ -824,7 +821,6 @@ fn eval_hir_fn_call(
                 .map_err(|error| ctx.eval_error(error.to_string(), args[0].span))
         }
         BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
-            expect_hir_builtin_arity(name, args, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
@@ -1061,7 +1057,6 @@ fn eval_hir_conversion_fn(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    expect_hir_builtin_arity(BuiltinFn::Conversion(kind), args, span, ctx)?;
     match kind {
         ConversionFn::ToFloat => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -1136,16 +1131,6 @@ fn eval_hir_datetime_constructor(
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         DatetimeConstructorFn::Datetime => {
-            if !(1..=2).contains(&args.len()) {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "datetime() received {} argument(s) after dim-check accepted arity 1..2",
-                        args.len()
-                    ),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
             let epoch = match args {
                 [arg] => {
                     let hir::ExprKind::OffsetDateTimeLiteral(datetime) = arg.kind() else {

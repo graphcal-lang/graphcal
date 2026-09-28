@@ -9,8 +9,6 @@ use super::super::InferredType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum ComplexTypeError {
-    #[error("expected {expected} argument(s), got {got}")]
-    WrongArity { expected: usize, got: usize },
     #[error("argument {argument} must be a quantity")]
     ExpectedQuantity { argument: usize },
     #[error("argument {argument} must be a complex quantity")]
@@ -25,17 +23,15 @@ pub(super) enum ComplexTypeError {
     ExpectedDimensionless { argument: usize },
 }
 
+/// Infer one complex built-in call from already-inferred arguments.
+///
+/// The caller has already checked `arguments` against the function's static
+/// entry (`check_builtin_arity`), so it holds exactly `function.arity()`
+/// types; this rule does not re-check the count.
 pub(super) fn infer(
     function: ComplexFn,
     arguments: &[InferredType],
 ) -> Result<InferredType, ComplexTypeError> {
-    if arguments.len() != function.arity() {
-        return Err(ComplexTypeError::WrongArity {
-            expected: function.arity(),
-            got: arguments.len(),
-        });
-    }
-
     match function {
         ComplexFn::Rectangular => {
             let re = quantity_dimension(arguments, 0)?;

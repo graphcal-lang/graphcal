@@ -1054,6 +1054,66 @@ fn linear_algebra_functions_have_fixed_arity() {
     assert!(matches!(error, GraphcalError::WrongArity { .. }));
 }
 
+/// An argument that fails inference on its own. A wrong-arity call that
+/// contains it must still report the arity, proving the entry-driven arity
+/// check runs before any argument is inferred.
+const ILL_TYPED_ARG: &str = "(1.0 m + 1.0 s)";
+
+#[test]
+fn builtin_arity_is_checked_before_arguments_are_inferred() {
+    let alone = check(&format!("node x: Dimensionless = {ILL_TYPED_ARG};")).unwrap_err();
+    assert!(
+        matches!(alone, GraphcalError::DimensionMismatch { .. }),
+        "got: {alone:?}"
+    );
+    // (callee, arguments with `{bad}` placeholders, expected arity), one row
+    // per family and per arity within a family.
+    let cases = [
+        ("sin", "{bad}, 1.0", 1),
+        ("re", "{bad}, 1.0", 1),
+        ("complex", "{bad}", 2),
+        ("sum", "{bad}, 1.0", 1),
+        ("norm", "{bad}, 1.0", 1),
+        ("dot", "{bad}", 2),
+        ("year", "{bad}, 1.0", 1),
+        ("from_jd", "{bad}, 1.0", 1),
+        ("to_jd", "{bad}, 1.0", 1),
+        ("to_tai", "{bad}, 1.0", 1),
+        ("epoch<TT>", "{bad}, 1.0", 1),
+        ("to_float", "{bad}, 1.0", 1),
+    ];
+    for (function, arguments, expected) in cases {
+        let arguments = arguments.replace("{bad}", ILL_TYPED_ARG);
+        let got = arguments.split(", ").count();
+        let source = format!("node x: Dimensionless = {function}({arguments});");
+        let error = check(&source).unwrap_err();
+        let GraphcalError::WrongArity {
+            name,
+            expected: found_expected,
+            got: found_got,
+            span,
+            ..
+        } = error
+        else {
+            panic!("expected wrong-arity diagnostic for `{source}`, got: {error:?}");
+        };
+        let spelling = function.split('<').next().unwrap();
+        assert_eq!(name.to_string(), spelling, "`{source}`");
+        assert_eq!((found_expected, found_got), (expected, got), "`{source}`");
+        assert_eq!(span.offset(), source.find(function).unwrap(), "`{source}`");
+    }
+}
+
+#[test]
+fn optional_trailing_arity_is_checked_before_arguments_are_inferred() {
+    let source = format!("node x: Datetime<UTC> = datetime({ILL_TYPED_ARG}, 1.0, 2.0);");
+    let error = check(&source).unwrap_err();
+    let GraphcalError::EvalError { message, .. } = &error else {
+        panic!("expected optional-trailing arity diagnostic, got: {error:?}");
+    };
+    assert_eq!(message, "datetime() expects 1 or 2 arguments, got 3");
+}
+
 #[test]
 fn check_scan() {
     let source = "\
