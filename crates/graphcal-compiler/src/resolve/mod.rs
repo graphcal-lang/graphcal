@@ -49,7 +49,7 @@ use crate::syntax::ast::BindableVisibility;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Span;
 
-use self::error::ModuleResolveError;
+use self::error::{ModuleResolveError, NameCategory};
 use self::scope::{
     ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget, declare_aliases,
 };
@@ -236,8 +236,8 @@ impl ModuleResolver {
             .get(&name.to_unowned_def_name())
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
-                namespace: Ns::DISPLAY_NAME,
-                name: name.as_str().to_string(),
+                category: NameCategory::Table(Ns::TABLE),
+                name: name.atom().clone(),
             })
     }
 

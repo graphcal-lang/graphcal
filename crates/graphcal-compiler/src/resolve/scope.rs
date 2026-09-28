@@ -200,8 +200,8 @@ impl ModuleScope {
             {
                 return Err(ModuleResolveError::DuplicateImportName {
                     owner: symbols.owner().clone(),
-                    namespace: namespace.label(),
-                    name: local.value.to_string(),
+                    namespace,
+                    name: local.value.clone(),
                     first: first.span,
                     duplicate: local.span,
                 });
@@ -339,7 +339,7 @@ pub(super) fn module_alias(
 ///
 /// Returns [`ModuleResolveError::DuplicateImportName`] when an alias collides
 /// with a local declaration or an earlier plugin alias, and
-/// [`ModuleResolveError::DuplicateSymbol`] for a function declared twice in
+/// [`ModuleResolveError::DuplicatePluginFunction`] for a function declared twice in
 /// one plugin block.
 pub(super) fn declare_aliases(
     scope: &mut ModuleScope,
@@ -376,8 +376,8 @@ pub(super) fn declare_aliases(
         {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
-                namespace: Namespace::Term.label(),
-                name: alias.value.to_string(),
+                namespace: Namespace::Term,
+                name: alias.value.atom().clone(),
                 first,
                 duplicate: alias.span,
             });
@@ -388,10 +388,9 @@ pub(super) fn declare_aliases(
                 if let Some(first) =
                     functions.insert(function.name.value.clone(), function.name.span)
                 {
-                    return Err(ModuleResolveError::DuplicateSymbol {
+                    return Err(ModuleResolveError::DuplicatePluginFunction {
                         owner: owner.clone(),
-                        namespace: crate::syntax::function_name::FnNameNamespace::DISPLAY_NAME,
-                        name: function.name.value.to_string(),
+                        function: function.name.value.clone(),
                         first,
                         duplicate: function.name.span,
                     });

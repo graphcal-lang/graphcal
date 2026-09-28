@@ -14,14 +14,11 @@ use crate::syntax::ast::{
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexName;
-use crate::syntax::names::NameNamespace;
-use crate::syntax::type_name::{
-    ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
-};
+use crate::syntax::type_name::{ConstructorName, ConstructorNameNamespace, StructTypeName};
 
 use super::ModuleResolver;
-use super::category::include_projection;
-use super::error::ModuleResolveError;
+use super::category::{SymbolTable, include_projection};
+use super::error::{ModuleResolveError, NameCategory};
 use super::imports::ExportLookup;
 use super::scope::Access;
 use super::symbols::{ConstructorSignature, Symbol};
@@ -63,7 +60,7 @@ impl ModuleResolver {
                     if include_projection(kind).is_none() {
                         return Err(ModuleResolveError::IncludeItemNotProjectable {
                             owner: target.clone(),
-                            name: item.name.name.to_string(),
+                            name: item.name.name.atom().clone(),
                             kind,
                             span: item.name.span,
                         });
@@ -101,8 +98,8 @@ impl ModuleResolver {
                             .get(&source_name)
                             .ok_or_else(|| ModuleResolveError::UnknownName {
                                 owner: target.clone(),
-                                namespace: StructTypeNameNamespace::DISPLAY_NAME,
-                                name: source_name.to_string(),
+                                category: NameCategory::Table(SymbolTable::StructType),
+                                name: source_name.atom().clone(),
                             })?;
                         let generic_params = source_symbol.data().clone();
                         let local_name = StructTypeName::classify(local);
@@ -289,8 +286,8 @@ impl ModuleResolver {
                         .cloned()
                         .ok_or_else(|| ModuleResolveError::UnknownName {
                             owner: resolved.owner().clone(),
-                            namespace: ConstructorNameNamespace::DISPLAY_NAME,
-                            name: source_constructor.to_string(),
+                            category: NameCategory::Table(SymbolTable::Constructor),
+                            name: source_constructor.atom().clone(),
                         })?;
                     if include.param_bindings.iter().any(|binding| {
                         binding.category == InputBindingCategory::Type
@@ -298,7 +295,7 @@ impl ModuleResolver {
                     }) {
                         return Err(ModuleResolveError::ConstructorOwnerRebound {
                             owner: owner.clone(),
-                            constructor: item.name.name.to_string(),
+                            constructor: source_constructor,
                             owner_type,
                             span: item.name.span,
                         });

@@ -21,7 +21,6 @@ use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
 };
-use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 use std::collections::{BTreeSet, HashMap};
 
@@ -42,8 +41,8 @@ use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
 use crate::resolve::ModuleResolver;
-use crate::resolve::category::DeclSymbolKind;
-use crate::resolve::error::ModuleResolveError;
+use crate::resolve::category::{DeclSymbolKind, SymbolTable};
+use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
 use crate::resolve::scope::ModuleAliasRole;
 use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
@@ -51,7 +50,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::names::{NameAtom, NameNamespace, NamePath};
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
@@ -1463,8 +1462,8 @@ fn static_binding_value_path(
         _ => Err(ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownName {
                 owner: owner.clone(),
-                namespace: "Static",
-                name: binding.name.name.to_string(),
+                category: NameCategory::Namespace(Namespace::Static),
+                name: binding.name.name.atom().clone(),
             },
             span: binding.value.span,
         }),
@@ -1984,8 +1983,8 @@ impl<'a> ExprLowerer<'a> {
                         Err(ExprLowerError::ModuleResolve {
                             source: ModuleResolveError::UnknownName {
                                 owner: self.ctx.owner.clone(),
-                                namespace: "Term",
-                                name: ident.name.to_string(),
+                                category: NameCategory::Namespace(Namespace::Term),
+                                name: ident.name.atom().clone(),
                             },
                             span,
                         })
@@ -2174,7 +2173,7 @@ impl<'a> ExprLowerer<'a> {
                 Err(ExprLowerError::ModuleResolve {
                     source: ModuleResolveError::UnexpectedDeclKind {
                         name: resolved,
-                        expected: "const",
+                        expected: ExpectedDeclKind::Const,
                         actual,
                     },
                     span,
@@ -2213,13 +2212,11 @@ impl<'a> ExprLowerer<'a> {
         }
 
         first_error.map_or_else(
+            // Only a name qualified by an anonymous include instance has no
+            // source path to resolve; without a binding it is unknown.
             || {
-                Err(ExprLowerError::ModuleResolve {
-                    source: ModuleResolveError::UnknownName {
-                        owner: self.ctx.owner.clone(),
-                        namespace: DeclNameNamespace::DISPLAY_NAME,
-                        name: name.to_string(),
-                    },
+                Err(ExprLowerError::UnknownGraphRef {
+                    name: name.clone(),
                     span,
                 })
             },
@@ -2287,8 +2284,12 @@ impl<'a> ExprLowerer<'a> {
                 source: ModuleResolveError::UnexpectedDeclKind {
                     name: resolved,
                     expected: match role {
-                        Some(ModuleAliasRole::ImportedDag) => "instance-independent const",
-                        Some(ModuleAliasRole::IncludedInstance) | None => "graph value",
+                        Some(ModuleAliasRole::ImportedDag) => {
+                            ExpectedDeclKind::InstanceIndependentConst
+                        }
+                        Some(ModuleAliasRole::IncludedInstance) | None => {
+                            ExpectedDeclKind::GraphValue
+                        }
                     },
                     actual: kind,
                 },
@@ -2390,8 +2391,8 @@ impl<'a> ExprLowerer<'a> {
                     Err(ExprLowerError::ModuleResolve {
                         source: ModuleResolveError::PrivateName {
                             owner: resolved.owner().clone(),
-                            namespace: DeclNameNamespace::DISPLAY_NAME,
-                            name: resolved.as_str().to_string(),
+                            category: NameCategory::Table(SymbolTable::Decl),
+                            name: resolved.atom().clone(),
                         },
                         span,
                     })
@@ -3605,7 +3606,7 @@ mod tests {
             ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnknownName { name, .. },
                 ..
-            } if name == "item"
+            } if name.as_str() == "item"
         )));
         assert_eq!(
             graph_dependency_names(&expr),

@@ -18,7 +18,7 @@ use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace
 
 use super::ModuleResolver;
 use super::category::{ExportedImportItemKind, include_projection};
-use super::error::ModuleResolveError;
+use super::error::{ModuleResolveError, NameCategory};
 use super::scope::{Access, ImportAddition, ImportTarget, ModuleAliasRole, module_alias};
 use super::symbols::Symbol;
 use super::tables::SymbolTables;
@@ -134,7 +134,7 @@ impl ModuleResolver {
                             if include_projection(kind).is_none() {
                                 return Err(ModuleResolveError::IncludeItemNotProjectable {
                                     owner: target.clone(),
-                                    name: item.name.name.to_string(),
+                                    name: item.name.name.atom().clone(),
                                     kind,
                                     span: item.name.span,
                                 });
@@ -239,16 +239,16 @@ impl ModuleResolver {
             (false, _) => Ok(additions),
             (true, true) => Err(ModuleResolveError::PrivateName {
                 owner: target.clone(),
-                namespace: "term import namespace",
-                name: source_atom.to_string(),
+                category: NameCategory::TermImport,
+                name: source_atom.atom().clone(),
             }),
             (true, false) => Err(self
                 .exported_import_item_categories(target, source_atom.atom(), access)?
                 .map_or_else(
                     || ModuleResolveError::UnknownName {
                         owner: target.clone(),
-                        namespace: "term import namespace",
-                        name: source_atom.to_string(),
+                        category: NameCategory::TermImport,
+                        name: source_atom.atom().clone(),
                     },
                     |alternatives| ModuleResolveError::WrongImportCategory {
                         owner: target.clone(),
@@ -274,16 +274,16 @@ impl ModuleResolver {
             ExportLookup::Public(target_name) => Ok(target_name),
             ExportLookup::Private => Err(ModuleResolveError::PrivateName {
                 owner: target.clone(),
-                namespace: Ns::DISPLAY_NAME,
-                name: source_atom.to_string(),
+                category: NameCategory::Table(Ns::TABLE),
+                name: source_atom.clone(),
             }),
             ExportLookup::Missing => Err(self
                 .exported_import_item_categories(target, source_atom, access)?
                 .map_or_else(
                     || ModuleResolveError::UnknownName {
                         owner: target.clone(),
-                        namespace: Ns::DISPLAY_NAME,
-                        name: source_atom.to_string(),
+                        category: NameCategory::Table(Ns::TABLE),
+                        name: source_atom.clone(),
                     },
                     |alternatives| ModuleResolveError::WrongImportCategory {
                         owner: target.clone(),

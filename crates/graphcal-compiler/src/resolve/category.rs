@@ -118,6 +118,32 @@ impl ExportedImportItemKind {
     }
 }
 
+/// One of the resolver's per-namespace symbol tables.
+///
+/// Diagnostics render it with the historical table label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SymbolTable {
+    Decl,
+    Constructor,
+    Dimension,
+    StructType,
+    Index,
+    Unit,
+}
+
+impl std::fmt::Display for SymbolTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Decl => "DeclName",
+            Self::Constructor => "ConstructorName",
+            Self::Dimension => "DimName",
+            Self::StructType => "StructTypeName",
+            Self::Index => "IndexName",
+            Self::Unit => "UnitName",
+        })
+    }
+}
+
 /// Surface category for diagnostics that cross namespace boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceNameKind {
