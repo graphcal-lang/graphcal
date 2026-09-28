@@ -14,6 +14,12 @@ formal-conformance: formal
 refactor-metrics:
     nu internals/refactor-metrics.nu check
 
+# The reading guide's generated file order; regenerate it with
+# `./internals/reading-order.py --write-guide`.
+reading-order:
+    PYTHONDONTWRITEBYTECODE=1 uv run --quiet -m unittest internals/test_reading_order.py
+    uv run --quiet internals/reading-order.py --check-guide
+
 # Syntax-aware module roles, exact dependency debt, and fail-closed fixtures.
 pipeline-layers:
     cargo test --locked --manifest-path internals/pipeline-layers/Cargo.toml
@@ -43,7 +49,7 @@ playground-check:
 playground-test: playground-assets
     cd web/playground && vp test
 
-lint: formal pipeline-layers-lint playground-check refactor-metrics
+lint: formal pipeline-layers-lint playground-check refactor-metrics reading-order
     cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
