@@ -17,7 +17,7 @@ use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::names::NamespacePath;
+use crate::syntax::names::{NameDef, NameNamespace, NamespacePath};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::SourceIdentifier;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
@@ -838,12 +838,12 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         };
         match reference {
             crate::syntax::ast::UnresolvedRef::IndexLabel { index, label, .. } => {
-                let name = IndexName::from_atom(index.leaf().name.atom().clone());
+                let name = IndexName::classify(index.leaf().name.atom().clone());
                 self.check_label(&name, format!("`{index}#{}`", label.value))
             }
             crate::syntax::ast::UnresolvedRef::Path(path) => {
                 if let Some(name) = path.as_bare() {
-                    let constructor = ConstructorName::from_atom(name.name.atom().clone());
+                    let constructor = ConstructorName::classify(name.name.atom().clone());
                     self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
                 }
                 Ok(())
@@ -855,7 +855,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
                 if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg {
-                    let name = IndexName::from_atom(index.value.leaf().clone());
+                    let name = IndexName::classify(index.value.leaf().clone());
                     self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
             }
@@ -871,7 +871,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         for entry in entries {
             for key in &entry.keys {
                 if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
-                    let index = IndexName::from_atom(index_name.leaf().clone());
+                    let index = IndexName::classify(index_name.leaf().clone());
                     self.check_label(&index, format!("`{}#{}`", index_name, key.variant.value))?;
                 }
             }
@@ -892,12 +892,12 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                 crate::desugar::desugared_ast::MatchPattern::IndexLabel {
                     index, variant, ..
                 } => {
-                    let name = IndexName::from_atom(index.value.leaf().clone());
+                    let name = IndexName::classify(index.value.leaf().clone());
                     self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
                     if let Some(name) = path.as_bare() {
-                        let constructor = ConstructorName::from_atom(name.name.atom().clone());
+                        let constructor = ConstructorName::classify(name.name.atom().clone());
                         self.check_constructor(
                             &constructor,
                             format!("match constructor `{constructor}`"),
@@ -924,7 +924,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         if let ExprKind::ConstructorCall { callee, .. } = &expr.kind
             && let Some(name) = callee.as_bare()
         {
-            let constructor = ConstructorName::from_atom(name.name.atom().clone());
+            let constructor = ConstructorName::classify(name.name.atom().clone());
             self.check_constructor(&constructor, format!("constructor `{constructor}(...)`"))?;
         }
         fields
@@ -933,16 +933,14 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
     }
 }
 
-fn rewrite_ambiguous_generic_arg_names<K>(
+fn rewrite_ambiguous_generic_arg_names<Ns: NameNamespace>(
     arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
-    bindings: &HashMap<K, K>,
-) where
-    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
-{
+    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
+) {
     match arg {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-            if let Some(new_name) = bindings.get(ident.name.as_str())
-                && let Ok(identifier) = SourceIdentifier::parse(new_name.as_ref())
+            if let Some(new_name) = bindings.get(&NameDef::classify(ident.name.atom().clone()))
+                && let Ok(identifier) = SourceIdentifier::parse(new_name.as_str())
             {
                 ident.name = identifier;
             }
@@ -962,7 +960,7 @@ fn rewrite_ambiguous_index_arg_declared_names(
     match arg {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
             if let Some(identifier) = bindings
-                .get(ident.name.as_str())
+                .get(&IndexName::classify(ident.name.atom().clone()))
                 .and_then(types::IndexBindingTarget::declared_name)
                 .and_then(|name| SourceIdentifier::parse(name.as_str()).ok())
             {
@@ -1003,7 +1001,7 @@ fn substitute_generic_arg_indexes(
 
     let finite_replacement = match arg {
         GenericArg::Ambiguous(AmbiguousGenericArg::Name(ident)) => bindings
-            .get(ident.name.as_str())
+            .get(&NameDef::classify(ident.name.atom().clone()))
             .filter(|target| matches!(target, types::IndexBindingTarget::Finite(_)))
             .map(|target| GenericArg::Index(index_expr_for_binding_target(target, ident.span))),
         GenericArg::Type(_)
@@ -1026,12 +1024,10 @@ fn substitute_generic_arg_indexes(
     }
 }
 
-fn substitute_generic_arg_nominal_names<K>(
+fn substitute_generic_arg_nominal_names<Ns: NameNamespace>(
     arg: &mut crate::desugar::desugared_ast::GenericArg,
-    bindings: &HashMap<K, K>,
-) where
-    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
-{
+    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
+) {
     match arg {
         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
             substitute_type_expr_nominal_names(type_expr, bindings);
@@ -1052,7 +1048,7 @@ fn substitute_index_expr(
         crate::desugar::desugared_ast::IndexExpr::Name(path) => path
             .value
             .as_bare()
-            .and_then(|atom| bindings.get(atom.as_str()))
+            .and_then(|atom| bindings.get(&NameDef::classify(atom.clone())))
             .map(|target| index_expr_for_binding_target(target, path.span)),
         crate::desugar::desugared_ast::IndexExpr::Finite { .. }
         | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => None,
@@ -1122,15 +1118,15 @@ pub fn substitute_type_expr_indexes(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn substitute_dim_expr_names<K>(dim_expr: &mut DimExpr, bindings: &HashMap<K, K>)
-where
-    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
-{
+pub fn substitute_dim_expr_names<Ns: NameNamespace>(
+    dim_expr: &mut DimExpr,
+    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
+) {
     for item in &mut dim_expr.terms {
         if let Some(atom) = item.term.name.value.as_bare()
-            && let Some(new_name) = bindings.get(atom.as_str())
+            && let Some(new_name) = bindings.get(&NameDef::classify(atom.clone()))
         {
-            item.term.name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
+            item.term.name.value = crate::syntax::names::NamePath::local(new_name.atom().clone());
         }
     }
 }
@@ -1147,10 +1143,10 @@ where
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn substitute_type_expr_nominal_names<K>(type_expr: &mut TypeExpr, bindings: &HashMap<K, K>)
-where
-    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
-{
+pub fn substitute_type_expr_nominal_names<Ns: NameNamespace>(
+    type_expr: &mut TypeExpr,
+    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
+) {
     use crate::desugar::desugared_ast::TypeExprKind;
 
     if bindings.is_empty() {
@@ -1163,9 +1159,9 @@ where
         }
         TypeExprKind::TypeApplication { name, generic_args } => {
             if let Some(atom) = name.value.as_bare()
-                && let Some(new_name) = bindings.get(atom.as_str())
+                && let Some(new_name) = bindings.get(&NameDef::classify(atom.clone()))
             {
-                name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
+                name.value = crate::syntax::names::NamePath::local(new_name.atom().clone());
             }
             for arg in generic_args {
                 substitute_generic_arg_nominal_names(arg, bindings);

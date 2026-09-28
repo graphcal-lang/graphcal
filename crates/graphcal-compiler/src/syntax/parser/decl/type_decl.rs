@@ -13,7 +13,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Type)?;
-        let name = self.parse_any_ident()?.into_spanned::<StructTypeName>();
+        let name: Spanned<StructTypeName> = self.parse_any_ident()?.classify();
 
         // Optional generic params: <D: Dim, F: Type>
         let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
@@ -127,7 +127,7 @@ impl Parser<'_> {
     ) -> Result<UnionMember, ParseError> {
         let start_span = ident.span;
         let name = Spanned::new(
-            ConstructorName::from_atom(ident.name.atom().clone()),
+            ConstructorName::classify(ident.name.atom().clone()),
             ident.span,
         );
 
@@ -164,7 +164,7 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             let type_ann = self.parse_type_expr()?;
             fields.push(FieldDecl {
-                name: Spanned::new(FieldName::from_atom(ident.name.into_atom()), ident.span),
+                name: Spanned::new(FieldName::classify(ident.name.into_atom()), ident.span),
                 type_ann,
             });
             match self.lexer.peek() {

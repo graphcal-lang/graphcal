@@ -737,7 +737,9 @@ fn resolve_private_in_public_dim() {
         pub node speed: Speed = @kmh;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Speed"));
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name.as_str() == "Speed")
+    );
 }
 
 #[test]
@@ -770,7 +772,7 @@ fn resolve_private_in_public_index_in_type() {
     let err = parse_and_resolve(source).unwrap_err();
     // May get PubIndexVariantLiteral before PrivateInPublic.
     assert!(
-        matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name == "Step")
+        matches!(err, GraphcalError::PrivateInPublic { ref ref_name, .. } if ref_name.as_str() == "Step")
             || matches!(err, GraphcalError::PubIndexVariantLiteral { .. }),
         "expected PrivateInPublic or PubIndexVariantLiteral error, got: {err:?}"
     );
@@ -912,7 +914,9 @@ fn resolve_param_with_private_dim_fires_v003() {
         param speed: Speed = 10.0 m/s;
     ";
     let err = parse_and_resolve(source).unwrap_err();
-    assert!(matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name == "Speed"));
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. } if ref_name.as_str() == "Speed")
+    );
 }
 
 #[test]
@@ -934,7 +938,7 @@ fn resolve_pub_dim_with_private_dim_fires_v003() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == DeclarationKind::Dimension && ref_name == "Inner")
+            if pub_kind == DeclarationKind::Dimension && ref_name.as_str() == "Inner")
     );
 }
 
@@ -947,7 +951,7 @@ fn resolve_pub_type_with_private_field_type_fires_v003() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == DeclarationKind::Type && ref_name == "Inner")
+            if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
 
@@ -967,7 +971,7 @@ fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == DeclarationKind::Type && ref_name == "Inner")
+            if pub_kind == DeclarationKind::Type && ref_name.as_str() == "Inner")
     );
 }
 
@@ -982,7 +986,7 @@ fn resolve_pub_type_with_private_type_default_fires_v003() {
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }
             if pub_kind == DeclarationKind::Type
                 && ref_kind == DeclarationKind::Type
-                && ref_name == "Secret")
+                && ref_name.as_str() == "Secret")
     );
 }
 
@@ -995,7 +999,7 @@ fn resolve_pub_type_with_private_dimension_default_fires_v003() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
-            if ref_kind == DeclarationKind::Dimension && ref_name == "SecretDim")
+            if ref_kind == DeclarationKind::Dimension && ref_name.as_str() == "SecretDim")
     );
 }
 
@@ -1008,7 +1012,7 @@ fn resolve_pub_type_with_private_index_default_fires_v003() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
-            if ref_kind == DeclarationKind::Index && ref_name == "SecretIndex")
+            if ref_kind == DeclarationKind::Index && ref_name.as_str() == "SecretIndex")
     );
 }
 
@@ -1022,7 +1026,7 @@ fn resolve_pub_type_checks_nested_generic_default_dependencies() {
     let err = compile_to_tir(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { ref_name, .. }
-            if ref_name == "Secret")
+            if ref_name.as_str() == "Secret")
     );
 }
 
@@ -1065,7 +1069,7 @@ fn resolve_pub_bind_index_with_private_dim_fires_v003() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == DeclarationKind::Index && ref_name == "Rate")
+            if pub_kind == DeclarationKind::Index && ref_name.as_str() == "Rate")
     );
 }
 
@@ -1078,6 +1082,6 @@ fn resolve_pub_unit_with_private_dim_fires_v003() {
     let err = parse_and_resolve(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_name, .. }
-            if pub_kind == DeclarationKind::Unit && ref_name == "Currency")
+            if pub_kind == DeclarationKind::Unit && ref_name.as_str() == "Currency")
     );
 }

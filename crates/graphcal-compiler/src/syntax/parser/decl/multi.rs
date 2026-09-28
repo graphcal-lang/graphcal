@@ -138,7 +138,7 @@ impl Parser<'_> {
         kind: SlotKind,
         kind_span: Span,
     ) -> Result<SlotHeader, ParseError> {
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Colon)?;
         let type_ann = self.parse_type_expr()?;
         let header_span = kind_span.merge(type_ann.span);
@@ -374,7 +374,7 @@ impl Parser<'_> {
                 TableIndexSpec::Named(_) => {
                     let label = self.parse_any_ident()?;
                     let label_span = label.span;
-                    let named_label = label.into_spanned::<IndexVariantName>();
+                    let named_label: Spanned<IndexVariantName> = label.classify();
                     self.expect(Token::Colon)?;
                     (
                         Spanned::new(IndexEntryKey::named(named_label.value), named_label.span),
@@ -590,7 +590,7 @@ impl Parser<'_> {
                 Ok(MultiHeaderCell::Underscore { span })
             }
             Some(token) if token.is_identifier() => {
-                let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                let variant: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
                 Ok(MultiHeaderCell::Variant {
                     span: variant.span,
                     variant,

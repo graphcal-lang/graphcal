@@ -1940,7 +1940,7 @@ impl<'a> ExprLowerer<'a> {
     /// Static atom into the expression HIR.
     fn lower_bare_name_ref(&self, ident: &Ident) -> Result<ExprKind, ExprLowerError> {
         let span = ident.span;
-        if let Ok(local) = self.lookup_local(&LocalName::from_atom(ident.name.atom().clone()), span)
+        if let Ok(local) = self.lookup_local(&LocalName::classify(ident.name.atom().clone()), span)
         {
             return Ok(ExprKind::LocalRef(Spanned::new(local, span)));
         }
@@ -1963,7 +1963,7 @@ impl<'a> ExprLowerer<'a> {
             });
         }
 
-        let scoped_name = ScopedName::from(ident.name.atom().clone());
+        let scoped_name = ScopedName::local(DeclName::classify(ident.name.atom().clone()));
         match self.resolve_decl_scoped_name(&scoped_name, span) {
             Ok(resolved) => {
                 let kind = self
@@ -2145,7 +2145,7 @@ impl<'a> ExprLowerer<'a> {
             if let Some(builtin) = BuiltinConst::parse(name.member().as_str()) {
                 return Ok(ConstRef::Builtin(builtin));
             }
-            let generic_name = GenericParamName::from_atom(name.member().atom().clone());
+            let generic_name = GenericParamName::classify(name.member().atom().clone());
             if let Some(binding) = self.ctx.generic_scope.get(&generic_name)
                 && binding.constraint == ast::GenericConstraint::Nat
             {
@@ -2408,7 +2408,7 @@ impl<'a> ExprLowerer<'a> {
                 owner.child(segment.as_str())
             });
         self.ctx.resolver.modules().get(&owner).and_then(|module| {
-            let decl_name = DeclName::from_atom(leaf.clone());
+            let decl_name = DeclName::classify(leaf.clone());
             module
                 .decls()
                 .contains_key(&decl_name)
@@ -2702,22 +2702,24 @@ impl<'a> ExprLowerer<'a> {
         // scope. Extern functions are only callable in this qualified form.
         if let Some((qualifiers, leaf)) = callee.qualifier_and_leaf()
             && let [qualifier] = qualifiers
-            && let Some(target) = self
-                .ctx
-                .resolver
-                .plugin_alias(self.ctx.owner, qualifier.name.as_str())
+            && let Some(target) = self.ctx.resolver.plugin_alias(
+                self.ctx.owner,
+                &crate::syntax::module_name::ModuleAliasName::classify(
+                    qualifier.name.atom().clone(),
+                ),
+            )
         {
-            let name = crate::syntax::function_name::FnName::from_atom(leaf.name.atom().clone());
+            let name = crate::syntax::function_name::FnName::classify(leaf.name.atom().clone());
             if !target.functions().contains_key(&name) {
                 return Err(ExprLowerError::UnknownExternFunction {
-                    alias: ModuleAliasName::from_atom(qualifier.name.atom().clone()),
+                    alias: ModuleAliasName::classify(qualifier.name.atom().clone()),
                     name,
                     span: callee.span(),
                 });
             }
             return Ok(UnappliedFunctionRef::External(ExternFnRef {
                 plugin: target.path().clone(),
-                alias: ModuleAliasName::from_atom(qualifier.name.atom().clone()),
+                alias: ModuleAliasName::classify(qualifier.name.atom().clone()),
                 name,
             }));
         }
@@ -2842,7 +2844,7 @@ impl<'a> ExprLowerer<'a> {
                 }))
             }
             ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
-                self.lookup_local(&LocalName::from_atom(ident.name.atom().clone()), ident.span)?,
+                self.lookup_local(&LocalName::classify(ident.name.atom().clone()), ident.span)?,
                 ident.span,
             ))),
             ast::IndexArg::Expr(expr) => Ok(IndexArg::Expr(Box::new(self.lower_expr(expr)))),
@@ -2967,7 +2969,7 @@ impl<'a> ExprLowerer<'a> {
             ast::PatternBinding::Bind { field, var } => Ok(PatternBinding::Bind {
                 field: field.clone(),
                 local: self
-                    .allocate_local(LocalName::from_atom(var.name.atom().clone()), var.span)?,
+                    .allocate_local(LocalName::classify(var.name.atom().clone()), var.span)?,
             }),
             ast::PatternBinding::Wildcard { field, span } => Ok(PatternBinding::Wildcard {
                 field: field.clone(),
@@ -3007,11 +3009,11 @@ impl<'a> ExprLowerer<'a> {
     fn push_scope(&mut self, bindings: Vec<LocalDef>) -> Result<(), ExprLowerError> {
         let mut scope = HashMap::new();
         for binding in bindings {
-            if let Some(first) = scope.get(binding.name.as_str()).cloned().or_else(|| {
+            if let Some(first) = scope.get(&binding.name).cloned().or_else(|| {
                 self.local_scopes
                     .iter()
                     .rev()
-                    .find_map(|visible| visible.get(binding.name.as_str()).cloned())
+                    .find_map(|visible| visible.get(&binding.name).cloned())
             }) {
                 return Err(ExprLowerError::DuplicateLocalBinding {
                     name: binding.name,
@@ -3051,7 +3053,7 @@ impl<'a> ExprLowerer<'a> {
         self.local_scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name.as_str()))
+            .find_map(|scope| scope.get(name))
             .map(|def| def.id)
             .ok_or_else(|| ExprLowerError::UnknownLocalRef {
                 name: name.clone(),

@@ -92,5 +92,5 @@ use template::{ElaboratedModuleTemplate, ModuleTemplateRef, ModuleTemplateStore}
 
 /// Derive the source-facing module alias from a module path leaf.
 fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
-    ModuleAliasName::from_atom(import_path.leaf().name.atom().clone())
+    ModuleAliasName::classify(import_path.leaf().name.atom().clone())
 }

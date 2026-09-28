@@ -193,7 +193,7 @@ fn validate_assumes_arguments(
                         });
                     }
                 };
-                let name = DeclName::from_atom(atom.clone());
+                let name = DeclName::classify(atom.clone());
                 seen.insert(name.clone(), span).map_or_else(
                     || {
                         names.push(Spanned::new(name.clone(), span));

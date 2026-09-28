@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, PlotField,
-    PlotPropertyName, SlotKind, Visibility,
+    Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, PlotField, SlotKind,
+    Visibility,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
@@ -77,7 +77,7 @@ impl Parser<'_> {
         kind: &'static str,
     ) -> Result<CompositionDeclParts, ParseError> {
         let (_, start_span) = self.expect(token)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Eq)?;
 
         self.expect(Token::LBrace)?;
@@ -102,7 +102,11 @@ impl Parser<'_> {
                 plots_seen = true;
                 self.expect(Token::LBracket)?;
                 while self.lexer.peek() != Some(&Token::RBracket) {
-                    let plot_name = self.parse_any_ident()?.into_spanned::<ScopedName>();
+                    let plot_ident = self.parse_any_ident()?;
+                    let plot_name = Spanned::new(
+                        ScopedName::local(DeclName::classify(plot_ident.name.into_atom())),
+                        plot_ident.span,
+                    );
                     plot_names.push(plot_name);
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.expect(Token::Comma)?;
@@ -125,7 +129,7 @@ impl Parser<'_> {
                 let value = self.parse_expr()?;
                 let field_end = value.span;
                 fields.push(PlotField {
-                    name: field_name.into_spanned::<PlotPropertyName>(),
+                    name: field_name.classify(),
                     value,
                     span: field_start.merge(field_end),
                 });
@@ -465,7 +469,7 @@ impl Parser<'_> {
             let path = self.parse_ident_path()?;
             if self.lexer.peek() == Some(&Token::Hash) {
                 self.expect(Token::Hash)?;
-                let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                let label: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
                 let span = path.span().merge(label.span);
                 Ok(AttributeArg::IndexLabel {
                     index: path.into_spanned_name_path(),

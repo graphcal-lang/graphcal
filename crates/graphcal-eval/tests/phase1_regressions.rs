@@ -898,7 +898,9 @@ pub dag calculation {
     let graphcal_eval::eval::Value::Quantity {
         display_unit: Some(unit),
         ..
-    } = fields.get("value").expect("output value field")
+    } = fields
+        .get(&graphcal_compiler::syntax::type_name::FieldName::expect_valid("value"))
+        .expect("output value field")
     else {
         panic!("expected presented quantity field: {fields:?}");
     };

@@ -120,7 +120,7 @@ fn imported_module_target(
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
 ) -> Option<graphcal_compiler::dag_id::DagId> {
     let (root, children) = owner.segments().split_first()?;
-    let alias = ModuleAliasName::from_atom(root.clone());
+    let alias = ModuleAliasName::classify(root.clone());
     let binding = module_map.get(&alias)?;
     if binding.role != graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
         return None;
@@ -1849,7 +1849,7 @@ struct AliasResolutionOwners<'a> {
 fn add_selective_aliases_inner(
     declarations: &HashMap<DeclName, graphcal_compiler::ir::lower::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
-    public_originals: &HashSet<DeclName>,
+    public_originals: &HashSet<graphcal_compiler::syntax::names::NameAtom>,
     prefix: &ScopeSegment,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
@@ -1876,7 +1876,7 @@ fn add_selective_aliases_inner(
             import_span,
         );
 
-        if public_originals.contains(orig_name) {
+        if public_originals.contains(orig_name.atom()) {
             unfrozen.export_term_alias(local_name.clone());
         }
         if declaration.is_const {
@@ -1924,7 +1924,7 @@ pub(in crate::project_compiler) fn extract_index_binding_target(
         IndexExpr::Name(path) => path
             .value
             .as_bare()
-            .map(|name| IndexBindingTarget::Declared(IndexName::from_atom(name.clone())))
+            .map(|name| IndexBindingTarget::Declared(IndexName::classify(name.clone())))
             .ok_or_else(invalid_binding),
         IndexExpr::Finite { cardinality, .. } => {
             let normalized =

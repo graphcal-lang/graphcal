@@ -50,7 +50,7 @@ fn register_value_namespace_name(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let scoped_name = ScopedName::from(name.clone());
+    let scoped_name = ScopedName::local(DeclName::classify(name.clone()));
     if let Some(first_span) = value_names.get(&scoped_name) {
         return Err(GraphcalError::DuplicateName {
             name: name.to_string(),
@@ -907,7 +907,7 @@ fn validate_private_in_public(
             let Some(ref_name) = ref_path.as_bare() else {
                 continue;
             };
-            let ref_decl_name = DeclName::from_atom(ref_name.clone());
+            let ref_decl_name = DeclName::classify(ref_name.clone());
             if let Some((referenced, _)) = local_type_names.get(ref_name)
                 && !external_surface.is_static_explicit_export(ref_decl_name.atom())
             {

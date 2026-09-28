@@ -104,8 +104,8 @@ impl Parser<'_> {
             let name = ScopedName::qualified_path(
                 owner
                     .iter()
-                    .map(|part| ModuleAliasName::from_atom(part.name.atom().clone())),
-                DeclName::from_atom(member.name.atom().clone()),
+                    .map(|part| ModuleAliasName::classify(part.name.atom().clone())),
+                DeclName::classify(member.name.atom().clone()),
             );
             Ok(Spanned::new(name, at.merge(path.span())))
         })?;
@@ -120,7 +120,7 @@ impl Parser<'_> {
 
     pub(super) fn parse_assert(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Assert)?;
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Eq)?;
         let first_expr = self.parse_expr()?;
 

@@ -754,7 +754,7 @@ impl ModuleSymbols {
         constness: UnitConstness,
         namespace_name: &'static str,
     ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.units.get(name.value.as_str()) {
+        if let Some(first) = self.units.get(&name.value) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
                 namespace: namespace_name,
@@ -780,7 +780,7 @@ impl ModuleSymbols {
         namespace_name: &'static str,
         generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.struct_types.get(name.value.as_str()) {
+        if let Some(first) = self.struct_types.get(&name.value) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
                 namespace: namespace_name,
@@ -807,7 +807,7 @@ impl ModuleSymbols {
         namespace_name: &'static str,
         generic_params: Vec<GenericParamSignature>,
     ) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.constructors.get(name.value.as_str()) {
+        if let Some(first) = self.constructors.get(&name.value) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
                 namespace: namespace_name,
@@ -828,7 +828,7 @@ impl ModuleSymbols {
     }
 
     fn insert_index(&mut self, index: &ast::IndexDecl) -> Result<(), ModuleResolveError> {
-        if let Some(first) = self.indexes.get(index.name.value.as_str()) {
+        if let Some(first) = self.indexes.get(&index.name.value) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
                 namespace: IndexNameNamespace::DISPLAY_NAME,
@@ -876,7 +876,7 @@ fn insert_symbol<Ns: NameNamespace>(
     visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(name.value.as_str()) {
+    if let Some(first) = map.get(&name.value) {
         return Err(ModuleResolveError::DuplicateSymbol {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -900,7 +900,7 @@ fn insert_decl_symbol(
     namespace_name: &'static str,
     kind: DeclSymbolKind,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(name.value.as_str()) {
+    if let Some(first) = map.get(&name.value) {
         return Err(ModuleResolveError::DuplicateSymbol {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -1412,7 +1412,7 @@ impl ModuleResolver {
         self.scopes
             .get(owner)?
             .module_aliases
-            .get(alias.as_str())
+            .get(alias)
             .map(ModuleAliasTarget::role)
     }
 
@@ -1421,7 +1421,11 @@ impl ModuleResolver {
     /// Plugin imports are file-level declarations; inline `dag` children see
     /// the enclosing file's aliases, so the lookup walks up the owner chain.
     #[must_use]
-    pub(crate) fn plugin_alias(&self, owner: &DagId, alias: &str) -> Option<&PluginAliasTarget> {
+    pub(crate) fn plugin_alias(
+        &self,
+        owner: &DagId,
+        alias: &ModuleAliasName,
+    ) -> Option<&PluginAliasTarget> {
         let mut current = Some(owner.clone());
         while let Some(id) = current {
             if let Some(target) = self
@@ -1823,7 +1827,7 @@ impl ModuleResolver {
             let source = item.name.name.clone();
             match item.namespace {
                 ImportItemNamespace::Type => {
-                    let source_name = StructTypeName::from_atom(source.into_atom());
+                    let source_name = StructTypeName::classify(source.into_atom());
                     if binding_path.is_none() && has_static_bindings {
                         let Some(target) = source_target else {
                             continue;
@@ -1838,7 +1842,7 @@ impl ModuleResolver {
                                 name: source_name.to_string(),
                             })?;
                         let generic_params = source_symbol.generic_params.clone();
-                        let local_name = StructTypeName::from_atom(local);
+                        let local_name = StructTypeName::classify(local);
                         self.scopes
                             .get_mut(owner)
                             .ok_or_else(|| ModuleResolveError::UnknownModule {
@@ -1884,7 +1888,7 @@ impl ModuleResolver {
                         })?
                         .selected_struct_types
                         .insert(
-                            StructTypeName::from_atom(local),
+                            StructTypeName::classify(local),
                             ImportedSymbol::new(resolved, item.local_span(), visibility),
                         );
                 }
@@ -1894,7 +1898,7 @@ impl ModuleResolver {
                         // ports (`QR = Q / Time`) is specialized by this
                         // include, so the projection is the importer's own
                         // declaration rather than the template's identity.
-                        let local_name = DimName::from_atom(local);
+                        let local_name = DimName::classify(local);
                         self.scopes
                             .get_mut(owner)
                             .ok_or_else(|| ModuleResolveError::UnknownModule {
@@ -1922,7 +1926,7 @@ impl ModuleResolver {
                             };
                             ResolvedDimName::from_def(
                                 target.clone(),
-                                DimName::from_atom(source.into_atom()),
+                                DimName::classify(source.into_atom()),
                             )
                         }
                     };
@@ -1933,13 +1937,13 @@ impl ModuleResolver {
                         })?
                         .selected_dimensions
                         .insert(
-                            DimName::from_atom(local),
+                            DimName::classify(local),
                             ImportedSymbol::new(resolved, item.local_span(), visibility),
                         );
                 }
                 ImportItemNamespace::Index => {
                     if binding.is_some() && binding_path.is_none() {
-                        let local = IndexName::from_atom(local);
+                        let local = IndexName::classify(local);
                         self.modules
                             .get_mut(owner)
                             .ok_or_else(|| ModuleResolveError::UnknownModule {
@@ -1968,7 +1972,7 @@ impl ModuleResolver {
                             };
                             ResolvedIndexName::from_def(
                                 target.clone(),
-                                IndexName::from_atom(source.into_atom()),
+                                IndexName::classify(source.into_atom()),
                             )
                         }
                     };
@@ -1979,7 +1983,7 @@ impl ModuleResolver {
                         })?
                         .selected_indexes
                         .insert(
-                            IndexName::from_atom(local),
+                            IndexName::classify(local),
                             ImportedSymbol::new(resolved, item.local_span(), visibility),
                         );
                 }
@@ -1989,7 +1993,7 @@ impl ModuleResolver {
                     };
                     let resolved = ResolvedUnitName::from_def(
                         target.clone(),
-                        UnitName::from_atom(source.into_atom()),
+                        UnitName::classify(source.into_atom()),
                     );
                     self.scopes
                         .get_mut(owner)
@@ -1998,7 +2002,7 @@ impl ModuleResolver {
                         })?
                         .selected_units
                         .insert(
-                            UnitName::from_atom(local),
+                            UnitName::classify(local),
                             ImportedSymbol::new(resolved, item.local_span(), visibility),
                         );
                 }
@@ -2007,7 +2011,7 @@ impl ModuleResolver {
                         continue;
                     };
                     let source_constructor =
-                        ConstructorName::from_atom(item.name.name.atom().clone());
+                        ConstructorName::classify(item.name.name.atom().clone());
                     let resolved = match self.exported_symbol_for_import(
                         source_target,
                         source_constructor.atom(),
@@ -2064,9 +2068,7 @@ impl ModuleResolver {
                                         visibility,
                                         span: item.local_span(),
                                     },
-                                    owner_type: StructTypeName::from_atom(
-                                        owner_type.atom().clone(),
-                                    ),
+                                    owner_type: owner_type.to_unowned_def_name(),
                                     generic_params: source_symbol.generic_params,
                                 },
                             );
@@ -2079,7 +2081,7 @@ impl ModuleResolver {
                             owner: owner.clone(),
                         }
                     })?;
-                    let local = ConstructorName::from_atom(local);
+                    let local = ConstructorName::classify(local);
                     let (span, visibility) = scope.selected_constructors.get(&local).map_or_else(
                         || (item.local_span(), visibility),
                         |existing| (existing.span(), existing.visibility()),
@@ -2168,10 +2170,10 @@ impl ModuleResolver {
         name: &ResolvedDeclName,
     ) -> Result<DeclSymbolKind, ModuleResolveError> {
         let symbols = self.module_symbols(name.owner())?;
-        let def_name = DeclName::from_atom(name.atom().clone());
+        let def_name = name.to_unowned_def_name();
         symbols
             .decls
-            .get(def_name.as_str())
+            .get(&def_name)
             .map(ModuleDeclSymbol::kind)
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
@@ -2184,7 +2186,7 @@ impl ModuleResolver {
         let symbols = self.module_symbols(name.owner())?;
         symbols
             .units
-            .get(name.as_str())
+            .get(&name.to_unowned_def_name())
             .map(ModuleUnitSymbol::constness)
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
@@ -2200,7 +2202,7 @@ impl ModuleResolver {
         let symbols = self.module_symbols(name.owner())?;
         symbols
             .constructors
-            .get(name.as_str())
+            .get(&name.to_unowned_def_name())
             .map(|constructor| {
                 ResolvedStructTypeName::from_def(
                     name.owner().clone(),
@@ -2223,10 +2225,10 @@ impl ModuleResolver {
         name: &ResolvedDeclName,
     ) -> Result<bool, ModuleResolveError> {
         let symbols = self.module_symbols(name.owner())?;
-        let def_name = DeclName::from_atom(name.atom().clone());
+        let def_name = name.to_unowned_def_name();
         symbols
             .decls
-            .get(def_name.as_str())
+            .get(&def_name)
             .map(|symbol| symbol.kind() == DeclSymbolKind::Param || symbol.visibility().is_public())
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
@@ -2276,7 +2278,7 @@ impl ModuleResolver {
         let symbols = self.module_symbols(name.owner())?;
         symbols
             .struct_types
-            .get(name.as_str())
+            .get(&name.to_unowned_def_name())
             .map(ModuleTypeSymbol::generic_params)
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
@@ -2304,7 +2306,7 @@ impl ModuleResolver {
         let symbols = self.module_symbols(name.owner())?;
         symbols
             .constructors
-            .get(name.as_str())
+            .get(&name.to_unowned_def_name())
             .map(ModuleConstructorSymbol::generic_params)
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
@@ -2397,17 +2399,16 @@ impl ModuleResolver {
     ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
         let resolved_index = self.resolve_index_path(owner, index_path)?;
         let index_owner = resolved_index.owner().clone();
-        let index_name = IndexName::from_atom(resolved_index.atom().clone());
+        let index_name = resolved_index.to_unowned_def_name();
         let target_symbols = self.module_symbols(&index_owner)?;
-        let index_symbol = target_symbols
-            .indexes
-            .get(index_name.as_str())
-            .ok_or_else(|| ModuleResolveError::UnknownName {
+        let index_symbol = target_symbols.indexes.get(&index_name).ok_or_else(|| {
+            ModuleResolveError::UnknownName {
                 owner: index_owner.clone(),
                 namespace: IndexNameNamespace::DISPLAY_NAME,
                 name: index_name.to_string(),
-            })?;
-        if !index_symbol.variants.contains_key(variant.as_str()) {
+            }
+        })?;
+        if !index_symbol.variants.contains_key(variant) {
             return Err(ModuleResolveError::UnknownIndexVariant {
                 index: resolved_index,
                 variant: variant.clone(),
@@ -2437,7 +2438,7 @@ impl ModuleResolver {
         let declared_dag_child = |parent: &DagId| {
             self.modules
                 .get(parent)
-                .and_then(|symbols| symbols.decls.get(head.as_str()))
+                .and_then(|symbols| symbols.decls.get(&NameDef::classify(head.atom().clone())))
                 .filter(|symbol| symbol.kind() == DeclSymbolKind::Dag)
                 .map(|_| parent.child(head.as_str()))
                 .filter(|child| self.modules.contains_key(child))
@@ -2449,13 +2450,13 @@ impl ModuleResolver {
         });
 
         let scope = self.module_scope(owner)?;
-        let alias = ModuleAliasName::from_atom(head.atom().clone());
-        let alias_binding = scope.module_aliases.get(alias.as_str());
+        let alias = ModuleAliasName::classify(head.atom().clone());
+        let alias_binding = scope.module_aliases.get(&alias);
         let imported_alias_target = alias_binding
             .filter(|binding| binding.role.is_callable())
             .map(|binding| (binding.target.clone(), binding.access));
-        let selected_name = DeclName::from_atom(head.atom().clone());
-        let selected_target = match scope.selected_decls.get(selected_name.as_str()) {
+        let selected_name = DeclName::classify(head.atom().clone());
+        let selected_target = match scope.selected_decls.get(&selected_name) {
             Some(imported)
                 if self.decl_symbol_kind(imported.resolved())? == DeclSymbolKind::Dag =>
             {
@@ -2546,7 +2547,7 @@ impl ModuleResolver {
             ImportKind::Module { alias } => {
                 let alias = alias.clone().unwrap_or_else(|| {
                     Spanned::new(
-                        ModuleAliasName::from_atom(path.leaf().name.atom().clone()),
+                        ModuleAliasName::classify(path.leaf().name.atom().clone()),
                         path.leaf().span,
                     )
                 });
@@ -2716,7 +2717,7 @@ impl ModuleResolver {
                 )?;
                 ImportAddition::StructType {
                     local: Spanned::new(
-                        StructTypeName::from_atom(local_atom.into_atom()),
+                        StructTypeName::classify(local_atom.into_atom()),
                         local_span,
                     ),
                     target: target_name,
@@ -2735,7 +2736,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Dimension {
-                    local: Spanned::new(DimName::from_atom(local_atom.into_atom()), local_span),
+                    local: Spanned::new(DimName::classify(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2752,7 +2753,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Unit {
-                    local: Spanned::new(UnitName::from_atom(local_atom.into_atom()), local_span),
+                    local: Spanned::new(UnitName::classify(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2769,7 +2770,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Index {
-                    local: Spanned::new(IndexName::from_atom(local_atom.into_atom()), local_span),
+                    local: Spanned::new(IndexName::classify(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2799,7 +2800,7 @@ impl ModuleResolver {
             |scope| &scope.selected_decls,
         )? {
             ExportLookup::Public(target_name) => additions.push(ImportAddition::Decl {
-                local: Spanned::new(DeclName::from_atom(local_atom.clone()), local_span),
+                local: Spanned::new(DeclName::classify(local_atom.clone()), local_span),
                 target: target_name,
                 visibility,
             }),
@@ -2814,7 +2815,7 @@ impl ModuleResolver {
             |scope| &scope.selected_constructors,
         )? {
             ExportLookup::Public(target_name) => additions.push(ImportAddition::Constructor {
-                local: Spanned::new(ConstructorName::from_atom(local_atom), local_span),
+                local: Spanned::new(ConstructorName::classify(local_atom), local_span),
                 target: target_name,
                 visibility,
             }),
@@ -2998,12 +2999,13 @@ impl ModuleResolver {
         S: ModuleSymbolLookup<Ns>,
     {
         if let Some(atom) = path.as_bare() {
+            let name = NameDef::<Ns>::classify(atom.clone());
             let local = self.module_symbols(owner)?;
-            if let Some(symbol) = local_symbols(local).get(atom.as_str()) {
+            if let Some(symbol) = local_symbols(local).get(&name) {
                 return Ok(symbol.resolved().clone());
             }
             let scope = self.module_scope(owner)?;
-            if let Some(imported) = selected_symbols(scope).get(atom.as_str()) {
+            if let Some(imported) = selected_symbols(scope).get(&name) {
                 return Ok(imported.resolved().clone());
             }
             if let Some(actual) =
@@ -3026,7 +3028,8 @@ impl ModuleResolver {
         let (qualifier, leaf) = path.split_last();
         let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
-        if let Some(symbol) = local_symbols(target).get(leaf.as_str()) {
+        let leaf_name = NameDef::<Ns>::classify(leaf.clone());
+        if let Some(symbol) = local_symbols(target).get(&leaf_name) {
             if target_ref.access.requires_public() && !symbol.visibility().is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: target_ref.owner,
@@ -3038,7 +3041,7 @@ impl ModuleResolver {
         }
 
         let target_scope = self.module_scope(&target_ref.owner)?;
-        if let Some(imported) = selected_symbols(target_scope).get(leaf.as_str()) {
+        if let Some(imported) = selected_symbols(target_scope).get(&leaf_name) {
             if target_ref.access.requires_public() && !imported.visibility().is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: target_ref.owner,
@@ -3118,8 +3121,8 @@ impl ModuleResolver {
             });
         };
         let scope = self.module_scope(owner)?;
-        let alias = ModuleAliasName::from_atom(head.clone());
-        let alias_target = scope.module_aliases.get(alias.as_str()).ok_or_else(|| {
+        let alias = ModuleAliasName::classify(head.clone());
+        let alias_target = scope.module_aliases.get(&alias).ok_or_else(|| {
             ModuleResolveError::UnknownModuleAlias {
                 owner: owner.clone(),
                 alias,
@@ -3136,7 +3139,7 @@ impl ModuleResolver {
             let nested_alias = self
                 .module_scope(&target)?
                 .module_aliases
-                .get(segment.as_str());
+                .get(&NameDef::classify(segment.clone()));
             if let Some(nested_alias) = nested_alias {
                 if alias_target.access.requires_public() && !nested_alias.visibility().is_public() {
                     return Err(ModuleResolveError::PrivateName {
@@ -3191,36 +3194,36 @@ impl ModuleResolver {
         let scope = self.module_scope(owner)?;
         Ok(local
             .dimensions
-            .get(name.as_str())
+            .get(&NameDef::classify(name.clone()))
             .map(ModuleSymbolLookup::span)
             .or_else(|| {
                 local
                     .struct_types
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ModuleSymbolLookup::span)
             })
             .or_else(|| {
                 local
                     .indexes
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ModuleSymbolLookup::span)
             })
             .or_else(|| {
                 scope
                     .selected_dimensions
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ImportedSymbol::span)
             })
             .or_else(|| {
                 scope
                     .selected_struct_types
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ImportedSymbol::span)
             })
             .or_else(|| {
                 scope
                     .selected_indexes
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ImportedSymbol::span)
             }))
     }
@@ -3235,36 +3238,36 @@ impl ModuleResolver {
         let scope = self.module_scope(owner)?;
         Ok(local
             .decls
-            .get(name.as_str())
+            .get(&NameDef::classify(name.clone()))
             .map(ModuleDeclSymbol::span)
             .or_else(|| {
                 local
                     .constructors
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ModuleSymbolLookup::span)
             })
             .or_else(|| {
                 scope
                     .selected_decls
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ImportedSymbol::span)
             })
             .or_else(|| {
                 scope
                     .selected_constructors
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ImportedSymbol::span)
             })
             .or_else(|| {
                 scope
                     .module_aliases
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(ModuleAliasTarget::span)
             })
             .or_else(|| {
                 scope
                     .plugin_aliases
-                    .get(name.as_str())
+                    .get(&NameDef::classify(name.clone()))
                     .map(PluginAliasTarget::span)
             }))
     }
@@ -3299,7 +3302,10 @@ impl ModuleResolver {
             let Some(symbol) = child
                 .leaf()
                 .spelling()
-                .and_then(|name| parent_symbols.decls.get(name))
+                // `DagSegment` spells source modules as text; classify the
+                // leaf into the declaration namespace at this boundary.
+                .and_then(|name| DeclName::try_new(name).ok())
+                .and_then(|name| parent_symbols.decls.get(&name))
             else {
                 // Synthetic include namespaces have a semantic parent but no
                 // source `dag` declaration on that edge.
@@ -3340,7 +3346,7 @@ impl ModuleScope {
             } => {
                 // Module aliases and plugin aliases share one qualifier
                 // namespace: `alias.name` must have a single meaning.
-                if let Some(first) = self.plugin_aliases.get(alias.value.as_str()) {
+                if let Some(first) = self.plugin_aliases.get(&alias.value) {
                     return Err(ModuleResolveError::DuplicateImportName {
                         owner: owner.clone(),
                         namespace: ModuleAliasNameNamespace::DISPLAY_NAME,
@@ -3450,7 +3456,7 @@ fn insert_module_alias(
     visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(alias.value.as_str()) {
+    if let Some(first) = map.get(&alias.value) {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -3491,18 +3497,18 @@ fn register_plugin_imports(
         let alias_atom = plugin.alias.value.atom();
         let local_term_span = symbols
             .decls
-            .get(alias_atom.as_str())
+            .get(&NameDef::classify(alias_atom.clone()))
             .map(ModuleDeclSymbol::span)
             .or_else(|| {
                 symbols
                     .constructors
-                    .get(alias_atom.as_str())
+                    .get(&NameDef::classify(alias_atom.clone()))
                     .map(ModuleSymbolLookup::span)
             });
         if let Some(first) = local_term_span.or_else(|| {
             scope
                 .plugin_aliases
-                .get(plugin.alias.value.as_str())
+                .get(&plugin.alias.value)
                 .map(PluginAliasTarget::span)
         }) {
             return Err(ModuleResolveError::DuplicateImportName {
@@ -3548,7 +3554,7 @@ fn surface_kind_in_local_symbols(
 ) -> Option<SurfaceNameKind> {
     macro_rules! probe {
         ($map:expr, $kind:expr) => {
-            if let Some(symbol) = $map.get(atom.as_str())
+            if let Some(symbol) = $map.get(&NameDef::classify(atom.clone()))
                 && (!requires_public || symbol.visibility().is_public())
             {
                 return Some($kind);
@@ -3579,7 +3585,7 @@ fn surface_kind_in_scope(
 ) -> Option<SurfaceNameKind> {
     macro_rules! probe {
         ($map:expr, $kind:expr) => {
-            if let Some(symbol) = $map.get(atom.as_str())
+            if let Some(symbol) = $map.get(&NameDef::classify(atom.clone()))
                 && (!requires_public || symbol.visibility().is_public())
             {
                 return Some($kind);
@@ -3715,7 +3721,7 @@ where
     Ns: NameNamespace,
     S: ModuleSymbolLookup<Ns>,
 {
-    if let Some(first) = local.get(name.value.as_str()) {
+    if let Some(first) = local.get(&name.value) {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -3724,7 +3730,7 @@ where
             duplicate: name.span,
         });
     }
-    if let Some(first) = selected.get(name.value.as_str()) {
+    if let Some(first) = selected.get(&name.value) {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -3769,7 +3775,7 @@ fn insert_imported_symbol<Ns: NameNamespace>(
     visibility: BindableVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = map.get(local.value.as_str()) {
+    if let Some(first) = map.get(&local.value) {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
             namespace: namespace_name,
@@ -3801,7 +3807,7 @@ where
     Ns: NameNamespace,
     S: ModuleSymbolLookup<Ns>,
 {
-    map.get(atom.as_str())
+    map.get(&NameDef::classify(atom.clone()))
         .map_or(ExportLookup::Missing, |symbol| {
             if !access.requires_public() || symbol.visibility().is_public() {
                 ExportLookup::Public(symbol.resolved().clone())
@@ -4086,8 +4092,16 @@ mod tests {
 
         let symbols = ModuleSymbols::from_declarations(owner, &file.declarations).unwrap();
 
-        assert!(symbols.struct_types().contains_key("T"));
-        assert!(symbols.constructors().contains_key("T"));
+        assert!(
+            symbols
+                .struct_types()
+                .contains_key(&StructTypeName::expect_valid("T"))
+        );
+        assert!(
+            symbols
+                .constructors()
+                .contains_key(&ConstructorName::expect_valid("T"))
+        );
     }
 
     #[test]

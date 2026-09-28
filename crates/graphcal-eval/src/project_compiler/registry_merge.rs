@@ -337,7 +337,7 @@ fn merge_registry_into_builder_filtered(
         builder.import_base_dimension(id.clone(), info);
         let dimension_name = id.source_name();
         if module_alias.is_some()
-            || dim_bindings.contains_key(dimension_name.as_str())
+            || dim_bindings.contains_key(&dimension_name)
             || pure_import_rejects(dimension_name.atom(), ImportItemNamespace::Dimension)
             || builder
                 .get_dimension(&DimRef::local(dimension_name.clone()))
@@ -357,7 +357,7 @@ fn merge_registry_into_builder_filtered(
     // dimension scope unchanged.
     for (reference, dim) in dep_registry.dimensions.all_dimensions() {
         let name = reference.name();
-        if (!reference.is_qualified() && dim_bindings.contains_key(name.as_str()))
+        if (!reference.is_qualified() && dim_bindings.contains_key(name))
             || pure_import_rejects(name.atom(), ImportItemNamespace::Dimension)
         {
             continue;
@@ -453,7 +453,7 @@ fn merge_registry_into_builder_filtered(
         {
             continue;
         }
-        if !index_bindings.contains_key(name.as_str()) {
+        if !index_bindings.contains_key(name) {
             if external_surface
                 .is_some_and(|surface| !surface.is_static_explicit_export(name.atom()))
             {
@@ -470,7 +470,7 @@ fn merge_registry_into_builder_filtered(
 
     // Import struct types — skip bound types (they are replaced by the importer's type).
     for type_def in dep_registry.types.all_types() {
-        if type_bindings.contains_key(type_def.name().as_str())
+        if type_bindings.contains_key(type_def.name())
             || pure_import_rejects(type_def.name().atom(), ImportItemNamespace::Type)
         {
             continue;

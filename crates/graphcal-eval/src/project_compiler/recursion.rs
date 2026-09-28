@@ -68,7 +68,7 @@ pub(in crate::project_compiler) fn check_dag_recursion(
             if let DeclKind::Include(inc) = &decl.kind
                 && inc.path.segments.len() == 1
             {
-                let target = DeclName::from_atom(inc.path.segments[0].name.atom().clone());
+                let target = DeclName::classify(inc.path.segments[0].name.atom().clone());
                 if let Some((target_name, _)) = dag_definitions.get_key_value(&target) {
                     includes.push(target_name);
                 }

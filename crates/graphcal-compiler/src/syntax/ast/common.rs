@@ -2,7 +2,7 @@ use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::names::{NameAtom, NamePath};
+use crate::syntax::names::{NameDef, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::SourceIdentifier;
@@ -274,15 +274,16 @@ pub struct Ident {
 }
 
 impl Ident {
-    /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
+    /// Classify this identifier into the namespace fixed by its grammar
+    /// position, consuming the name and span.
     #[must_use]
-    pub(crate) fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
-        Spanned::new(T::from(self.name.into_atom()), self.span)
+    pub(crate) fn classify<Ns: NameNamespace>(self) -> Spanned<NameDef<Ns>> {
+        Spanned::new(NameDef::classify(self.name.into_atom()), self.span)
     }
 
     /// Interpret this identifier as a generic parameter name.
     #[must_use]
     pub(crate) fn as_generic_param_name(&self) -> GenericParamName {
-        GenericParamName::from_atom(self.name.atom().clone())
+        GenericParamName::classify(self.name.atom().clone())
     }
 }

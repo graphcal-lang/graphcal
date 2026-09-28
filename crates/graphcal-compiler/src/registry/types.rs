@@ -799,6 +799,12 @@ mod tests {
         assert!(def.is_union());
         let fields = def.record_fields().expect("single-variant collision");
         assert_eq!(fields.len(), 2);
+        assert_eq!(
+            def.record_member().map(UnionMemberDef::name),
+            Some(&crate::syntax::type_name::record_constructor_name(
+                def.name()
+            ))
+        );
         assert_eq!(fields[0].name().as_str(), "dv1");
         assert_eq!(
             r.dimensions.resolve_type_expr(fields[0].type_ann()),

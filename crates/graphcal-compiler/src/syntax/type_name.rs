@@ -53,5 +53,15 @@ pub type ConstructorName = NameDef<ConstructorNameNamespace>;
 /// Module-resolved tagged-union constructor name.
 pub type ResolvedConstructorName = ResolvedName<ConstructorNameNamespace>;
 
+/// The sole constructor a record-shaped type introduces.
+///
+/// A record type `type T { T(..) }` spells its constructor with the type's own
+/// leaf; this is the one language rule that relates the type and constructor
+/// namespaces, so it is the only conversion between them.
+#[must_use]
+pub fn record_constructor_name(type_name: &StructTypeName) -> ConstructorName {
+    ConstructorName::classify(type_name.atom().clone())
+}
+
 /// Name of a generic type parameter (e.g., `"D"`, `"I"`).
 pub type GenericParamName = NameDef<GenericParamNameNamespace>;

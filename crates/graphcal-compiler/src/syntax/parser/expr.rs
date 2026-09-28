@@ -134,7 +134,7 @@ impl Parser<'_> {
     /// `field: expr`. Used inside the paren-form `Ctor(field: expr, ...)`.
     fn parse_named_field_init(&mut self) -> Result<FieldInit, ParseError> {
         let ident = self.parse_any_ident()?;
-        let name = ident.into_spanned::<FieldName>();
+        let name: Spanned<FieldName> = ident.classify();
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         Ok(FieldInit { name, value })
@@ -424,7 +424,7 @@ impl Parser<'_> {
                     expr = Expr::new(
                         ExprKind::FieldAccess {
                             expr: Box::new(expr),
-                            field: field_ident.into_spanned::<FieldName>(),
+                            field: field_ident.classify(),
                         },
                         span,
                     );
@@ -563,7 +563,7 @@ impl Parser<'_> {
         let terminator = probe.peek().copied();
         if !matches!(terminator, Some(Token::LParen | Token::DoubleColon)) {
             let span = at_span.merge(first.span);
-            let name = ScopedName::from(DeclName::from_atom(first.name.into_atom()));
+            let name = ScopedName::from(DeclName::classify(first.name.into_atom()));
             return Ok(Expr::new(
                 ExprKind::GraphRef(Spanned::new(name, span)),
                 span,
@@ -585,9 +585,9 @@ impl Parser<'_> {
         let member_span = member.span;
         let scoped = ScopedName::qualified_path(
             namespace.into_iter().map(|segment| {
-                crate::syntax::module_name::ModuleAliasName::from_atom(segment.name.into_atom())
+                crate::syntax::module_name::ModuleAliasName::classify(segment.name.into_atom())
             }),
-            DeclName::from_atom(member.name.into_atom()),
+            DeclName::classify(member.name.into_atom()),
         );
         Ok(Expr::new(
             ExprKind::GraphRef(Spanned::new(scoped, at_span.merge(member_span))),
@@ -635,7 +635,7 @@ impl Parser<'_> {
             ExprKind::InlineDagRef {
                 path,
                 args,
-                output: output.into_spanned::<DeclName>(),
+                output: output.classify(),
             },
             span,
         ))
@@ -730,7 +730,7 @@ impl Parser<'_> {
 
         if self.lexer.peek() == Some(&Token::Hash) {
             self.lexer.next_token();
-            let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let label: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
             let span = path.span().merge(label.span);
             return Ok(Expr::new(
                 ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel {
@@ -829,7 +829,7 @@ impl Parser<'_> {
         let index = self.parse_ident_path()?;
         let index_span = index.span();
         self.expect(Token::Hash)?;
-        let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+        let variant: Spanned<IndexVariantName> = self.parse_any_ident()?.classify();
         let full_span = index_span.merge(variant.span);
         Ok((index.into_spanned_name_path(), variant, full_span))
     }
@@ -1182,7 +1182,7 @@ mod tests {
             DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(
-                        matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.member() == "speed")
+                        matches!(&expr.kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "speed")
                     );
                     assert_eq!(target.terms.len(), 2);
                     assert_eq!(target.terms[0].name.value.to_string(), "km");
@@ -1348,7 +1348,9 @@ mod tests {
     fn parse_graph_ref() {
         let expr = parse_node_expr("@x + 1.0");
         if let ExprKind::BinOp { lhs, .. } = &expr.kind {
-            assert!(matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member() == "x"));
+            assert!(
+                matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "x")
+            );
         } else {
             panic!("expected BinOp");
         }
@@ -1374,7 +1376,9 @@ mod tests {
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
             assert_eq!(callee.as_bare().unwrap().name.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
-            assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.member() == "x"));
+            assert!(
+                matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "x")
+            );
         } else {
             panic!("expected FnCall");
         }
@@ -1610,7 +1614,7 @@ mod tests {
             ));
             assert!(matches!(
                 &then_branch.kind,
-                ExprKind::GraphRef(id) if id.value.member() == "x"
+                ExprKind::GraphRef(id) if id.value.member().as_str() == "x"
             ));
             assert!(matches!(else_branch.kind, ExprKind::Number(_)));
         } else {
@@ -1677,7 +1681,7 @@ mod tests {
         if let ExprKind::BinOp { op, lhs, rhs } = &expr.kind {
             assert_eq!(*op, BinOp::Mul);
             assert!(
-                matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member() == "v_exhaust")
+                matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "v_exhaust")
             );
             assert!(
                 matches!(&rhs.kind, ExprKind::FnCall { callee, .. } if callee.as_bare().is_some_and(|name| name.name.as_str() == "ln"))
@@ -1707,7 +1711,7 @@ mod tests {
             DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert!(
-                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.value.member() == "transfer")
+                        matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.value.member().as_str() == "transfer")
                     );
                     assert_eq!(field.value.as_str(), "dv1");
                 }
@@ -1732,7 +1736,7 @@ mod tests {
                         } => {
                             assert_eq!(mid_field.value.as_str(), "transfer");
                             assert!(
-                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.value.member() == "mission")
+                                matches!(&inner.kind, ExprKind::GraphRef(ident) if ident.value.member().as_str() == "mission")
                             );
                         }
                         other => panic!("expected inner FieldAccess, got {other:?}"),
@@ -1761,7 +1765,7 @@ mod tests {
         match &node.definition.formula().unwrap().kind {
             ExprKind::FieldAccess { expr: inner, field } => {
                 assert!(
-                    matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.member() == "stage")
+                    matches!(&inner.kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "stage")
                 );
                 assert_eq!(field.value.as_str(), "delta_v");
             }
@@ -1785,7 +1789,7 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name.as_str(), "x");
                 assert!(
-                    matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.value.member() == "p")
+                    matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.value.member().as_str() == "p")
                 );
                 assert_eq!(output.value.as_str(), "result");
             }
@@ -1868,7 +1872,7 @@ mod tests {
             ExprKind::FieldAccess { expr, field } => {
                 assert_eq!(field.value.as_str(), "altitude");
                 match &expr.kind {
-                    ExprKind::GraphRef(name) => assert_eq!(name.value.member(), "orbit"),
+                    ExprKind::GraphRef(name) => assert_eq!(name.value.member().as_str(), "orbit"),
                     other => panic!("expected inner GraphRef, got {other:?}"),
                 }
             }
@@ -1907,7 +1911,7 @@ mod tests {
         let ExprKind::GraphRef(a) = &inner.kind else {
             panic!("expected innermost GraphRef");
         };
-        assert_eq!(a.value.member(), "a");
+        assert_eq!(a.value.member().as_str(), "a");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::syntax::ast::{DagDecl, DeclKind, Declaration, Visibility};
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::span::Spanned;
 use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
@@ -12,7 +13,7 @@ impl Parser<'_> {
     pub(super) fn parse_dag_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dag)?;
 
-        let name = self.parse_any_ident()?.into_spanned::<DeclName>();
+        let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
 
         self.expect(Token::LBrace)?;
 

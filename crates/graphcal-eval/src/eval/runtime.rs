@@ -7,7 +7,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use graphcal_compiler::syntax::span::Span;
 
@@ -964,7 +964,7 @@ fn dependency_failure_message<'a>(
         deps.iter()
             .filter_map(|dep| {
                 errors.get(dep).map(|err| {
-                    let leaf = DeclName::from_atom(dep.atom().clone());
+                    let leaf = dep.atom();
                     match err {
                         NodeUnavailable::EvalFailed { message } => format!("{leaf} ({message})"),
                         NodeUnavailable::DependencyFailed { .. } => leaf.to_string(),

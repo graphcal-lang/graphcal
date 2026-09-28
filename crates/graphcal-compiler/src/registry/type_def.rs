@@ -245,13 +245,19 @@ impl TypeDef {
     /// `match`.
     #[must_use]
     pub fn record_fields(&self) -> Option<&[StructField]> {
+        self.record_member().map(UnionMemberDef::fields)
+    }
+
+    /// The sole constructor of a record-shaped type (named after the type).
+    #[must_use]
+    pub fn record_member(&self) -> Option<&UnionMemberDef> {
         let TypeDefKind::Union { members } = &self.kind else {
             return None;
         };
         let [only] = members.as_slice() else {
             return None;
         };
-        (only.name.atom() == self.name.atom()).then_some(only.fields.as_slice())
+        (only.name.atom() == self.name.atom()).then_some(only)
     }
 }
 
