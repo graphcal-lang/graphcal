@@ -9,10 +9,6 @@ use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, reso
 use crate::server::AnalysisResult;
 use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVariantId};
 use crate::symbol_table::SymbolKey;
-use graphcal_compiler::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
-    ResolvedStructTypeName, ResolvedUnitName,
-};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::function_name::FnName;
@@ -186,30 +182,22 @@ impl std::fmt::Display for RenameRefusal {
 /// the renamed symbol's own namespace/scope.
 fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
     Some(match key {
-        SymbolKey::Declaration(name) => SymbolKey::Declaration(ResolvedDeclName::from_def(
-            name.owner().clone(),
-            DeclName::expect_valid(new_name),
-        )),
-        SymbolKey::Dimension(name) => SymbolKey::Dimension(ResolvedDimName::from_def(
-            name.owner().clone(),
-            DimName::expect_valid(new_name),
-        )),
-        SymbolKey::Unit(name) => SymbolKey::Unit(ResolvedUnitName::from_def(
-            name.owner().clone(),
-            UnitName::expect_valid(new_name),
-        )),
-        SymbolKey::StructType(name) => SymbolKey::StructType(ResolvedStructTypeName::from_def(
-            name.owner().clone(),
-            StructTypeName::expect_valid(new_name),
-        )),
-        SymbolKey::Constructor(name) => SymbolKey::Constructor(ResolvedConstructorName::from_def(
-            name.owner().clone(),
-            ConstructorName::expect_valid(new_name),
-        )),
-        SymbolKey::Index(name) => SymbolKey::Index(ResolvedIndexName::from_def(
-            name.owner().clone(),
-            IndexName::expect_valid(new_name),
-        )),
+        SymbolKey::Declaration(name) => {
+            SymbolKey::Declaration(name.with_leaf(DeclName::expect_valid(new_name)))
+        }
+        SymbolKey::Dimension(name) => {
+            SymbolKey::Dimension(name.with_leaf(DimName::expect_valid(new_name)))
+        }
+        SymbolKey::Unit(name) => SymbolKey::Unit(name.with_leaf(UnitName::expect_valid(new_name))),
+        SymbolKey::StructType(name) => {
+            SymbolKey::StructType(name.with_leaf(StructTypeName::expect_valid(new_name)))
+        }
+        SymbolKey::Constructor(name) => {
+            SymbolKey::Constructor(name.with_leaf(ConstructorName::expect_valid(new_name)))
+        }
+        SymbolKey::Index(name) => {
+            SymbolKey::Index(name.with_leaf(IndexName::expect_valid(new_name)))
+        }
         SymbolKey::IndexVariant(variant) => SymbolKey::IndexVariant(IndexVariantId::new(
             variant.index().clone(),
             IndexVariantName::expect_valid(new_name),

@@ -7,7 +7,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
     InstanceAssertionProjection, InstanceBindingEnvironment, InstanceIndexBindingTarget,
     InstancePlotProjection, InstanceRecord, InstanceValueProjection, StaticSpecializationId,
-    StaticSubstitution,
+    StaticSubstitution, instance_declaration, template_declaration,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::resolved_name::{
@@ -909,9 +909,8 @@ struct SemanticStaticBindings {
 fn semantic_value_bindings(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    instance_owner: &graphcal_compiler::dag_id::DagId,
+    instance: &graphcal_compiler::dag_id::InstanceId,
 ) -> SemanticValueBindings {
-    let template_id = &request.template.dag_id;
     let ports = template
         .source_order
         .iter()
@@ -923,20 +922,15 @@ fn semantic_value_bindings(
         })
         .map(|(name, _)| {
             (
-                ResolvedDeclName::from_def(template_id.clone(), name.leaf().clone()),
-                ResolvedDeclName::from_def(instance_owner.clone(), name.leaf().clone()),
+                template_declaration(instance, name.leaf().clone()),
+                instance_declaration(instance, name.leaf().clone()),
             )
         })
         .collect();
     let values = request
         .bindings
         .iter()
-        .map(|(name, expr)| {
-            (
-                ResolvedDeclName::from_def(template_id.clone(), name.clone()),
-                expr.clone(),
-            )
-        })
+        .map(|(name, expr)| (template_declaration(instance, name.clone()), expr.clone()))
         .collect::<HashMap<_, _>>();
     let explicitly_bound = values.keys().cloned().collect();
     SemanticValueBindings {
@@ -1140,7 +1134,10 @@ fn semantic_static_bindings(
     })
 }
 
-fn semantic_output_projections(request: &IncludeInstanceRequest) -> Vec<InstanceValueProjection> {
+fn semantic_output_projections(
+    request: &IncludeInstanceRequest,
+    instance: &graphcal_compiler::dag_id::InstanceId,
+) -> Vec<InstanceValueProjection> {
     request
         .surface_outputs
         .iter()
@@ -1156,7 +1153,7 @@ fn semantic_output_projections(request: &IncludeInstanceRequest) -> Vec<Instance
                 })
                 .unwrap_or_else(|| exposed_name.leaf().clone());
             InstanceValueProjection {
-                target: ResolvedDeclName::from_def(request.template.dag_id.clone(), source_name),
+                target: template_declaration(instance, source_name),
                 exposed_name: exposed_name.clone(),
             }
         })
@@ -1166,6 +1163,7 @@ fn semantic_output_projections(request: &IncludeInstanceRequest) -> Vec<Instance
 fn semantic_assertion_projections(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
+    instance: &graphcal_compiler::dag_id::InstanceId,
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
@@ -1176,10 +1174,7 @@ fn semantic_assertion_projections(
             .iter()
             .map(|(source, exposed)| {
                 Ok(InstanceAssertionProjection {
-                    target: ResolvedDeclName::from_def(
-                        request.template.dag_id.clone(),
-                        source.clone(),
-                    ),
+                    target: template_declaration(instance, source.clone()),
                     exposed_name: ScopedName::local(exposed.clone()),
                     expected_fail: resolve_projection_expected_fail(
                         request,
@@ -1195,7 +1190,7 @@ fn semantic_assertion_projections(
             .assertion_names()
             .into_iter()
             .map(|name| InstanceAssertionProjection {
-                target: ResolvedDeclName::from_def(request.template.dag_id.clone(), name.clone()),
+                target: template_declaration(instance, name.clone()),
                 exposed_name: ScopedName::in_scope(request.instance_scope.clone(), name),
                 expected_fail: None,
             })
@@ -1246,7 +1241,7 @@ fn record_semantic_instance(
         template_id.clone(),
     );
     let instance_owner = instance_id.owner().clone();
-    let value_bindings = semantic_value_bindings(request, template, &instance_owner);
+    let value_bindings = semantic_value_bindings(request, template, &instance_id);
     let static_bindings =
         semantic_static_bindings(request, template, importer, module_resolver, src)?;
     let specialization = StaticSpecializationId::new(
@@ -1269,9 +1264,15 @@ fn record_semantic_instance(
                 .collect(),
         },
     );
-    let output_projections = semantic_output_projections(request);
-    let assertion_projections =
-        semantic_assertion_projections(request, template, importer, module_resolver, src)?;
+    let output_projections = semantic_output_projections(request, &instance_id);
+    let assertion_projections = semantic_assertion_projections(
+        request,
+        template,
+        &instance_id,
+        importer,
+        module_resolver,
+        src,
+    )?;
     let plot_projections = semantic_plot_projections(request, template, src)?;
     unfrozen.add_semantic_dynamic_unit_bindings(
         &request.runtime_unit_names,

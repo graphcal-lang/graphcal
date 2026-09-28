@@ -86,7 +86,7 @@ pub(crate) struct FnSignatureInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AnalysisDegradation {
     EmptySymbolTable { reason: String },
-    EmptyModuleResolver { reason: String },
+    FileLocalModuleResolver { reason: String },
 }
 
 impl AnalysisDegradation {
@@ -95,8 +95,8 @@ impl AnalysisDegradation {
             Self::EmptySymbolTable { reason } => format!(
                 "analysis for {uri} could not build a fallback symbol table: {reason}; retaining previous symbol information when available"
             ),
-            Self::EmptyModuleResolver { reason } => format!(
-                "analysis for {uri} is using an empty module resolver after resolver construction failed: {reason}; cross-module editor features may be unavailable"
+            Self::FileLocalModuleResolver { reason } => format!(
+                "analysis for {uri} is using a file-local module resolver after project resolver construction failed: {reason}; cross-module editor features may be unavailable"
             ),
         }
     }
@@ -1589,8 +1589,8 @@ fn run_analysis_with_cancellation(
             let (module_resolver, degradations) = match project.build_module_resolver() {
                 Ok(module_resolver) => (module_resolver, Vec::new()),
                 Err(resolver_error) => (
-                    graphcal_compiler::resolve::ModuleResolver::default(),
-                    vec![AnalysisDegradation::EmptyModuleResolver {
+                    symbol_table::file_local_resolver(root_ast, project.root_id()),
+                    vec![AnalysisDegradation::FileLocalModuleResolver {
                         reason: resolver_error.to_string(),
                     }],
                 ),
@@ -3244,7 +3244,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_resolver_rebuild_records_empty_resolver_degradation() {
+    fn failed_resolver_rebuild_records_file_local_resolver_degradation() {
         let uri = Url::parse("file:///degraded-resolver.gcl").unwrap();
         let run = run_analysis_run(
             &uri,
@@ -3259,9 +3259,13 @@ mod tests {
         };
         assert!(matches!(
             degradation,
-            AnalysisDegradation::EmptyModuleResolver { .. }
+            AnalysisDegradation::FileLocalModuleResolver { .. }
         ));
-        assert!(degradation.message(&uri).contains("empty module resolver"));
+        assert!(
+            degradation
+                .message(&uri)
+                .contains("file-local module resolver")
+        );
     }
 
     fn empty_symbols() -> BTreeMap<graphcal_compiler::dimension::BaseDimId, String> {

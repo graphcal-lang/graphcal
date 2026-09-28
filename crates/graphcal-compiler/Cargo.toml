@@ -12,6 +12,8 @@ categories.workspace = true
 
 [features]
 test-cancellation = []
+# Cross-crate tests may name declarations directly (`ResolvedName::for_test`).
+test-identities = []
 
 [dependencies]
 graphcal-ast-derive.workspace = true

@@ -50,6 +50,7 @@ use std::collections::HashMap;
 use crate::dag_id::DagId;
 use crate::resolved_name::ResolvedName;
 use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::NameDef;
 
 use self::error::ModuleResolveError;
 use self::scope::{ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget};
@@ -130,6 +131,29 @@ impl ModuleResolver {
     #[must_use]
     pub fn symbols(&self, owner: &DagId) -> Option<&ModuleSymbols> {
         self.modules.get(owner).map(ModuleEntry::symbols)
+    }
+
+    /// The declaration of `name` in `owner`'s own table, regardless of its
+    /// visibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::UnknownModule`] when the resolver does
+    /// not know `owner`, or [`ModuleResolveError::UnknownName`] when `owner`
+    /// declares no `name` in that namespace.
+    pub fn declaration<Ns: NamespaceTables>(
+        &self,
+        owner: &DagId,
+        name: &NameDef<Ns>,
+    ) -> Result<SymbolRef<'_, Ns, Ns::Declared>, ModuleResolveError> {
+        Ns::declared(self.module_symbols(owner)?)
+            .get(name)
+            .map(SymbolRef::new)
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: owner.clone(),
+                category: error::NameCategory::Table(Ns::TABLE),
+                name: name.atom().clone(),
+            })
     }
 
     /// The declaration a canonical identity denotes, in its owner's own

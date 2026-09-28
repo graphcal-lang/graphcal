@@ -415,7 +415,7 @@ mod tests {
     }
 
     fn node_id(name: &str) -> GraphNodeId {
-        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
+        graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
             graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(
                 "test.gcl",
             ))

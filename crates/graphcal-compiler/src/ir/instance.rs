@@ -7,8 +7,22 @@ use crate::registry::index::FiniteIndex;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+
+/// The declaration `name` of the template that `instance` instantiates.
+#[must_use]
+pub fn template_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDeclName {
+    ResolvedDeclName::from_def(instance.template().clone(), name)
+}
+
+/// The concrete copy that `instance` materializes of its template's
+/// declaration `name`.
+#[must_use]
+pub fn instance_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDeclName {
+    ResolvedDeclName::from_def(instance.owner().clone(), name)
+}
 
 /// Canonical importer-side target of one instance index binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -126,4 +140,28 @@ pub struct HirInstanceRecord {
         ResolvedDeclName,
         Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
     >,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::module_name::ScopeSegment;
+
+    #[test]
+    fn template_and_instance_declarations_share_the_leaf() {
+        let parent = DagId::root_in_package("test", "main");
+        let template = DagId::root_in_package("test", "lib");
+        let instance = InstanceId::new(
+            parent,
+            ScopeSegment::Named(ModuleAliasName::expect_valid("inst")),
+            template.clone(),
+        );
+        let name = DeclName::expect_valid("value");
+
+        let source = template_declaration(&instance, name.clone());
+        let copy = instance_declaration(&instance, name);
+        assert_eq!(source.owner(), &template);
+        assert_eq!(copy.owner(), instance.owner());
+        assert_eq!(source.as_str(), copy.as_str());
+    }
 }

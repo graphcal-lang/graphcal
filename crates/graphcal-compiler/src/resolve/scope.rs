@@ -348,19 +348,31 @@ pub(super) fn module_alias(
 /// edge registers (see [`ModuleScope::add_imports`]); plugin aliases have no
 /// edge and are installed here.
 ///
-/// # Errors
-///
-/// Returns [`ModuleResolveError::DuplicateImportName`] when an alias collides
-/// with a local declaration or an earlier plugin alias, and
-/// [`ModuleResolveError::DuplicatePluginFunction`] for a function declared twice in
-/// one plugin block.
+/// A declaration whose alias cannot be claimed is skipped and its error
+/// returned, in declaration order: [`ModuleResolveError::DuplicateImportName`]
+/// when an alias collides with a local declaration or an earlier plugin
+/// alias, and [`ModuleResolveError::DuplicatePluginFunction`] for a function
+/// declared twice in one plugin block.
 pub(super) fn declare_aliases(
     scope: &mut ModuleScope,
     symbols: &ModuleSymbols,
     declarations: &[ast::Declaration],
+) -> Vec<ModuleResolveError> {
+    declarations
+        .iter()
+        .filter_map(|decl| declare_alias(scope, symbols, decl).err())
+        .collect()
+}
+
+/// Claim the alias one declaration introduces, if any (see
+/// [`declare_aliases`]).
+fn declare_alias(
+    scope: &mut ModuleScope,
+    symbols: &ModuleSymbols,
+    decl: &ast::Declaration,
 ) -> Result<(), ModuleResolveError> {
     let owner = symbols.owner();
-    for decl in declarations {
+    {
         let (alias, respells_path) = match &decl.kind {
             ast::DeclKind::Import(ast::ImportDecl::Module { path, alias, .. })
             | ast::DeclKind::Include(ast::IncludeDecl {
@@ -374,7 +386,7 @@ pub(super) fn declare_aliases(
                 (alias, respells_path)
             }
             ast::DeclKind::PluginImport(plugin) => (plugin.alias.clone(), false),
-            _ => continue,
+            _ => return Ok(()),
         };
         let plugin_alias = match &decl.kind {
             ast::DeclKind::PluginImport(_) => scope.plugin_aliases.get(&alias.value),
