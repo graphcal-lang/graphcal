@@ -8,12 +8,11 @@
 
 use crate::dimension::Rational;
 use crate::registry::time_scale::TimeScale;
+use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::ast::MulDivOp;
-use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
+use crate::syntax::type_name::GenericParamName;
 
 /// Canonical identity for a generic parameter in a lexical generic scope.
 ///

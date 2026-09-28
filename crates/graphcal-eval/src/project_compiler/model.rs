@@ -13,8 +13,8 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexBindingTarget, Registry};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
@@ -184,7 +184,7 @@ pub struct CompiledFile {
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project> {
     pub(super) project: &'project crate::loader::LoadedProject,
-    pub(super) module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    pub(super) module_resolver: &'project graphcal_compiler::resolve::ModuleResolver,
     pub(super) module_templates: &'project mut ModuleTemplateStore,
 }
 
@@ -222,7 +222,7 @@ pub(super) struct IncludeInstanceRequest {
 pub(super) struct ProjectModuleBinding {
     pub(super) target: graphcal_compiler::dag_id::DagId,
     pub(super) span: Span,
-    pub(super) role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole,
+    pub(super) role: graphcal_compiler::resolve::scope::ModuleAliasRole,
 }
 
 impl ProjectModuleBinding {

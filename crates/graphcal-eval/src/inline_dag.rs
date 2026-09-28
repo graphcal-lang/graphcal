@@ -16,9 +16,9 @@ use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::module_interface::{ModuleInterface, PureImportTermDisposition};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 
 use crate::import_surface::{import_item_not_found_error, validate_constructor_alias};
 
@@ -82,7 +82,7 @@ pub fn preprocess_dag_body_self_imports(
             )
         })?;
     let mut names = ImportedValueNames::default();
-    let mut bindings: HashMap<ScopedName, graphcal_compiler::syntax::decl_name::ResolvedDeclName> =
+    let mut bindings: HashMap<ScopedName, graphcal_compiler::resolved_name::ResolvedDeclName> =
         HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
 
@@ -169,7 +169,7 @@ pub fn preprocess_dag_body_self_imports(
                                     names.const_names.push((scoped.clone(), span));
                                     bindings.insert(
                                         scoped,
-                                        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                                        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
                                             parent_dag_id.clone(),
                                             DeclName::classify(orig_name.atom().clone()),
                                         ),

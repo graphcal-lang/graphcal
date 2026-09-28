@@ -5,7 +5,8 @@ use graphcal_compiler::registry::types::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitScale, UnitScaleStepError, UnitScaleTerm,
     try_fold_unit_scale,
 };
-use graphcal_compiler::syntax::dimension::{ResolvedUnitName, UnitRef};
+use graphcal_compiler::resolved_name::ResolvedUnitName;
+use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;

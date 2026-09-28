@@ -5,7 +5,7 @@ use std::collections::{HashMap, hash_map::Entry};
 use graphcal_compiler::dag_id::DagId;
 use thiserror::Error;
 
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// An authoritative location index, not a semantic-owner fallback.
 #[derive(Debug)]
@@ -63,7 +63,8 @@ impl DeclarationLocations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
+    use graphcal_compiler::resolved_name::ResolvedDeclName;
+    use graphcal_compiler::syntax::decl_name::DeclName;
 
     fn owner(file: &str) -> DagId {
         DagId::from_virtual_relative_path(std::path::Path::new(file)).unwrap()

@@ -62,9 +62,10 @@ fn rows(root: &Expr, revision: &BodyRevision) -> HashMap<ExprId, Box<CheckedExpr
 #[test]
 fn constructor_target_coverage_is_exact_even_with_repeated_references() {
     use crate::hir::expr::{MatchArm, MatchPattern};
+    use crate::resolved_name::ResolvedConstructorName;
     use crate::syntax::ast::PatternBindings;
     use crate::syntax::span::Spanned;
-    use crate::syntax::type_name::{ResolvedConstructorName, StructTypeName};
+    use crate::syntax::type_name::StructTypeName;
 
     let constructor = |name: &str| {
         ResolvedConstructorName::from_def(owner(), ConstructorName::expect_valid(name))

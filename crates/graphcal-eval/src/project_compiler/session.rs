@@ -175,7 +175,7 @@ impl super::HirProject<'_> {
 pub struct CheckedProject {
     pub(super) compiled: CompiledFile,
     pub(super) source: NamedSource<Arc<String>>,
-    pub(super) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    pub(super) module_resolver: graphcal_compiler::resolve::ModuleResolver,
 }
 
 impl std::fmt::Debug for CheckedProject {
@@ -197,9 +197,7 @@ impl CheckedProject {
 
     /// Borrow the canonical resolver built by this compilation session.
     #[must_use]
-    pub const fn module_resolver(
-        &self,
-    ) -> &graphcal_compiler::syntax::module_resolve::ModuleResolver {
+    pub const fn module_resolver(&self) -> &graphcal_compiler::resolve::ModuleResolver {
         &self.module_resolver
     }
 
@@ -223,7 +221,7 @@ impl CheckedProject {
 pub struct CheckedProjectRuntimeParts {
     pub(crate) compiled: CompiledFile,
     pub(crate) source: NamedSource<Arc<String>>,
-    pub(crate) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    pub(crate) module_resolver: graphcal_compiler::resolve::ModuleResolver,
 }
 
 /// Compile a loaded project into the reusable checked-program boundary.

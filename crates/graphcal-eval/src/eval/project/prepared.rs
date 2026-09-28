@@ -16,10 +16,10 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexKind};
+use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 use graphcal_compiler::syntax::span::Span;
 use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
@@ -29,7 +29,7 @@ use crate::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
 use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap};
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::host_fns::HostFunctionRegistry;
 use crate::project_compiler::{
@@ -286,7 +286,7 @@ impl PreparedProject {
     #[must_use]
     pub fn source_index_path(
         &self,
-        index: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
+        index: &graphcal_compiler::resolved_name::ResolvedIndexName,
     ) -> Option<graphcal_compiler::syntax::names::NamePath> {
         self.module_resolver
             .source_index_path(self.tir.root_dag_id(), index)

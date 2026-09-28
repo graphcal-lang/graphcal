@@ -13,10 +13,10 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::dimension::Rational;
 use graphcal_compiler::hir;
-use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
-use graphcal_compiler::syntax::module_resolve::ModuleResolver;
+use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::phase::never;
-use graphcal_compiler::syntax::type_name::ResolvedConstructorName;
 
 use crate::symbol_identity::FieldId;
 

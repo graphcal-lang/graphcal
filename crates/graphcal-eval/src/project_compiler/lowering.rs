@@ -10,10 +10,9 @@ use graphcal_compiler::ir::instance::{
     StaticSubstitution,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-use graphcal_compiler::syntax::dimension::ResolvedDimName;
-use graphcal_compiler::syntax::index_name::ResolvedIndexName;
-use graphcal_compiler::syntax::type_name::ResolvedStructTypeName;
+use graphcal_compiler::resolved_name::{
+    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+};
 
 #[allow(
     clippy::wildcard_imports,
@@ -33,7 +32,7 @@ struct DirectDagCallValidator<'a> {
     project: &'a crate::loader::LoadedProject,
     owner: &'a graphcal_compiler::dag_id::DagId,
     importer: &'a ModuleInterface,
-    resolver: &'a graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &'a graphcal_compiler::resolve::ModuleResolver,
     src: &'a NamedSource<Arc<String>>,
 }
 
@@ -73,7 +72,7 @@ fn validate_direct_dag_calls(
     module: crate::loader::LoadedModule<'_>,
     project: &crate::loader::LoadedProject,
     owner: &graphcal_compiler::dag_id::DagId,
-    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     let mut validator = DirectDagCallValidator {
@@ -139,7 +138,7 @@ fn imported_module_target(
     let (root, children) = (owner.first(), &owner.as_slice()[1..]);
     let alias = ModuleAliasName::classify(root.clone());
     let binding = module_map.get(&alias)?;
-    if binding.role != graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
+    if binding.role != graphcal_compiler::resolve::scope::ModuleAliasRole::ImportedDag {
         return None;
     }
     Some(
@@ -365,21 +364,19 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
 }
 
 pub(super) fn module_resolve_compile_error(
-    err: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
+    err: graphcal_compiler::resolve::error::ModuleResolveError,
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
     match err {
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError::PrivateName {
-            owner,
-            name,
-            ..
+        graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
+            owner, name, ..
         } => CompileError::Eval(GraphcalError::ImportPrivateItem {
             name,
             file_path: owner.to_string(),
             src: src.clone(),
             span: Span::new(0, src.inner().len()).into(),
         }),
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError::WrongImportCategory {
+        graphcal_compiler::resolve::error::ModuleResolveError::WrongImportCategory {
             owner,
             mismatch,
             span,
@@ -389,7 +386,7 @@ pub(super) fn module_resolve_compile_error(
             src: src.clone(),
             span: span.into(),
         }),
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError::IncludeItemNotProjectable {
+        graphcal_compiler::resolve::error::ModuleResolveError::IncludeItemNotProjectable {
             name,
             span,
             ..
@@ -398,7 +395,7 @@ pub(super) fn module_resolve_compile_error(
             src: src.clone(),
             span: span.into(),
         }),
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError::ConstructorOwnerRebound {
+        graphcal_compiler::resolve::error::ModuleResolveError::ConstructorOwnerRebound {
             constructor,
             owner_type,
             span,
@@ -409,13 +406,13 @@ pub(super) fn module_resolve_compile_error(
             src: src.clone(),
             span: span.into(),
         }),
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
+        graphcal_compiler::resolve::error::ModuleResolveError::DuplicateSymbol {
             name,
             first,
             duplicate,
             ..
         }
-        | graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+        | graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
             name,
             first,
             duplicate,
@@ -439,7 +436,7 @@ fn lower_inline_dag_modules<'a>(
     loaded_file: &crate::loader::LoadedFile,
     parent_registry: &Registry,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
@@ -479,7 +476,7 @@ fn compile_loaded_dag_module_ir<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
@@ -603,7 +600,7 @@ fn compile_loaded_dag_module_ir<'a>(
 fn freeze_inline_module_template(
     template: &ElaboratedModuleTemplate,
     dag_id: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
@@ -621,7 +618,7 @@ fn store_and_freeze_module_template(
     dag_id: &graphcal_compiler::dag_id::DagId,
     unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
     registry: Registry,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
@@ -693,7 +690,7 @@ fn process_dag_body_import_declarations<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -729,7 +726,7 @@ fn process_dag_body_include_declarations<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -828,7 +825,7 @@ fn resolve_projection_expected_fail(
     request: &IncludeInstanceRequest,
     source: &graphcal_compiler::syntax::decl_name::DeclName,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, CompileError> {
     use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
@@ -957,7 +954,7 @@ fn semantic_index_bindings(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ResolvedIndexName, InstanceIndexBindingTarget>, CompileError> {
     request
@@ -1015,7 +1012,7 @@ fn semantic_type_bindings(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ResolvedStructTypeName, ResolvedStructTypeName>, CompileError> {
     let mut types = request
@@ -1079,7 +1076,7 @@ fn semantic_dimension_bindings(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ResolvedDimName, ResolvedDimName>, CompileError> {
     let prelude = graphcal_compiler::hir::PreludeTypeScope::graphcal();
@@ -1103,7 +1100,7 @@ fn semantic_static_bindings(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<SemanticStaticBindings, CompileError> {
     Ok(SemanticStaticBindings {
@@ -1140,7 +1137,7 @@ fn semantic_assertion_projections(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<InstanceAssertionProjection>, CompileError> {
     match &request.selective_names {
@@ -1209,7 +1206,7 @@ fn record_semantic_instance(
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     override_reconciliations: graphcal_compiler::ir::lower::IncludeOverrideReconciliations,
     importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     let template_id = &request.template.dag_id;
@@ -1302,7 +1299,7 @@ fn elaborate_include_instances(
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer: crate::loader::LoadedModule<'_>,

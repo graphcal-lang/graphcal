@@ -8,10 +8,9 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
 use crate::ir::lower::ParsedExpectedFailMetadata;
 use crate::registry::error::GraphcalError;
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::ResolvedConstructorName;
 
 use super::{
     DagTIR, ModuleTypeContext, ResolvedConstructorRefs, ResolvedConstructorTarget,
@@ -25,20 +24,17 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
     if dag.semantic.dynamic_unit_scales.is_empty() {
         return Ok(());
     }
-    let scale_deps: HashMap<
-        crate::syntax::dimension::ResolvedUnitName,
-        BTreeSet<ResolvedDeclName>,
-    > = dag
-        .semantic
-        .dynamic_unit_scales
-        .iter()
-        .map(|(name, entry)| {
-            (
-                name.clone(),
-                hir::collect_expr_dependencies(&entry.expr).graph_refs,
-            )
-        })
-        .collect();
+    let scale_deps: HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> =
+        dag.semantic
+            .dynamic_unit_scales
+            .iter()
+            .map(|(name, entry)| {
+                (
+                    name.clone(),
+                    hir::collect_expr_dependencies(&entry.expr).graph_refs,
+                )
+            })
+            .collect();
     let runtime_units = dag
         .params
         .iter()
@@ -91,7 +87,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
 
 fn collect_unit_names(
     expr: &hir::Expr,
-) -> std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName> {
+) -> std::collections::HashSet<crate::resolved_name::ResolvedUnitName> {
     let mut names = std::collections::HashSet::new();
     collect_unit_names_from_hir(expr, &mut names);
     names
@@ -102,7 +98,7 @@ fn collect_unit_names(
 /// self/forward references; an unselected display target schedules no work.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
-    names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
+    names: &mut std::collections::HashSet<crate::resolved_name::ResolvedUnitName>,
 ) {
     hir::visit_expr(expr, &mut |node| {
         let unit = match node.kind() {

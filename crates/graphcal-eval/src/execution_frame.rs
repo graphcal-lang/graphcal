@@ -10,7 +10,7 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::model::TIR;
 use miette::NamedSource;
@@ -104,7 +104,7 @@ impl<'a> ExecutionFrame<'a> {
 
     pub fn unfinished_origins(
         &self,
-    ) -> impl Iterator<Item = &graphcal_compiler::syntax::decl_name::ResolvedDeclName> {
+    ) -> impl Iterator<Item = &graphcal_compiler::resolved_name::ResolvedDeclName> {
         self.errors.values().flat_map(NodeUnavailable::unfinished)
     }
 

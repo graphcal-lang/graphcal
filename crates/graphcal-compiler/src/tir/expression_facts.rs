@@ -19,9 +19,9 @@ use crate::expression_id::{ExprId, UnassignedExprId};
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, visit_expr_children};
 use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType, IndexTypeRef};
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{ConstructorName, FieldName, ResolvedStructTypeName};
+use crate::syntax::type_name::{ConstructorName, FieldName};
 use crate::tir::materialized_shape::MaterializedShape;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,7 +252,7 @@ pub enum NominalObservation {
     },
     Constructor {
         identity: ResolvedStructTypeName,
-        constructor: crate::syntax::type_name::ResolvedConstructorName,
+        constructor: crate::resolved_name::ResolvedConstructorName,
     },
     TypeArgument(ResolvedStructTypeName),
     IndexLabel {
@@ -285,10 +285,9 @@ pub struct CheckedExpressionRecord {
     pub(crate) children: Option<std::sync::Arc<[ExprId]>>,
     pub static_indexes: Vec<StaticIndexRequirement>,
     /// Canonical unit edges are resolved in the unit body's own fact scope.
-    pub(crate) unit_dependencies:
-        Option<std::sync::Arc<[crate::syntax::dimension::ResolvedUnitName]>>,
+    pub(crate) unit_dependencies: Option<std::sync::Arc<[crate::resolved_name::ResolvedUnitName]>>,
     pub constructor_matches:
-        HashMap<crate::syntax::type_name::ResolvedConstructorName, ConstructorMatch>,
+        HashMap<crate::resolved_name::ResolvedConstructorName, ConstructorMatch>,
     /// Binder-aware nominal observations for a checked root (V005).
     pub(crate) nominal_observations: Option<std::sync::Arc<[NominalObservation]>>,
     pub nat_parameters: Option<
@@ -309,7 +308,7 @@ impl CheckedExpressionRecord {
     }
 
     #[must_use]
-    pub fn unit_dependencies(&self) -> &[crate::syntax::dimension::ResolvedUnitName] {
+    pub fn unit_dependencies(&self) -> &[crate::resolved_name::ResolvedUnitName] {
         self.unit_dependencies.as_deref().unwrap_or(&[])
     }
 

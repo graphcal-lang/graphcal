@@ -13,8 +13,9 @@ use crate::ir::instance::{
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{self, Registry};
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
-use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
+use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::names::{NameDef, NameNamespace};
@@ -234,7 +235,7 @@ impl UnfrozenIR {
         self,
         registry: Registry,
         owner: &crate::dag_id::DagId,
-        resolver: &crate::syntax::module_resolve::ModuleResolver,
+        resolver: &crate::resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
     ) -> Result<HirDag, GraphcalError> {
         self.freeze_with_cancellation(
@@ -259,7 +260,7 @@ impl UnfrozenIR {
         self,
         registry: Registry,
         owner: &crate::dag_id::DagId,
-        resolver: &crate::syntax::module_resolve::ModuleResolver,
+        resolver: &crate::resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<HirDag, GraphcalError> {

@@ -1,11 +1,10 @@
 //! Direct source-declaration provenance retained at the HIR boundary.
 
+use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::static_interface::{StaticInputKind, StaticRole};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::ResolvedStructTypeName;
 
 /// One runtime-interface-relevant declaration authored directly in a DAG.
 ///

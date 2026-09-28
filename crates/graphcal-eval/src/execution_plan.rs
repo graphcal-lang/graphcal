@@ -11,7 +11,7 @@ use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::declaration_locations::DeclarationLocations;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::CheckedExecutionFacts;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]

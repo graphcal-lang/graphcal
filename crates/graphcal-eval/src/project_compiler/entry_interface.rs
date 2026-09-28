@@ -17,7 +17,7 @@ use graphcal_compiler::tir::typed::TIR;
 use miette::NamedSource;
 
 use crate::eval::types::CompileError;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// One checked entry-DAG parameter in direct source order.
 #[derive(Debug)]

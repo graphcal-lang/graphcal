@@ -1,7 +1,7 @@
 use super::*;
 use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::registry::time_scale::TimeScale;
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;
 
 fn make_src(source: &str) -> NamedSource<Arc<String>> {
@@ -24,7 +24,7 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let file = parse_and_desugar(source);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let ir = crate::ir::lower::lower(&file, &src)?;
-    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    let mut resolver = crate::resolve::ModuleResolver::default();
     resolver
         .add_module(ir.dag_id().clone(), &file.declarations)
         .unwrap();
@@ -45,7 +45,7 @@ fn dep_names_of<'a>(
     match map.iter().find(|(key, _)| key.as_str() == decl) {
         Some((_, dependencies)) => dependencies
             .iter()
-            .map(crate::syntax::names::ResolvedName::as_str)
+            .map(crate::resolved_name::ResolvedName::as_str)
             .collect(),
         None => Vec::new(),
     }
@@ -78,7 +78,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
     )
     .unwrap();
     let mixed = tir
-        .dimension(&crate::syntax::dimension::ResolvedDimName::from_def(
+        .dimension(&crate::resolved_name::ResolvedDimName::from_def(
             tir.root_dag_id().clone(),
             crate::syntax::dimension::DimName::expect_valid("Mixed"),
         ))

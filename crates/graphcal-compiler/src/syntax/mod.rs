@@ -15,7 +15,6 @@ pub mod index_name;
 pub mod lexer;
 pub mod local_name;
 pub mod module_name;
-pub mod module_resolve;
 pub mod names;
 pub mod non_empty;
 pub mod parser;

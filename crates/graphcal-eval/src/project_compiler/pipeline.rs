@@ -38,7 +38,7 @@ fn lower_single_file_to_hir(
     project: &crate::loader::LoadedProject,
     loaded_file: &crate::loader::LoadedFile,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<
@@ -199,7 +199,7 @@ fn store_module_artifact(
 /// body checking, constant evaluation, or host verification occurs here.
 pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     project: &'project crate::loader::LoadedProject,
-    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: graphcal_compiler::resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirProject<'project>, CompileError> {
     cancellation.checkpoint()?;

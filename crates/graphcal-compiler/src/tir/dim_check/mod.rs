@@ -1,6 +1,4 @@
-use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::type_name::ResolvedStructTypeName;
+use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

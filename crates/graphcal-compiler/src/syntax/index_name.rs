@@ -1,6 +1,6 @@
 //! Index and index-variant names.
 
-use crate::syntax::names::{NameDef, NameNamespace, NamePath, ResolvedName};
+use crate::syntax::names::{NameDef, NameNamespace, NamePath};
 
 /// Index type namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -28,9 +28,6 @@ impl NameNamespace for IndexVarNameNamespace {
 
 /// Name of an index type (e.g., `"Maneuver"`).
 pub type IndexName = NameDef<IndexNameNamespace>;
-
-/// Module-resolved index name.
-pub type ResolvedIndexName = ResolvedName<IndexNameNamespace>;
 
 /// Name of an index variant (e.g., `"Departure"`, `"Correction"`).
 pub type IndexVariantName = NameDef<IndexVariantNameNamespace>;
@@ -128,77 +125,5 @@ impl QualifiedIndexVariantName {
 impl std::fmt::Display for QualifiedIndexVariantName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}#{}", self.index, self.variant)
-    }
-}
-
-/// A fully resolved index variant reference.
-///
-/// Index variants are owned by an index declaration rather than directly by a
-/// DAG/module. This type therefore resolves the index itself to a canonical
-/// owner, then stores the variant as a leaf in that index's variant set.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ResolvedIndexVariant {
-    index: ResolvedIndexName,
-    variant: IndexVariantName,
-}
-
-impl ResolvedIndexVariant {
-    /// Create a resolved index-variant reference from its resolved index and
-    /// variant leaf.
-    #[must_use]
-    pub(crate) const fn new(index: ResolvedIndexName, variant: IndexVariantName) -> Self {
-        Self { index, variant }
-    }
-
-    /// The resolved index that owns this variant.
-    #[must_use]
-    pub const fn index(&self) -> &ResolvedIndexName {
-        &self.index
-    }
-
-    /// The variant leaf inside [`Self::index`].
-    #[must_use]
-    pub const fn variant(&self) -> &IndexVariantName {
-        &self.variant
-    }
-
-    /// Consume this value and return its typed parts.
-    #[must_use]
-    pub(crate) fn into_parts(self) -> (ResolvedIndexName, IndexVariantName) {
-        (self.index, self.variant)
-    }
-}
-
-impl std::fmt::Debug for ResolvedIndexVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedIndexVariant")
-            .field("index", &self.index)
-            .field("variant", &self.variant)
-            .finish()
-    }
-}
-
-impl std::fmt::Display for ResolvedIndexVariant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.index, self.variant)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolved_index_variant_carries_resolved_index_owner() {
-        let index = ResolvedIndexName::from_def(
-            crate::dag_id::DagId::root_in_package("test", "mission"),
-            IndexName::expect_valid("Phase"),
-        );
-        let variant = ResolvedIndexVariant::new(index, IndexVariantName::expect_valid("Burn"));
-
-        assert_eq!(variant.index().owner().to_string(), "mission");
-        assert_eq!(variant.index().as_str(), "Phase");
-        assert_eq!(variant.variant().as_str(), "Burn");
-        assert_eq!(variant.to_string(), "mission.Phase#Burn");
     }
 }

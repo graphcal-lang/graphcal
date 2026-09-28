@@ -5,8 +5,9 @@
 //! parameters, or generic index parameters. It does not reinterpret source
 //! paths from declaration signatures.
 
-use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::type_name::ResolvedStructTypeName;
+use crate::resolved_name::{
+    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -16,8 +17,6 @@ use crate::hir;
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::ResolvedDimName;
-use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
@@ -26,8 +25,8 @@ use crate::declaration_category::DeclCategory;
 use crate::ir::lower::HirDag;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
+use crate::resolve::ModuleResolver;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::names::NamePath;
 
 pub mod model;
@@ -1663,7 +1662,7 @@ impl HirPolicyChecker<'_> {
             // collection; the policy walk only classifies known ones.
             return Ok(());
         };
-        if matches!(kind, crate::syntax::module_resolve::DeclSymbolKind::Assert) {
+        if matches!(kind, crate::resolve::category::DeclSymbolKind::Assert) {
             return Err(GraphcalError::GraphRefToAssert {
                 name: target.value.to_unowned_def_name(),
                 src: self.src.clone(),

@@ -441,7 +441,7 @@ pub enum ModuleResolverBuildError {
     },
     /// Ordinary symbol-table construction failed.
     #[error(transparent)]
-    ModuleResolve(#[from] graphcal_compiler::syntax::module_resolve::ModuleResolveError),
+    ModuleResolve(#[from] graphcal_compiler::resolve::error::ModuleResolveError),
 }
 
 /// Span-free identity for an `import`/`include` path.
@@ -1401,10 +1401,9 @@ impl LoadedProject {
     /// symbols, or invalid resolved import surfaces.
     pub fn build_module_resolver(
         &self,
-    ) -> Result<graphcal_compiler::syntax::module_resolve::ModuleResolver, ModuleResolverBuildError>
-    {
+    ) -> Result<graphcal_compiler::resolve::ModuleResolver, ModuleResolverBuildError> {
         ensure_acyclic_include_expansion(self)?;
-        let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
+        let mut resolver = graphcal_compiler::resolve::ModuleResolver::default();
 
         for loaded in &self.files {
             resolver.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
@@ -1563,12 +1562,12 @@ impl ResolvedModuleLookup for HashMap<ModulePathKey, InlineBodyImportResolution>
 }
 
 fn add_include_instance_modules(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
     project: &LoadedProject,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
     for decl in declarations {
         let DeclKind::Include(include) = &decl.kind else {
             continue;
@@ -1595,12 +1594,12 @@ fn add_include_instance_modules(
 /// adds the source's selective public re-exports and module aliases after all
 /// canonical import edges have been registered.
 fn inherit_include_instance_scopes(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
     project: &LoadedProject,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
     for declaration in declarations {
         let DeclKind::Include(include) = &declaration.kind else {
             continue;
@@ -1645,11 +1644,11 @@ fn nested_include_instances(
 }
 
 fn add_nested_include_instance_modules(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
     source: &DagId,
     instance: &DagId,
     project: &LoadedProject,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
     let mut pending = nested_include_instances(source, instance, project)
         .into_iter()
         .rev()
@@ -1669,11 +1668,11 @@ fn add_nested_include_instance_modules(
 }
 
 fn inherit_nested_include_instance_scopes(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
     source: &DagId,
     instance: &DagId,
     project: &LoadedProject,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
     let mut pending = nested_include_instances(source, instance, project)
         .into_iter()
         .rev()
@@ -1717,11 +1716,11 @@ fn module_declarations<'a>(
 }
 
 fn register_module_imports(
-    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
-) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
     for decl in declarations {
         match &decl.kind {
             DeclKind::Import(import) => {

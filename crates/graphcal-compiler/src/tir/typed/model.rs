@@ -16,15 +16,17 @@ use crate::registry::declared_type::{DeclaredType, IndexDisplayName, IndexTypeRe
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{FormattingRegistry, IndexDef, RegistryBuilder, UnitInfo};
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
-use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
-use crate::syntax::index_name::{IndexName, ResolvedIndexName};
-use crate::syntax::module_name::ScopedName;
-use crate::syntax::module_resolve::ModuleResolver;
-use crate::syntax::span::Span;
-use crate::syntax::type_name::{
-    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
+use crate::resolve::ModuleResolver;
+use crate::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
+    ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::DimName;
+use crate::syntax::index_name::IndexName;
+use crate::syntax::module_name::ScopedName;
+use crate::syntax::span::Span;
+use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -338,7 +340,7 @@ pub struct ProjectConstructorDef {
 }
 
 /// Authoritative project type-system definitions keyed by
-/// [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
+/// [`ResolvedName`](crate::resolved_name::ResolvedName) identities.
 ///
 /// HIR keeps its source-name registries only until TIR construction consumes
 /// them. Checked TIR retains a [`FormattingRegistry`] for diagnostics and input
@@ -1948,12 +1950,12 @@ impl DagTIR {
     #[must_use]
     pub fn runtime_unit_identity(
         &self,
-        target: &crate::syntax::dimension::ResolvedUnitName,
-    ) -> crate::syntax::dimension::ResolvedUnitName {
+        target: &crate::resolved_name::ResolvedUnitName,
+    ) -> crate::resolved_name::ResolvedUnitName {
         self.runtime_owner_rebases.get(target.owner()).map_or_else(
             || match &self.semantic_specialization {
                 Some(specialization) if target.owner() == &specialization.template => {
-                    crate::syntax::dimension::ResolvedUnitName::from_def(
+                    crate::resolved_name::ResolvedUnitName::from_def(
                         self.dag_id.clone(),
                         target.to_unowned_def_name(),
                     )
@@ -1961,7 +1963,7 @@ impl DagTIR {
                 Some(_) | None => target.clone(),
             },
             |owner| {
-                crate::syntax::dimension::ResolvedUnitName::from_def(
+                crate::resolved_name::ResolvedUnitName::from_def(
                     owner.clone(),
                     target.to_unowned_def_name(),
                 )

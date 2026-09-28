@@ -5,8 +5,9 @@
 //! index, constructor, DAG-call refs, lexical `LocalId`s, and typed built-in
 //! function variants. It must not fall back to source/syntax-AST inference.
 
-use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedIndexVariant, ResolvedStructTypeName,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -28,7 +29,7 @@ use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::ast::UnaryOp;
-use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
+use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
@@ -2813,7 +2814,8 @@ fn finite_axis_form(
 mod finite_axis_form_tests {
     use super::*;
     use crate::dag_id::DagId;
-    use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+    use crate::resolved_name::ResolvedIndexName;
+    use crate::syntax::index_name::IndexName;
     use std::path::Path;
 
     #[test]
@@ -4456,7 +4458,7 @@ fn infer_hir_scan(
 
 #[expect(clippy::too_many_arguments, reason = "unfold expression context")]
 fn infer_hir_unfold(
-    axis: &crate::syntax::span::Spanned<crate::syntax::index_name::ResolvedIndexName>,
+    axis: &crate::syntax::span::Spanned<crate::resolved_name::ResolvedIndexName>,
     init: &hir::Expr,
     prev_state: &hir::LocalDef,
     prev_index: &hir::LocalDef,

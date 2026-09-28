@@ -10,18 +10,16 @@ use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::hir;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-use graphcal_compiler::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
-use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_compiler::syntax::index_name::{
-    IndexVariantName, ResolvedIndexName, ResolvedIndexVariant,
+use graphcal_compiler::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
+    ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
 };
+use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ModuleAliasName;
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{
-    FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
-};
+use graphcal_compiler::syntax::type_name::{FieldName, GenericParamName};
 
 /// Canonical identity of an index variant.
 ///

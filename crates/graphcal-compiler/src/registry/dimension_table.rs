@@ -359,7 +359,7 @@ impl DimensionFormattingRegistry {
     /// Add diagnostic formatting for one synthetic rigid template dimension.
     pub(crate) fn register_rigid_dimension(
         &mut self,
-        name: &crate::syntax::dimension::ResolvedDimName,
+        name: &crate::resolved_name::ResolvedDimName,
     ) {
         let base = BaseDimId::UserDefined(name.clone());
         self.bases.insert(

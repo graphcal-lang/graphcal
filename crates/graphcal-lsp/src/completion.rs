@@ -88,9 +88,10 @@ pub fn completion(
 
 /// Completion kind for one exported import-surface category.
 const fn exported_import_item_kind(
-    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind,
+    kind: graphcal_compiler::resolve::category::ExportedImportItemKind,
 ) -> CompletionItemKind {
-    use graphcal_compiler::syntax::module_resolve::{DeclSymbolKind, ExportedImportItemKind};
+    use graphcal_compiler::resolve::category::DeclSymbolKind;
+    use graphcal_compiler::resolve::category::ExportedImportItemKind;
 
     match kind {
         ExportedImportItemKind::Decl(DeclSymbolKind::Const) => CompletionItemKind::CONSTANT,

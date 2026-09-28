@@ -16,7 +16,7 @@ use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, TIR};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr_with_presentation};
 use crate::execution_facts::RuntimeValueMap;
 use crate::presentation_evidence::PresentationInstanceMap;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 pub(super) fn eval_const_pools_for_dags(
     tir: &TIR,

@@ -9,9 +9,9 @@
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
+use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
-use graphcal_compiler::syntax::module_resolve::ExportedImportItemKind;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
 use miette::NamedSource;

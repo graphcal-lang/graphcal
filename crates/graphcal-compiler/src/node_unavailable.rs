@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

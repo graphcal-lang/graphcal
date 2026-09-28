@@ -5,7 +5,8 @@
 
 use crate::dag_id::DagId;
 use crate::registry::declared_type::IndexTypeRef;
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::resolved_name::ResolvedIndexVariant;
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 

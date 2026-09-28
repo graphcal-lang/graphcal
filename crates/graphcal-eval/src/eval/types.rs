@@ -769,7 +769,7 @@ pub enum EvalOutputView {
 pub struct EvalResult {
     /// Unfinished origins reached inside invoked DAGs, including private
     /// siblings of otherwise available projected outputs.
-    pub unfinished_calls: Vec<graphcal_compiler::syntax::decl_name::ResolvedDeclName>,
+    pub unfinished_calls: Vec<graphcal_compiler::resolved_name::ResolvedDeclName>,
     /// All const, param, and node values in source order with their
     /// declaration type (may contain per-node errors). Const *values* are
     /// compile-time, but a const's display unit (e.g. a dynamic conversion

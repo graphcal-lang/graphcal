@@ -9,14 +9,17 @@ use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, reso
 use crate::server::AnalysisResult;
 use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVariantId};
 use crate::symbol_table::SymbolKey;
-use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
-use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
+use graphcal_compiler::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
+    ResolvedStructTypeName, ResolvedUnitName,
+};
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexName};
+use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
 use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_compiler::syntax::type_name::{
-    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
-    StructTypeName,
+    ConstructorName, FieldName, GenericParamName, StructTypeName,
 };
 
 /// Check whether a name is a valid Graphcal identifier.

@@ -19,10 +19,9 @@ use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
-use crate::syntax::decl_name::ResolvedDeclName;
-use crate::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
-use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::type_name::ResolvedStructTypeName;
+use crate::resolved_name::{
+    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
+};
 use crate::tir::presentation::DagPresentationFacts;
 
 fn dimension_substitution<'a>(
@@ -1119,7 +1118,7 @@ fn instantiate_semantic_edge(
                 .semantic
                 .dynamic_unit_scales
                 .keys()
-                .map(crate::syntax::names::ResolvedName::to_unowned_def_name),
+                .map(crate::resolved_name::ResolvedName::to_unowned_def_name),
         )
         .collect::<BTreeSet<_>>();
     let runtime_unit_infos = runtime_unit_names

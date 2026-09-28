@@ -23,12 +23,11 @@ use graphcal_compiler::ir::static_interface::{
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
+use graphcal_compiler::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
+use graphcal_compiler::resolve::exports::ExportedBindingTarget;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::dimension::UnitName;
-use graphcal_compiler::syntax::module_resolve::{
-    DeclSymbolKind, ExportedBindingTarget, ExportedImportItemKind,
-};
 use graphcal_compiler::syntax::names::NameAtom;
 
 /// Whether `kind` declares a graph value (`param`, `node`, or `const node`).
@@ -109,7 +108,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_file: &crate::loader::LoadedFile,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -438,11 +437,11 @@ fn validate_include_item_attributes(
 }
 
 fn exported_bindings(
-    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    resolver: &graphcal_compiler::resolve::ModuleResolver,
     owner: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<Vec<graphcal_compiler::syntax::module_resolve::ExportedBinding>, CompileError> {
+) -> Result<Vec<graphcal_compiler::resolve::exports::ExportedBinding>, CompileError> {
     resolver.exported_bindings(owner).map_err(|error| {
         CompileError::Eval(GraphcalError::InternalError {
             message: format!("module resolver could not enumerate exports of `{owner}`: {error}"),
@@ -937,7 +936,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files()[import_dag_id];
@@ -968,7 +967,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             ProjectModuleBinding {
                 target: import_dag_id.clone(),
                 span: include_decl.path.span(),
-                role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+                role: graphcal_compiler::resolve::scope::ModuleAliasRole::IncludedInstance,
             },
         );
     }
@@ -1211,7 +1210,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'_>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
@@ -1238,7 +1237,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             ProjectModuleBinding {
                 target: dag_id.clone(),
                 span: include_decl.path.span(),
-                role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+                role: graphcal_compiler::resolve::scope::ModuleAliasRole::IncludedInstance,
             },
         );
     }
@@ -1448,7 +1447,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
     importer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let import_path = import.path();
@@ -1673,7 +1672,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 import_path.span(),
             )?;
 
-            let role = graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag;
+            let role = graphcal_compiler::resolve::scope::ModuleAliasRole::ImportedDag;
             ctx.module_map.insert(
                 module_name.clone(),
                 ProjectModuleBinding {
@@ -1755,7 +1754,7 @@ pub(in crate::project_compiler) fn import_selective_item(
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
     import_selective_resolved_item(
-        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
             source_owner.clone(),
             DeclName::classify(orig_name.clone()),
         ),
@@ -1769,7 +1768,7 @@ pub(in crate::project_compiler) fn import_selective_item(
 }
 
 fn import_selective_resolved_item(
-    canonical: graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    canonical: graphcal_compiler::resolved_name::ResolvedDeclName,
     local_name: &DeclName,
     span: Span,
     src: &NamedSource<Arc<String>>,
@@ -1797,7 +1796,7 @@ fn import_selective_resolved_item(
 
 /// Import all resolver-visible exported constants under a module prefix.
 fn import_module_values_from_resolver(
-    exported_bindings: &[graphcal_compiler::syntax::module_resolve::ExportedBinding],
+    exported_bindings: &[graphcal_compiler::resolve::exports::ExportedBinding],
     module_name: &ModuleAliasName,
     import_span: Span,
     src: &NamedSource<Arc<String>>,
@@ -1986,7 +1985,7 @@ mod tests {
         let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
         assert_eq!(
             &imported_bindings[&lexical],
-            &graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+            &graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
                 owner,
                 DeclName::expect_valid("g0"),
             )

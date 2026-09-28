@@ -9,7 +9,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 use miette::NamedSource;
@@ -50,7 +50,7 @@ pub struct EvalEnvironment<'a> {
     pub root_values: Option<&'a RuntimeValueMap>,
     pub unavailable: Option<
         &'a HashMap<
-            graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+            graphcal_compiler::resolved_name::ResolvedDeclName,
             graphcal_compiler::node_unavailable::NodeUnavailable,
         >,
     >,
@@ -244,7 +244,7 @@ impl<'a> EvalContext<'a> {
     pub const fn with_unavailable(
         mut self,
         unavailable: &'a HashMap<
-            graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+            graphcal_compiler::resolved_name::ResolvedDeclName,
             graphcal_compiler::node_unavailable::NodeUnavailable,
         >,
     ) -> Self {

@@ -24,7 +24,7 @@ use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
 use thiserror::Error;
 
 /// Stable identity of a graph node: the declaration's canonical resolved name.
-pub type GraphNodeId = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+pub type GraphNodeId = graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// The declaration kind behind a graph node. Drives renderer styling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -375,7 +375,7 @@ fn project_dag_nodes(
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
-    use graphcal_compiler::syntax::module_resolve::ModuleResolver;
+    use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
     use miette::NamedSource;
@@ -416,7 +416,7 @@ mod tests {
     }
 
     fn node_id(name: &str) -> GraphNodeId {
-        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+        graphcal_compiler::resolved_name::ResolvedDeclName::from_def(
             graphcal_compiler::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(
                 "test.gcl",
             ))

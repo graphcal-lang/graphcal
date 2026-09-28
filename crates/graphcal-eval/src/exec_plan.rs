@@ -16,7 +16,7 @@ use crate::declaration_locations::DeclarationLocations;
 use crate::execution_facts::CheckedExecutionFacts;
 use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
 use crate::execution_scope::CheckedExecutionScope;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Check a TIR and select its root execution plan.
 ///
@@ -493,8 +493,9 @@ mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
     use graphcal_compiler::registry::runtime_value::RuntimeValue;
-    use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
-    use graphcal_compiler::syntax::module_resolve::ModuleResolver;
+    use graphcal_compiler::resolve::ModuleResolver;
+    use graphcal_compiler::resolved_name::ResolvedDeclName;
+    use graphcal_compiler::syntax::decl_name::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
 

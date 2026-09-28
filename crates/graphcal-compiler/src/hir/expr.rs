@@ -17,10 +17,12 @@
 //! entry points (`lower_expr`, `lower_assert_body`) reject any tree that
 //! contains an error node, so the batch pipeline never sees one.
 
-use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
-use crate::syntax::dimension::{ResolvedDimName, ResolvedUnitName, UnitRef as SyntaxUnitRef};
-use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::resolved_name::{
+    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
+    ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
+};
+use crate::syntax::decl_name::DeclNameNamespace;
+use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 use std::collections::{BTreeSet, HashMap};
 
 use thiserror::Error;
@@ -39,14 +41,15 @@ use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_na
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
+use crate::resolve::ModuleResolver;
+use crate::resolve::category::DeclSymbolKind;
+use crate::resolve::error::ModuleResolveError;
+use crate::resolve::scope::ModuleAliasRole;
 use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::module_resolve::{
-    DeclSymbolKind, ModuleAliasRole, ModuleResolveError, ModuleResolver,
-};
 use crate::syntax::names::{NameAtom, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
@@ -3486,7 +3489,7 @@ mod tests {
         assert_eq!(
             graph_refs
                 .iter()
-                .map(crate::syntax::names::ResolvedName::as_str)
+                .map(crate::resolved_name::ResolvedName::as_str)
                 .collect::<Vec<_>>(),
             ["C", "p"]
         );

@@ -155,7 +155,8 @@ fn map_channel_axes(
 mod tests {
     use super::*;
     use crate::dag_id::DagId;
-    use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+    use crate::resolved_name::ResolvedIndexName;
+    use crate::syntax::index_name::IndexName;
 
     fn axis(owner: &str, name: &str) -> IndexTypeRef {
         IndexTypeRef::from_resolved(ResolvedIndexName::from_def(

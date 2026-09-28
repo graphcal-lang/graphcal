@@ -1,8 +1,8 @@
 use super::*;
 use crate::dimension::BaseDimId;
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
 use crate::syntax::span::Span;
@@ -30,7 +30,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let (ir, parent_registry) =
         crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id = test_dag_id();
-    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    let mut resolver = crate::resolve::ModuleResolver::default();
     resolver
         .add_module(parent_dag_id.clone(), &file.declarations)
         .map_err(|err| GraphcalError::InternalError {
@@ -92,7 +92,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let file = desugared;
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
-    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    let mut resolver = crate::resolve::ModuleResolver::default();
     resolver
         .add_module(ir.dag_id().clone(), &file.declarations)
         .unwrap();
@@ -201,7 +201,7 @@ fn compile_inline_dag_bodies_test(
         })
         .collect::<Vec<_>>();
 
-    let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
+    let mut resolver = crate::resolve::ModuleResolver::default();
     resolver
         .add_module(parent_dag_id.clone(), parent_declarations)
         .map_err(|err| GraphcalError::InternalError {

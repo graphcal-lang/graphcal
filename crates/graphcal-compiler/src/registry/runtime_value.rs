@@ -6,10 +6,9 @@ use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
 use crate::finite_value::{FiniteQuantity, NonFiniteQuantity};
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
-use crate::syntax::type_name::{
-    ConstructorName, FieldName, ResolvedStructTypeName, StructTypeName,
-};
+use crate::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]

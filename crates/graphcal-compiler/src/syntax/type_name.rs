@@ -1,6 +1,6 @@
 //! Names owned by Graphcal's type and constructor syntax.
 
-use crate::syntax::names::{NameDef, NameNamespace, ResolvedName};
+use crate::syntax::names::{NameDef, NameNamespace};
 
 /// Struct/tagged-union type namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -37,9 +37,6 @@ impl NameNamespace for GenericParamNameNamespace {
 /// Name of a struct type (e.g., `"TransferResult"`).
 pub type StructTypeName = NameDef<StructTypeNameNamespace>;
 
-/// Module-resolved struct/tagged-union type name.
-pub type ResolvedStructTypeName = ResolvedName<StructTypeNameNamespace>;
-
 /// Name of a struct or constructor field (e.g., `"dv1"`, `"altitude"`).
 pub type FieldName = NameDef<FieldNameNamespace>;
 
@@ -49,9 +46,6 @@ pub type FieldName = NameDef<FieldNameNamespace>;
 /// name both a type and a constructor. Keeping these distinct marker namespaces
 /// enforces the boundary at the type level.
 pub type ConstructorName = NameDef<ConstructorNameNamespace>;
-
-/// Module-resolved tagged-union constructor name.
-pub type ResolvedConstructorName = ResolvedName<ConstructorNameNamespace>;
 
 /// The sole constructor a record-shaped type introduces.
 ///

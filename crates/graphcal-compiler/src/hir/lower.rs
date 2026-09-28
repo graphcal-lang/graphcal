@@ -5,7 +5,8 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
+use crate::resolved_name::{ResolvedDimName, ResolvedName, ResolvedUnitName};
+use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
@@ -14,10 +15,12 @@ use thiserror::Error;
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
+use crate::resolve::ModuleResolver;
+use crate::resolve::category::SurfaceNameKind;
+use crate::resolve::error::ModuleResolveError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexVariantName;
-use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
-use crate::syntax::names::{NameAtom, NameDef, NamePath, ResolvedName};
+use crate::syntax::names::{NameAtom, NameDef, NamePath};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 
@@ -405,7 +408,7 @@ fn lower_key_application(
 
 pub(crate) fn lower_generic_args(
     target: &str,
-    params: &[crate::syntax::module_resolve::GenericParamSignature],
+    params: &[crate::resolve::symbols::GenericParamSignature],
     args: &[ast::GenericArg],
     span: Span,
     ctx: TypeLoweringContext<'_>,
@@ -422,7 +425,7 @@ pub(crate) fn lower_generic_args(
 
 fn check_generic_arg_count(
     target: &str,
-    params: &[crate::syntax::module_resolve::GenericParamSignature],
+    params: &[crate::resolve::symbols::GenericParamSignature],
     got: usize,
     span: Span,
 ) -> Result<(), HirLowerError> {
@@ -1019,8 +1022,9 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 mod tests {
     use super::*;
     use crate::hir::GenericParamOwner;
+    use crate::resolved_name::ResolvedStructTypeName;
     use crate::syntax::parser::Parser;
-    use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
+    use crate::syntax::type_name::StructTypeName;
 
     fn desugared_source(source: &str) -> ast::File {
         let raw = Parser::new(source).parse_file().unwrap();

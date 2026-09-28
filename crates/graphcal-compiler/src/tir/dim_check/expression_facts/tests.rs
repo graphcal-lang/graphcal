@@ -1,7 +1,8 @@
 use super::*;
 use crate::dag_id::DagId;
 use crate::hir::types::{GenericParamId, GenericParamOwner};
-use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName, StructTypeName};
+use crate::resolved_name::ResolvedStructTypeName;
+use crate::syntax::type_name::{GenericParamName, StructTypeName};
 
 #[test]
 fn bound_nat_resolution_is_lexical_and_preserves_missing_and_overflow_errors() {

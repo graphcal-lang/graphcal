@@ -18,13 +18,11 @@ use crate::registry::type_def::{
     StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind, TypeGenericParam,
 };
 use crate::registry::types::Registry;
+use crate::resolve::ModuleResolver;
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;
-use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{
-    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
-    StructTypeName,
-};
+use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 use super::{GenericArg, GenericParamId, TypeAnnotation};
 

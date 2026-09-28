@@ -2,7 +2,8 @@
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::imported_binding::ImportedValueKind;
-use graphcal_compiler::syntax::module_resolve::{DeclSymbolKind, ModuleResolver};
+use graphcal_compiler::resolve::ModuleResolver;
+use graphcal_compiler::resolve::category::DeclSymbolKind;
 
 #[allow(
     clippy::wildcard_imports,
@@ -12,7 +13,7 @@ use graphcal_compiler::syntax::module_resolve::{DeclSymbolKind, ModuleResolver};
 use super::*;
 
 fn declared_type_for_target(
-    target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    target: &graphcal_compiler::resolved_name::ResolvedDeclName,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     module_artifacts: &ModuleArtifactStore,
 ) -> Option<DeclaredType> {
@@ -106,7 +107,7 @@ fn resolve_file_signatures(
     root: graphcal_compiler::ir::lower::HirDag,
     inline: Vec<graphcal_compiler::ir::lower::HirDag>,
     file_src: &NamedSource<Arc<String>>,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ResolvedFileSignatures, CompileError> {
@@ -170,7 +171,7 @@ pub(super) fn check_hir_file(
         graphcal_compiler::dag_id::DagId,
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     >,
-    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &Arc<graphcal_compiler::tir::typed::ProjectTypeStore>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
