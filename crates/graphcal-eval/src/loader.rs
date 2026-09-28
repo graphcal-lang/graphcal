@@ -12,7 +12,6 @@ use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::module_interface::ModuleInterface;
-use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
@@ -27,14 +26,15 @@ use graphcal_io::{
 };
 mod build;
 mod inline_dags;
+mod source_authority;
 mod source_snapshot;
 
 use build::{build_loaded_files, reject_file_root_stem_imports};
 use inline_dags::lift_inline_dags;
-use source_snapshot::{
-    FetchedFile, ModuleLocation, ModuleResolution, PackageFileKey, ParsedFile, ParsedSource,
-    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, file_stem,
+use source_authority::{
+    ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
+use source_snapshot::{PackageFileKey, ParsedFile, ResolveFailure, file_stem};
 
 use graphcal_package::{
     GitSourceId, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
@@ -366,23 +366,6 @@ fn loader_manifest_error(error: impl std::fmt::Display) -> CompileError {
     })
 }
 
-/// Parse the text of `named_source`, rendering a parse failure against that
-/// same named source.
-///
-/// Until the loader returns `Outcome<_>` itself, cancellation still travels
-/// inside `CompileError` (as `GraphcalError::Cancelled`).
-fn parse_named_source(
-    named_source: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::syntax::ast::File, CompileError> {
-    graphcal_compiler::syntax::parser::Parser::new(named_source.inner())
-        .parse_file_with_cancellation(cancellation)
-        .map_err(|outcome| match outcome {
-            Outcome::Cancelled => graphcal_compiler::cancellation::Cancelled.into(),
-            Outcome::Failed(error) => CompileError::parse(error, named_source.clone()),
-        })
-}
-
 /// Loader-resolved identities for one module path.
 ///
 /// A path may name a file-root DAG or an inline DAG inside a loaded file.
@@ -657,6 +640,32 @@ pub struct LoadedFile {
 }
 
 impl LoadedFile {
+    /// Assemble a loaded file from its parsed source; the declared interface
+    /// is computed here, once, from exactly the parsed declarations.
+    fn new(
+        path: PathBuf,
+        dag_id: DagId,
+        parsed: ParsedFile,
+        resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
+        inline_dags: Vec<LoadedDag>,
+    ) -> Self {
+        let ParsedFile {
+            source,
+            named_source,
+            ast,
+        } = parsed;
+        Self {
+            path,
+            dag_id,
+            source,
+            interface: ModuleInterface::new(&ast.declarations),
+            ast,
+            named_source,
+            resolved_imports,
+            inline_dags,
+        }
+    }
+
     /// Declared interface of this file root module.
     #[must_use]
     pub(crate) const fn interface(&self) -> &ModuleInterface {
@@ -1285,15 +1294,11 @@ impl LoadedProject {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
         cancellation.checkpoint()?;
-        let source = Arc::new(source.to_string());
-        let named_source = NamedSource::new(name, Arc::clone(&source));
-        let raw_ast = parse_named_source(&named_source, cancellation)?;
-        cancellation.checkpoint()?;
-        let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
+        let parsed = ParsedFile::parse(name, Arc::new(source.to_string()), cancellation)?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         let stem = file_stem(&path);
-        reject_file_root_stem_imports(&ast.declarations, stem, &named_source)?;
+        reject_file_root_stem_imports(&parsed.ast.declarations, stem, &parsed.named_source)?;
         // `name` is also a diagnostic label and may be an absolute virtual URI
         // path. A standalone in-memory file has no filesystem hierarchy, so a
         // rooted label contributes only its leaf to semantic DAG identity.
@@ -1315,17 +1320,17 @@ impl LoadedProject {
         let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|error| {
             CompileError::Eval(GraphcalError::internal_error(
                 format!("invalid source name `{name}`: {error}"),
-                &named_source,
+                &parsed.named_source,
                 DiagnosticAnchor::WholeFile,
             ))
         })?;
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
-        let inline_dags = lift_inline_dags(&ast, &dag_id, stem, |_| None);
+        let inline_dags = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| None);
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
-        let plugins = wasm_plugin_paths(&ast)
+        let plugins = wasm_plugin_paths(&parsed.ast)
             .map(|plugin| {
                 (
                     PluginIdentity::resolve(plugin, dag_id.package()),
@@ -1334,16 +1339,7 @@ impl LoadedProject {
             })
             .collect();
         cancellation.checkpoint()?;
-        let loaded_file = LoadedFile {
-            path,
-            dag_id,
-            source,
-            interface: ModuleInterface::new(&ast.declarations),
-            ast,
-            named_source,
-            resolved_imports: HashMap::new(),
-            inline_dags,
-        };
+        let loaded_file = LoadedFile::new(path, dag_id, parsed, HashMap::new(), inline_dags);
         Ok(Self::from_parts(
             DependencyOrdered::new(Vec::new(), loaded_file),
             plugins,
@@ -1902,239 +1898,47 @@ enum PackageAuthorityError {
     NoFilesystem(PackageInstanceId),
 }
 
-/// Source authority through which the IO shell fetches one project's files.
-trait SnapshotSource {
-    type Key: SourceKey;
-
-    /// Read, parse, and resolve the dependency paths of one file. Read and
-    /// parse failures are recorded in the fetched file; `Err` aborts the load
-    /// (cooperative cancellation).
-    fn fetch(
-        &self,
-        file: &Self::Key,
-        budget: &mut LoaderBudgetState,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<FetchedFile<Self::Key>, CompileError>;
-}
-
-/// Fetch every source file reachable from `root` in load order (depth-first
-/// preorder, the order in which the builder visits files), stopping after the
-/// first file that cannot be read or parsed.
-fn fetch_source_snapshot<S: SnapshotSource>(
-    authority: &S,
-    root: S::Key,
-    budget: &mut LoaderBudgetState,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<SourceSnapshot<S::Key>, CompileError> {
-    let mut files = HashMap::new();
-    let mut pending = vec![root.clone()];
-    while let Some(file) = pending.pop() {
-        if files.contains_key(&file) {
-            continue;
-        }
-        let fetched = authority.fetch(&file, budget, cancellation)?;
-        let Ok(parsed) = &fetched else {
-            files.insert(file, fetched);
-            break;
-        };
-        pending.extend(parsed.dependency_files(&file).into_iter().rev().cloned());
-        files.insert(file, fetched);
-    }
-    Ok(SourceSnapshot { root, files })
-}
-
-/// Read one source file through the bounded capability, then parse and
-/// desugar it under the diagnostic `name`.
-fn read_source_file(
-    fs: &dyn FileSystemReader,
-    path: &Path,
-    name: &str,
-    budget: &mut LoaderBudgetState,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ParsedFile, CompileError> {
-    let source_str = budget
-        .read_text(fs, path, LoaderArtifact::SourceFile, cancellation)
-        .map_err(|error| match error {
-            LoaderReadError::Filesystem(filesystem)
-                if filesystem.io_kind() == Some(std::io::ErrorKind::NotFound) =>
-            {
-                io_not_found(path)
-            }
-            other => loader_manifest_error(format!(
-                "could not read source `{}`: {other}",
-                path.display()
-            )),
-        })?;
-    let source = Arc::new(source_str);
-    let named_source = NamedSource::new(name, Arc::clone(&source));
-    let raw_ast = parse_named_source(&named_source, cancellation)?;
-    let ast = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
-    Ok(ParsedFile {
-        source,
-        named_source,
-        ast,
-    })
-}
-
-/// Filesystem authority of a single-package project: a real package whose
-/// manifest has no dependencies, or a virtual (manifest-less) package.
-struct ProjectSources<'a, F> {
-    /// Import boundary: every import must resolve inside this directory tree.
-    project_root: &'a Path,
-    package_id: &'a DagPackageId,
-    manifest: Option<&'a PackageManifest>,
-    fs: &'a F,
-}
-
-impl<F: FileSystemReader> SnapshotSource for ProjectSources<'_, F> {
-    type Key = PathBuf;
-
-    fn fetch(
-        &self,
-        file: &PathBuf,
-        budget: &mut LoaderBudgetState,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<FetchedFile<PathBuf>, CompileError> {
-        cancellation.checkpoint()?;
-        // Use the canonical path as the NamedSource name (not just the
-        // basename). Downstream diagnostic emitters can recover the file URL
-        // via `Url::from_file_path(Path::new(name))` without an external
-        // resolver, and basename ambiguity (two `lib.gcl`s in different
-        // packages) cannot arise. The CLI's miette renderer trims this for
-        // display anyway.
-        let name = file.display().to_string();
-        let parsed = match read_source_file(self.fs, file, &name, budget, cancellation) {
-            Ok(parsed) => parsed,
-            Err(error) => return Ok(Err(error)),
-        };
-        cancellation.checkpoint()?;
-        let location = ModuleLocation {
-            package: self.package_id.clone(),
-            relative_path: file
-                .strip_prefix(self.project_root)
-                .unwrap_or(file)
-                .to_path_buf(),
-        };
-        ParsedSource::resolve(location, parsed, |path| {
-            cancellation.checkpoint()?;
-            Ok(resolve_project_module(
-                path,
-                self.project_root,
-                self.manifest,
-                self.fs,
-            ))
-        })
-        .map(Ok)
-    }
-}
-
-impl SnapshotSource for PackageLoadContext<'_> {
+impl ModuleSourceAuthority for PackageLoadContext<'_> {
     type Key = PackageFileKey;
 
-    fn fetch(
-        &self,
-        file: &PackageFileKey,
-        budget: &mut LoaderBudgetState,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<FetchedFile<PackageFileKey>, CompileError> {
-        cancellation.checkpoint()?;
-        let (package_root, reader) = match self.authority_for(&file.package) {
-            Ok(authority) => authority,
-            Err(error) => return Ok(Err(loader_manifest_error(error))),
-        };
-        let name = format!("{}:{}", file.package, file.path.display());
-        let parsed = match read_source_file(reader, &file.path, &name, budget, cancellation) {
-            Ok(parsed) => parsed,
-            Err(error) => return Ok(Err(error)),
-        };
-        cancellation.checkpoint()?;
-        let location = ModuleLocation {
-            package: DagPackageId::new(file.package.as_str()),
-            relative_path: file
-                .path
-                .strip_prefix(package_root)
-                .unwrap_or(&file.path)
-                .to_path_buf(),
-        };
-        ParsedSource::resolve(location, parsed, |path| {
-            cancellation.checkpoint()?;
-            Ok(resolve_package_module(path, &file.package, self))
+    fn tree(&self, package: &PackageInstanceId) -> Result<SourceTree<'_>, PackageAuthorityError> {
+        let (root, reader) = self.authority_for(package)?;
+        Ok(SourceTree {
+            reader,
+            root,
+            package: DagPackageId::new(package.as_str()),
         })
-        .map(Ok)
     }
-}
-/// Resolve a module path from a file of `current_package` through the locked
-/// package graph to a canonical file inside the owning package's authority.
-fn resolve_package_module(
-    path: &ModulePath,
-    current_package: &PackageInstanceId,
-    context: &PackageLoadContext<'_>,
-) -> ModuleResolution<PackageFileKey> {
-    if names_stdlib(path) {
-        return ModuleResolution::Failed(ResolveFailure::StdlibNotImplemented);
-    }
-    let segments = path
-        .segments
-        .iter()
-        .map(|segment| segment.name.to_string())
-        .collect::<Vec<_>>();
-    let resolved = match context
-        .graph
-        .resolve_module_path(current_package, &segments)
-    {
-        Ok(resolved) => resolved,
-        Err(error) => {
-            return ModuleResolution::Failed(ResolveFailure::NotLocked {
-                message: error.to_string(),
-            });
-        }
-    };
-    let Some(package) = context.graph.package(&resolved.package) else {
-        return ModuleResolution::Failed(ResolveFailure::Manifest {
-            message: format!("lockfile package `{}` is missing", resolved.package),
-        });
-    };
-    let (root, reader) = match context.authority_for(&resolved.package) {
-        Ok(authority) => authority,
-        Err(error) => {
-            return ModuleResolution::Failed(ResolveFailure::Manifest {
-                message: error.to_string(),
-            });
-        }
-    };
-    for file_segment_count in (0..=resolved.module_segments.len()).rev() {
-        let mut file_path = package.source_dir.join_to(root).join(package.name.as_str());
-        for segment in &resolved.module_segments[..file_segment_count] {
-            file_path = file_path.join(segment);
-        }
-        file_path.set_extension("gcl");
-        let Ok(canonical) = reader.canonicalize(&file_path) else {
-            continue;
-        };
-        if !canonical.starts_with(root) {
-            return ModuleResolution::Failed(ResolveFailure::OutsidePackageRoot);
-        }
-        let inline_path = match resolved.module_segments[file_segment_count..]
+
+    /// Resolve the first segment through the locked package graph of the
+    /// importing file's package.
+    fn select_package(
+        &self,
+        path: &ModulePath,
+        from: &PackageFileKey,
+    ) -> Result<SelectedPackage<PackageInstanceId>, ResolveFailure> {
+        let segments = path
+            .segments
             .iter()
-            .map(|segment| DeclName::try_new(segment.clone()))
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(inline_path) => inline_path,
-            Err(error) => {
-                return ModuleResolution::Failed(ResolveFailure::Manifest {
-                    message: format!("invalid locked module segment: {error}"),
-                });
-            }
-        };
-        return ModuleResolution::Resolved(ResolvedFile {
-            file: PackageFileKey {
-                package: resolved.package,
-                path: canonical,
-            },
-            inline_path,
-        });
+            .map(|segment| segment.name.to_string())
+            .collect::<Vec<_>>();
+        let resolved = self
+            .graph
+            .resolve_module_path(&from.package, &segments)
+            .map_err(|error| ResolveFailure::NotLocked {
+                message: error.to_string(),
+            })?;
+        let package =
+            self.graph
+                .package(&resolved.package)
+                .ok_or_else(|| ResolveFailure::Manifest {
+                    message: format!("lockfile package `{}` is missing", resolved.package),
+                })?;
+        Ok(SelectedPackage {
+            namespace_dir: package.source_dir.to_path_buf().join(package.name.as_str()),
+            package: resolved.package,
+        })
     }
-    ModuleResolution::Failed(ResolveFailure::FileNotFound)
 }
 
 fn source_root_candidate(
@@ -2499,70 +2303,6 @@ fn root_in_package_namespace<F: FileSystemReader>(
     false
 }
 
-/// Whether a module path names the reserved (deferred) standard library.
-/// Both `graphcal` and `std` first segments are reserved (Concept §6.2).
-fn names_stdlib(path: &ModulePath) -> bool {
-    matches!(path.segments.first().name.as_str(), "graphcal" | "std")
-}
-
-/// Resolve a module path of a single-package project to a canonical file.
-///
-/// All paths are absolute from a package root (real package via
-/// `graphcal.toml` manifest, or virtual package = single-file project).
-/// The first segment names the package; remaining segments walk the
-/// directory tree under `source_dir`, so `nasa.rocket` resolves to
-/// `<project_root>/<source_dir>/nasa/rocket.gcl`.
-fn resolve_project_module<F: FileSystemReader>(
-    path: &ModulePath,
-    project_root: &Path,
-    manifest: Option<&PackageManifest>,
-    fs: &F,
-) -> ModuleResolution<PathBuf> {
-    if names_stdlib(path) {
-        return ModuleResolution::Failed(ResolveFailure::StdlibNotImplemented);
-    }
-    // The manifest is determined eagerly by `load_manifest_for_root` based on
-    // whether the root file lives inside the package namespace. Without one
-    // the project is a single standalone file whose only legal path is its
-    // own stem (Concept 7 self-reference), which never reaches resolution.
-    let Some(manifest) = manifest else {
-        return ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage);
-    };
-    let segments = path.segments();
-    // Real package: first segment must match the package name.
-    if segments[0].name.as_str() != manifest.name.as_str() {
-        return ModuleResolution::Failed(ResolveFailure::PackageNameMismatch {
-            package_name: manifest.name.to_string(),
-        });
-    }
-
-    // Choose the longest prefix that names a physical source file. Any
-    // remaining segments are an exact nested inline-DAG path in that file.
-    for file_segment_count in (1..=segments.len()).rev() {
-        let mut file_path = manifest.source_dir.join_to(project_root);
-        for segment in &segments[..file_segment_count] {
-            file_path = file_path.join(segment.name.as_str());
-        }
-        file_path.set_extension("gcl");
-        let Ok(canonical) = fs.canonicalize(&file_path) else {
-            continue;
-        };
-        // Path sandboxing: imports must stay inside the project root.
-        if !canonical.starts_with(project_root) {
-            return ModuleResolution::OutsideProjectRoot;
-        }
-        let inline_path = segments[file_segment_count..]
-            .iter()
-            .map(|segment| DeclName::classify(segment.name.atom().clone()))
-            .collect();
-        return ModuleResolution::Resolved(ResolvedFile {
-            file: canonical,
-            inline_path,
-        });
-    }
-    ModuleResolution::Failed(ResolveFailure::FileNotFound)
-}
-
 fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError> {
     let file_name = path
         .file_name()
@@ -2599,6 +2339,8 @@ mod tests {
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_io::{CancellationSignal, EntryLimit, NeverCancel, RealFileSystem};
     use graphcal_package::Sha256Digest;
+
+    use source_snapshot::{ModuleResolution, ResolvedFile, SourceSnapshot};
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
@@ -3667,6 +3409,76 @@ node result: Dimensionless = @calculation()::out;
     }
 
     #[cfg(unix)]
+    fn assert_outside_root(error: &CompileError, expected_path: &str) {
+        assert!(
+            matches!(
+                error,
+                CompileError::Eval(GraphcalError::ImportOutsideRoot { path, .. })
+                    if path == expected_path
+            ),
+            "expected an outside-root import error, got {error:?}"
+        );
+    }
+
+    /// Both project modes reject a module symlinked outside its package root,
+    /// at file root and in inline-DAG bodies alike.
+    #[cfg(unix)]
+    #[test]
+    fn single_package_import_symlinked_outside_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        for main in [
+            "import mission.escape::{ x };",
+            "dag calc {\n    import mission.escape::{ x };\n}",
+        ] {
+            let directory = setup_temp_dir(&[
+                ("project/graphcal.toml", "[package]\nname = \"mission\"\n"),
+                ("project/src/mission/main.gcl", main),
+                ("outside.gcl", "pub const node x: Dimensionless = 1.0;"),
+            ]);
+            symlink(
+                directory.path().join("outside.gcl"),
+                directory.path().join("project/src/mission/escape.gcl"),
+            )
+            .unwrap();
+
+            let error = load_project(
+                &directory.path().join("project/src/mission/main.gcl"),
+                None,
+                &RealFileSystem::default(),
+            )
+            .expect_err("a module outside the project root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locked_package_import_symlinked_outside_root_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        for main in [
+            "import mission.escape::{ x };",
+            // Regression: package mode used to leave this inline-body import
+            // unresolved instead of reporting the sandbox escape.
+            "dag calc {\n    import mission.escape::{ x };\n}",
+        ] {
+            let fixture = locked_package_fixture(main, "pub const node one: Dimensionless = 1.0;");
+            let outside = fixture.directory.path().join("outside.gcl");
+            std::fs::write(&outside, "pub const node x: Dimensionless = 1.0;").unwrap();
+            symlink(
+                &outside,
+                fixture.root_file.parent().unwrap().join("escape.gcl"),
+            )
+            .unwrap();
+
+            let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
+                .expect_err("a module outside the package root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn unrooted_plugin_reader_rejects_symlink_escape() {
         use std::os::unix::fs::symlink;
@@ -3814,84 +3626,95 @@ node result: Dimensionless = @calculation()::out;
         );
     }
 
-    /// In-memory authority recording the order in which files are fetched.
+    /// In-memory package `pkg` rooted at `/p` whose reader records the order
+    /// in which source files are read.
     struct ScriptedSources {
-        files: HashMap<PathBuf, &'static str>,
         manifest: PackageManifest,
-        filesystem: graphcal_io::InMemoryFileSystem,
+        filesystem: RecordingFileSystem,
+        package_id: DagPackageId,
+    }
+
+    struct RecordingFileSystem {
+        inner: graphcal_io::InMemoryFileSystem,
         fetched: std::cell::RefCell<Vec<PathBuf>>,
+    }
+
+    impl FileSystemReader for RecordingFileSystem {
+        fn read_bytes_bounded(
+            &self,
+            path: &Path,
+            limit: ByteLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<u8>, FileSystemReadError> {
+            self.fetched.borrow_mut().push(path.to_path_buf());
+            self.inner.read_bytes_bounded(path, limit, cancellation)
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
+            self.inner.canonicalize(path)
+        }
+
+        fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
+            self.inner.entry_kind(path)
+        }
+
+        fn read_directory_bounded(
+            &self,
+            path: &Path,
+            limit: EntryLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+            self.inner.read_directory_bounded(path, limit, cancellation)
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.inner.is_file(path)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
     }
 
     impl ScriptedSources {
         fn new(files: &[(&str, &'static str)]) -> Self {
             let mut filesystem = graphcal_io::InMemoryFileSystem::new();
-            let files = files
-                .iter()
-                .map(|(name, text)| {
-                    let path = PathBuf::from(format!("/p/src/pkg/{name}.gcl"));
-                    filesystem
-                        .add_file(
-                            graphcal_io::VirtualAbsolutePath::new(path.clone()).unwrap(),
-                            (*text).to_string(),
-                        )
-                        .unwrap();
-                    (path, *text)
-                })
-                .collect();
+            for (name, text) in files {
+                filesystem
+                    .add_file(
+                        graphcal_io::VirtualAbsolutePath::new(scripted_path(name)).unwrap(),
+                        (*text).to_string(),
+                    )
+                    .unwrap();
+            }
             Self {
-                files,
                 manifest: parse_manifest_str("[package]\nname = \"pkg\"\n").unwrap(),
-                filesystem,
-                fetched: std::cell::RefCell::new(Vec::new()),
+                filesystem: RecordingFileSystem {
+                    inner: filesystem,
+                    fetched: std::cell::RefCell::new(Vec::new()),
+                },
+                package_id: DagPackageId::new("pkg"),
             }
         }
-    }
 
-    impl SnapshotSource for ScriptedSources {
-        type Key = PathBuf;
+        fn authority(&self) -> ProjectSources<'_> {
+            ProjectSources {
+                project_root: Path::new("/p"),
+                package_id: &self.package_id,
+                manifest: Some(&self.manifest),
+                fs: &self.filesystem,
+            }
+        }
 
-        fn fetch(
-            &self,
-            file: &PathBuf,
-            _budget: &mut LoaderBudgetState,
-            _cancellation: &graphcal_compiler::cancellation::CancellationToken,
-        ) -> Result<FetchedFile<PathBuf>, CompileError> {
-            self.fetched.borrow_mut().push(file.clone());
-            let Some(text) = self.files.get(file) else {
-                return Ok(Err(io_not_found(file)));
-            };
-            let name = file.display().to_string();
-            let source = Arc::new((*text).to_string());
-            let named_source = NamedSource::new(name.as_str(), Arc::clone(&source));
-            let parsed = match graphcal_compiler::syntax::parser::Parser::new(&source).parse_file()
-            {
-                Ok(raw) => ParsedFile {
-                    named_source,
-                    source,
-                    ast: graphcal_compiler::desugar::desugared_ast::File::from(raw),
-                },
-                Err(error) => return Ok(Err(CompileError::parse(error, named_source))),
-            };
-            let location = ModuleLocation {
-                package: DagPackageId::new("pkg"),
-                relative_path: file.strip_prefix("/p").unwrap().to_path_buf(),
-            };
-            ParsedSource::resolve(location, parsed, |path| {
-                Ok(resolve_project_module(
-                    path,
-                    Path::new("/p"),
-                    Some(&self.manifest),
-                    &self.filesystem,
-                ))
-            })
-            .map(Ok)
+        fn fetched(&self) -> Vec<PathBuf> {
+            self.filesystem.fetched.borrow().clone()
         }
     }
 
     fn fetch_scripted(sources: &ScriptedSources, root: &str) -> SourceSnapshot<PathBuf> {
         fetch_source_snapshot(
-            sources,
-            PathBuf::from(format!("/p/src/pkg/{root}.gcl")),
+            &sources.authority(),
+            scripted_path(root),
             &mut LoaderBudgetState::new(LoaderBudget::default()),
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
@@ -3916,7 +3739,7 @@ node result: Dimensionless = @calculation()::out;
         let snapshot = fetch_scripted(&sources, "main");
 
         assert_eq!(
-            *sources.fetched.borrow(),
+            sources.fetched(),
             ["main", "b", "c", "d"].map(scripted_path)
         );
         assert_eq!(snapshot.files.len(), 4);
@@ -3939,7 +3762,7 @@ node result: Dimensionless = @calculation()::out;
         ]);
         let snapshot = fetch_scripted(&sources, "main");
 
-        assert_eq!(*sources.fetched.borrow(), ["main", "b"].map(scripted_path));
+        assert_eq!(sources.fetched(), ["main", "b"].map(scripted_path));
         assert!(snapshot.files[&scripted_path("b")].is_err());
         assert!(matches!(
             build_loaded_files(snapshot),
@@ -3955,7 +3778,7 @@ node result: Dimensionless = @calculation()::out;
         )]);
         let snapshot = fetch_scripted(&sources, "main");
 
-        assert_eq!(*sources.fetched.borrow(), [scripted_path("main")]);
+        assert_eq!(sources.fetched(), [scripted_path("main")]);
         assert!(matches!(
             build_loaded_files(snapshot),
             Err(CompileError::Eval(GraphcalError::ImportFileNotFound { ref path, .. })) if path == "pkg.missing"
@@ -3974,11 +3797,10 @@ node result: Dimensionless = @calculation()::out;
             else {
                 panic!("expected an import");
             };
-            resolve_project_module(
+            source_authority::resolve_module(
+                &sources.authority(),
                 import.path(),
-                Path::new("/p"),
-                Some(&sources.manifest),
-                &sources.filesystem,
+                &scripted_path("main"),
             )
         };
 
@@ -4025,7 +3847,14 @@ node result: Dimensionless = @calculation()::out;
             panic!("expected an import");
         };
         assert_eq!(
-            resolve_project_module(import.path(), Path::new("/p"), None, &sources.filesystem),
+            source_authority::resolve_module(
+                &ProjectSources {
+                    manifest: None,
+                    ..sources.authority()
+                },
+                import.path(),
+                &scripted_path("main"),
+            ),
             ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
         );
     }

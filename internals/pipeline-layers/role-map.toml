@@ -1758,6 +1758,11 @@ role = "loading"
 
 [[module]]
 package = "eval"
+path = ["loader", "source_authority"]
+role = "loading"
+
+[[module]]
+package = "eval"
 path = ["loader", "source_snapshot"]
 role = "loading"
 
