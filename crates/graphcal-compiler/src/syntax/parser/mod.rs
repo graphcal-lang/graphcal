@@ -8,7 +8,7 @@ use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
-use crate::syntax::token::{ContextualKeyword, Token};
+use crate::syntax::token::{ContextualKeyword, SourceIdentifier, Token};
 
 mod compound;
 mod decl;
@@ -728,7 +728,9 @@ impl<'src> Parser<'src> {
     fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {
             Some((token, span)) if token.is_identifier() => Ok(Ident {
-                name: NameAtom::new_unchecked_for_parser(self.lexer.slice_at(span).to_string()),
+                name: SourceIdentifier::new_unchecked_for_parser(
+                    self.lexer.slice_at(span).to_string(),
+                ),
                 span,
             }),
             Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),

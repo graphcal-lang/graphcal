@@ -103,6 +103,7 @@ pub fn validate_attributes<'a>(
             let name = attribute
                 .name
                 .name
+                .as_str()
                 .parse::<AttributeName>()
                 .map_err(|error| AttributeValidationError::UnknownAttribute {
                     name: error.into_raw(),

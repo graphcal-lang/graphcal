@@ -1823,7 +1823,7 @@ impl ModuleResolver {
             let source = item.name.name.clone();
             match item.namespace {
                 ImportItemNamespace::Type => {
-                    let source_name = StructTypeName::from_atom(source);
+                    let source_name = StructTypeName::from_atom(source.into_atom());
                     if binding_path.is_none() && has_static_bindings {
                         let Some(target) = source_target else {
                             continue;
@@ -1920,7 +1920,10 @@ impl ModuleResolver {
                             let Some(target) = source_target else {
                                 continue;
                             };
-                            ResolvedDimName::from_def(target.clone(), DimName::from_atom(source))
+                            ResolvedDimName::from_def(
+                                target.clone(),
+                                DimName::from_atom(source.into_atom()),
+                            )
                         }
                     };
                     self.scopes
@@ -1965,7 +1968,7 @@ impl ModuleResolver {
                             };
                             ResolvedIndexName::from_def(
                                 target.clone(),
-                                IndexName::from_atom(source),
+                                IndexName::from_atom(source.into_atom()),
                             )
                         }
                     };
@@ -1984,8 +1987,10 @@ impl ModuleResolver {
                     let Some(target) = source_target else {
                         continue;
                     };
-                    let resolved =
-                        ResolvedUnitName::from_def(target.clone(), UnitName::from_atom(source));
+                    let resolved = ResolvedUnitName::from_def(
+                        target.clone(),
+                        UnitName::from_atom(source.into_atom()),
+                    );
                     self.scopes
                         .get_mut(owner)
                         .ok_or_else(|| ModuleResolveError::UnknownModule {
@@ -2001,7 +2006,8 @@ impl ModuleResolver {
                     let Some(source_target) = source_target else {
                         continue;
                     };
-                    let source_constructor = ConstructorName::from_atom(item.name.name.clone());
+                    let source_constructor =
+                        ConstructorName::from_atom(item.name.name.atom().clone());
                     let resolved = match self.exported_symbol_for_import(
                         source_target,
                         source_constructor.atom(),
@@ -2025,7 +2031,7 @@ impl ModuleResolver {
                         })?;
                     if include.param_bindings.iter().any(|binding| {
                         binding.category == InputBindingCategory::Type
-                            && binding.name.name == *owner_type.atom()
+                            && binding.name.name.atom() == owner_type.atom()
                     }) {
                         return Err(ModuleResolveError::ConstructorOwnerRebound {
                             owner: owner.clone(),
@@ -2037,7 +2043,7 @@ impl ModuleResolver {
                     let has_specialized_owner = has_static_bindings
                         && items.iter().any(|candidate| {
                             candidate.namespace == ImportItemNamespace::Type
-                                && candidate.name.name == *owner_type.atom()
+                                && candidate.name.name.atom() == owner_type.atom()
                         });
                     let resolved = if has_specialized_owner {
                         let resolved = ResolvedConstructorName::from_def(
@@ -2443,12 +2449,12 @@ impl ModuleResolver {
         });
 
         let scope = self.module_scope(owner)?;
-        let alias = ModuleAliasName::from_atom(head.clone());
+        let alias = ModuleAliasName::from_atom(head.atom().clone());
         let alias_binding = scope.module_aliases.get(alias.as_str());
         let imported_alias_target = alias_binding
             .filter(|binding| binding.role.is_callable())
             .map(|binding| (binding.target.clone(), binding.access));
-        let selected_name = DeclName::from_atom(head.clone());
+        let selected_name = DeclName::from_atom(head.atom().clone());
         let selected_target = match scope.selected_decls.get(selected_name.as_str()) {
             Some(imported)
                 if self.decl_symbol_kind(imported.resolved())? == DeclSymbolKind::Dag =>
@@ -2540,7 +2546,7 @@ impl ModuleResolver {
             ImportKind::Module { alias } => {
                 let alias = alias.clone().unwrap_or_else(|| {
                     Spanned::new(
-                        ModuleAliasName::from_atom(path.leaf().name.clone()),
+                        ModuleAliasName::from_atom(path.leaf().name.atom().clone()),
                         path.leaf().span,
                     )
                 });
@@ -2689,13 +2695,18 @@ impl ModuleResolver {
 
         let additions = match item.namespace {
             ImportItemNamespace::Term => {
-                return self
-                    .term_import_item_additions(target, item, access, local_atom, visibility);
+                return self.term_import_item_additions(
+                    target,
+                    item,
+                    access,
+                    local_atom.into_atom(),
+                    visibility,
+                );
             }
             ImportItemNamespace::Type => {
                 let target_name = self.required_exported_symbol_for_import(
                     target,
-                    &item.name.name,
+                    item.name.name.atom(),
                     access,
                     ModuleSymbols::struct_types,
                     |scope| &scope.selected_struct_types,
@@ -2704,7 +2715,10 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::StructType {
-                    local: Spanned::new(StructTypeName::from_atom(local_atom), local_span),
+                    local: Spanned::new(
+                        StructTypeName::from_atom(local_atom.into_atom()),
+                        local_span,
+                    ),
                     target: target_name,
                     visibility,
                 }
@@ -2712,7 +2726,7 @@ impl ModuleResolver {
             ImportItemNamespace::Dimension => {
                 let target_name = self.required_exported_symbol_for_import(
                     target,
-                    &item.name.name,
+                    item.name.name.atom(),
                     access,
                     ModuleSymbols::dimensions,
                     |scope| &scope.selected_dimensions,
@@ -2721,7 +2735,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Dimension {
-                    local: Spanned::new(DimName::from_atom(local_atom), local_span),
+                    local: Spanned::new(DimName::from_atom(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2729,7 +2743,7 @@ impl ModuleResolver {
             ImportItemNamespace::Unit => {
                 let target_name = self.required_exported_symbol_for_import(
                     target,
-                    &item.name.name,
+                    item.name.name.atom(),
                     access,
                     ModuleSymbols::units,
                     |scope| &scope.selected_units,
@@ -2738,7 +2752,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Unit {
-                    local: Spanned::new(UnitName::from_atom(local_atom), local_span),
+                    local: Spanned::new(UnitName::from_atom(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2746,7 +2760,7 @@ impl ModuleResolver {
             ImportItemNamespace::Index => {
                 let target_name = self.required_exported_symbol_for_import(
                     target,
-                    &item.name.name,
+                    item.name.name.atom(),
                     access,
                     ModuleSymbols::indexes,
                     |scope| &scope.selected_indexes,
@@ -2755,7 +2769,7 @@ impl ModuleResolver {
                     item.name.span,
                 )?;
                 ImportAddition::Index {
-                    local: Spanned::new(IndexName::from_atom(local_atom), local_span),
+                    local: Spanned::new(IndexName::from_atom(local_atom.into_atom()), local_span),
                     target: target_name,
                     visibility,
                 }
@@ -2779,7 +2793,7 @@ impl ModuleResolver {
 
         match self.exported_symbol_for_import(
             target,
-            source_atom,
+            source_atom.atom(),
             access,
             ModuleSymbols::decls,
             |scope| &scope.selected_decls,
@@ -2794,7 +2808,7 @@ impl ModuleResolver {
         }
         match self.exported_symbol_for_import(
             target,
-            source_atom,
+            source_atom.atom(),
             access,
             ModuleSymbols::constructors,
             |scope| &scope.selected_constructors,
@@ -2816,7 +2830,7 @@ impl ModuleResolver {
                 name: source_atom.to_string(),
             }),
             (true, false) => self
-                .exported_import_item_categories(target, source_atom, access)?
+                .exported_import_item_categories(target, source_atom.atom(), access)?
                 .map_or_else(
                     || {
                         Err(ModuleResolveError::UnknownName {
@@ -2829,7 +2843,7 @@ impl ModuleResolver {
                         Err(ModuleResolveError::WrongImportCategory {
                             owner: target.clone(),
                             mismatch: ImportItemCategoryMismatch::new(
-                                source_atom.clone(),
+                                source_atom.atom().clone(),
                                 item.namespace,
                                 alternatives,
                             ),
@@ -3973,7 +3987,7 @@ mod tests {
         let idents = segments
             .iter()
             .map(|s| Ident {
-                name: atom(s),
+                name: crate::syntax::token::SourceIdentifier::parse(*s).unwrap(),
                 span: Span::new(0, 0),
             })
             .collect::<Vec<_>>();

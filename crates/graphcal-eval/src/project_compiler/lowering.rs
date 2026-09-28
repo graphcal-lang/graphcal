@@ -822,7 +822,7 @@ fn resolve_projection_expected_fail(
         .into_iter()
         .flatten()
         .find(|attribute| {
-            attribute.name.name.parse::<AttributeName>() == Ok(AttributeName::ExpectedFail)
+            attribute.name.name.as_str().parse::<AttributeName>() == Ok(AttributeName::ExpectedFail)
         })
         .map(|attribute| {
             let parsed =

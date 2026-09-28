@@ -6,6 +6,7 @@ use graphcal_compiler::syntax::ast::{
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Spanned;
+use graphcal_compiler::syntax::token::SourceIdentifier;
 
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalContext,
@@ -230,6 +231,14 @@ impl PreparedProject {
                 ),
             ));
         }
+        // Canonical constructor names are declared in source, so they always
+        // occupy a source identifier position.
+        let callee = SourceIdentifier::parse(constructor.name().as_str()).map_err(|error| {
+            structured_error(
+                path,
+                format!("constructor `{}` {error}", constructor.name()),
+            )
+        })?;
         let span = Span::new(0, 0);
         let owner = expected_id.identity().resolved().owner();
         let fields = fields
@@ -248,10 +257,7 @@ impl PreparedProject {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Expr::new(
             AstExprKind::ConstructorCall {
-                callee: IdentPath::bare(Ident {
-                    name: constructor.name().atom().clone(),
-                    span,
-                }),
+                callee: IdentPath::bare(Ident { name: callee, span }),
                 generic_args: Vec::new(),
                 fields,
             },
@@ -531,7 +537,7 @@ impl PreparedProject {
                     .definition(type_id)
                     .is_some_and(|definition| {
                         definition.constructors().iter().any(|constructor| {
-                            constructor.name().atom() == &path.leaf().name
+                            constructor.name().atom() == path.leaf().name.atom()
                                 && constructor.fields().is_empty()
                         })
                     }) =>
@@ -585,7 +591,7 @@ impl PreparedProject {
         let Some(constructor) = definition
             .constructors()
             .iter()
-            .find(|constructor| constructor.name().atom() == &callee.leaf().name)
+            .find(|constructor| constructor.name().atom() == callee.leaf().name.atom())
         else {
             return self.lower_binding_expr_in_owner(expr, owner);
         };
@@ -891,7 +897,7 @@ fn normalize_binding_literal_in_place(
                 definition
                     .constructors()
                     .iter()
-                    .find(|constructor| constructor.name().atom() == &callee.leaf().name)
+                    .find(|constructor| constructor.name().atom() == callee.leaf().name.atom())
             }) {
                 for field in fields {
                     if let Some(field_schema) = constructor

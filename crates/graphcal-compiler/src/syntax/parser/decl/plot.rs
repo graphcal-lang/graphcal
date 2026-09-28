@@ -57,10 +57,10 @@ impl Parser<'_> {
                 _ => {
                     if properties
                         .iter()
-                        .any(|p| p.name.value.as_str() == field_name.name)
+                        .any(|p| p.name.value.as_str() == field_name.name.as_str())
                     {
                         return Err(self.duplicate_plot_field(
-                            &field_name.name,
+                            field_name.name.as_str(),
                             "plot declaration",
                             field_start,
                         ));
@@ -130,7 +130,7 @@ impl Parser<'_> {
             _ => {
                 return Err(self.unexpected_token(
                     "`point`, `line`, `bar`, `area`, `rect`, or `tick`",
-                    &mark_ident.name,
+                    mark_ident.name.as_str(),
                     mark_type_span,
                 ));
             }
@@ -146,10 +146,10 @@ impl Parser<'_> {
                 self.expect(Token::Colon)?;
                 if properties
                     .iter()
-                    .any(|p: &PlotField| p.name.value.as_str() == prop_name.name)
+                    .any(|p: &PlotField| p.name.value.as_str() == prop_name.name.as_str())
                 {
                     return Err(self.duplicate_plot_field(
-                        &prop_name.name,
+                        prop_name.name.as_str(),
                         "mark properties",
                         prop_start,
                     ));
@@ -202,7 +202,7 @@ impl Parser<'_> {
                 _ => {
                     return Err(self.unexpected_token(
                         "encoding channel (`x`, `y`, `color`, `size`, `shape`, `opacity`, `detail`, `text`, `tooltip`)",
-                        &channel_ident.name,
+                        channel_ident.name.as_str(),
                         channel_span,
                     ));
                 }
@@ -210,7 +210,7 @@ impl Parser<'_> {
             self.expect(Token::Colon)?;
             if encodings.iter().any(|e: &Encoding| e.channel == channel) {
                 return Err(self.duplicate_plot_field(
-                    &channel_ident.name,
+                    channel_ident.name.as_str(),
                     "encode block",
                     channel_span,
                 ));

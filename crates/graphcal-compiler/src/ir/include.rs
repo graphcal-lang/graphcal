@@ -17,8 +17,9 @@ use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::names::{NameAtom, NamespacePath};
+use crate::syntax::names::NamespacePath;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::token::SourceIdentifier;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::ExprVisitor;
 
@@ -837,12 +838,12 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         };
         match reference {
             crate::syntax::ast::UnresolvedRef::IndexLabel { index, label, .. } => {
-                let name = IndexName::from_atom(index.leaf().name.clone());
+                let name = IndexName::from_atom(index.leaf().name.atom().clone());
                 self.check_label(&name, format!("`{index}#{}`", label.value))
             }
             crate::syntax::ast::UnresolvedRef::Path(path) => {
                 if let Some(name) = path.as_bare() {
-                    let constructor = ConstructorName::from_atom(name.name.clone());
+                    let constructor = ConstructorName::from_atom(name.name.atom().clone());
                     self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
                 }
                 Ok(())
@@ -896,7 +897,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
                     if let Some(name) = path.as_bare() {
-                        let constructor = ConstructorName::from_atom(name.name.clone());
+                        let constructor = ConstructorName::from_atom(name.name.atom().clone());
                         self.check_constructor(
                             &constructor,
                             format!("match constructor `{constructor}`"),
@@ -923,7 +924,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
         if let ExprKind::ConstructorCall { callee, .. } = &expr.kind
             && let Some(name) = callee.as_bare()
         {
-            let constructor = ConstructorName::from_atom(name.name.clone());
+            let constructor = ConstructorName::from_atom(name.name.atom().clone());
             self.check_constructor(&constructor, format!("constructor `{constructor}(...)`"))?;
         }
         fields
@@ -941,9 +942,9 @@ fn rewrite_ambiguous_generic_arg_names<K>(
     match arg {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
             if let Some(new_name) = bindings.get(ident.name.as_str())
-                && let Ok(atom) = NameAtom::parse(new_name.as_ref())
+                && let Ok(identifier) = SourceIdentifier::parse(new_name.as_ref())
             {
-                ident.name = atom;
+                ident.name = identifier;
             }
         }
         crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
@@ -960,11 +961,12 @@ fn rewrite_ambiguous_index_arg_declared_names(
 ) {
     match arg {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-            if let Some(name) = bindings
+            if let Some(identifier) = bindings
                 .get(ident.name.as_str())
                 .and_then(types::IndexBindingTarget::declared_name)
+                .and_then(|name| SourceIdentifier::parse(name.as_str()).ok())
             {
-                ident.name = name.atom().clone();
+                ident.name = identifier;
             }
         }
         crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {

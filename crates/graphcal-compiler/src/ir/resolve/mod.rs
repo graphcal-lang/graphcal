@@ -1086,7 +1086,7 @@ fn collect_ambiguous_generic_refs(
 ) {
     match arg {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => refs.push((
-            crate::syntax::names::NamePath::local(ident.name.clone()),
+            crate::syntax::names::NamePath::local(ident.name.atom().clone()),
             ident.span,
         )),
         crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {

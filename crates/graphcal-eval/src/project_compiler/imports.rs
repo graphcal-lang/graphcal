@@ -150,7 +150,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             &InlineDagIncludeTarget {
                 dag_def: dag,
                 dag_id: &dag_id,
-                dag_name,
+                dag_name: dag_name.as_str(),
                 parent_dag_id: file_dag_id,
             },
             include,
@@ -424,7 +424,7 @@ fn validate_include_item_attributes(
         (false, true) => Some(DeclarationKind::Assert),
         (false, false) => None,
     };
-    let target = AttributeTarget::include_item(producer, import_item.name.name.clone());
+    let target = AttributeTarget::include_item(producer, import_item.name.name.atom().clone());
     let attributes =
         graphcal_compiler::ir::resolve::attribute_validation::validate_attributes(
             &import_item.attributes,
@@ -536,7 +536,7 @@ fn file_exports_plot(
             items.iter().any(|item| {
                 item.is_pub
                     && item.local_name_atom() == name
-                    && visit(project, target.source_file(), &item.name.name, seen)
+                    && visit(project, target.source_file(), item.name.name.atom(), seen)
             })
         })
     }
@@ -642,8 +642,10 @@ fn classify_param_bindings(
         let binding_name = &binding.name.name;
         match binding.category {
             InputBindingCategory::Unmarked if dep_index.params.contains(binding_name.as_str()) => {
-                out.params
-                    .insert(DeclName::expect_valid(binding_name), binding.value.clone());
+                out.params.insert(
+                    DeclName::from_atom(binding_name.atom().clone()),
+                    binding.value.clone(),
+                );
             }
             InputBindingCategory::Type
                 if dep_index
@@ -653,11 +655,11 @@ fn classify_param_bindings(
             {
                 let rhs_name = lowering::extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name,
+                    binding_name.as_str(),
                     file_src,
                 )?;
                 out.types.insert(
-                    StructTypeName::expect_valid(binding_name),
+                    StructTypeName::from_atom(binding_name.atom().clone()),
                     StructTypeName::expect_valid(rhs_name),
                 );
             }
@@ -669,11 +671,11 @@ fn classify_param_bindings(
             {
                 let rhs_name = lowering::extract_type_name_from_binding_expr(
                     &binding.value,
-                    binding_name,
+                    binding_name.as_str(),
                     file_src,
                 )?;
                 out.dims.insert(
-                    DimName::expect_valid(binding_name),
+                    DimName::from_atom(binding_name.atom().clone()),
                     DimName::expect_valid(rhs_name),
                 );
             }
@@ -683,7 +685,7 @@ fn classify_param_bindings(
                     .get(binding_name.as_str())
                     .is_some_and(|role| role.is_bindable()) =>
             {
-                let dep_name = IndexName::expect_valid(binding_name);
+                let dep_name = IndexName::from_atom(binding_name.atom().clone());
                 let target =
                     lowering::extract_index_binding_target(&binding.value, &dep_name, file_src)?;
                 out.index_spans.insert(dep_name.clone(), binding.value.span);
@@ -825,7 +827,7 @@ fn projected_static_alias(
     let alias = item.local_name_atom().clone();
     match item.namespace {
         ImportItemNamespace::Type => {
-            let source = StructTypeName::from_atom(source);
+            let source = StructTypeName::from_atom(source.into_atom());
             let target = type_bindings
                 .get(&source)
                 .cloned()
@@ -841,14 +843,14 @@ fn projected_static_alias(
             })
         }
         ImportItemNamespace::Dimension => {
-            let source = DimName::from_atom(source);
+            let source = DimName::from_atom(source.into_atom());
             Some(ProjectedStaticAlias::Dimension {
                 alias: DimName::from_atom(alias),
                 target: dim_bindings.get(&source).cloned().unwrap_or(source),
             })
         }
         ImportItemNamespace::Index => {
-            let source = IndexName::from_atom(source);
+            let source = IndexName::from_atom(source.into_atom());
             Some(ProjectedStaticAlias::Index {
                 alias: IndexName::from_atom(alias),
                 target: index_bindings
@@ -859,7 +861,7 @@ fn projected_static_alias(
         }
         ImportItemNamespace::Unit => Some(ProjectedStaticAlias::Unit {
             alias: UnitName::from_atom(alias),
-            target: UnitName::from_atom(source),
+            target: UnitName::from_atom(source.into_atom()),
         }),
         ImportItemNamespace::Term => None,
     }
@@ -898,14 +900,14 @@ fn record_include_projection(
             // A projected dimension may be defined over the instance's
             // dimension ports, so it carries this include's bindings.
             selected.insert_dimension_projection(
-                DimName::from_atom(import_item.name.name.clone()),
+                DimName::from_atom(import_item.name.name.atom().clone()),
                 DimName::from_atom(import_item.local_name_atom().clone()),
                 dim_bindings.clone(),
             );
         } else {
             selected.insert_as(
                 import_item.namespace,
-                import_item.name.name.clone(),
+                import_item.name.name.atom().clone(),
                 import_item.local_name_atom().clone(),
             );
         }
@@ -928,11 +930,11 @@ fn projection_uses_source_declaration(
     projection: &ProjectedStaticAlias,
 ) -> bool {
     match projection {
-        ProjectedStaticAlias::Type { target, .. } => target.atom() == &item.name.name,
-        ProjectedStaticAlias::Dimension { target, .. } => target.atom() == &item.name.name,
+        ProjectedStaticAlias::Type { target, .. } => target.atom() == item.name.name.atom(),
+        ProjectedStaticAlias::Dimension { target, .. } => target.atom() == item.name.name.atom(),
         ProjectedStaticAlias::Index { target, .. } => matches!(
             target,
-            IndexBindingTarget::Declared(target) if target.atom() == &item.name.name
+            IndexBindingTarget::Declared(target) if target.atom() == item.name.name.atom()
         ),
         ProjectedStaticAlias::Unit { .. } => true,
     }
@@ -1149,19 +1151,19 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let original = DeclName::from_atom(orig_name.clone());
+                let original = DeclName::from_atom(orig_name.atom().clone());
                 let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
                     dep_loaded.ast(),
-                    orig_name,
+                    orig_name.as_str(),
                     import_item.namespace,
                     &include_decl.path.display_path(),
                     file_src,
                     import_item.name.span,
                 )?;
                 if let Some(binding) = exported_bindings.iter().find(|binding| {
-                    binding.name == *orig_name
+                    &binding.name == orig_name.atom()
                         && binding.target.kind().namespace() == import_item.namespace
                 }) {
                     validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
@@ -1187,11 +1189,12 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     );
                 }
                 let is_plot = is_term_namespace
-                    && (dep_index.is_plot(orig_name)
-                        || file_exports_plot(project, import_dag_id, orig_name));
-                let is_assert = is_term_namespace && dep_index.is_assert(orig_name);
+                    && (dep_index.is_plot(orig_name.as_str())
+                        || file_exports_plot(project, import_dag_id, orig_name.atom()));
+                let is_assert = is_term_namespace && dep_index.is_assert(orig_name.as_str());
                 let is_graph_value = is_term_namespace
-                    && (dep_index.is_const(orig_name) || dep_index.is_runtime(orig_name));
+                    && (dep_index.is_const(orig_name.as_str())
+                        || dep_index.is_runtime(orig_name.as_str()));
                 if is_graph_value {
                     validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
                 }
@@ -1229,8 +1232,8 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 let scoped = ScopedName::local(local.clone());
                 let span = import_item.local_span();
                 match (
-                    dep_index.is_const(orig_name),
-                    dep_index.is_runtime(orig_name),
+                    dep_index.is_const(orig_name.as_str()),
+                    dep_index.is_runtime(orig_name.as_str()),
                 ) {
                     (true, _) => ctx.imported_names.const_names.push((scoped, span)),
                     (false, true) => ctx.imported_names.param_names.push((scoped, span)),
@@ -1304,7 +1307,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| DeclName::from_atom(it.name.name.clone()))
+            .map(|it| DeclName::from_atom(it.name.name.atom().clone()))
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -1423,19 +1426,19 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let original = DeclName::from_atom(orig_name.clone());
+                let original = DeclName::from_atom(orig_name.atom().clone());
                 let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
                     &dag_body,
-                    orig_name,
+                    orig_name.as_str(),
                     import_item.namespace,
                     dag_name,
                     file_src,
                     import_item.name.span,
                 )?;
                 if let Some(binding) = exported_bindings.iter().find(|binding| {
-                    binding.name == *orig_name
+                    &binding.name == orig_name.atom()
                         && binding.target.kind().namespace() == import_item.namespace
                 }) {
                     validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
@@ -1565,7 +1568,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
             .filter(|it| it.is_pub)
-            .map(|it| DeclName::from_atom(it.name.name.clone()))
+            .map(|it| DeclName::from_atom(it.name.name.atom().clone()))
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
@@ -1659,7 +1662,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 let local_name = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 let resolved_export = exported_bindings.iter().find(|binding| {
-                    binding.name == *orig_name
+                    &binding.name == orig_name.atom()
                         && binding.target.kind().namespace() == import_item.namespace
                 });
                 if let Some(binding) = resolved_export {
@@ -1671,13 +1674,13 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 if resolved_export.is_none()
                     && !declarations_expose_import_item(
                         declarations,
-                        orig_name,
+                        orig_name.as_str(),
                         import_item.namespace,
                     )
                 {
                     let exists = declarations_have_import_item(
                         declarations,
-                        orig_name,
+                        orig_name.as_str(),
                         import_item.namespace,
                     );
                     if exists {
@@ -1691,7 +1694,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     return Err(CompileError::Eval(
                         import_item_not_found_error_from_declarations(
                             declarations,
-                            orig_name,
+                            orig_name.atom(),
                             import_item.namespace,
                             &import_path.display_path(),
                             file_src,
@@ -1702,7 +1705,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 
                 validate_static_import_capability(
                     declarations,
-                    orig_name,
+                    orig_name.atom(),
                     import_item.namespace,
                     file_src,
                     import_item.name.span,
@@ -1720,7 +1723,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
                             dep,
-                            orig_name,
+                            orig_name.atom(),
                             file_src,
                             import_item.name.span,
                         )?;
@@ -1734,7 +1737,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     // visible; likewise `unit spd as s`).
                     selected.insert_as(
                         import_item.namespace,
-                        orig_name.clone(),
+                        orig_name.atom().clone(),
                         import_item.local_name_atom().clone(),
                     );
                     continue;
@@ -1762,7 +1765,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         }
                         _ => None,
                     })
-                    .or_else(|| pure_import_term_disposition(declarations, orig_name))
+                    .or_else(|| pure_import_term_disposition(declarations, orig_name.as_str()))
                     .ok_or_else(|| {
                         CompileError::Eval(GraphcalError::ImportNameNotFound {
                             name: orig_name.to_string(),
@@ -1819,11 +1822,11 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         ctx.imported_type_system_names
                             .entry(module_target.clone())
                             .or_default()
-                            .insert(import_item.namespace, orig_name.clone());
+                            .insert(import_item.namespace, orig_name.atom().clone());
                     }
                     PureImportTermDisposition::Reject(reason) => {
                         return Err(CompileError::Eval(reason.diagnostic(
-                            orig_name,
+                            orig_name.atom(),
                             file_src,
                             import_item.name.span,
                         )));

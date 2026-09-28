@@ -857,7 +857,10 @@ When syntax changes, update these together with the compiler/parser and docs.
 
 ### 3.1 Typed Names
 
-Identifier leaf segments are `NameAtom`s. Definition-site names are
+Identifier leaf segments are `NameAtom`s. A parsed AST `Ident` holds the
+narrower `SourceIdentifier` (`syntax/token.rs`), proven by the lexer to be one
+`IDENT` token, so compiler-generated names cannot pose as written identifiers.
+Definition-site names are
 `NameDef<Ns>` aliases in `syntax/names.rs`: `DeclName`, `DimName`, `UnitName`,
 `StructTypeName`, `IndexName`, `FnName`, `FieldName`, `IndexVariantName`,
 `ConstructorName`, `GenericParamName`, `LocalName`, `ModuleAliasName`, and

@@ -42,7 +42,7 @@ pub fn validate_unique_include_producers(
         .try_fold(HashMap::<IncludeProducer, Span>::new(), |mut seen, item| {
             let producer = IncludeProducer {
                 namespace: item.namespace,
-                name: item.name.name.clone(),
+                name: item.name.name.atom().clone(),
             };
             seen.insert(producer.clone(), item.name.span)
                 .map_or(Ok(seen), |first| {

@@ -563,7 +563,7 @@ impl Parser<'_> {
         let terminator = probe.peek().copied();
         if !matches!(terminator, Some(Token::LParen | Token::DoubleColon)) {
             let span = at_span.merge(first.span);
-            let name = ScopedName::from(DeclName::from_atom(first.name));
+            let name = ScopedName::from(DeclName::from_atom(first.name.into_atom()));
             return Ok(Expr::new(
                 ExprKind::GraphRef(Spanned::new(name, span)),
                 span,
@@ -585,9 +585,9 @@ impl Parser<'_> {
         let member_span = member.span;
         let scoped = ScopedName::qualified_path(
             namespace.into_iter().map(|segment| {
-                crate::syntax::module_name::ModuleAliasName::from_atom(segment.name)
+                crate::syntax::module_name::ModuleAliasName::from_atom(segment.name.into_atom())
             }),
-            DeclName::from_atom(member.name),
+            DeclName::from_atom(member.name.into_atom()),
         );
         Ok(Expr::new(
             ExprKind::GraphRef(Spanned::new(scoped, at_span.merge(member_span))),
@@ -1372,7 +1372,7 @@ mod tests {
     fn parse_function_call_one_arg() {
         let expr = parse_node_expr("sqrt(@x)");
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
-            assert_eq!(callee.as_bare().unwrap().name, "sqrt");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
             assert!(matches!(&args[0].kind, ExprKind::GraphRef(id) if id.value.member() == "x"));
         } else {
@@ -1384,8 +1384,8 @@ mod tests {
     fn parse_qualified_function_call_preserves_callee_path() {
         let expr = parse_node_expr("module::sqrt(@x)");
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
-            assert_eq!(callee.owner_segments().unwrap()[0].name, "module");
-            assert_eq!(callee.leaf().name, "sqrt");
+            assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "module");
+            assert_eq!(callee.leaf().name.as_str(), "sqrt");
             assert_eq!(args.len(), 1);
         } else {
             panic!("expected FnCall");
@@ -1457,7 +1457,7 @@ mod tests {
     fn parse_function_call_two_args() {
         let expr = parse_node_expr("atan2(@a, @b)");
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
-            assert_eq!(callee.as_bare().unwrap().name, "atan2");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "atan2");
             assert_eq!(args.len(), 2);
         } else {
             panic!("expected FnCall");
@@ -1468,7 +1468,7 @@ mod tests {
     fn parse_function_call_zero_args() {
         let expr = parse_node_expr("foo()");
         if let ExprKind::FnCall { callee, args, .. } = &expr.kind {
-            assert_eq!(callee.as_bare().unwrap().name, "foo");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "foo");
             assert_eq!(args.len(), 0);
         } else {
             panic!("expected FnCall");
@@ -1484,7 +1484,7 @@ mod tests {
             args,
         } = &expr.kind
         {
-            assert_eq!(callee.as_bare().unwrap().name, "eye");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "eye");
             assert_eq!(generic_args.len(), 1);
             assert!(matches!(
                 &generic_args[0],
@@ -1518,7 +1518,7 @@ mod tests {
             args,
         } = &expr.kind
         {
-            assert_eq!(callee.as_bare().unwrap().name, "make");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "make");
             assert_eq!(generic_args.len(), 1);
             assert!(matches!(
                 &generic_args[0],
@@ -1541,7 +1541,7 @@ mod tests {
             args,
         } = &expr.kind
         {
-            assert_eq!(callee.as_bare().unwrap().name, "foo");
+            assert_eq!(callee.as_bare().unwrap().name.as_str(), "foo");
             assert_eq!(generic_args.len(), 2);
             assert!(matches!(
                 &generic_args[0],
@@ -1680,7 +1680,7 @@ mod tests {
                 matches!(&lhs.kind, ExprKind::GraphRef(id) if id.value.member() == "v_exhaust")
             );
             assert!(
-                matches!(&rhs.kind, ExprKind::FnCall { callee, .. } if callee.as_bare().is_some_and(|name| name.name == "ln"))
+                matches!(&rhs.kind, ExprKind::FnCall { callee, .. } if callee.as_bare().is_some_and(|name| name.name.as_str() == "ln"))
             );
         } else {
             panic!("expected Mul");
@@ -1781,9 +1781,9 @@ mod tests {
         match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
-                assert_eq!(path.segments[0].name, "clamp");
+                assert_eq!(path.segments[0].name.as_str(), "clamp");
                 assert_eq!(args.len(), 1);
-                assert_eq!(args[0].name.name, "x");
+                assert_eq!(args[0].name.name.as_str(), "x");
                 assert!(
                     matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.value.member() == "p")
                 );
@@ -1805,10 +1805,10 @@ mod tests {
         match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
-                assert_eq!(path.segments[0].name, "scale");
+                assert_eq!(path.segments[0].name.as_str(), "scale");
                 assert_eq!(args.len(), 2);
-                assert_eq!(args[0].name.name, "factor");
-                assert_eq!(args[1].name.name, "v");
+                assert_eq!(args[0].name.name.as_str(), "factor");
+                assert_eq!(args[1].name.name.as_str(), "v");
                 assert_eq!(output.value.as_str(), "out");
             }
             other => panic!("expected InlineDagRef, got {other:?}"),
@@ -1840,11 +1840,11 @@ mod tests {
         match &node.definition.formula().unwrap().kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 2);
-                assert_eq!(path.segments[0].name, "geom");
-                assert_eq!(path.segments[1].name, "clamp");
+                assert_eq!(path.segments[0].name.as_str(), "geom");
+                assert_eq!(path.segments[1].name.as_str(), "clamp");
                 assert_eq!(path.display_path(), "geom.clamp");
                 assert_eq!(args.len(), 1);
-                assert_eq!(args[0].name.name, "x");
+                assert_eq!(args[0].name.name.as_str(), "x");
                 assert_eq!(output.value.as_str(), "result");
             }
             other => panic!("expected InlineDagRef, got {other:?}"),
@@ -1973,7 +1973,7 @@ mod tests {
                         .collect::<Vec<_>>(),
                     vec!["constants", "physics"]
                 );
-                assert_eq!(path.leaf().name, "G0");
+                assert_eq!(path.leaf().name.as_str(), "G0");
             }
             other => panic!("expected unresolved path, got {other:?}"),
         }

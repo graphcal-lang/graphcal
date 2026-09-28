@@ -1594,7 +1594,7 @@ fn collect_attribute_refs(
     }
 
     for attribute in attributes {
-        if attribute.name.name.parse::<AttributeName>() == Ok(AttributeName::Assumes) {
+        if attribute.name.name.as_str().parse::<AttributeName>() == Ok(AttributeName::Assumes) {
             for argument in &attribute.args {
                 collect_argument(argument, table, refs);
             }
@@ -2137,7 +2137,7 @@ fn collect_include_decl(
                 span: binding.name.span,
                 target: SymbolKey::Declaration(ResolvedDeclName::from_def(
                     target.clone(),
-                    DeclName::from_atom(binding.name.name.clone()),
+                    DeclName::from_atom(binding.name.name.atom().clone()),
                 ))
                 .into(),
             });
@@ -2150,7 +2150,7 @@ fn collect_include_decl(
                     span: item.name.span,
                     target: SymbolKey::Declaration(ResolvedDeclName::from_def(
                         target.clone(),
-                        DeclName::from_atom(item.name.name.clone()),
+                        DeclName::from_atom(item.name.name.atom().clone()),
                     ))
                     .into(),
                 });
@@ -2158,7 +2158,7 @@ fn collect_include_decl(
                     table.references.push(ReferenceInfo {
                         span: alias.span,
                         target: ReferenceTarget::Unresolved(UnresolvedSymbol::Declaration(
-                            SourceSymbolPath::local(alias.name.clone()),
+                            SourceSymbolPath::local(alias.name.atom().clone()),
                         )),
                     });
                 }
@@ -2347,10 +2347,10 @@ fn collect_ambiguous_generic_arg_refs(
         graphcal_compiler::syntax::ast::AmbiguousGenericArg::Name(ident) => {
             table.references.push(ReferenceInfo {
                 span: ident.span,
-                target: generic_param_symbol(&ident.name, generic_scope).map_or_else(
+                target: generic_param_symbol(ident.name.atom(), generic_scope).map_or_else(
                     || {
                         ReferenceTarget::Unresolved(UnresolvedSymbol::GenericArgument(
-                            SourceSymbolPath::local(ident.name.clone()),
+                            SourceSymbolPath::local(ident.name.atom().clone()),
                         ))
                     },
                     ReferenceTarget::Resolved,
@@ -2373,7 +2373,7 @@ fn collect_nat_generic_param_refs(
     match expr {
         graphcal_compiler::syntax::ast::NatExpr::Literal(..) => {}
         graphcal_compiler::syntax::ast::NatExpr::Var(ident) => {
-            if let Some(target) = generic_param_symbol(&ident.name, generic_scope) {
+            if let Some(target) = generic_param_symbol(ident.name.atom(), generic_scope) {
                 table.references.push(ReferenceInfo {
                     span: ident.span,
                     target: target.into(),

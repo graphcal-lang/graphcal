@@ -150,7 +150,7 @@ pub fn extract_external_decl_surface_from_declarations(
                     if d.visibility.is_public() =>
                 {
                     let name = alias.as_ref().map_or_else(
-                        || d.path.leaf().name.clone(),
+                        || d.path.leaf().name.atom().clone(),
                         |alias| alias.value.atom().clone(),
                     );
                     surface.insert_explicit_export(DeclName::from_atom(name));

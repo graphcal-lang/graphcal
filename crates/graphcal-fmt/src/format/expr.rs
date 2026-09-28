@@ -277,7 +277,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                     IndexArg::Variant { index, variant } => {
                         RcDoc::text(format!("{}#{}", index.value, variant.value.as_str()))
                     }
-                    IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
+                    IndexArg::Var(ident) => RcDoc::text(ident.name.as_str().to_owned()),
                     IndexArg::Expr(e) => format_delimited_expr(fmt, e),
                 })
                 .collect();
@@ -1087,7 +1087,7 @@ fn append_pattern_bindings(
         .map(|b| match b {
             PatternBinding::Bind { field, var } => RcDoc::text(field.value.as_str().to_string())
                 .append(RcDoc::text(": "))
-                .append(RcDoc::text(var.name.clone())),
+                .append(RcDoc::text(var.name.as_str().to_owned())),
             PatternBinding::Wildcard { field, .. } => {
                 RcDoc::text(field.value.as_str().to_string()).append(RcDoc::text(": _"))
             }
@@ -1168,7 +1168,7 @@ fn format_inline_dag_ref(
                 graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
             };
             RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.clone()))
+                .append(RcDoc::text(b.name.name.as_str().to_owned()))
                 .append(RcDoc::text(": "))
                 .append(format_delimited_expr(fmt, &b.value))
         })

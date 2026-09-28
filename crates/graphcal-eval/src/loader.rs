@@ -2779,7 +2779,7 @@ fn resolve_project_module<F: FileSystemReader>(
     };
     let segments = path.segments();
     // Real package: first segment must match the package name.
-    if segments[0].name != manifest.name.as_str() {
+    if segments[0].name.as_str() != manifest.name.as_str() {
         return ModuleResolution::Failed(ResolveFailure::PackageNameMismatch {
             package_name: manifest.name.to_string(),
         });
@@ -2802,7 +2802,7 @@ fn resolve_project_module<F: FileSystemReader>(
         }
         let inline_path = segments[file_segment_count..]
             .iter()
-            .map(|segment| DeclName::from_atom(segment.name.clone()))
+            .map(|segment| DeclName::from_atom(segment.name.atom().clone()))
             .collect();
         return ModuleResolution::Resolved(ResolvedFile {
             file: canonical,

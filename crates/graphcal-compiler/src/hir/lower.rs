@@ -565,10 +565,10 @@ fn non_nat_sort_for_ambiguous_arg(
 ) -> Option<&'static str> {
     match arg {
         ast::AmbiguousGenericArg::Name(ident) => {
-            if ctx.generic_scope.get_atom(&ident.name).is_some() {
+            if ctx.generic_scope.get_atom(ident.name.atom()).is_some() {
                 return None;
             }
-            let path = NamePath::local(ident.name.clone());
+            let path = NamePath::local(ident.name.atom().clone());
             if ctx.resolver.resolve_index_path(ctx.owner, &path).is_ok() {
                 return Some("Index argument");
             }
@@ -636,7 +636,7 @@ fn collect_ambiguous_dim_terms(arg: &ast::AmbiguousGenericArg, terms: &mut Vec<a
         ast::AmbiguousGenericArg::Name(ident) => terms.push(ast::DimExprItem {
             op: ast::MulDivOp::Mul,
             term: ast::DimTerm {
-                name: Spanned::new(NamePath::local(ident.name.clone()), ident.span),
+                name: Spanned::new(NamePath::local(ident.name.atom().clone()), ident.span),
                 power: None,
                 span: ident.span,
             },

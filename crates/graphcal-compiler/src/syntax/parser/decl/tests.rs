@@ -887,10 +887,10 @@ fn parse_import_brace_list_no_alias() {
     };
     assert_eq!(names.len(), 2);
     assert_eq!(names[0].namespace, ImportItemNamespace::Term);
-    assert_eq!(names[0].name.name, "x");
+    assert_eq!(names[0].name.name.as_str(), "x");
     assert!(names[0].alias.is_none());
     assert_eq!(names[0].local_name(), "x");
-    assert_eq!(names[1].name.name, "Y");
+    assert_eq!(names[1].name.name.as_str(), "Y");
     assert!(names[1].alias.is_none());
     assert_eq!(names[1].local_name(), "Y");
 }
@@ -907,8 +907,8 @@ fn parse_import_brace_list_with_alias() {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 1);
-    assert_eq!(names[0].name.name, "x");
-    assert_eq!(names[0].alias.as_ref().unwrap().name, "y");
+    assert_eq!(names[0].name.name.as_str(), "x");
+    assert_eq!(names[0].alias.as_ref().unwrap().name.as_str(), "y");
     assert_eq!(names[0].local_name(), "y");
 }
 
@@ -938,8 +938,8 @@ fn parse_import_category_items_with_aliases() {
         (&names[3], ImportItemNamespace::Index, "Case", "Scenario"),
     ] {
         assert_eq!(item.namespace, namespace);
-        assert_eq!(item.name.name, name);
-        assert_eq!(item.alias.as_ref().unwrap().name, alias);
+        assert_eq!(item.name.name.as_str(), name);
+        assert_eq!(item.alias.as_ref().unwrap().name.as_str(), alias);
         assert_eq!(item.local_name(), alias);
     }
 }
@@ -979,12 +979,12 @@ fn parse_import_brace_list_mixed_alias() {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 3);
-    assert_eq!(names[0].name.name, "x");
+    assert_eq!(names[0].name.name.as_str(), "x");
     assert!(names[0].alias.is_none());
-    assert_eq!(names[1].name.name, "Y");
-    assert_eq!(names[1].alias.as_ref().unwrap().name, "Z");
+    assert_eq!(names[1].name.name.as_str(), "Y");
+    assert_eq!(names[1].alias.as_ref().unwrap().name.as_str(), "Z");
     assert_eq!(names[1].local_name(), "Z");
-    assert_eq!(names[2].name.name, "w");
+    assert_eq!(names[2].name.name.as_str(), "w");
     assert!(names[2].alias.is_none());
 }
 
@@ -1041,14 +1041,14 @@ fn parse_import_dotted_path_selective() {
         panic!("expected Import");
     };
     assert_eq!(u.path.segments.len(), 2);
-    assert_eq!(u.path.segments[0].name, "nasa");
-    assert_eq!(u.path.segments[1].name, "rocket");
+    assert_eq!(u.path.segments[0].name.as_str(), "nasa");
+    assert_eq!(u.path.segments[1].name.as_str(), "rocket");
     assert_eq!(u.path.display_path(), "nasa.rocket");
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 1);
-    assert_eq!(names[0].name.name, "delta_v");
+    assert_eq!(names[0].name.name.as_str(), "delta_v");
 }
 
 #[test]
@@ -1086,7 +1086,7 @@ fn parse_include_dotted_path_with_param_bindings() {
     };
     assert_eq!(u.path.display_path(), "nasa.rocket");
     assert_eq!(u.param_bindings.len(), 1);
-    assert_eq!(u.param_bindings[0].name.name, "dry_mass");
+    assert_eq!(u.param_bindings[0].name.name.as_str(), "dry_mass");
     let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
@@ -1179,9 +1179,9 @@ fn parse_import_brace_list_pub_items() {
     };
     assert_eq!(items.len(), 2);
     assert!(items[0].is_pub);
-    assert_eq!(items[0].name.name, "x");
+    assert_eq!(items[0].name.name.as_str(), "x");
     assert!(!items[1].is_pub);
-    assert_eq!(items[1].name.name, "Y");
+    assert_eq!(items[1].name.name.as_str(), "Y");
 }
 
 #[test]
@@ -1223,7 +1223,10 @@ fn parse_attribute_no_args() {
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
     assert_eq!(file.declarations[0].attributes.len(), 1);
-    assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
+    assert_eq!(
+        file.declarations[0].attributes[0].name.name.as_str(),
+        "lazy"
+    );
     assert!(file.declarations[0].attributes[0].args.is_empty());
 }
 
@@ -1234,7 +1237,7 @@ fn parse_attribute_with_one_arg() {
         .unwrap();
     assert_eq!(file.declarations[0].attributes.len(), 1);
     let attr = &file.declarations[0].attributes[0];
-    assert_eq!(attr.name.name, "assumes");
+    assert_eq!(attr.name.name.as_str(), "assumes");
     assert_eq!(attr.args.len(), 1);
     let AttributeArg::Path { path } = &attr.args[0] else {
         panic!("expected attribute path arg");
@@ -1248,7 +1251,7 @@ fn parse_attribute_with_multiple_args() {
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
-    assert_eq!(attr.name.name, "assumes");
+    assert_eq!(attr.name.name.as_str(), "assumes");
     assert_eq!(attr.args.len(), 2);
     let AttributeArg::Path { path: first } = &attr.args[0] else {
         panic!("expected first attribute path arg");
@@ -1275,8 +1278,14 @@ fn parse_multiple_attributes() {
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations[0].attributes.len(), 2);
-    assert_eq!(file.declarations[0].attributes[0].name.name, "lazy");
-    assert_eq!(file.declarations[0].attributes[1].name.name, "assumes");
+    assert_eq!(
+        file.declarations[0].attributes[0].name.name.as_str(),
+        "lazy"
+    );
+    assert_eq!(
+        file.declarations[0].attributes[1].name.name.as_str(),
+        "assumes"
+    );
 }
 
 #[test]
@@ -1311,7 +1320,7 @@ fn parse_attribute_expected_fail_no_args() {
         .unwrap();
     assert_eq!(file.declarations[0].attributes.len(), 1);
     let attr = &file.declarations[0].attributes[0];
-    assert_eq!(attr.name.name, "expected_fail");
+    assert_eq!(attr.name.name.as_str(), "expected_fail");
     assert!(attr.args.is_empty());
 }
 
@@ -1465,9 +1474,9 @@ fn parse_include_item_with_expected_fail() {
         panic!("expected selective include");
     };
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].name.name, "my_assert");
+    assert_eq!(items[0].name.name.as_str(), "my_assert");
     assert_eq!(items[0].attributes.len(), 1);
-    assert_eq!(items[0].attributes[0].name.name, "expected_fail");
+    assert_eq!(items[0].attributes[0].name.name.as_str(), "expected_fail");
     assert_eq!(items[0].attributes[0].args.len(), 1);
 }
 
@@ -1485,10 +1494,13 @@ fn parse_include_item_with_expected_fail_and_alias() {
         panic!("expected selective include");
     };
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].name.name, "my_assert");
-    assert_eq!(items[0].alias.as_ref().unwrap().name, "local_assert");
+    assert_eq!(items[0].name.name.as_str(), "my_assert");
+    assert_eq!(
+        items[0].alias.as_ref().unwrap().name.as_str(),
+        "local_assert"
+    );
     assert_eq!(items[0].attributes.len(), 1);
-    assert_eq!(items[0].attributes[0].name.name, "expected_fail");
+    assert_eq!(items[0].attributes[0].name.name.as_str(), "expected_fail");
 }
 
 #[test]
@@ -1589,7 +1601,10 @@ fn parse_dag_with_attributes() {
     .unwrap();
     assert_eq!(file.declarations.len(), 1);
     assert_eq!(file.declarations[0].attributes.len(), 1);
-    assert_eq!(file.declarations[0].attributes[0].name.name, "hidden");
+    assert_eq!(
+        file.declarations[0].attributes[0].name.name.as_str(),
+        "hidden"
+    );
     assert!(matches!(&file.declarations[0].kind, DeclKind::Dag(_)));
 }
 
@@ -1643,7 +1658,7 @@ fn parse_include_single_segment_dag_name() {
     match &file.declarations[0].kind {
         DeclKind::Include(include_decl) => {
             assert_eq!(include_decl.path.segments.len(), 1);
-            assert_eq!(include_decl.path.segments[0].name, "my_dag");
+            assert_eq!(include_decl.path.segments[0].name.as_str(), "my_dag");
             assert_eq!(include_decl.param_bindings.len(), 1);
         }
         other => panic!("expected Include, got {other:?}"),

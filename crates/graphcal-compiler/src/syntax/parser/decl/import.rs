@@ -135,13 +135,15 @@ impl Parser<'_> {
                 let binder = match constraint.name.as_str() {
                     "Dim" => crate::syntax::ast::ExternGenericBinder::Dim(
                         crate::syntax::span::Spanned::new(
-                            crate::syntax::dimension::DimVarName::from_atom(var.name),
+                            crate::syntax::dimension::DimVarName::from_atom(var.name.into_atom()),
                             var.span,
                         ),
                     ),
                     "Index" => crate::syntax::ast::ExternGenericBinder::Index(
                         crate::syntax::span::Spanned::new(
-                            crate::syntax::index_name::IndexVarName::from_atom(var.name),
+                            crate::syntax::index_name::IndexVarName::from_atom(
+                                var.name.into_atom(),
+                            ),
                             var.span,
                         ),
                     ),
@@ -424,7 +426,7 @@ impl Parser<'_> {
                 declared.insert((binding.category, &binding.name.name), binding.name.span)
             {
                 return Err(ParseError::DuplicateDagBinding {
-                    name: binding.name.name.clone(),
+                    name: binding.name.name.atom().clone(),
                     src: self.named_source(),
                     duplicate: binding.name.span.into(),
                     first: first.into(),

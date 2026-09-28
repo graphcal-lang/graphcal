@@ -2122,7 +2122,7 @@ fn collect_file_imported_symbols(
             }
             graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
                 let module_name = alias.as_ref().map_or_else(
-                    || path.leaf().name.clone(),
+                    || path.leaf().name.atom().clone(),
                     |alias_ident| alias_ident.value.atom().clone(),
                 );
                 collect_module_import_definitions(

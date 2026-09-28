@@ -161,7 +161,7 @@ fn collect_ambiguous_generic_static_references(
     match argument {
         crate::desugar::desugared_ast::AmbiguousGenericArg::Name(identifier) => {
             references.push(StaticReference::ambiguous(
-                identifier.name.clone(),
+                identifier.name.atom().clone(),
                 StaticReferenceNamespaces::IndexTypeOrDimension,
             ));
         }

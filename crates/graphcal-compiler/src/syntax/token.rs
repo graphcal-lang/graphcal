@@ -25,6 +25,8 @@
 
 use logos::Logos;
 
+use crate::syntax::names::NameAtom;
+
 /// Define the lexer's [`LexicalToken`], the parser-facing [`Token`] (with its
 /// `Display` rendering and [`Token::HARD_KEYWORDS`]), and [`ContextualKeyword`]
 /// (with its spellings and `ALL` listing) from one table.
@@ -395,14 +397,14 @@ pub enum SourceIdentifierError {
     ReservedKeyword,
 }
 
-/// A spelling proven safe to render in a Graphcal `IDENT` position.
+/// A spelling proven by the lexer to occupy a Graphcal `IDENT` position.
 ///
-/// This is deliberately narrower than
-/// [`NameAtom`](crate::syntax::names::NameAtom), because wire and generated
-/// names may contain characters that the source lexer cannot accept. Source
-/// generators should construct this type before writing identifier text.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SourceIdentifier(String);
+/// This is deliberately narrower than [`NameAtom`], because wire and generated
+/// names may contain characters that the source lexer cannot accept. Parsed
+/// AST identifiers carry this type, and source generators should construct it
+/// before writing identifier text.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SourceIdentifier(NameAtom);
 
 impl SourceIdentifier {
     /// Validate one source identifier spelling.
@@ -424,7 +426,9 @@ impl SourceIdentifier {
             }
         };
         match whole_token {
-            Some(LexicalItem::Syntax(token)) if token.is_identifier() => Ok(Self(spelling)),
+            Some(LexicalItem::Syntax(token)) if token.is_identifier() => {
+                Ok(Self(NameAtom::new_unchecked_for_parser(spelling)))
+            }
             Some(LexicalItem::Syntax(token)) if Token::HARD_KEYWORDS.contains(&token) => {
                 Err(SourceIdentifierError::ReservedKeyword)
             }
@@ -434,16 +438,46 @@ impl SourceIdentifier {
         }
     }
 
+    /// Wrap the spelling of one lexer-produced identifier token.
+    ///
+    /// The parser has already tokenized `spelling` as a single `IDENT`, so the
+    /// invariant is asserted here without making parser code handle an
+    /// impossible error path.
+    #[must_use]
+    pub(crate) fn new_unchecked_for_parser(spelling: String) -> Self {
+        debug_assert!(Self::parse(spelling.as_str()).is_ok());
+        Self(NameAtom::new_unchecked_for_parser(spelling))
+    }
+
     /// Return the validated source spelling.
     #[must_use]
     pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Borrow the identifier as a name atom (every source identifier is one).
+    #[must_use]
+    pub const fn atom(&self) -> &NameAtom {
         &self.0
+    }
+
+    /// Convert the identifier into its name atom.
+    #[must_use]
+    pub fn into_atom(self) -> NameAtom {
+        self.0
     }
 }
 
 impl std::fmt::Display for SourceIdentifier {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for SourceIdentifier {
+    /// Debug output matches [`NameAtom`]'s so AST dumps show one spelling.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, formatter)
     }
 }
 
@@ -512,6 +546,14 @@ mod tests {
         {
             let identifier = SourceIdentifier::parse(valid).unwrap();
             assert_eq!(identifier.as_str(), valid);
+            assert_eq!(identifier.atom().as_str(), valid);
+            assert_eq!(format!("{identifier:?}"), format!("{valid:?}"));
+            assert_eq!(identifier.to_string(), valid);
+            assert_eq!(
+                SourceIdentifier::new_unchecked_for_parser(valid.to_owned()),
+                identifier
+            );
+            assert_eq!(identifier.into_atom().as_str(), valid);
             assert!(lex_tokens(valid)[0].is_identifier(), "{valid}");
         }
         for keyword in Token::HARD_KEYWORDS {

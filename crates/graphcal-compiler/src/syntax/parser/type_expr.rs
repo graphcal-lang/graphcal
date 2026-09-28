@@ -9,7 +9,7 @@ use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
-use crate::syntax::token::{ContextualKeyword, Token};
+use crate::syntax::token::{ContextualKeyword, SourceIdentifier, Token};
 use crate::syntax::type_name::GenericParamName;
 
 use super::{ParseError, Parser};
@@ -739,18 +739,18 @@ impl Parser<'_> {
         if first.op != MulDivOp::Mul || first.term.power.is_some() {
             return None;
         }
-        let first_atom = first.term.name.value.as_bare()?.clone();
+        let first_atom = first.term.name.value.as_bare()?;
         let initial = AmbiguousGenericArg::Name(Ident {
-            name: first_atom,
+            name: SourceIdentifier::new_unchecked_for_parser(first_atom.as_str().to_owned()),
             span: first.term.name.span,
         });
         terms.try_fold(initial, |lhs, item| {
             if item.op != MulDivOp::Mul || item.term.power.is_some() {
                 return None;
             }
-            let atom = item.term.name.value.as_bare()?.clone();
+            let atom = item.term.name.value.as_bare()?;
             let rhs = AmbiguousGenericArg::Name(Ident {
-                name: atom,
+                name: SourceIdentifier::new_unchecked_for_parser(atom.as_str().to_owned()),
                 span: item.term.name.span,
             });
             let span = lhs.span().merge(rhs.span());
@@ -899,7 +899,7 @@ impl Parser<'_> {
                 _ => {
                     return Err(parser.unexpected_token(
                         "`Dim`, `Index`, `Nat`, or `Type`",
-                        &constraint_ident.name,
+                        constraint_ident.name.as_str(),
                         constraint_ident.span,
                     ));
                 }

@@ -5,6 +5,7 @@ use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::token::SourceIdentifier;
 use crate::syntax::type_name::GenericParamName;
 
 /// An attribute annotation on a declaration: `#[name]` or `#[name(arg1, arg2)]`.
@@ -244,9 +245,7 @@ impl ImportItem {
     /// Returns the alias if present, otherwise the original name.
     #[must_use]
     pub fn local_name_atom(&self) -> &crate::syntax::names::NameAtom {
-        self.alias
-            .as_ref()
-            .map_or(&self.name.name, |alias| &alias.name)
+        self.alias.as_ref().unwrap_or(&self.name).name.atom()
     }
 
     /// The spelling of the name that this import introduces into local scope.
@@ -263,9 +262,13 @@ impl ImportItem {
 }
 
 /// An identifier with its source span.
+///
+/// The spelling is a [`SourceIdentifier`]: every `Ident` is one lexer `IDENT`
+/// token, so compiler-generated names (which may lie outside the source
+/// identifier grammar) cannot masquerade as written identifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, FormatEquivalent)]
 pub struct Ident {
-    pub name: NameAtom,
+    pub name: SourceIdentifier,
     #[fe(skip)]
     pub span: Span,
 }
@@ -274,12 +277,12 @@ impl Ident {
     /// Convert this identifier into a `Spanned<T>`, consuming the name and span.
     #[must_use]
     pub(crate) fn into_spanned<T: From<NameAtom>>(self) -> Spanned<T> {
-        Spanned::new(T::from(self.name), self.span)
+        Spanned::new(T::from(self.name.into_atom()), self.span)
     }
 
     /// Interpret this identifier as a generic parameter name.
     #[must_use]
     pub(crate) fn as_generic_param_name(&self) -> GenericParamName {
-        GenericParamName::from_atom(self.name.clone())
+        GenericParamName::from_atom(self.name.atom().clone())
     }
 }

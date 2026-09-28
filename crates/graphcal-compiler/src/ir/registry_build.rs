@@ -1347,7 +1347,7 @@ fn find_non_earlier_ambiguous_reference(
 ) -> Option<(GenericParamName, Span)> {
     match arg {
         crate::syntax::ast::AmbiguousGenericArg::Name(ident) => {
-            non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
+            non_earlier_generic_reference(ident.name.atom(), ident.span, current_index, positions)
         }
         crate::syntax::ast::AmbiguousGenericArg::Mul(operands, _) => {
             operands.iter().find_map(|operand| {
@@ -1365,7 +1365,7 @@ fn find_non_earlier_nat_reference(
     match expr {
         crate::syntax::ast::NatExpr::Literal(..) => None,
         crate::syntax::ast::NatExpr::Var(ident) => {
-            non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
+            non_earlier_generic_reference(ident.name.atom(), ident.span, current_index, positions)
         }
         crate::syntax::ast::NatExpr::Add(operands, _)
         | crate::syntax::ast::NatExpr::Mul(operands, _) => operands
