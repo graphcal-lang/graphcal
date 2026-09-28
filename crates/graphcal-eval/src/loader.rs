@@ -550,13 +550,11 @@ impl LoadedDag {
         &self.interface
     }
 
-    /// This inline DAG's body paired with its declared interface.
+    /// This inline DAG as a module of its owning `file`.
     #[must_use]
     pub(crate) fn module<'a>(&'a self, file: &'a LoadedFile) -> LoadedModule<'a> {
-        LoadedModule {
-            declarations: self.body(file),
-            interface: &self.interface,
-        }
+        debug_assert_eq!(self.parent_dag_id, file.dag_id);
+        LoadedModule::InlineDag { file, dag: self }
     }
 
     #[must_use]
@@ -592,24 +590,47 @@ impl LoadedDag {
     }
 }
 
-/// One loaded DAG module (a file root or an inline `dag`): its authoritative
-/// declarations paired with the interface computed from exactly those
-/// declarations at load time.
+/// One loaded DAG module (a file root or an inline `dag`), borrowed from the
+/// source file that owns it.
+///
+/// Holding the owning file (and inline-DAG entry) itself, rather than their
+/// identities, makes every later lookup of the module's body, interface, and
+/// owning source file infallible.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LoadedModule<'a> {
-    declarations: &'a [Declaration],
-    interface: &'a ModuleInterface,
+pub(crate) enum LoadedModule<'a> {
+    FileRoot(&'a LoadedFile),
+    InlineDag {
+        file: &'a LoadedFile,
+        dag: &'a LoadedDag,
+    },
 }
 
 impl<'a> LoadedModule<'a> {
+    /// Authoritative declarations of this module's body.
     #[must_use]
-    pub(crate) const fn declarations(self) -> &'a [Declaration] {
-        self.declarations
+    pub(crate) fn declarations(self) -> &'a [Declaration] {
+        match self {
+            Self::FileRoot(file) => &file.ast.declarations,
+            Self::InlineDag { file, dag } => dag.body(file),
+        }
     }
 
+    /// Declared interface computed at load from exactly [`Self::declarations`].
     #[must_use]
     pub(crate) const fn interface(self) -> &'a ModuleInterface {
-        self.interface
+        match self {
+            Self::FileRoot(file) => &file.interface,
+            Self::InlineDag { dag, .. } => &dag.interface,
+        }
+    }
+
+    /// Exact file-root or inline-DAG identity of this module.
+    #[must_use]
+    pub(crate) const fn dag_id(self) -> &'a DagId {
+        match self {
+            Self::FileRoot(file) => &file.dag_id,
+            Self::InlineDag { dag, .. } => &dag.dag_id,
+        }
     }
 }
 
@@ -672,13 +693,10 @@ impl LoadedFile {
         &self.interface
     }
 
-    /// This file root's declarations paired with its declared interface.
+    /// This file root as a module.
     #[must_use]
-    pub(crate) fn module(&self) -> LoadedModule<'_> {
-        LoadedModule {
-            declarations: &self.ast.declarations,
-            interface: &self.interface,
-        }
+    pub(crate) const fn module(&self) -> LoadedModule<'_> {
+        LoadedModule::FileRoot(self)
     }
 
     /// Canonical path used for I/O and diagnostic URI mapping.
@@ -893,22 +911,6 @@ impl LoadedFiles {
         self.owners
             .get(dag_id)
             .and_then(|position| self.ordered.get(*position))
-    }
-}
-
-impl std::ops::Index<&DagId> for LoadedFiles {
-    type Output = LoadedFile;
-
-    /// Keyed lookup with the same contract as indexing the former
-    /// `HashMap<DagId, LoadedFile>`: callers index only identities produced by
-    /// this project's loader.
-    #[expect(
-        clippy::panic,
-        reason = "preserves the former map-indexing contract of loader-produced identities"
-    )]
-    fn index(&self, dag_id: &DagId) -> &LoadedFile {
-        self.get(dag_id)
-            .unwrap_or_else(|| panic!("`{dag_id}` is not a loaded source file"))
     }
 }
 
@@ -2877,7 +2879,7 @@ dag calc {
 
         // Helper.lib file should use disk content
         let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
-        let lib_file = &project.files[&lib_dag_id];
+        let lib_file = project.file(&lib_dag_id).unwrap();
         assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
     }
 

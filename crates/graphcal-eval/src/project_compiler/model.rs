@@ -21,7 +21,7 @@ use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
-use super::template::{ModuleTemplateRef, ModuleTemplateStore};
+use super::template::ModuleTemplateStore;
 
 /// Dependency-side name to importer-side name.
 pub(super) type DepToImporter<T> = HashMap<T, T>;
@@ -195,8 +195,9 @@ pub(super) struct UnitProjectionAlias {
 }
 
 /// Typed request for one concrete file-root or inline-DAG instance.
-pub(super) struct IncludeInstanceRequest {
-    pub(super) template: ModuleTemplateRef,
+pub(super) struct IncludeInstanceRequest<'a> {
+    /// Reusable file-root or inline-DAG template module.
+    pub(super) template: crate::loader::LoadedModule<'a>,
     pub(super) instance_scope: ScopeSegment,
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,
@@ -266,7 +267,7 @@ pub(super) struct ImportContext<'a> {
         Vec<graphcal_compiler::syntax::span::Spanned<ProjectedStaticAlias>>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
-    pub(super) include_instances: Vec<IncludeInstanceRequest>,
+    pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,
 }
 
 /// Whether registry composition is a pure import or concrete instance boundary.
