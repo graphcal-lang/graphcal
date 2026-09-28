@@ -321,23 +321,17 @@ pub(crate) fn lower_type_expr(
             indexes: indexes.try_map_ref(|index| lower_index_expr(index, ctx))?,
         },
         ast::TypeExprKind::TypeApplication { name, generic_args } => {
-            let resolved_name = ctx
+            let struct_type = ctx
                 .resolver
                 .resolve_struct_type_path(ctx.owner, &name.value)
                 .map_err(|source| HirLowerError::ModuleResolve {
                     source,
                     span: name.span,
                 })?;
-            let params = ctx
-                .resolver
-                .struct_type_generic_params(&resolved_name)
-                .map_err(|source| HirLowerError::ModuleResolve {
-                    source,
-                    span: name.span,
-                })?;
+            let resolved_name = struct_type.into_resolved();
             let generic_args = lower_generic_args(
                 resolved_name.as_str(),
-                params,
+                struct_type.kind(),
                 generic_args.as_slice(),
                 type_ann.span,
                 ctx,
@@ -572,12 +566,18 @@ fn non_nat_sort_for_ambiguous_arg(
                 return None;
             }
             let path = NamePath::local(ident.name.atom().clone());
-            if ctx.resolver.resolve_index_path(ctx.owner, &path).is_ok() {
+            if ctx
+                .resolver
+                .resolve_index_path(ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
+                .is_ok()
+            {
                 return Some("Index argument");
             }
             if ctx
                 .resolver
                 .resolve_struct_type_path(ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .is_ok()
             {
                 return Some("Type argument");
@@ -585,6 +585,7 @@ fn non_nat_sort_for_ambiguous_arg(
             if ctx
                 .resolver
                 .resolve_dimension_path(ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .is_ok()
                 || ctx.resolve_prelude_dimension_path(&path).is_some()
             {
@@ -752,7 +753,11 @@ fn lower_single_term_nominal_type(
 
     let mut deferred_error = None;
 
-    match resolve_optional(ctx.resolver.resolve_index_path(ctx.owner, path)) {
+    match resolve_optional(
+        ctx.resolver
+            .resolve_index_path(ctx.owner, path)
+            .map(crate::resolve::symbols::SymbolRef::into_resolved),
+    ) {
         LookupCandidate::Found(index) => {
             return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
                 IndexRef::Concrete(Spanned::new(index, item.term.name.span)),
@@ -765,14 +770,9 @@ fn lower_single_term_nominal_type(
     }
 
     match resolve_optional(ctx.resolver.resolve_struct_type_path(ctx.owner, path)) {
-        LookupCandidate::Found(struct_type) => {
-            let generic_params = ctx
-                .resolver
-                .struct_type_generic_params(&struct_type)
-                .map_err(|source| HirLowerError::ModuleResolve {
-                    source,
-                    span: item.term.name.span,
-                })?;
+        LookupCandidate::Found(symbol) => {
+            let generic_params = symbol.kind();
+            let struct_type = symbol.into_resolved();
             let kind = if generic_params.is_empty() {
                 TypeExprKind::Struct(Spanned::new(struct_type, item.term.name.span))
             } else {
@@ -850,6 +850,7 @@ fn lower_dim_term(
     let resolved = match ctx
         .resolver
         .resolve_dimension_path(ctx.owner, &term.name.value)
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
     {
         Ok(resolved) => resolved,
         Err(ModuleResolveError::UnknownName { .. }) => ctx
@@ -915,6 +916,7 @@ fn lower_index_expr_name(
 
     ctx.resolver
         .resolve_index_path(ctx.owner, &path.value)
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .map(|index| IndexRef::Concrete(Spanned::new(index, path.span)))
         .map_err(|source| match source {
             ModuleResolveError::UnknownName { .. } => HirLowerError::UnknownTypePath {

@@ -26,6 +26,7 @@ use crate::ir::lower::HirDag;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
+use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 
@@ -746,6 +747,7 @@ fn resolve_override_target(
             let source = ctx
                 .resolver
                 .resolve_index_path(source_owner, &NamePath::local(overridden.atom().clone()))
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .map_err(resolve_error)?;
             let replacement = match replacement {
                 crate::registry::types::IndexBindingTarget::Declared(name) => {
@@ -755,6 +757,7 @@ fn resolve_override_target(
                             replacement_owner,
                             &NamePath::local(name.atom().clone()),
                         )
+                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
                         .map_err(resolve_error)?;
                     IndexTypeRef::from_resolved(resolved)
                 }
@@ -777,6 +780,7 @@ fn resolve_override_target(
             let source = ctx
                 .resolver
                 .resolve_struct_type_path(source_owner, &NamePath::local(overridden.atom().clone()))
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .map_err(resolve_error)?;
             let replacement = ctx
                 .resolver
@@ -784,6 +788,7 @@ fn resolve_override_target(
                     replacement_owner,
                     &NamePath::local(replacement.atom().clone()),
                 )
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .map_err(resolve_error)?;
             Ok(ResolvedOverrideTarget::Type {
                 overridden: overridden.clone(),
@@ -913,9 +918,9 @@ impl PublicSignatureDependency {
 
     fn is_public(&self, resolver: &ModuleResolver) -> Option<bool> {
         let visibility = match self {
-            Self::Dimension(name) => resolver.dimension_visibility(&name.value),
-            Self::Index(name) => resolver.index_visibility(&name.value),
-            Self::Type(name) => resolver.struct_type_visibility(&name.value),
+            Self::Dimension(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
+            Self::Index(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
+            Self::Type(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
         };
         visibility.map(crate::syntax::ast::BindableVisibility::is_public)
     }
@@ -1064,13 +1069,17 @@ fn validate_public_generic_defaults(
         {
             continue;
         }
-        let pub_span = ctx.resolver.struct_type_span(type_name).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("module resolver lost source span for public type `{type_name}`"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
+        let pub_span = ctx
+            .resolver
+            .symbol(type_name)
+            .map(SymbolRef::span)
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("module resolver lost source span for public type `{type_name}`"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
         for param in type_def.generic_params() {
             let Some(default) = param.default() else {
                 continue;
@@ -1657,7 +1666,12 @@ impl HirPolicyChecker<'_> {
         ref_span: Span,
         phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
-        let Ok(kind) = self.ctx.resolver.decl_symbol_kind(&target.value) else {
+        let Some(kind) = self
+            .ctx
+            .resolver
+            .symbol(&target.value)
+            .map(|symbol| *symbol.kind())
+        else {
             // Unknown targets get their own diagnostic from dependency
             // collection; the policy walk only classifies known ones.
             return Ok(());

@@ -1188,9 +1188,33 @@ pub enum FunctionRef {
     External(ExternFnRef),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ResolvedCallable {
-    Constructor(ResolvedConstructorName),
+/// Attach the source span of a failed module-resolver lookup.
+fn spanned<T>(result: Result<T, ModuleResolveError>, span: Span) -> Result<T, ExprLowerError> {
+    result.map_err(|source| ExprLowerError::ModuleResolve { source, span })
+}
+
+/// A declaration identity reached through a lexical binding that the
+/// resolver does not declare.
+fn unknown_decl(resolved: &ResolvedDeclName, span: Span) -> ExprLowerError {
+    ExprLowerError::ModuleResolve {
+        source: ModuleResolveError::UnknownName {
+            owner: resolved.owner().clone(),
+            category: NameCategory::Table(SymbolTable::Decl),
+            name: resolved.atom().clone(),
+        },
+        span,
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedCallable<'r> {
+    Constructor(
+        crate::resolve::symbols::SymbolRef<
+            'r,
+            crate::syntax::type_name::ConstructorNameNamespace,
+            crate::resolve::symbols::ConstructorSignature,
+        >,
+    ),
     Function(UnappliedFunctionRef),
 }
 
@@ -1620,6 +1644,7 @@ impl<'a> ExprLowerer<'a> {
                     }
                 }
                 ResolvedCallable::Constructor(constructor) => {
+                    let constructor = constructor.into_resolved();
                     return Err(if args.is_empty() {
                         ExprLowerError::EmptyParenthesizedConstructor {
                             constructor,
@@ -1666,7 +1691,7 @@ impl<'a> ExprLowerer<'a> {
                 generic_args,
                 fields,
             } => {
-                let resolved = match self.resolve_callable(callee)? {
+                let constructor = match self.resolve_callable(callee)? {
                     ResolvedCallable::Constructor(constructor) => constructor,
                     ResolvedCallable::Function(function) => {
                         return Err(ExprLowerError::NamedArgumentsOnFunction {
@@ -1679,17 +1704,10 @@ impl<'a> ExprLowerer<'a> {
                         });
                     }
                 };
-                let params = self
-                    .ctx
-                    .resolver
-                    .constructor_generic_params(&resolved)
-                    .map_err(|source| ExprLowerError::ModuleResolve {
-                        source,
-                        span: callee.span(),
-                    })?;
+                let resolved = constructor.into_resolved();
                 let lowered_args = lower_generic_args(
                     resolved.as_str(),
-                    params,
+                    constructor.kind().generic_params(),
                     generic_args,
                     expr.span,
                     self.ctx.type_context(),
@@ -1761,6 +1779,7 @@ impl<'a> ExprLowerer<'a> {
                     .ctx
                     .resolver
                     .resolve_index_path(self.ctx.owner, &axis.value)
+                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
                         span: axis.span,
@@ -1792,6 +1811,7 @@ impl<'a> ExprLowerer<'a> {
                             .ctx
                             .resolver
                             .resolve_index_path(self.ctx.owner, &path.value)
+                            .map(crate::resolve::symbols::SymbolRef::into_resolved)
                             .map_err(|source| ExprLowerError::ModuleResolve {
                                 source,
                                 span: path.span,
@@ -1842,6 +1862,7 @@ impl<'a> ExprLowerer<'a> {
                     .ctx
                     .resolver
                     .resolve_decl_path(&target, &output_path)
+                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
                         span: output.span,
@@ -1877,7 +1898,12 @@ impl<'a> ExprLowerer<'a> {
                     .cloned()
                 {
                     Some(resolved) => resolved,
-                    None => match self.ctx.resolver.resolve_unit_path(self.ctx.owner, &path) {
+                    None => match self
+                        .ctx
+                        .resolver
+                        .resolve_unit_path(self.ctx.owner, &path)
+                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
+                    {
                         Ok(resolved) => resolved,
                         Err(ModuleResolveError::UnknownName { .. }) => self
                             .ctx
@@ -1954,7 +1980,8 @@ impl<'a> ExprLowerer<'a> {
         let constructor_result = self
             .ctx
             .resolver
-            .resolve_constructor_path(self.ctx.owner, &path);
+            .resolve_constructor_path(self.ctx.owner, &path)
+            .map(crate::resolve::symbols::SymbolRef::into_resolved);
         if let Ok(constructor) = constructor_result {
             return Ok(ExprKind::ConstructorCall {
                 callee: Spanned::new(constructor, span),
@@ -1966,11 +1993,12 @@ impl<'a> ExprLowerer<'a> {
         let scoped_name = ScopedName::local(DeclName::classify(ident.name.atom().clone()));
         match self.resolve_decl_scoped_name(&scoped_name, span) {
             Ok(resolved) => {
-                let kind = self
+                let kind = *self
                     .ctx
                     .resolver
-                    .decl_symbol_kind(&resolved)
-                    .map_err(|source| ExprLowerError::ModuleResolve { source, span })?;
+                    .symbol(&resolved)
+                    .ok_or_else(|| unknown_decl(&resolved, span))?
+                    .kind();
                 Err(ExprLowerError::BareGraphDeclarationRef {
                     name: scoped_name,
                     kind,
@@ -2027,39 +2055,34 @@ impl<'a> ExprLowerer<'a> {
                     params.push(self.lower_param_binding(target, binding)?);
                 }
                 InputBindingCategory::Type => {
-                    let input = self
-                        .ctx
-                        .resolver
-                        .resolve_struct_type_path(target, &input_path)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: binding.name.span,
-                        })?;
+                    let resolver = self.ctx.resolver;
+                    let input = spanned(
+                        resolver.resolve_struct_type_path(target, &input_path),
+                        binding.name.span,
+                    )?
+                    .into_resolved();
                     let value_path = static_binding_value_path(binding, self.ctx.owner)?;
-                    let value = self
-                        .ctx
-                        .resolver
-                        .resolve_struct_type_path(self.ctx.owner, &value_path)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: binding.value.span,
-                        })?;
+                    let value = spanned(
+                        resolver.resolve_struct_type_path(self.ctx.owner, &value_path),
+                        binding.value.span,
+                    )?
+                    .into_resolved();
                     static_bindings.types.insert(input, value);
                 }
                 InputBindingCategory::Dimension => {
-                    let input = self
-                        .ctx
-                        .resolver
-                        .resolve_dimension_path(target, &input_path)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: binding.name.span,
-                        })?;
+                    let input = spanned(
+                        self.ctx
+                            .resolver
+                            .resolve_dimension_path(target, &input_path),
+                        binding.name.span,
+                    )?
+                    .into_resolved();
                     let value_path = static_binding_value_path(binding, self.ctx.owner)?;
                     let value = match self
                         .ctx
                         .resolver
                         .resolve_dimension_path(self.ctx.owner, &value_path)
+                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     {
                         Ok(value) => value,
                         Err(source @ ModuleResolveError::UnknownName { .. }) => self
@@ -2079,19 +2102,17 @@ impl<'a> ExprLowerer<'a> {
                     static_bindings.dimensions.insert(input, value);
                 }
                 InputBindingCategory::Index => {
-                    let input = self
-                        .ctx
-                        .resolver
-                        .resolve_index_path(target, &input_path)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: binding.name.span,
-                        })?;
+                    let input = spanned(
+                        self.ctx.resolver.resolve_index_path(target, &input_path),
+                        binding.name.span,
+                    )?
+                    .into_resolved();
                     let value = match binding.value.index_binding_arg() {
                         Some(ast::IndexExpr::Name(path)) => self
                             .ctx
                             .resolver
                             .resolve_index_path(self.ctx.owner, &path.value)
+                            .map(crate::resolve::symbols::SymbolRef::into_resolved)
                             .map(DagCallIndexBinding::Declared)
                             .map_err(|source| ExprLowerError::ModuleResolve {
                                 source,
@@ -2130,6 +2151,7 @@ impl<'a> ExprLowerer<'a> {
             .ctx
             .resolver
             .resolve_decl_path(target, &path)
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
             .map_err(|source| ExprLowerError::ModuleResolve {
                 source,
                 span: binding.name.span,
@@ -2162,11 +2184,12 @@ impl<'a> ExprLowerer<'a> {
             .cloned()
         {
             self.ensure_bound_decl_access(name, &resolved, span)?;
-            let actual = self
+            let actual = *self
                 .ctx
                 .resolver
-                .decl_symbol_kind(&resolved)
-                .map_err(|source| ExprLowerError::ModuleResolve { source, span })?;
+                .symbol(&resolved)
+                .ok_or_else(|| unknown_decl(&resolved, span))?
+                .kind();
             return if actual.is_const() {
                 Ok(ConstRef::Decl(resolved))
             } else {
@@ -2188,6 +2211,7 @@ impl<'a> ExprLowerer<'a> {
                 .ctx
                 .resolver
                 .resolve_const_decl_path(self.ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
             {
                 Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
                 Err(err) => first_error.get_or_insert(err),
@@ -2196,8 +2220,8 @@ impl<'a> ExprLowerer<'a> {
                 && self
                     .ctx
                     .resolver
-                    .decl_symbol_kind(&resolved)
-                    .is_ok_and(DeclSymbolKind::is_const)
+                    .symbol(&resolved)
+                    .is_some_and(|symbol| symbol.kind().is_const())
             {
                 return Ok(ConstRef::Decl(resolved));
             }
@@ -2205,6 +2229,7 @@ impl<'a> ExprLowerer<'a> {
                 .ctx
                 .resolver
                 .resolve_constructor_path(self.ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
             {
                 Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
                 Err(err) => first_error.get_or_insert(err),
@@ -2233,36 +2258,30 @@ impl<'a> ExprLowerer<'a> {
         name: &Spanned<ScopedName>,
     ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
-        let kind_identity = match name
+        let path_symbol = match name
             .value
             .to_name_path()
             .map(|path| self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path))
         {
-            Some(Ok(identity)) => identity,
+            Some(Ok(symbol)) => Some(symbol),
             Some(Err(source @ ModuleResolveError::PrivateName { .. })) => {
                 return Err(ExprLowerError::ModuleResolve {
                     source,
                     span: name.span,
                 });
             }
-            Some(Err(_)) | None => resolved.clone(),
+            Some(Err(_)) | None => None,
         };
-        let kind = match self.ctx.resolver.decl_symbol_kind(&kind_identity) {
-            Ok(kind) => kind,
-            Err(_)
-                if self
-                    .ctx
-                    .decl_bindings
-                    .is_some_and(|bindings| bindings.contains_key(&name.value)) =>
+        let kind = match path_symbol.or_else(|| self.ctx.resolver.symbol(&resolved)) {
+            Some(symbol) => *symbol.kind(),
+            None if self
+                .ctx
+                .decl_bindings
+                .is_some_and(|bindings| bindings.contains_key(&name.value)) =>
             {
                 return Ok(Spanned::new(resolved, name.span));
             }
-            Err(source) => {
-                return Err(ExprLowerError::ModuleResolve {
-                    source,
-                    span: name.span,
-                });
-            }
+            None => return Err(unknown_decl(&resolved, name.span)),
         };
         let role = name
             .value
@@ -2321,7 +2340,12 @@ impl<'a> ExprLowerer<'a> {
                 span,
             });
         };
-        let resolved = match self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path) {
+        let resolved = match self
+            .ctx
+            .resolver
+            .resolve_decl_path(self.ctx.owner, &path)
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
+        {
             Ok(resolved) => Ok(resolved),
             // Synthetic include-instance children intentionally are not module
             // aliases. Retry only when the qualifier itself is absent; once
@@ -2350,10 +2374,12 @@ impl<'a> ExprLowerer<'a> {
             return Ok(());
         }
 
-        match name
-            .to_name_path()
-            .map(|path| self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path))
-        {
+        match name.to_name_path().map(|path| {
+            self.ctx
+                .resolver
+                .resolve_decl_path(self.ctx.owner, &path)
+                .map(crate::resolve::symbols::SymbolRef::into_resolved)
+        }) {
             Some(Ok(_)) => Ok(()),
             // An anonymous include qualifier is never a module alias.
             None
@@ -2373,18 +2399,12 @@ impl<'a> ExprLowerer<'a> {
                 }
 
                 let template_path = NamePath::local(resolved.atom().clone());
-                let template_name = self
-                    .ctx
-                    .resolver
-                    .resolve_decl_path(template, &template_path)
-                    .unwrap_or_else(|_| {
-                        ResolvedDeclName::from_def(template.clone(), resolved.to_unowned_def_name())
-                    });
                 if self
                     .ctx
                     .resolver
-                    .decl_symbol_is_instance_accessible(&template_name)
+                    .resolve_decl_path(template, &template_path)
                     .map_err(|source| ExprLowerError::ModuleResolve { source, span })?
+                    .is_instance_accessible()
                 {
                     Ok(())
                 } else {
@@ -2677,7 +2697,7 @@ impl<'a> ExprLowerer<'a> {
     /// Resolve one Term callee before argument-shape validation. The backing
     /// maps are an implementation detail; namespace construction guarantees
     /// that at most one callable category occupies the selected Term slot.
-    fn resolve_callable(&self, callee: &IdentPath) -> Result<ResolvedCallable, ExprLowerError> {
+    fn resolve_callable(&self, callee: &IdentPath) -> Result<ResolvedCallable<'a>, ExprLowerError> {
         let constructor = self
             .ctx
             .resolver
@@ -2807,6 +2827,7 @@ impl<'a> ExprLowerer<'a> {
                     .ctx
                     .resolver
                     .resolve_index_path(self.ctx.owner, &index.value)
+                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
                         span: index.span,
@@ -2874,6 +2895,7 @@ impl<'a> ExprLowerer<'a> {
                             self.ctx.owner,
                             &NamePath::local(name.value.atom().clone()),
                         )
+                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
                         .map_err(|source| ExprLowerError::ModuleResolve {
                             source,
                             span: name.span,
@@ -2923,6 +2945,7 @@ impl<'a> ExprLowerer<'a> {
             .ctx
             .resolver
             .resolve_constructor_path(self.ctx.owner, &name_path)
+            .map(crate::resolve::symbols::SymbolRef::into_resolved)
         {
             Ok(constructor) => Ok(MatchPattern::Constructor {
                 constructor: Spanned::new(constructor, path.span()),

@@ -19,15 +19,15 @@ use super::symbols::{ConstructorSignature, GenericParamSignature, ModuleSymbols,
 ///
 /// Resolution is written once over this trait; each namespace only names its
 /// two tables and the payload its declarations carry.
-pub(super) trait NamespaceTables: Namespaced {
+pub trait NamespaceTables: Namespaced {
     /// Payload a local declaration in this namespace carries.
-    type Declared;
+    type Declared: Clone;
 
     /// The module's own declarations in this namespace.
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared>;
 
     /// The module's selective imports in this namespace.
-    fn selected(scope: &ModuleScope) -> &Table<Self>;
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared>;
 }
 
 impl NamespaceTables for DeclNameNamespace {
@@ -37,7 +37,7 @@ impl NamespaceTables for DeclNameNamespace {
         &symbols.decls
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_decls
     }
 }
@@ -49,7 +49,7 @@ impl NamespaceTables for ConstructorNameNamespace {
         &symbols.constructors
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_constructors
     }
 }
@@ -61,7 +61,7 @@ impl NamespaceTables for DimNameNamespace {
         &symbols.dimensions
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_dimensions
     }
 }
@@ -73,7 +73,7 @@ impl NamespaceTables for StructTypeNameNamespace {
         &symbols.struct_types
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_struct_types
     }
 }
@@ -85,7 +85,7 @@ impl NamespaceTables for IndexNameNamespace {
         &symbols.indexes
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_indexes
     }
 }
@@ -97,7 +97,7 @@ impl NamespaceTables for UnitNameNamespace {
         &symbols.units
     }
 
-    fn selected(scope: &ModuleScope) -> &Table<Self> {
+    fn selected(scope: &ModuleScope) -> &Table<Self, Self::Declared> {
         &scope.selected_units
     }
 }

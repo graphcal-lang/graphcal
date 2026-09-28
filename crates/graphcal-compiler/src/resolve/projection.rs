@@ -6,22 +6,25 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
-    ResolvedUnitName,
 };
 use crate::syntax::ast::{
     BindableVisibility, ExprKind, ImportKind, InputBindingCategory, UnresolvedRef,
 };
-use crate::syntax::dimension::{DimName, UnitName};
+use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::import_category::ImportItemNamespace;
-use crate::syntax::index_name::IndexName;
-use crate::syntax::type_name::{ConstructorName, ConstructorNameNamespace, StructTypeName};
+use crate::syntax::index_name::{IndexName, IndexNameNamespace};
+use crate::syntax::names::NameAtom;
+use crate::syntax::type_name::{
+    ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
+};
 
 use super::ModuleResolver;
 use super::category::SymbolTable;
 use super::error::{ModuleResolveError, NameCategory};
 use super::imports::ExportLookup;
 use super::scope::Access;
-use super::symbols::{ConstructorSignature, Symbol};
+use super::symbols::Symbol;
+use super::tables::NamespaceTables;
 
 impl ModuleResolver {
     /// Redirect selected Static aliases to supplied effective binding targets.
@@ -68,10 +71,11 @@ impl ModuleResolver {
             });
             let visibility = BindableVisibility::from(item.visibility);
             let local = item.local_name_atom().clone();
-            let source = item.name.name.clone();
+            let source = item.name.name.atom();
+            let local_span = item.local_span();
             match item.namespace {
                 ImportItemNamespace::Type => {
-                    let source_name = StructTypeName::classify(source.into_atom());
+                    let source_name = StructTypeName::classify(source.clone());
                     if binding_path.is_none() && has_static_bindings {
                         let source_symbol = self
                             .module_symbols(template)?
@@ -84,29 +88,31 @@ impl ModuleResolver {
                             })?;
                         let generic_params = source_symbol.data().clone();
                         let local_name = StructTypeName::classify(local);
-                        self.entry_mut(owner)?
-                            .scope
-                            .selected_struct_types
-                            .remove(&local_name);
-                        self.entry_mut(owner)?.symbols.struct_types.insert(
+                        let entry = self.entry_mut(owner)?;
+                        entry.scope.selected_struct_types.remove(&local_name);
+                        entry.symbols.struct_types.insert(
                             local_name,
                             Symbol::new(
                                 ResolvedStructTypeName::from_def(owner.clone(), source_name),
                                 visibility,
-                                item.local_span(),
+                                local_span,
                                 generic_params,
                             ),
                         );
                         continue;
                     }
-                    let resolved = match binding_path {
-                        Some(path) => self.resolve_struct_type_path(owner, &path)?,
-                        None => ResolvedStructTypeName::from_def(template.clone(), source_name),
+                    let selected = match binding_path {
+                        Some(path) => self
+                            .resolve_struct_type_path(owner, &path)?
+                            .rebind(visibility, local_span),
+                        None => self
+                            .template_export::<StructTypeNameNamespace>(template, source)?
+                            .rebind(visibility, local_span),
                     };
-                    self.entry_mut(owner)?.scope.selected_struct_types.insert(
-                        StructTypeName::classify(local),
-                        Symbol::new(resolved, visibility, item.local_span(), ()),
-                    );
+                    self.entry_mut(owner)?
+                        .scope
+                        .selected_struct_types
+                        .insert(StructTypeName::classify(local), selected);
                 }
                 ImportItemNamespace::Dimension => {
                     if binding_path.is_none() && has_dimension_bindings {
@@ -115,32 +121,31 @@ impl ModuleResolver {
                         // include, so the projection is the importer's own
                         // declaration rather than the template's identity.
                         let local_name = DimName::classify(local);
-                        self.entry_mut(owner)?
-                            .scope
-                            .selected_dimensions
-                            .remove(&local_name);
-                        self.entry_mut(owner)?.symbols.dimensions.insert(
+                        let entry = self.entry_mut(owner)?;
+                        entry.scope.selected_dimensions.remove(&local_name);
+                        entry.symbols.dimensions.insert(
                             local_name.clone(),
                             Symbol::new(
                                 ResolvedDimName::from_def(owner.clone(), local_name),
                                 visibility,
-                                item.local_span(),
+                                local_span,
                                 (),
                             ),
                         );
                         continue;
                     }
-                    let resolved = match binding_path {
-                        Some(path) => self.resolve_dimension_path(owner, &path)?,
-                        None => ResolvedDimName::from_def(
-                            template.clone(),
-                            DimName::classify(source.into_atom()),
-                        ),
+                    let selected = match binding_path {
+                        Some(path) => self
+                            .resolve_dimension_path(owner, &path)?
+                            .rebind(visibility, local_span),
+                        None => self
+                            .template_export::<DimNameNamespace>(template, source)?
+                            .rebind(visibility, local_span),
                     };
-                    self.entry_mut(owner)?.scope.selected_dimensions.insert(
-                        DimName::classify(local),
-                        Symbol::new(resolved, visibility, item.local_span(), ()),
-                    );
+                    self.entry_mut(owner)?
+                        .scope
+                        .selected_dimensions
+                        .insert(DimName::classify(local), selected);
                 }
                 ImportItemNamespace::Index => {
                     if binding.is_some() && binding_path.is_none() {
@@ -150,57 +155,46 @@ impl ModuleResolver {
                             Symbol::new(
                                 ResolvedIndexName::from_def(owner.clone(), local),
                                 visibility,
-                                item.local_span(),
+                                local_span,
                                 HashMap::new(),
                             ),
                         );
                         continue;
                     }
-                    let resolved = match binding_path {
-                        Some(path) => self.resolve_index_path(owner, &path)?,
-                        None => ResolvedIndexName::from_def(
-                            template.clone(),
-                            IndexName::classify(source.into_atom()),
-                        ),
+                    let selected = match binding_path {
+                        Some(path) => self
+                            .resolve_index_path(owner, &path)?
+                            .rebind(visibility, local_span),
+                        None => self
+                            .template_export::<IndexNameNamespace>(template, source)?
+                            .rebind(visibility, local_span),
                     };
-                    self.entry_mut(owner)?.scope.selected_indexes.insert(
-                        IndexName::classify(local),
-                        Symbol::new(resolved, visibility, item.local_span(), ()),
-                    );
+                    self.entry_mut(owner)?
+                        .scope
+                        .selected_indexes
+                        .insert(IndexName::classify(local), selected);
                 }
                 ImportItemNamespace::Unit => {
-                    let resolved = ResolvedUnitName::from_def(
-                        template.clone(),
-                        UnitName::classify(source.into_atom()),
-                    );
-                    self.entry_mut(owner)?.scope.selected_units.insert(
-                        UnitName::classify(local),
-                        Symbol::new(resolved, visibility, item.local_span(), ()),
-                    );
+                    let selected = self
+                        .template_export::<UnitNameNamespace>(template, source)?
+                        .rebind(visibility, local_span);
+                    self.entry_mut(owner)?
+                        .scope
+                        .selected_units
+                        .insert(UnitName::classify(local), selected);
                 }
                 ImportItemNamespace::Term => {
-                    let source_constructor =
-                        ConstructorName::classify(item.name.name.atom().clone());
-                    let resolved = match self
+                    let source_constructor = ConstructorName::classify(source.clone());
+                    let constructor = match self
                         .exported_symbol_for_import::<ConstructorNameNamespace>(
                             template,
-                            source_constructor.atom(),
+                            source,
                             Access::CrossModule,
                         )? {
-                        ExportLookup::Public(resolved) => resolved,
+                        ExportLookup::Public(constructor) => constructor,
                         ExportLookup::Private | ExportLookup::Missing => continue,
                     };
-                    let owner_type = self.constructor_owner_type(&resolved)?;
-                    let source_symbol = self
-                        .module_symbols(resolved.owner())?
-                        .constructors
-                        .get(&source_constructor)
-                        .cloned()
-                        .ok_or_else(|| ModuleResolveError::UnknownName {
-                            owner: resolved.owner().clone(),
-                            category: NameCategory::Table(SymbolTable::Constructor),
-                            name: source_constructor.atom().clone(),
-                        })?;
+                    let owner_type = &constructor.data().owner_type;
                     if include.param_bindings.iter().any(|binding| {
                         binding.category == InputBindingCategory::Type
                             && binding.name.name.atom() == owner_type.atom()
@@ -208,7 +202,10 @@ impl ModuleResolver {
                         return Err(ModuleResolveError::ConstructorOwnerRebound {
                             owner: owner.clone(),
                             constructor: source_constructor,
-                            owner_type,
+                            owner_type: ResolvedStructTypeName::from_def(
+                                constructor.resolved().owner().clone(),
+                                owner_type.clone(),
+                            ),
                             span: item.name.span,
                         });
                     }
@@ -217,39 +214,59 @@ impl ModuleResolver {
                             candidate.namespace == ImportItemNamespace::Type
                                 && candidate.name.name.atom() == owner_type.atom()
                         });
-                    let resolved = if has_specialized_owner {
-                        let resolved = ResolvedConstructorName::from_def(
-                            owner.clone(),
-                            resolved.to_unowned_def_name(),
+                    let constructor = if has_specialized_owner {
+                        let specialized = Symbol::new(
+                            ResolvedConstructorName::from_def(
+                                owner.clone(),
+                                constructor.resolved().to_unowned_def_name(),
+                            ),
+                            visibility,
+                            local_span,
+                            constructor.data().clone(),
                         );
                         self.entry_mut(owner)?.symbols.constructors.insert(
-                            resolved.to_unowned_def_name(),
-                            Symbol::new(
-                                resolved.clone(),
-                                visibility,
-                                item.local_span(),
-                                ConstructorSignature {
-                                    owner_type: owner_type.to_unowned_def_name(),
-                                    generic_params: source_symbol.data().generic_params.clone(),
-                                },
-                            ),
+                            specialized.resolved().to_unowned_def_name(),
+                            specialized.clone(),
                         );
-                        resolved
+                        specialized
                     } else {
-                        resolved
+                        constructor
                     };
                     let scope = &mut self.entry_mut(owner)?.scope;
                     let local = ConstructorName::classify(local);
-                    let (span, visibility) = scope.selected_constructors.get(&local).map_or_else(
-                        || (item.local_span(), visibility),
-                        |existing| (existing.span(), existing.visibility()),
-                    );
+                    let (span, visibility) = scope
+                        .selected_constructors
+                        .get(&local)
+                        .map_or((local_span, visibility), |existing| {
+                            (existing.span(), existing.visibility())
+                        });
                     scope
                         .selected_constructors
-                        .insert(local, Symbol::new(resolved, visibility, span, ()));
+                        .insert(local, constructor.rebind(visibility, span));
                 }
             }
         }
         Ok(())
+    }
+
+    /// The binding `template` publicly exports as `atom` in one namespace.
+    fn template_export<Ns: NamespaceTables>(
+        &self,
+        template: &DagId,
+        atom: &NameAtom,
+    ) -> Result<Symbol<Ns, Ns::Declared>, ModuleResolveError> {
+        match self.exported_symbol_for_import::<Ns>(template, atom, Access::CrossModule)? {
+            ExportLookup::Public(symbol) => Ok(symbol),
+            ExportLookup::Private => Err(ModuleResolveError::PrivateName {
+                owner: template.clone(),
+                category: NameCategory::Table(Ns::TABLE),
+                name: atom.clone(),
+            }),
+            ExportLookup::Missing => Err(ModuleResolveError::UnknownName {
+                owner: template.clone(),
+                category: NameCategory::Table(Ns::TABLE),
+                name: atom.clone(),
+            }),
+        }
     }
 }

@@ -4,24 +4,21 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedName,
-    ResolvedStructTypeName, ResolvedUnitName,
-};
-use crate::syntax::ast::{BindableVisibility, ImportKind, ModulePath};
-use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
-use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
-use crate::syntax::index_name::{IndexName, IndexNameNamespace};
+use crate::syntax::ast::{BindableVisibility, ImportKind, ModulePath, UnitConstness};
+use crate::syntax::decl_name::DeclNameNamespace;
+use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
+use crate::syntax::index_name::{IndexNameNamespace, IndexVariantName};
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{
-    ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
-};
+use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
 
+use super::category::{DeclSymbolKind, ExportedImportItemKind};
 use super::error::ModuleResolveError;
 use super::namespace::{Namespace, Occupant};
-use super::symbols::{ModuleSymbols, Symbol, occupant_in};
+use super::symbols::{
+    ConstructorSignature, GenericParamSignature, ModuleSymbols, Symbol, Table, occupant_in,
+};
 
 /// Visibility rule applied when a module path or symbol is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,18 +117,19 @@ impl PluginAliasTarget {
 
 /// Import scope for a single module.
 ///
-/// Selective imports are [`Symbol`]s without a payload: the local name binds
-/// the target's canonical identity, whose payload stays with its declaration.
+/// A selective import is a [`Symbol`] that binds the local name to the
+/// target's canonical identity and carries the payload of the target's
+/// declaration, so resolving it never looks the target up again.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleScope {
     pub(super) module_aliases: HashMap<ModuleAliasName, ModuleAliasTarget>,
     pub(super) plugin_aliases: HashMap<ModuleAliasName, PluginAliasTarget>,
-    pub(super) selected_decls: HashMap<DeclName, Symbol<DeclNameNamespace>>,
-    pub(super) selected_dimensions: HashMap<DimName, Symbol<DimNameNamespace>>,
-    pub(super) selected_units: HashMap<UnitName, Symbol<UnitNameNamespace>>,
-    pub(super) selected_struct_types: HashMap<StructTypeName, Symbol<StructTypeNameNamespace>>,
-    pub(super) selected_indexes: HashMap<IndexName, Symbol<IndexNameNamespace>>,
-    pub(super) selected_constructors: HashMap<ConstructorName, Symbol<ConstructorNameNamespace>>,
+    pub(super) selected_decls: Table<DeclNameNamespace, DeclSymbolKind>,
+    pub(super) selected_dimensions: Table<DimNameNamespace>,
+    pub(super) selected_units: Table<UnitNameNamespace, UnitConstness>,
+    pub(super) selected_struct_types: Table<StructTypeNameNamespace, Vec<GenericParamSignature>>,
+    pub(super) selected_indexes: Table<IndexNameNamespace, HashMap<IndexVariantName, Span>>,
+    pub(super) selected_constructors: Table<ConstructorNameNamespace, ConstructorSignature>,
 }
 
 impl ModuleScope {
@@ -212,15 +210,15 @@ impl ModuleScope {
     }
 
     fn install(&mut self, addition: ImportAddition) {
-        fn select<Ns: NameNamespace>(
-            table: &mut HashMap<NameDef<Ns>, Symbol<Ns>>,
+        fn select<Ns: NameNamespace, X: Clone>(
+            table: &mut Table<Ns, X>,
             local: Spanned<NameAtom>,
-            target: ResolvedName<Ns>,
+            target: &Symbol<Ns, X>,
             visibility: BindableVisibility,
         ) {
             table.insert(
                 NameDef::classify(local.value),
-                Symbol::new(target, visibility, local.span, ()),
+                target.rebind(visibility, local.span),
             );
         }
 
@@ -247,22 +245,22 @@ impl ModuleScope {
                 );
             }
             ImportTarget::Decl(target) => {
-                select(&mut self.selected_decls, local, target, visibility);
+                select(&mut self.selected_decls, local, &target, visibility);
             }
             ImportTarget::Dimension(target) => {
-                select(&mut self.selected_dimensions, local, target, visibility);
+                select(&mut self.selected_dimensions, local, &target, visibility);
             }
             ImportTarget::Unit(target) => {
-                select(&mut self.selected_units, local, target, visibility);
+                select(&mut self.selected_units, local, &target, visibility);
             }
             ImportTarget::StructType(target) => {
-                select(&mut self.selected_struct_types, local, target, visibility);
+                select(&mut self.selected_struct_types, local, &target, visibility);
             }
             ImportTarget::Index(target) => {
-                select(&mut self.selected_indexes, local, target, visibility);
+                select(&mut self.selected_indexes, local, &target, visibility);
             }
             ImportTarget::Constructor(target) => {
-                select(&mut self.selected_constructors, local, target, visibility);
+                select(&mut self.selected_constructors, local, &target, visibility);
             }
         }
     }
@@ -279,7 +277,9 @@ pub(super) struct ImportAddition {
     pub(super) target: ImportTarget,
 }
 
-/// What one import-introduced local name denotes.
+/// What one import-introduced local name denotes: a module alias, or the
+/// source module's binding (canonical target and declaration payload) that
+/// the local name re-binds.
 #[derive(Debug, Clone)]
 pub(super) enum ImportTarget {
     ModuleAlias {
@@ -287,15 +287,28 @@ pub(super) enum ImportTarget {
         access: Access,
         role: ModuleAliasRole,
     },
-    Decl(ResolvedDeclName),
-    Dimension(ResolvedDimName),
-    Unit(ResolvedUnitName),
-    StructType(ResolvedStructTypeName),
-    Index(ResolvedIndexName),
-    Constructor(ResolvedConstructorName),
+    Decl(Symbol<DeclNameNamespace, DeclSymbolKind>),
+    Dimension(Symbol<DimNameNamespace>),
+    Unit(Symbol<UnitNameNamespace, UnitConstness>),
+    StructType(Symbol<StructTypeNameNamespace, Vec<GenericParamSignature>>),
+    Index(Symbol<IndexNameNamespace, HashMap<IndexVariantName, Span>>),
+    Constructor(Symbol<ConstructorNameNamespace, ConstructorSignature>),
 }
 
 impl ImportTarget {
+    /// Selective-import category of this target; module aliases have none.
+    pub(super) const fn item_kind(&self) -> Option<ExportedImportItemKind> {
+        Some(match self {
+            Self::ModuleAlias { .. } => return None,
+            Self::Decl(symbol) => ExportedImportItemKind::Decl(*symbol.data()),
+            Self::Unit(symbol) => ExportedImportItemKind::Unit(*symbol.data()),
+            Self::Dimension(_) => ExportedImportItemKind::Dimension,
+            Self::StructType(_) => ExportedImportItemKind::Type,
+            Self::Index(_) => ExportedImportItemKind::Index,
+            Self::Constructor(_) => ExportedImportItemKind::Constructor,
+        })
+    }
+
     /// The collision unit the local name occupies.
     pub(super) const fn namespace(&self) -> Namespace {
         match self {

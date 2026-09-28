@@ -875,7 +875,7 @@ fn resolve_projection_expected_fail(
                                     variant,
                                     span,
                                 } => module_resolver
-                                    .resolve_index_path(importer, &index)
+                                    .resolve_index_path(importer, &index).map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                                     .map(|index| ExpectedFailKeyPart::Named {
                                         index: IndexTypeRef::from_resolved(index),
                                         variant,
@@ -992,6 +992,7 @@ fn semantic_index_bindings(
                                     target.atom().clone(),
                                 ),
                             )
+                            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                             .map_err(|error| module_resolve_compile_error(error, src))?,
                     )
                 }
@@ -1047,6 +1048,7 @@ fn semantic_type_bindings(
                         importer,
                         &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
                     )
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|error| module_resolve_compile_error(error, src))?,
             ))
         })
@@ -1058,8 +1060,12 @@ fn semantic_type_bindings(
             let target_path =
                 graphcal_compiler::syntax::names::NamePath::local(alias.local.atom().clone());
             if let (Ok(source), Ok(target)) = (
-                module_resolver.resolve_struct_type_path(&request.template.dag_id, &source_path),
-                module_resolver.resolve_struct_type_path(importer, &target_path),
+                module_resolver
+                    .resolve_struct_type_path(&request.template.dag_id, &source_path)
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
+                module_resolver
+                    .resolve_struct_type_path(importer, &target_path)
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
             ) {
                 types.insert(source, target);
             }
@@ -1106,7 +1112,10 @@ fn semantic_dimension_bindings(
         .iter()
         .map(|(source, target)| {
             let path = graphcal_compiler::syntax::names::NamePath::local(target.atom().clone());
-            let target = match module_resolver.resolve_dimension_path(importer, &path) {
+            let target = match module_resolver
+                .resolve_dimension_path(importer, &path)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+            {
                 Ok(resolved) => resolved,
                 Err(error) => prelude
                     .resolve_dimension_path(&path)

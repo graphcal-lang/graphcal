@@ -3,10 +3,7 @@
 use std::collections::HashMap;
 
 use crate::dag_id::DagId;
-use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
-    ResolvedIndexVariant, ResolvedName, ResolvedStructTypeName, ResolvedUnitName,
-};
+use crate::resolved_name::{ResolvedIndexName, ResolvedIndexVariant};
 use crate::syntax::ast::{IdentPath, ModulePath, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
@@ -22,7 +19,7 @@ use super::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use super::exports::{ExportedBinding, ExportedBindingTarget, ExportedImportItem};
 use super::namespace::Namespace;
 use super::scope::Access;
-use super::symbols::{GenericParamSignature, Symbol};
+use super::symbols::{ConstructorSignature, GenericParamSignature, Symbol, SymbolRef};
 use super::tables::NamespaceTables;
 use super::{ModuleEntry, ModuleResolver};
 
@@ -57,7 +54,7 @@ impl ModuleResolver {
             });
         };
 
-        for (name, symbol) in public(&symbols.decls) {
+        for (name, symbol) in public_symbols::<DeclNameNamespace>(symbols, scope) {
             export(
                 name,
                 ExportedBindingTarget::Decl {
@@ -66,16 +63,7 @@ impl ModuleResolver {
                 },
             );
         }
-        for (name, symbol) in public(&scope.selected_decls) {
-            export(
-                name,
-                ExportedBindingTarget::Decl {
-                    identity: symbol.resolved().clone(),
-                    kind: self.decl_symbol_kind(symbol.resolved())?,
-                },
-            );
-        }
-        for (name, symbol) in public(&symbols.units) {
+        for (name, symbol) in public_symbols::<UnitNameNamespace>(symbols, scope) {
             export(
                 name,
                 ExportedBindingTarget::Unit {
@@ -84,26 +72,26 @@ impl ModuleResolver {
                 },
             );
         }
-        for (name, symbol) in public(&scope.selected_units) {
+        for (name, symbol) in public_symbols::<ConstructorNameNamespace>(symbols, scope) {
             export(
                 name,
-                ExportedBindingTarget::Unit {
-                    identity: symbol.resolved().clone(),
-                    constness: self.unit_constness(symbol.resolved())?,
-                },
+                ExportedBindingTarget::Constructor(symbol.resolved().clone()),
             );
         }
-        for (name, resolved) in public_targets::<ConstructorNameNamespace>(symbols, scope) {
-            export(name, ExportedBindingTarget::Constructor(resolved.clone()));
+        for (name, symbol) in public_symbols::<StructTypeNameNamespace>(symbols, scope) {
+            export(name, ExportedBindingTarget::Type(symbol.resolved().clone()));
         }
-        for (name, resolved) in public_targets::<StructTypeNameNamespace>(symbols, scope) {
-            export(name, ExportedBindingTarget::Type(resolved.clone()));
+        for (name, symbol) in public_symbols::<DimNameNamespace>(symbols, scope) {
+            export(
+                name,
+                ExportedBindingTarget::Dimension(symbol.resolved().clone()),
+            );
         }
-        for (name, resolved) in public_targets::<DimNameNamespace>(symbols, scope) {
-            export(name, ExportedBindingTarget::Dimension(resolved.clone()));
-        }
-        for (name, resolved) in public_targets::<IndexNameNamespace>(symbols, scope) {
-            export(name, ExportedBindingTarget::Index(resolved.clone()));
+        for (name, symbol) in public_symbols::<IndexNameNamespace>(symbols, scope) {
+            export(
+                name,
+                ExportedBindingTarget::Index(symbol.resolved().clone()),
+            );
         }
 
         bindings.sort_by(|left, right| {
@@ -148,26 +136,22 @@ impl ModuleResolver {
         owner: &DagId,
     ) -> Result<Vec<(DeclName, DagId)>, ModuleResolveError> {
         let scope = self.module_scope(owner)?;
-        scope
+        Ok(scope
             .selected_decls
             .iter()
+            .filter(|(_, imported)| *imported.data() == DeclSymbolKind::Dag)
             .map(|(local, imported)| {
-                self.decl_symbol_kind(imported.resolved()).map(|kind| {
-                    (kind == DeclSymbolKind::Dag).then(|| {
-                        (
-                            local.clone(),
-                            imported
-                                .resolved()
-                                .owner()
-                                .inline_dag_child(imported.resolved().to_unowned_def_name()),
-                        )
-                    })
-                })
+                (
+                    local.clone(),
+                    imported
+                        .resolved()
+                        .owner()
+                        .inline_dag_child(imported.resolved().to_unowned_def_name()),
+                )
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|entries| entries.into_iter().flatten().collect())
+            .collect())
     }
-    /// Resolve a syntactic declaration/value path to a canonical owner + leaf.
+    /// Resolve a syntactic declaration/value path to the symbol it denotes.
     ///
     /// Bare paths first search local declarations, then selective imports.
     /// Qualified paths resolve their qualifier through module aliases and then
@@ -176,7 +160,7 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedDeclName, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, DeclNameNamespace, DeclSymbolKind>, ModuleResolveError> {
         self.resolve_symbol_path::<DeclNameNamespace>(owner, path)
     }
 
@@ -185,108 +169,60 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedDeclName, ModuleResolveError> {
-        let resolved = self.resolve_decl_path(owner, path)?;
-        let actual = self.decl_symbol_kind(&resolved)?;
+    ) -> Result<SymbolRef<'_, DeclNameNamespace, DeclSymbolKind>, ModuleResolveError> {
+        let symbol = self.resolve_decl_path(owner, path)?;
+        let actual = *symbol.kind();
         if actual.is_const() {
-            Ok(resolved)
+            Ok(symbol)
         } else {
             Err(ModuleResolveError::UnexpectedDeclKind {
-                name: resolved,
+                name: symbol.into_resolved(),
                 expected: ExpectedDeclKind::Const,
                 actual,
             })
         }
     }
 
-    /// Return the semantic kind of a resolved declaration symbol.
-    pub fn decl_symbol_kind(
-        &self,
-        name: &ResolvedDeclName,
-    ) -> Result<DeclSymbolKind, ModuleResolveError> {
-        self.declared(name).copied()
-    }
-
-    pub(super) fn unit_constness(
-        &self,
-        name: &ResolvedUnitName,
-    ) -> Result<UnitConstness, ModuleResolveError> {
-        self.declared(name).copied()
-    }
-
-    pub(super) fn constructor_owner_type(
-        &self,
-        name: &ResolvedConstructorName,
-    ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
-        self.declared(name).map(|signature| {
-            ResolvedStructTypeName::from_def(name.owner().clone(), signature.owner_type.clone())
-        })
-    }
-
-    /// Return whether an instantiated declaration may be referenced by its consumer.
-    ///
-    /// Parameters are explicit instance inputs even when they are not declared
-    /// `pub`; other declaration kinds require public visibility.
-    pub(crate) fn decl_symbol_is_instance_accessible(
-        &self,
-        name: &ResolvedDeclName,
-    ) -> Result<bool, ModuleResolveError> {
-        self.declaration(name).map(|symbol| {
-            *symbol.data() == DeclSymbolKind::Param || symbol.visibility().is_public()
-        })
-    }
-
-    /// Resolve a syntactic dimension path to a canonical owner + leaf.
+    /// Resolve a syntactic dimension path to the symbol it denotes.
     pub fn resolve_dimension_path(
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedDimName, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, DimNameNamespace, ()>, ModuleResolveError> {
         self.resolve_symbol_path::<DimNameNamespace>(owner, path)
     }
 
-    /// Resolve a syntactic unit path to a canonical owner + leaf.
+    /// Resolve a syntactic unit path to the symbol it denotes.
     pub fn resolve_unit_path(
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedUnitName, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, UnitNameNamespace, UnitConstness>, ModuleResolveError> {
         self.resolve_symbol_path::<UnitNameNamespace>(owner, path)
     }
 
-    /// Resolve a syntactic struct/tagged-union type path to a canonical owner + leaf.
+    /// Resolve a syntactic struct/tagged-union type path to the symbol it
+    /// denotes, whose kind is the type's source generic signature.
     pub fn resolve_struct_type_path(
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
+    ) -> Result<
+        SymbolRef<'_, StructTypeNameNamespace, Vec<GenericParamSignature>>,
+        ModuleResolveError,
+    > {
         self.resolve_symbol_path::<StructTypeNameNamespace>(owner, path)
     }
 
-    /// Return the source generic signature for a resolved user-defined type.
-    pub(crate) fn struct_type_generic_params(
-        &self,
-        name: &ResolvedStructTypeName,
-    ) -> Result<&[GenericParamSignature], ModuleResolveError> {
-        self.declared(name).map(Vec::as_slice)
-    }
-
-    /// Resolve a syntactic tagged-union constructor path to a canonical owner + leaf.
+    /// Resolve a syntactic tagged-union constructor path to the symbol it
+    /// denotes, whose kind is its owning type's signature.
     pub fn resolve_constructor_path(
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedConstructorName, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, ConstructorNameNamespace, ConstructorSignature>, ModuleResolveError>
+    {
         self.resolve_symbol_path::<ConstructorNameNamespace>(owner, path)
-    }
-
-    /// Return the owning type's source generic signature for a resolved constructor.
-    pub(crate) fn constructor_generic_params(
-        &self,
-        name: &ResolvedConstructorName,
-    ) -> Result<&[GenericParamSignature], ModuleResolveError> {
-        self.declared(name)
-            .map(|signature| signature.generic_params.as_slice())
     }
 
     /// Resolve a span-aware constructor path without losing source path shape at
@@ -295,7 +231,8 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &IdentPath,
-    ) -> Result<ResolvedConstructorName, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, ConstructorNameNamespace, ConstructorSignature>, ModuleResolveError>
+    {
         self.resolve_constructor_path(owner, &ident_path_to_name_path(path))
     }
 
@@ -343,7 +280,7 @@ impl ModuleResolver {
         candidates.sort();
         candidates.into_iter().find(|candidate| {
             self.resolve_index_path(owner, candidate)
-                .is_ok_and(|resolved| &resolved == target)
+                .is_ok_and(|resolved| resolved.resolved() == target)
         })
     }
 
@@ -352,7 +289,10 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedIndexName, ModuleResolveError> {
+    ) -> Result<
+        SymbolRef<'_, IndexNameNamespace, HashMap<IndexVariantName, Span>>,
+        ModuleResolveError,
+    > {
         self.resolve_symbol_path::<IndexNameNamespace>(owner, path)
     }
 
@@ -369,14 +309,17 @@ impl ModuleResolver {
         index_path: &NamePath,
         variant: &IndexVariantName,
     ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
-        let resolved_index = self.resolve_index_path(owner, index_path)?;
-        if !self.declared(&resolved_index)?.contains_key(variant) {
+        let index = self.resolve_index_path(owner, index_path)?;
+        if !index.kind().contains_key(variant) {
             return Err(ModuleResolveError::UnknownIndexVariant {
-                index: resolved_index,
+                index: index.into_resolved(),
                 variant: variant.clone(),
             });
         }
-        Ok(ResolvedIndexVariant::new(resolved_index, variant.clone()))
+        Ok(ResolvedIndexVariant::new(
+            index.into_resolved(),
+            variant.clone(),
+        ))
     }
 
     /// Resolve a source DAG/module call path to its canonical [`DagId`].
@@ -418,17 +361,13 @@ impl ModuleResolver {
             .map(|binding| (binding.target.clone(), binding.access));
         let selected_name = DeclName::classify(head.atom().clone());
         let selected_target = match scope.selected_decls.get(&selected_name) {
-            Some(imported)
-                if self.decl_symbol_kind(imported.resolved())? == DeclSymbolKind::Dag =>
-            {
-                Some((
-                    imported
-                        .resolved()
-                        .owner()
-                        .inline_dag_child(imported.resolved().to_unowned_def_name()),
-                    Access::CrossModule,
-                ))
-            }
+            Some(imported) if *imported.data() == DeclSymbolKind::Dag => Some((
+                imported
+                    .resolved()
+                    .owner()
+                    .inline_dag_child(imported.resolved().to_unowned_def_name()),
+                Access::CrossModule,
+            )),
             Some(_) | None => None,
         };
         let candidates = local_target
@@ -498,15 +437,15 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         path: &NamePath,
-    ) -> Result<ResolvedName<Ns>, ModuleResolveError> {
+    ) -> Result<SymbolRef<'_, Ns, Ns::Declared>, ModuleResolveError> {
         let Some((qualifier, leaf)) = path.qualifier_and_leaf() else {
             let atom = path.leaf();
             let name = NameDef::<Ns>::classify(atom.clone());
             if let Some(symbol) = Ns::declared(self.module_symbols(owner)?).get(&name) {
-                return Ok(symbol.resolved().clone());
+                return Ok(SymbolRef::new(symbol));
             }
             if let Some(imported) = Ns::selected(self.module_scope(owner)?).get(&name) {
-                return Ok(imported.resolved().clone());
+                return Ok(SymbolRef::new(imported));
             }
             if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
@@ -528,22 +467,20 @@ impl ModuleResolver {
         let leaf_name = NameDef::<Ns>::classify(leaf.clone());
         let found = Ns::declared(self.module_symbols(&target_ref.owner)?)
             .get(&leaf_name)
-            .map(|symbol| (symbol.resolved(), symbol.visibility()))
             .or_else(|| {
                 self.modules
                     .get(&target_ref.owner)
                     .and_then(|entry| Ns::selected(&entry.scope).get(&leaf_name))
-                    .map(|imported| (imported.resolved(), imported.visibility()))
             });
-        if let Some((resolved, visibility)) = found {
-            if requires_public && !visibility.is_public() {
+        if let Some(symbol) = found {
+            if requires_public && !symbol.visibility().is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: target_ref.owner,
                     category: NameCategory::Table(Ns::TABLE),
                     name: leaf.clone(),
                 });
             }
-            return Ok(resolved.clone());
+            return Ok(SymbolRef::new(symbol));
         }
 
         if let Some(actual) =
@@ -715,12 +652,10 @@ fn public<Ns: NameNamespace, X>(
 }
 
 /// Public spellings of one namespace (declarations, then selective
-/// re-exports) with the canonical target each denotes.
-fn public_targets<'a, Ns: NamespaceTables>(
+/// re-exports) with the binding each denotes.
+fn public_symbols<'a, Ns: NamespaceTables>(
     symbols: &'a super::symbols::ModuleSymbols,
     scope: &'a super::scope::ModuleScope,
-) -> impl Iterator<Item = (&'a NameAtom, &'a ResolvedName<Ns>)> {
-    public(Ns::declared(symbols))
-        .map(|(name, symbol)| (name, symbol.resolved()))
-        .chain(public(Ns::selected(scope)).map(|(name, symbol)| (name, symbol.resolved())))
+) -> impl Iterator<Item = (&'a NameAtom, &'a Symbol<Ns, Ns::Declared>)> {
+    public(Ns::declared(symbols)).chain(public(Ns::selected(scope)))
 }

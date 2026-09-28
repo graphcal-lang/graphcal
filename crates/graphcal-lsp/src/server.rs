@@ -2262,24 +2262,36 @@ fn resolve_selective_binding(
     let local = item.local_name_atom().clone();
     let path = NamePath::local(local.clone());
     let target = match item.namespace {
-        ImportItemNamespace::Term => match resolver.resolve_decl_path(owner, &path) {
+        ImportItemNamespace::Term => match resolver
+            .resolve_decl_path(owner, &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+        {
             Ok(declaration) => SymbolKey::Declaration(declaration),
-            Err(_) => SymbolKey::Constructor(resolver.resolve_constructor_path(owner, &path).ok()?),
+            Err(_) => SymbolKey::Constructor(
+                resolver
+                    .resolve_constructor_path(owner, &path)
+                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+                    .ok()?,
+            ),
         },
         ImportItemNamespace::Type => resolver
             .resolve_struct_type_path(owner, &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
             .map(SymbolKey::StructType)
             .ok()?,
         ImportItemNamespace::Dimension => resolver
             .resolve_dimension_path(owner, &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
             .map(SymbolKey::Dimension)
             .ok()?,
         ImportItemNamespace::Unit => resolver
             .resolve_unit_path(owner, &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
             .map(SymbolKey::Unit)
             .ok()?,
         ImportItemNamespace::Index => resolver
             .resolve_index_path(owner, &path)
+            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
             .map(SymbolKey::Index)
             .ok()?,
     };

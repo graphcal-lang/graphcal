@@ -134,8 +134,21 @@ pub(super) fn collect_resolved_dag_dependencies(
             // `check_hir_body_policies`.
             let kind = ctx
                 .resolver
-                .decl_symbol_kind(graph_ref)
-                .map_err(|err| module_resolve_error(&err, src, entry.span))?;
+                .symbol(graph_ref)
+                .map(|symbol| *symbol.kind())
+                .ok_or_else(|| {
+                    module_resolve_error(
+                        &crate::resolve::error::ModuleResolveError::UnknownName {
+                            owner: graph_ref.owner().clone(),
+                            category: crate::resolve::error::NameCategory::Table(
+                                crate::resolve::category::SymbolTable::Decl,
+                            ),
+                            name: graph_ref.atom().clone(),
+                        },
+                        src,
+                        entry.span,
+                    )
+                })?;
             if kind.is_const() {
                 deps.const_refs.insert(graph_ref.clone());
             }

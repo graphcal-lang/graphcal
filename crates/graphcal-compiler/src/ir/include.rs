@@ -388,6 +388,7 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 let unit = resolver
                     .resolve_unit_path(&entry.unit_owner, &entry.spelling.to_name_path())
+                    .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|err| GraphcalError::InternalError {
                         message: format!(
                             "registered dynamic unit `{}` did not resolve canonically: {err}",

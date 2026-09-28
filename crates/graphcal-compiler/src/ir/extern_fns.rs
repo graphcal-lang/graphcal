@@ -388,7 +388,10 @@ pub(super) fn resolve_extern_struct_return(
         src: src.clone(),
         span: span.into(),
     };
-    let Ok(resolved_type) = resolver.resolve_struct_type_path(owner, path) else {
+    let Ok(resolved_type) = resolver
+        .resolve_struct_type_path(owner, path)
+        .map(crate::resolve::symbols::SymbolRef::into_resolved)
+    else {
         // Neither a dimension nor a type in scope: report it the way any
         // other unknown dimension-position name is reported.
         return Err(GraphcalError::UnknownDimension {
