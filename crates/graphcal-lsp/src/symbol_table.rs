@@ -189,12 +189,8 @@ impl<'a> HirRefCollector<'a> {
                 *span,
             ),
             hir::ExprLowerError::UnknownUnit { name, span } => {
-                let qualifier = name
-                    .qualifier()
-                    .into_iter()
-                    .flat_map(|owner| owner.segments().iter().cloned())
-                    .collect();
-                let path = SourceSymbolPath::module_member(qualifier, name.name().atom().clone());
+                let qualifier = name.qualifier().to_vec();
+                let path = SourceSymbolPath::module_member(qualifier, name.leaf().atom().clone());
                 (UnresolvedSymbol::Unit(path), *span)
             }
             hir::ExprLowerError::UnknownFunction { path, span } => {
@@ -2446,15 +2442,9 @@ fn dag_declaration_name(dag: &DagId) -> Option<ResolvedDeclName> {
 /// Collect references from a syntax-layer unit expression.
 fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
     for item in &unit_expr.terms {
-        let qualifier = item
-            .name
-            .value
-            .qualifier()
-            .into_iter()
-            .flat_map(|owner| owner.segments().iter().cloned())
-            .collect();
+        let qualifier = item.name.value.qualifier().to_vec();
         let path =
-            SourceSymbolPath::module_member(qualifier, item.name.value.name().atom().clone());
+            SourceSymbolPath::module_member(qualifier, item.name.value.leaf().atom().clone());
         table.references.push(ReferenceInfo {
             span: item.name.span,
             target: ReferenceTarget::Unresolved(UnresolvedSymbol::Unit(path)),

@@ -311,7 +311,7 @@ mod tests {
         let loaded_dims = r
             .dimensions
             .all_dimensions()
-            .map(|(name, _)| name.name().as_str())
+            .map(|(name, _)| name.leaf().as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_dims, loaded_dims);
 
@@ -319,7 +319,7 @@ mod tests {
         let loaded_units = r
             .units
             .all_units()
-            .map(|(unit_ref, _)| unit_ref.name().as_str())
+            .map(|(unit_ref, _)| unit_ref.leaf().as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_units, loaded_units);
     }

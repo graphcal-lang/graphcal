@@ -275,8 +275,8 @@ impl ScopedName {
             .iter()
             .map(|segment| segment.alias().map(|alias| alias.atom().clone()))
             .collect::<Option<Vec<_>>>()?;
-        Some(NamePath::qualified_path(
-            qualifier,
+        Some(NamePath::from_parts(
+            crate::syntax::non_empty::NonEmpty::try_from_vec(qualifier).ok(),
             self.member.atom().clone(),
         ))
     }
@@ -349,10 +349,12 @@ impl From<NamePath> for ScopedName {
 
 impl From<&NamePath> for ScopedName {
     fn from(path: &NamePath) -> Self {
-        let (qualifier, member) = path.split_last();
         Self::qualified_path(
-            qualifier.iter().cloned().map(ModuleAliasName::classify),
-            DeclName::classify(member.clone()),
+            path.qualifier()
+                .iter()
+                .cloned()
+                .map(ModuleAliasName::classify),
+            DeclName::classify(path.leaf().clone()),
         )
     }
 }

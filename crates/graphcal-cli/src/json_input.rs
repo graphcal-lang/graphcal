@@ -30,7 +30,7 @@ use graphcal_compiler::syntax::ast::{
 };
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
-use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath, NamespacePath};
+use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
@@ -60,8 +60,8 @@ fn synth_ident_path(
             })
     };
     Ok(match owner {
-        Some(owner) => IdentPath::member(owner.into_segments().try_map(ident)?, ident(member)?),
-        None => IdentPath::bare(ident(member)?),
+        Some(owner) => IdentPath::qualified(owner.try_map(ident)?, ident(member)?),
+        None => IdentPath::local(ident(member)?),
     })
 }
 
@@ -97,7 +97,7 @@ fn parse_name_path(
         .map_err(invalid)?;
     let owner = NonEmpty::try_from_vec(owner).map_err(|_| invalid(NameAtomError::Empty))?;
     let member = NameAtom::parse(member).map_err(invalid)?;
-    Ok(NamePath::member(NamespacePath::new(owner), member))
+    Ok(NamePath::qualified(owner, member))
 }
 
 // ---------------------------------------------------------------------------
@@ -996,7 +996,7 @@ mod tests {
 
         match &overrides[&DeclName::expect_valid("status")].kind {
             ExprKind::ConstructorCall { callee, .. } => {
-                assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "lib");
+                assert_eq!(callee.owner().unwrap()[0].name.as_str(), "lib");
                 assert_eq!(callee.leaf().name.as_str(), "Pick");
             }
             other => panic!("expected ConstructorCall, got {other:?}"),

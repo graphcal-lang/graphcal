@@ -3033,12 +3033,15 @@ fuel_per_call = 900000000
     }
 
     fn name_path(segments: &[&str]) -> graphcal_compiler::syntax::names::NamePath {
-        let atoms = segments
-            .iter()
-            .map(|segment| graphcal_compiler::syntax::names::NameAtom::parse(*segment).unwrap())
-            .collect::<Vec<_>>();
-        graphcal_compiler::syntax::names::NamePath::new(
-            graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(atoms).unwrap(),
+        let atom =
+            |segment: &str| graphcal_compiler::syntax::names::NameAtom::parse(segment).unwrap();
+        let (leaf, owner) = segments.split_last().unwrap();
+        graphcal_compiler::syntax::names::NamePath::from_parts(
+            graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
+                owner.iter().map(|segment| atom(segment)).collect(),
+            )
+            .ok(),
+            atom(leaf),
         )
     }
 

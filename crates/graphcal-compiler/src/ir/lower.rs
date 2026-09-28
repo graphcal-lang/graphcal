@@ -1363,8 +1363,8 @@ mod tests {
 
     #[test]
     fn unknown_qualified_extern_dimension_preserves_its_path() {
-        let path = NamePath::qualified_path(
-            [NameAtom::parse("missing").unwrap()],
+        let path = NamePath::qualified(
+            crate::syntax::non_empty::NonEmpty::singleton(NameAtom::parse("missing").unwrap()),
             NameAtom::parse("Dimension").unwrap(),
         );
         let registry = RegistryBuilder::new().build();
@@ -1388,8 +1388,7 @@ mod tests {
             matches!(
                 &error,
                 GraphcalError::UnknownDimension { name, .. }
-                    if name.owner().is_some_and(|owner| owner.segments()
-                        .iter().map(NameAtom::as_str).eq(["missing"]))
+                    if name.qualifier().iter().map(NameAtom::as_str).eq(["missing"])
                         && name.leaf().as_str() == "Dimension"
             ),
             "{error:?}"

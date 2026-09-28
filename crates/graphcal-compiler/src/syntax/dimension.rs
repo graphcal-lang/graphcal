@@ -1,8 +1,6 @@
 //! Syntax-level dimension and unit names.
 
-use std::fmt;
-
-use crate::syntax::names::{NameDef, NameNamespace, NamePath, NamespacePath, ResolvedName};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, Qualified, ResolvedName};
 
 /// Dimension namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -47,169 +45,11 @@ pub type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 pub type DimVarName = NameDef<DimVarNameNamespace>;
 
 /// A Unit name selected locally or after a dotted DAG path and `::`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct UnitRef {
-    owner: Option<NamespacePath>,
-    name: UnitName,
-}
-
-impl UnitRef {
-    /// Create an unqualified local/selective/prelude Unit reference.
-    #[must_use]
-    pub fn local(name: impl Into<UnitName>) -> Self {
-        Self {
-            owner: None,
-            name: name.into(),
-        }
-    }
-
-    /// Create a Unit member selected after `::`.
-    #[must_use]
-    pub const fn qualified(owner: NamespacePath, name: UnitName) -> Self {
-        Self {
-            owner: Some(owner),
-            name,
-        }
-    }
-
-    /// Construct from the namespace-neutral syntax reference parser.
-    #[must_use]
-    pub fn from_name_path(path: NamePath) -> Self {
-        let (owner, name) = path.into_parts();
-        Self {
-            owner,
-            name: UnitName::classify(name),
-        }
-    }
-
-    /// The dotted DAG/module owner before `::`, if any.
-    #[must_use]
-    pub const fn qualifier(&self) -> Option<&NamespacePath> {
-        self.owner.as_ref()
-    }
-
-    /// Convert to the namespace-neutral path consumed by the resolver.
-    #[must_use]
-    pub(crate) fn to_name_path(&self) -> NamePath {
-        self.owner.as_ref().map_or_else(
-            || NamePath::local(self.name.atom().clone()),
-            |owner| NamePath::member(owner.clone(), self.name.atom().clone()),
-        )
-    }
-
-    /// The unit leaf name.
-    #[must_use]
-    pub const fn name(&self) -> &UnitName {
-        &self.name
-    }
-
-    /// Returns whether this reference is module-qualified.
-    #[must_use]
-    pub const fn is_qualified(&self) -> bool {
-        self.owner.is_some()
-    }
-}
-
-impl From<UnitName> for UnitRef {
-    /// Wrap a bare unit name as a local reference. Definition sites always
-    /// produce local references; qualified forms are constructed explicitly
-    /// via [`UnitRef::qualified`].
-    fn from(name: UnitName) -> Self {
-        Self::local(name)
-    }
-}
-
-impl fmt::Display for UnitRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(owner) = &self.owner {
-            write!(f, "{owner}::")?;
-        }
-        write!(f, "{}", self.name)
-    }
-}
+pub type UnitRef = Qualified<NameAtom, UnitName>;
 
 /// A Dimension name selected locally or after a dotted DAG path and `::`.
 ///
 /// Mirrors [`UnitRef`]: flat per-file registries key source-visible dimension
 /// names by this reference so that `a::Rate` and a local or imported `Rate`
 /// remain distinct entries instead of colliding on the leaf spelling.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DimRef {
-    owner: Option<NamespacePath>,
-    name: DimName,
-}
-
-impl DimRef {
-    /// Create an unqualified local/selective/prelude Dimension reference.
-    #[must_use]
-    pub fn local(name: impl Into<DimName>) -> Self {
-        Self {
-            owner: None,
-            name: name.into(),
-        }
-    }
-
-    /// Create a Dimension member selected after `::`.
-    #[must_use]
-    pub const fn qualified(owner: NamespacePath, name: DimName) -> Self {
-        Self {
-            owner: Some(owner),
-            name,
-        }
-    }
-
-    /// Construct from the namespace-neutral syntax reference parser.
-    #[must_use]
-    pub fn from_name_path(path: NamePath) -> Self {
-        let (owner, name) = path.into_parts();
-        Self {
-            owner,
-            name: DimName::classify(name),
-        }
-    }
-
-    /// Convert to the namespace-neutral source path used by diagnostics.
-    #[must_use]
-    pub fn to_name_path(&self) -> NamePath {
-        self.owner.as_ref().map_or_else(
-            || NamePath::local(self.name.atom().clone()),
-            |owner| NamePath::member(owner.clone(), self.name.atom().clone()),
-        )
-    }
-
-    /// The dotted DAG/module owner before `::`, if any.
-    #[must_use]
-    pub const fn qualifier(&self) -> Option<&NamespacePath> {
-        self.owner.as_ref()
-    }
-
-    /// The dimension leaf name.
-    #[must_use]
-    pub const fn name(&self) -> &DimName {
-        &self.name
-    }
-
-    /// Returns whether this reference is module-qualified.
-    #[must_use]
-    pub const fn is_qualified(&self) -> bool {
-        self.owner.is_some()
-    }
-}
-
-impl From<DimName> for DimRef {
-    /// Wrap a bare dimension name as a local reference. Definition sites
-    /// always produce local references; qualified forms are constructed
-    /// explicitly via [`DimRef::qualified`].
-    fn from(name: DimName) -> Self {
-        Self::local(name)
-    }
-}
-
-impl fmt::Display for DimRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(owner) = &self.owner {
-            write!(f, "{owner}::")?;
-        }
-        write!(f, "{}", self.name)
-    }
-}
+pub type DimRef = Qualified<NameAtom, DimName>;

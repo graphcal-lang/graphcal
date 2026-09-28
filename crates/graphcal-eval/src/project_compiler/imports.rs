@@ -290,7 +290,7 @@ fn validate_qualified_static_import_references(
         .flat_map(|declaration| declaration_static_references(&declaration.kind))
         .filter_map(|reference| {
             let (owner, leaf) = reference.path().qualifier_and_leaf()?;
-            (owner == [module_name.atom().clone()])
+            (owner.as_slice() == [module_name.atom().clone()])
                 .then_some((leaf.clone(), reference.namespaces()))
         })
         .try_for_each(|(name, namespaces)| {

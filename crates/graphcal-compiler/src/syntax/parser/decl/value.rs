@@ -100,12 +100,11 @@ impl Parser<'_> {
         let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
             let (_, at) = parser.expect(Token::At)?;
             let path = parser.parse_ident_path()?;
-            let (owner, member) = path.split_last();
             let name = ScopedName::qualified_path(
-                owner
+                path.qualifier()
                     .iter()
                     .map(|part| ModuleAliasName::classify(part.name.atom().clone())),
-                DeclName::classify(member.name.atom().clone()),
+                DeclName::classify(path.leaf().name.atom().clone()),
             );
             Ok(Spanned::new(name, at.merge(path.span())))
         })?;

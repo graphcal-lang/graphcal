@@ -257,7 +257,7 @@ impl PreparedProject {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Expr::new(
             AstExprKind::ConstructorCall {
-                callee: IdentPath::bare(Ident { name: callee, span }),
+                callee: IdentPath::local(Ident { name: callee, span }),
                 generic_args: Vec::new(),
                 fields,
             },

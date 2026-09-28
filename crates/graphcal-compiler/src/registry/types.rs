@@ -634,12 +634,13 @@ mod tests {
     fn resolve_dim_expr_keys_qualified_and_aliased_references() {
         use crate::registry::dimension_table::DimensionResolveError;
         use crate::syntax::dimension::DimRef;
-        use crate::syntax::names::{NameAtom, NamespacePath};
+        use crate::syntax::names::NameAtom;
+        use crate::syntax::non_empty::NonEmpty;
 
         let atom = |s: &str| NameAtom::parse(s).unwrap();
         let rate = DimName::expect_valid("Rate");
         let qualified =
-            |owner: &str| DimRef::qualified(NamespacePath::root(atom(owner)), rate.clone());
+            |owner: &str| DimRef::qualified(NonEmpty::singleton(atom(owner)), rate.clone());
         let single = |path: NamePath| DimExpr {
             terms: vec![DimExprItem {
                 op: MulDivOp::Mul,
@@ -662,7 +663,8 @@ mod tests {
         b.register_dimension_alias(DimRef::local(DimName::expect_valid("R")), qualified("a"))
             .unwrap();
 
-        let member = |owner: &str| NamePath::member(NamespacePath::root(atom(owner)), atom("Rate"));
+        let member =
+            |owner: &str| NamePath::qualified(NonEmpty::singleton(atom(owner)), atom("Rate"));
         assert_eq!(
             b.resolve_dim_expr_detailed(&single(member("a"))),
             Ok(velocity.clone())

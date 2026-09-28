@@ -196,14 +196,6 @@ impl<T> NonEmpty<T> {
         self.items
     }
 
-    /// Consume the sequence into its last item and the preceding items.
-    #[must_use]
-    pub(crate) fn into_last_and_init(mut self) -> (T, Vec<T>) {
-        let last_index = self.items.len() - 1;
-        let last = self.items.remove(last_index);
-        (last, self.items)
-    }
-
     /// Borrow as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
@@ -238,13 +230,6 @@ impl<T> NonEmpty<T> {
     #[must_use]
     pub fn last(&self) -> &T {
         &self.items[self.items.len() - 1]
-    }
-
-    /// Split into the last element and the elements before it.
-    #[must_use]
-    pub(crate) fn split_last(&self) -> (&T, &[T]) {
-        let last_index = self.items.len() - 1;
-        (&self.items[last_index], &self.items[..last_index])
     }
 
     /// Iterate over all elements in source order.

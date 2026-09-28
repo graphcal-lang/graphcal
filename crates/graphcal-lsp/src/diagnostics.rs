@@ -264,7 +264,7 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             .as_bare()
             .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
         GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
-            auto_import_data(name.name().as_str(), AutoImportCategory::Unit)
+            auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
         }
         // Structural `Fin(N)` axes are never importable.
         GraphcalError::UnknownIndex { name, .. } => name
@@ -376,7 +376,7 @@ mod tests {
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
     use graphcal_compiler::registry::error::GraphcalError;
-    use graphcal_compiler::syntax::names::{NameAtom, NamePath, NamespacePath};
+    use graphcal_compiler::syntax::names::{NameAtom, NamePath};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::syntax::span::Span;
@@ -444,8 +444,8 @@ mod tests {
     fn qualified_unknown_dimension_retains_its_path_without_auto_import_data() {
         let source = "missing::Dimension";
         let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-        let path = NamePath::member(
-            NamespacePath::new(NonEmpty::singleton(NameAtom::parse("missing").unwrap())),
+        let path = NamePath::qualified(
+            NonEmpty::singleton(NameAtom::parse("missing").unwrap()),
             NameAtom::parse("Dimension").unwrap(),
         );
         let error = CompileError::Eval(GraphcalError::UnknownDimension {

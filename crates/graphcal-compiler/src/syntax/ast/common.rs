@@ -189,28 +189,6 @@ impl ModulePath {
     pub fn leaf(&self) -> &Ident {
         self.segments.last()
     }
-
-    /// Split the path into qualifier segments and the leaf segment.
-    ///
-    /// The qualifier slice is empty for one-segment paths.
-    #[must_use]
-    pub fn split_last(&self) -> (&[Ident], &Ident) {
-        let (leaf, qualifier) = self.segments.split_last();
-        (qualifier, leaf)
-    }
-
-    /// Returns the qualifier segments before the leaf. Empty for bare paths.
-    #[must_use]
-    pub fn qualifier_segments(&self) -> &[Ident] {
-        self.split_last().0
-    }
-
-    /// Returns qualifier segments and leaf only when this path is qualified.
-    #[must_use]
-    pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
-        let (qualifier, leaf) = self.split_last();
-        (!qualifier.is_empty()).then_some((qualifier, leaf))
-    }
 }
 
 /// A single item in an `import` declaration, optionally aliased.
@@ -271,6 +249,12 @@ pub struct Ident {
     pub name: SourceIdentifier,
     #[fe(skip)]
     pub span: Span,
+}
+
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.name, f)
+    }
 }
 
 impl Ident {

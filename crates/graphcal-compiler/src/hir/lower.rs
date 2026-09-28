@@ -156,12 +156,12 @@ impl PreludeTypeScope {
     }
 
     pub(crate) fn resolve_unit_ref(&self, reference: &UnitRef) -> Option<ResolvedUnitName> {
-        if reference.is_qualified() || !self.units.contains(reference.name()) {
+        if reference.is_qualified() || !self.units.contains(reference.leaf()) {
             return None;
         }
         Some(ResolvedName::from_def(
             self.owner.clone(),
-            reference.name().clone(),
+            reference.leaf().clone(),
         ))
     }
 }

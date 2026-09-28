@@ -43,11 +43,10 @@ pub use graphcal_ast_derive::FormatEquivalent;
 
 use crate::dimension::Rational;
 use crate::exact_rational::ExactRational;
-use crate::syntax::dimension::UnitRef;
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, Qualified};
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::plugin::PluginPath;
 use crate::syntax::span::Spanned;
@@ -94,9 +93,7 @@ format_equivalent_via_eq!(
     // Identifiers and paths — written identity only, never a span.
     NameAtom,
     SourceIdentifier,
-    NamePath,
     ScopedName,
-    UnitRef,
     IndexEntryKey,
     PluginPath,
     ImportItemNamespace,
@@ -163,6 +160,18 @@ impl<T: FormatEquivalent> FormatEquivalent for Vec<T> {
 impl<T: FormatEquivalent> FormatEquivalent for NonEmpty<T> {
     fn format_equivalent(&self, other: &Self) -> bool {
         self.as_slice().format_equivalent(other.as_slice())
+    }
+}
+
+/// A source path is equivalent when its owner segments and leaf are.
+impl<Seg: FormatEquivalent, Leaf: FormatEquivalent> FormatEquivalent for Qualified<Seg, Leaf> {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        let owners_match = match (self.owner(), other.owner()) {
+            (None, None) => true,
+            (Some(owner), Some(other_owner)) => owner.format_equivalent(other_owner),
+            (None, Some(_)) | (Some(_), None) => false,
+        };
+        owners_match && self.leaf().format_equivalent(other.leaf())
     }
 }
 

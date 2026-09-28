@@ -754,7 +754,7 @@ impl<'src> Parser<'src> {
             probe.next_token();
         }
         if probe.peek() != Some(&Token::DoubleColon) {
-            return Ok(IdentPath::bare(first));
+            return Ok(IdentPath::local(first));
         }
 
         let mut owner_rest = Vec::new();
@@ -764,7 +764,7 @@ impl<'src> Parser<'src> {
         }
         self.expect(Token::DoubleColon)?;
         let member = self.parse_any_ident()?;
-        Ok(IdentPath::member(
+        Ok(IdentPath::qualified(
             crate::syntax::non_empty::NonEmpty::new(first, owner_rest),
             member,
         ))

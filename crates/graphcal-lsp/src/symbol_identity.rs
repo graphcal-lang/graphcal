@@ -292,10 +292,7 @@ impl SourceSymbolPath {
         path.qualifier_and_leaf().map_or_else(
             || Self::Local(path.leaf().clone()),
             |(namespace, member)| Self::ModuleMember {
-                namespace: graphcal_compiler::syntax::non_empty::NonEmpty::new(
-                    namespace[0].clone(),
-                    namespace[1..].to_vec(),
-                ),
+                namespace: namespace.clone(),
                 member: member.clone(),
             },
         )

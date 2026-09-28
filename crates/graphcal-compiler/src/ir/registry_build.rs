@@ -593,7 +593,7 @@ fn topo_sort_units<'a>(
                 if item.name.value.is_qualified() {
                     continue;
                 }
-                let dep_name = item.name.value.name().as_str();
+                let dep_name = item.name.value.leaf().as_str();
                 if dep_name != self_name
                     && let Some(&to) = name_to_idx.get(dep_name)
                 {
@@ -1339,7 +1339,7 @@ fn find_non_earlier_path_reference(
     current_index: usize,
     positions: &GenericParamPositions,
 ) -> Option<(GenericParamName, Span)> {
-    path.value.is_bare().then_some(())?;
+    path.value.as_bare()?;
     non_earlier_generic_reference(path.value.leaf(), path.span, current_index, positions)
 }
 

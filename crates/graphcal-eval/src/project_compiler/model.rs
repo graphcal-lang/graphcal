@@ -58,9 +58,9 @@ impl LoweringModuleInterface {
             .filter(|(unit, info)| {
                 !unit.is_qualified()
                     && !info.scale.constness().is_const()
-                    && external_surface.is_unit_explicit_export(unit.name().atom())
+                    && external_surface.is_unit_explicit_export(unit.leaf().atom())
             })
-            .map(|(unit, _)| unit.name().clone())
+            .map(|(unit, _)| unit.leaf().clone())
             .collect();
         Self {
             frontend_registry,

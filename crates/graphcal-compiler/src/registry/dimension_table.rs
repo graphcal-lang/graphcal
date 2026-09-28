@@ -43,7 +43,7 @@ pub fn resolve_dim_expr_with<'a>(
     expr.terms
         .iter()
         .try_fold(Dimension::dimensionless(), |acc, item| {
-            let reference = DimRef::from_name_path(item.term.name.value.clone());
+            let reference: DimRef = item.term.name.value.clone().classify_leaf();
             let Some(base) = lookup(&reference) else {
                 return Err(DimensionResolveError::UnknownDimension { name: reference });
             };

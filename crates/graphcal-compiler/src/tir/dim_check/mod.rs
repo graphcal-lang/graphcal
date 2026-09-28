@@ -289,7 +289,7 @@ fn check_dynamic_unit_scale_type(
     ctx.checkpoint()?;
     if entry.declared_dimension != entry.base_unit_dimension {
         return Err(GraphcalError::UnitDefinitionDimensionMismatch {
-            name: entry.spelling.name().clone(),
+            name: entry.spelling.leaf().clone(),
             declared: ctx
                 .registry
                 .dimensions
