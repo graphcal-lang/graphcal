@@ -363,6 +363,21 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     ))
 }
 
+/// N001 for a resolver duplicate, rendered with its spelled name.
+fn duplicate_name(
+    name: String,
+    first: Span,
+    duplicate: Span,
+    src: &NamedSource<Arc<String>>,
+) -> CompileError {
+    CompileError::Eval(GraphcalError::DuplicateName {
+        name,
+        src: src.clone(),
+        duplicate: duplicate.into(),
+        first: first.into(),
+    })
+}
+
 pub(super) fn module_resolve_compile_error(
     err: graphcal_compiler::resolve::error::ModuleResolveError,
     src: &NamedSource<Arc<String>>,
@@ -371,7 +386,7 @@ pub(super) fn module_resolve_compile_error(
         graphcal_compiler::resolve::error::ModuleResolveError::PrivateName {
             owner, name, ..
         } => CompileError::Eval(GraphcalError::ImportPrivateItem {
-            name,
+            name: name.to_string(),
             file_path: owner.to_string(),
             src: src.clone(),
             span: Span::new(0, src.inner().len()).into(),
@@ -391,7 +406,7 @@ pub(super) fn module_resolve_compile_error(
             span,
             ..
         } => CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
-            name,
+            name: name.to_string(),
             src: src.clone(),
             span: span.into(),
         }),
@@ -401,7 +416,7 @@ pub(super) fn module_resolve_compile_error(
             span,
             ..
         } => CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
-            constructor,
+            constructor: constructor.to_string(),
             owner_type: owner_type.to_string(),
             src: src.clone(),
             span: span.into(),
@@ -417,12 +432,19 @@ pub(super) fn module_resolve_compile_error(
             first,
             duplicate,
             ..
-        } => CompileError::Eval(GraphcalError::DuplicateName {
-            name,
-            src: src.clone(),
-            duplicate: duplicate.into(),
-            first: first.into(),
-        }),
+        } => duplicate_name(name.to_string(), first, duplicate, src),
+        graphcal_compiler::resolve::error::ModuleResolveError::DuplicateIndexVariant {
+            variant,
+            first,
+            duplicate,
+            ..
+        } => duplicate_name(variant.to_string(), first, duplicate, src),
+        graphcal_compiler::resolve::error::ModuleResolveError::DuplicatePluginFunction {
+            function,
+            first,
+            duplicate,
+            ..
+        } => duplicate_name(function.to_string(), first, duplicate, src),
         other => CompileError::Eval(GraphcalError::EvalError {
             message: other.to_string(),
             src: src.clone(),

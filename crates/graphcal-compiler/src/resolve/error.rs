@@ -1,15 +1,71 @@
 //! Errors produced while building or using module-aware symbol tables.
+//!
+//! Every payload is typed; text appears only in the `Display` rendering, which
+//! keeps the resolver's established diagnostic wording.
 
 use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::syntax::function_name::FnName;
 use crate::syntax::import_category::ImportItemCategoryMismatch;
-use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::{IndexVariantName, QualifiedIndexVariantName};
 use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
+use crate::syntax::type_name::ConstructorName;
 
-use super::category::{DeclSymbolKind, ExportedImportItemKind, SurfaceNameKind};
+use super::category::{DeclSymbolKind, ExportedImportItemKind, SurfaceNameKind, SymbolTable};
+use super::namespace::Namespace;
+
+/// What a failed lookup or visibility check searched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NameCategory {
+    /// One declaration / selective-import table.
+    Table(SymbolTable),
+    /// A whole collision unit.
+    Namespace(Namespace),
+    /// The Term category of a selective import, which may name a
+    /// declaration or a constructor.
+    TermImport,
+    /// A module alias reached through a qualifier.
+    DagAlias,
+    /// A `dag` declaration on a module path.
+    Dag,
+}
+
+impl std::fmt::Display for NameCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Table(table) => table.fmt(f),
+            Self::Namespace(namespace) => namespace.fmt(f),
+            Self::TermImport => f.write_str("term import namespace"),
+            Self::DagAlias => f.write_str("dag alias"),
+            Self::Dag => f.write_str("dag"),
+        }
+    }
+}
+
+/// The declaration kind a use site requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExpectedDeclKind {
+    /// A `const` declaration.
+    Const,
+    /// A `const` declaration reached through an imported (not instantiated) DAG.
+    InstanceIndependentConst,
+    /// A value that participates in the graph (`const`, `param`, or `node`).
+    GraphValue,
+}
+
+impl std::fmt::Display for ExpectedDeclKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Const => "const",
+            Self::InstanceIndependentConst => "instance-independent const",
+            Self::GraphValue => "graph value",
+        })
+    }
+}
 
 /// Errors produced while building or using module-aware symbol tables.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -39,30 +95,46 @@ pub enum ModuleResolveError {
         owner: DagId,
         alias: ModuleAliasName,
     },
-    /// Duplicate definition in one namespace.
+    /// Two local declarations occupy one slot of the module's collision unit.
     #[error("duplicate {namespace} `{name}` in module `{owner}`")]
     DuplicateSymbol {
         owner: DagId,
-        namespace: &'static str,
-        name: String,
+        namespace: Namespace,
+        name: NameAtom,
         first: Span,
         duplicate: Span,
     },
-    /// Duplicate local import/alias in one namespace.
+    /// One index declaration lists a variant twice.
+    #[error("duplicate IndexVariantName `{variant}` in module `{owner}`")]
+    DuplicateIndexVariant {
+        owner: DagId,
+        variant: QualifiedIndexVariantName,
+        first: Span,
+        duplicate: Span,
+    },
+    /// One plugin block declares a function twice.
+    #[error("duplicate FnName `{function}` in module `{owner}`")]
+    DuplicatePluginFunction {
+        owner: DagId,
+        function: FnName,
+        first: Span,
+        duplicate: Span,
+    },
+    /// An alias or import claims a slot another binding already occupies.
     #[error("duplicate imported {namespace} `{name}` in module `{owner}`")]
     DuplicateImportName {
         owner: DagId,
-        namespace: &'static str,
-        name: String,
+        namespace: Namespace,
+        name: NameAtom,
         first: Span,
         duplicate: Span,
     },
-    /// A name was not found in the requested namespace.
-    #[error("unknown {namespace} `{name}` in module `{owner}`")]
+    /// A name was not found where the lookup searched.
+    #[error("unknown {category} `{name}` in module `{owner}`")]
     UnknownName {
         owner: DagId,
-        namespace: &'static str,
-        name: String,
+        category: NameCategory,
+        name: NameAtom,
     },
     /// A selective import name exists, but not under the marked category.
     #[error("in module `{owner}`, {mismatch}")]
@@ -75,7 +147,7 @@ pub enum ModuleResolveError {
     #[error("in module `{owner}`, `{name}` is {actual}, not {expected}")]
     WrongUniverseName {
         owner: DagId,
-        name: String,
+        name: NamePath,
         expected: SurfaceNameKind,
         actual: SurfaceNameKind,
     },
@@ -83,7 +155,7 @@ pub enum ModuleResolveError {
     #[error("cannot project `{name}` from configured instance `{owner}` ({kind:?})")]
     IncludeItemNotProjectable {
         owner: DagId,
-        name: String,
+        name: NameAtom,
         kind: ExportedImportItemKind,
         span: Span,
     },
@@ -93,7 +165,7 @@ pub enum ModuleResolveError {
     )]
     ConstructorOwnerRebound {
         owner: DagId,
-        constructor: String,
+        constructor: ConstructorName,
         owner_type: ResolvedStructTypeName,
         span: Span,
     },
@@ -101,30 +173,20 @@ pub enum ModuleResolveError {
     #[error("expected {expected} declaration `{name}`, found {actual}")]
     UnexpectedDeclKind {
         name: ResolvedDeclName,
-        expected: &'static str,
+        expected: ExpectedDeclKind,
         actual: DeclSymbolKind,
     },
     /// A name exists but is not public across module boundaries.
-    #[error("private {namespace} `{name}` in module `{owner}`")]
+    #[error("private {category} `{name}` in module `{owner}`")]
     PrivateName {
         owner: DagId,
-        namespace: &'static str,
-        name: String,
+        category: NameCategory,
+        name: NameAtom,
     },
-    /// A path did not have enough segments to denote `Index#Variant`.
-    #[error("expected index-variant path in module `{owner}`, got `{path}`")]
-    ExpectedIndexVariantPath { owner: DagId, path: String },
     /// The index exists, but the requested variant is absent.
     #[error("unknown variant `{variant}` for index `{index}`")]
     UnknownIndexVariant {
         index: ResolvedIndexName,
         variant: IndexVariantName,
-    },
-    /// A bare variant exists on more than one visible index.
-    #[error("ambiguous index label `{variant}` in module `{owner}`; qualify it with an index name")]
-    AmbiguousIndexVariant {
-        owner: DagId,
-        variant: IndexVariantName,
-        indexes: Vec<ResolvedIndexName>,
     },
 }

@@ -204,15 +204,10 @@ impl<'a> HirRefCollector<'a> {
             hir::ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnknownName { name, .. },
                 span,
-            } => {
-                let Ok(name) = NameAtom::parse(name) else {
-                    return;
-                };
-                (
-                    UnresolvedSymbol::Declaration(SourceSymbolPath::local(name)),
-                    *span,
-                )
-            }
+            } => (
+                UnresolvedSymbol::Declaration(SourceSymbolPath::local(name.clone())),
+                *span,
+            ),
             _ => return,
         };
         table.references.push(ReferenceInfo {

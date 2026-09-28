@@ -12,6 +12,7 @@ use super::ModuleResolver;
 use super::category::*;
 use super::error::*;
 use super::exports::*;
+use super::namespace::Namespace;
 use super::symbols::*;
 use crate::syntax::ast::Ident;
 use crate::syntax::parser::Parser;
@@ -98,10 +99,10 @@ fn local_type_index_name_collision_is_rejected() {
         err,
         ModuleResolveError::DuplicateSymbol {
             owner: err_owner,
-            namespace: "Static",
+            namespace: Namespace::Static,
             name,
             ..
-        } if err_owner == owner && name == "M"
+        } if err_owner == owner && name.as_str() == "M"
     ));
 }
 
@@ -116,10 +117,10 @@ fn local_dimension_type_name_collision_is_rejected() {
         err,
         ModuleResolveError::DuplicateSymbol {
             owner: err_owner,
-            namespace: "Static",
+            namespace: Namespace::Static,
             name,
             ..
-        } if err_owner == owner && name == "M"
+        } if err_owner == owner && name.as_str() == "M"
     ));
 }
 
@@ -225,10 +226,10 @@ fn local_value_constructor_name_collision_is_rejected_in_either_order() {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner: err_owner,
-                namespace: "Term",
+                namespace: Namespace::Term,
                 name,
                 ..
-            } if err_owner == owner && name == "Red"
+            } if err_owner == owner && name.as_str() == "Red"
         ));
     }
 }
@@ -256,10 +257,10 @@ fn unit_import_colliding_with_local_unit_is_rejected() {
         err,
         ModuleResolveError::DuplicateImportName {
             owner,
-            namespace: "Unit",
+            namespace: Namespace::Unit,
             name,
             ..
-        } if owner == main_id && name == "m"
+        } if owner == main_id && name.as_str() == "m"
     ));
 }
 
@@ -286,10 +287,10 @@ fn constructor_import_colliding_with_local_constructor_is_rejected() {
         err,
         ModuleResolveError::DuplicateImportName {
             owner,
-            namespace: "Term",
+            namespace: Namespace::Term,
             name,
             ..
-        } if owner == main_id && name == "Mk"
+        } if owner == main_id && name.as_str() == "Mk"
     ));
 }
 
@@ -326,10 +327,10 @@ fn imported_value_constructor_collisions_are_rejected_in_either_direction() {
             err,
             ModuleResolveError::DuplicateImportName {
                 owner,
-                namespace: "Term",
+                namespace: Namespace::Term,
                 name,
                 ..
-            } if owner == main_id && name == "Red"
+            } if owner == main_id && name.as_str() == "Red"
         ));
     }
 }
@@ -408,10 +409,10 @@ fn selective_import_cross_universe_name_collision_is_rejected() {
         err,
         ModuleResolveError::DuplicateImportName {
             owner,
-            namespace: "Static",
+            namespace: Namespace::Static,
             name,
             ..
-        } if owner == main_id && name == "M"
+        } if owner == main_id && name.as_str() == "M"
     ));
 }
 
@@ -512,9 +513,9 @@ fn type_import_in_child_dag_does_not_import_same_named_constructor() {
         err,
         ModuleResolveError::UnknownName {
             owner,
-            namespace: "ConstructorName",
+            category: NameCategory::Table(SymbolTable::Constructor),
             name,
-        } if owner == child_id && name == "TransferResult"
+        } if owner == child_id && name.as_str() == "TransferResult"
     ));
 }
 
@@ -645,9 +646,9 @@ fn qualified_private_type_is_rejected() {
         err,
         ModuleResolveError::PrivateName {
             owner,
-            namespace: "StructTypeName",
+            category: NameCategory::Table(SymbolTable::StructType),
             name,
-        } if owner == lib_id && name == "Secret"
+        } if owner == lib_id && name.as_str() == "Secret"
     ));
 }
 
@@ -675,9 +676,9 @@ fn include_selective_private_decl_is_rejected() {
         err,
         ModuleResolveError::PrivateName {
             owner,
-            namespace: _,
+            category: _,
             name,
-        } if owner == lib_id && name == "hidden"
+        } if owner == lib_id && name.as_str() == "hidden"
     ));
 }
 
@@ -775,7 +776,7 @@ fn selective_include_rejects_dag_projection_at_selector() {
             kind: ExportedImportItemKind::Decl(DeclSymbolKind::Dag),
             span,
             ..
-        } if name == "child" && span == items[0].name.span
+        } if name.as_str() == "child" && span == items[0].name.span
     ));
 }
 
@@ -865,7 +866,7 @@ fn selective_include_rejects_constructor_when_owner_type_is_rebound() {
             owner_type,
             span,
             ..
-        } if constructor == "Pick"
+        } if constructor.as_str() == "Pick"
             && owner_type.owner() == &lib_id
             && owner_type.as_str() == "Choice"
             && span == items[0].name.span
@@ -1018,9 +1019,9 @@ fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace
             error,
             ModuleResolveError::PrivateName {
                 owner,
-                namespace: "dag",
+                category: NameCategory::Dag,
                 name,
-            } if owner == lib_id && name == "helper"
+            } if owner == lib_id && name.as_str() == "helper"
         ));
     }
 }
@@ -1054,9 +1055,9 @@ fn selective_import_from_private_inline_dag_is_rejected() {
         resolver.register_import(&main_id, import, &helper_id),
         Err(ModuleResolveError::PrivateName {
             owner,
-            namespace: "dag",
+            category: NameCategory::Dag,
             name,
-        }) if owner == lib_id && name == "helper"
+        }) if owner == lib_id && name.as_str() == "helper"
     ));
 }
 
@@ -1110,9 +1111,9 @@ fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
             error,
             ModuleResolveError::PrivateName {
                 owner,
-                namespace: "dag",
+                category: NameCategory::Dag,
                 name,
-            } if owner == lib_id && name == "private_parent"
+            } if owner == lib_id && name.as_str() == "private_parent"
         ));
     }
 }
@@ -1250,12 +1251,12 @@ fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
     assert!(matches!(
         result,
         Err(ModuleResolveError::DuplicateImportName {
-            namespace: "Term",
+            namespace: Namespace::Term,
             ref name,
             first,
             duplicate,
             ..
-        }) if name == "shared" && first.offset() < duplicate.offset()
+        }) if name.as_str() == "shared" && first.offset() < duplicate.offset()
     ));
 }
 
@@ -1267,12 +1268,12 @@ fn duplicate_term_alias(source: &str) -> Option<(String, Span, Span)> {
     {
         Ok(()) => None,
         Err(ModuleResolveError::DuplicateImportName {
-            namespace: "Term",
+            namespace: Namespace::Term,
             name,
             first,
             duplicate,
             ..
-        }) => Some((name, first, duplicate)),
+        }) => Some((name.to_string(), first, duplicate)),
         Err(other) => panic!("unexpected resolver error for {source:?}: {other:?}"),
     }
 }
@@ -1408,9 +1409,9 @@ fn qualified_private_dag_path_is_rejected() {
         err,
         ModuleResolveError::PrivateName {
             owner,
-            namespace: "dag",
+            category: NameCategory::Dag,
             name,
-        } if owner == lib_id && name == "helper"
+        } if owner == lib_id && name.as_str() == "helper"
     ));
 }
 
@@ -1451,9 +1452,9 @@ fn qualified_symbol_path_through_private_dag_is_rejected() {
             err,
             ModuleResolveError::PrivateName {
                 ref owner,
-                namespace: "dag",
+                category: NameCategory::Dag,
                 ref name,
-            } if *owner == lib_id && name == "helper"
+            } if *owner == lib_id && name.as_str() == "helper"
         ),
         "expected PrivateName for dag `helper`, got: {err:?}"
     );
@@ -1527,4 +1528,121 @@ fn selective_pub_reexport_resolves_to_original_owner() {
 
     assert_eq!(resolved_name.owner(), &leaf_id);
     assert_eq!(resolved_name.as_str(), "Acceleration");
+}
+
+#[test]
+fn lookup_categories_render_the_established_labels() {
+    let owner = DagId::root_in_package("test", "main");
+    let unknown = |category| ModuleResolveError::UnknownName {
+        owner: owner.clone(),
+        category,
+        name: NameAtom::parse("x").unwrap(),
+    };
+    let private = |category| ModuleResolveError::PrivateName {
+        owner: owner.clone(),
+        category,
+        name: NameAtom::parse("x").unwrap(),
+    };
+    let cases = [
+        (NameCategory::Table(SymbolTable::Decl), "DeclName"),
+        (
+            NameCategory::Table(SymbolTable::Constructor),
+            "ConstructorName",
+        ),
+        (NameCategory::Table(SymbolTable::Dimension), "DimName"),
+        (
+            NameCategory::Table(SymbolTable::StructType),
+            "StructTypeName",
+        ),
+        (NameCategory::Table(SymbolTable::Index), "IndexName"),
+        (NameCategory::Table(SymbolTable::Unit), "UnitName"),
+        (NameCategory::Namespace(Namespace::Static), "Static"),
+        (NameCategory::Namespace(Namespace::Term), "Term"),
+        (NameCategory::Namespace(Namespace::Unit), "Unit"),
+        (NameCategory::TermImport, "term import namespace"),
+        (NameCategory::DagAlias, "dag alias"),
+        (NameCategory::Dag, "dag"),
+    ];
+    for (category, label) in cases {
+        assert_eq!(
+            unknown(category).to_string(),
+            format!("unknown {label} `x` in module `main`")
+        );
+        assert_eq!(
+            private(category).to_string(),
+            format!("private {label} `x` in module `main`")
+        );
+    }
+}
+
+#[test]
+fn duplicate_and_decl_kind_errors_render_the_established_messages() {
+    use crate::resolved_name::ResolvedDeclName;
+    use crate::syntax::decl_name::DeclName;
+    use crate::syntax::function_name::FnName;
+    use crate::syntax::index_name::IndexName;
+
+    let owner = DagId::root_in_package("test", "main");
+    let span = Span::new(0, 1);
+    let unexpected = |expected| ModuleResolveError::UnexpectedDeclKind {
+        name: ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("x")),
+        expected,
+        actual: DeclSymbolKind::Node,
+    };
+    let cases = [
+        (
+            ModuleResolveError::DuplicateSymbol {
+                owner: owner.clone(),
+                namespace: Namespace::Unit,
+                name: NameAtom::parse("m").unwrap(),
+                first: span,
+                duplicate: span,
+            },
+            "duplicate Unit `m` in module `main`",
+        ),
+        (
+            ModuleResolveError::DuplicateImportName {
+                owner: owner.clone(),
+                namespace: Namespace::Static,
+                name: NameAtom::parse("M").unwrap(),
+                first: span,
+                duplicate: span,
+            },
+            "duplicate imported Static `M` in module `main`",
+        ),
+        (
+            ModuleResolveError::DuplicateIndexVariant {
+                owner: owner.clone(),
+                variant: IndexVariantName::expect_valid("Burn")
+                    .qualified_by(&IndexName::expect_valid("Phase")),
+                first: span,
+                duplicate: span,
+            },
+            "duplicate IndexVariantName `Phase#Burn` in module `main`",
+        ),
+        (
+            ModuleResolveError::DuplicatePluginFunction {
+                owner: owner.clone(),
+                function: FnName::expect_valid("f"),
+                first: span,
+                duplicate: span,
+            },
+            "duplicate FnName `f` in module `main`",
+        ),
+        (
+            unexpected(ExpectedDeclKind::Const),
+            "expected const declaration `main.x`, found node",
+        ),
+        (
+            unexpected(ExpectedDeclKind::InstanceIndependentConst),
+            "expected instance-independent const declaration `main.x`, found node",
+        ),
+        (
+            unexpected(ExpectedDeclKind::GraphValue),
+            "expected graph value declaration `main.x`, found node",
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
 }

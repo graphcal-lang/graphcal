@@ -1,1 +1,113 @@
-AGENTS.md
+# Instruction for Coding Agents
+
+## Project Overview
+
+- The goal of this project is to create type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations.
+- Because we target engineering projects as one of the use cases, we prioritize safety over usability. We prefer explicitness over implicitness.
+  - e.g., no implicit type/unit conversion, no implicit type inference, no implicit null propagation, etc.
+  - Remember Mars Climate Orbiter failure due to unit mismatch.
+- This project is not yet published, so breaking changes are acceptable for simpler/clever/clean design and implementation.
+  - DO NOT implement workarounds for backward compatibility. If a major design change, such as data model modification, is needed, just make the change and update the existing codebase accordingly.
+
+## Documentation
+
+- **Do not update user-facing documentation by default when fixing bugs or adding/changing features.** It is a learning resource, not a changelog or an implementation log. Add or change content only when it provides substantial, lasting value to someone learning Graphcal, or corrects materially misleading existing guidance.
+  - Document essential concepts, syntax, and workflows users need to understand or use Graphcal correctly. Do not add implementation details, regression-test scenarios, obscure edge cases, or notes that merely announce a fix/change.
+  - A bug fix that restores documented behavior does not need a documentation edit. A feature addition alone is not sufficient justification either; apply the learner-value criterion above.
+  - When an update is justified, integrate the minimum necessary explanation into the relevant existing section. If the benefit to a new learner is unclear, leave the documentation unchanged.
+- The user-facing documentation is in `docs/en/` (English) and `docs/ja/` (Japanese). The entry points are `docs/en/index.md` and `docs/ja/index.md`. Update both languages together; see `internals/docs-localization.md` for the translation and validation workflow.
+  - It is a Zensical site, so you can run it locally with `zensical serve` in the project root and open `http://localhost:8000` in the browser.
+- The formal grammar is in `grammar.ebnf` at the repository root. It serves as the source of truth referenced by tree-sitter and TextMate grammars.
+- Design ideas and feature proposals are tracked as GitHub issues.
+- The detailed discussion file can be found in `.local/` directory. Note that these are raw notes and may contain incomplete or obsolete information.
+
+## README.md
+
+- Keep `README.md` minimal and avoid updating it during feature implementations or bug fixes.
+- Update `README.md` only when existing information is stale or a similarly essential correction is required.
+
+## Testing
+
+- CLI builds automatically generate and verify the embedded browser engine under Cargo's `OUT_DIR`. Install the source-build prerequisites in `docs/en/installation.md` when tools are missing; never bypass freshness or integrity checks. Generated engine files must not be committed. `just wasm-report` exports the current bundle for Node tests; `just wasm-report-package` stages it only for release packaging.
+
+## Implementation Guidelines
+
+- When you add/modify/remove a feature, please also update the followings accordingly:
+  - The test cases in the codebase (unit tests, integration tests, snapshot tests, property-based tests, etc.).
+  - The corresponding LSP features in the `crates/graphcal-lsp/` directory (diagnostics, code actions, inlay hints, etc.).
+  - The user-facing documentation in the `docs/` directory **only when warranted by the Documentation policy above; leaving it unchanged is the default**.
+  - The tree-sitter grammar in the `graphcal-lang/tree-sitter-graphcal` repository.
+  - The Zed extension in the `graphcal-lang/zed-graphcal` repository (syntax highlighting, LSP features, etc.).
+  - The VS Code extension in the `graphcal-lang/vscode-graphcal` repository, including the TextMate grammar and LSP features.
+
+## GitHub Issues and Pull Requests
+
+When opening or updating a GitHub Pull Request, comply with `.github/pull_request_template.md`.
+
+For pull request classification, a **breaking change** means a change that requires existing Graphcal source programs to be modified. Changes only to Rust APIs or internal implementation interfaces do not count as breaking changes.
+
+When an agent files a GitHub Issue or opens a GitHub Pull Request, put this alert note at the very top of the description. Add the same note at the beginning of any issue or pull request comment written by an agent:
+
+> [!WARNING]
+> This content was written by an AI agent and must be verified by a human developer. After human verification, this alert may be removed.
+
+The human developer must remove this note after verifying the description or comment's contents.
+
+## Type Safety: Encode Semantics in Types, Not Conventions
+
+The compiler is the language's first user — its own implementation must hold itself to the same explicitness standard the language enforces on graphcal programs. Distinct semantic concepts must be distinct types; never lean on a string convention, naming pattern, or "everyone knows" rule when a typed alternative is possible.
+
+### Hard rules
+
+- **No flat-string encodings of structured data.** If a value has parts (qualified name, indexed key, scoped binding, …), model it as a struct or enum that names the parts. Do not concatenate fields with a separator (`"::"`, `"."`, `"@"`, `"/"`, …) and rely on later splits/contains to recover them. Concretely, ban patterns like:
+  - `format!("{prefix}::{name}")` to fabricate a qualified name.
+  - `s.split_once("::")` / `s.contains("::")` / `s.starts_with("@")` to recover structure that should have been preserved typewise.
+  - `HashMap<String, …>` or `HashSet<&str>` keyed by an ad-hoc composite string when the components are already typed.
+- **No casing-based dispatch.** Don't use `is_upper_snake_case(name)` to decide "is this a const?" or `name.starts_with('_')` to decide visibility. Carry the category (`DeclCategory`, `Visibility`, …) as a typed field on the data.
+- **No string-matched control flow on internal identifiers.** A function that branches on `name == "sum"` or `kind == "node"` is missing an enum. Built-in classifications belong in `enum SpecialFnKind { Aggregation(AggregationFn), … }`–style hierarchies whose `parse(&str) -> Option<Self>` is the _only_ place strings cross into the typed core.
+- **Stringify only at boundaries.** Rendering for diagnostics, debug output, file/wire serialization, or third-party APIs is fine — but the conversion happens at the boundary, not throughout the functional core. Inside the core, pattern-match on the typed variant.
+
+### Functional core, imperative shell
+
+Treat the compiler as a functional core (parser → AST → IR → TIR → eval plan) with imperative shells at the I/O edges (file loader, LSP server, CLI). The core holds typed values and pure functions over them; the shell handles disk reads, process spawns, network calls, and any necessary serialization. A flat string that exists _only_ because the shell uses one (e.g., `HashMap<DeclName, …>` lookups) is acceptable transitionally, but it is a _boundary_ concern — not a license to spread the convention upstream.
+
+The conceptual source-file ordering is maintained in the "Suggested Reading Order" section of `internals/codebase-reading-guide.md` as a topologically sorted list in library-consumer order; regenerate it with `./internals/reading-order.py --write-guide` when refactors change the dependency graph. A file should only consume upstream files (ones that come before it in that list), and should be implemented as a library whose API makes invalid or wrong use impossible wherever practical, rather than relying on downstream consumers to call it correctly. This rule makes it easy to review the codebase in topological order because we can focus on making each file correct as a library implementation before tackling its consumers, rather than reasoning about a tightly-coupled codebase as a whole.
+
+### Module scope and layering
+
+Prefer small modules with a single, atomic responsibility over broad domain grab-bags. Two concepts belonging to the same user-facing domain is not enough reason to implement them in the same file; they should also live at the same abstraction layer and have a real implementation dependency. For example, syntax/surface reference types that carry module aliases or source-level names should not live beside core semantic algebra that does not depend on syntax. Split by role and dependency direction so that core business logic can be reviewed, tested, and reused independently of parser/AST concerns.
+
+Before adding a type to an existing module, ask:
+
+1. Is this type at the same abstraction layer as the existing contents (syntax, HIR, TIR, registry, eval, CLI, etc.)?
+2. Does it depend on the same upstream concepts, or would it pull in unrelated dependencies?
+3. Would moving it to a smaller focused module make dependency direction clearer?
+4. Is the module name still accurate after adding it?
+
+If a file starts containing both source/syntax structures and semantic/core structures, prefer splitting it. Re-exporting for ergonomics is acceptable at module boundaries when it does not hide dependency direction or create cycles.
+
+### Avoid zero-value wrapper types
+
+Do not introduce a newtype merely because a value can be described with a different noun. A wrapper is justified only when it preserves or enforces a real invariant, abstraction boundary, ownership/scope distinction, source span/spelling, phase distinction, or API safety property. If a wrapper only forwards `Display`, `AsRef`, or `inner()` to an already precise enum/struct, use the underlying type directly.
+
+Examples of wrappers that need extra justification:
+
+- `FooName(Foo)` when `Foo` is already a closed semantic enum and no source spelling/span is preserved.
+- `ResolvedThingName(ResolvedName<Thing>)` if it adds no behavior or invariant beyond a type alias.
+- A syntax-layer wrapper around a core value that is immediately unwrapped by the next compiler phase.
+
+When a distinction is useful, encode the missing information explicitly (for example, `Spanned<TimeScale>`, `SourceFoo { spelling, parsed }`, or a phase-specific enum), rather than adding an opaque wrapper with no additional semantics.
+
+### When you reach for a string
+
+Stop. Ask yourself:
+
+1. Does this string carry structure (multiple fields, a closed set of variants, a parse-able shape)?
+2. Will multiple sites need to construct or destructure it the same way?
+3. If the convention changed (separator, casing rule, prefix), how many sites would I have to touch?
+
+If any answer is "yes / many", introduce a type. A namespace-tagged name for opaque identifiers (see `NameDef<Ns>` / `ResolvedName<Ns>` in `crates/graphcal-compiler/src/syntax/names.rs` and a namespace marker such as `crates/graphcal-compiler/src/syntax/decl_name.rs`), an enum for finite variants, a struct for composites. Place it where the data lives in the layering, not where it's first consumed.
+
+### When the rule conflicts with adjacent code
+
+If you find an existing string convention that violates the rule, prefer fixing it over matching it. If the fix is too large for the current change, fence it into the smallest possible boundary, leave a `// TODO(#NNN):` pointing at a tracking issue, and _do not_ widen the convention. Patterns spread; types contain them.

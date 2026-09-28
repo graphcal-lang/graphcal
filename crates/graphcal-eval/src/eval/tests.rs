@@ -5407,8 +5407,11 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
                 ..
             },
         )) => {
-            assert_eq!(namespace, "Term");
-            assert_eq!(name, "duplicate");
+            assert_eq!(
+                namespace,
+                graphcal_compiler::resolve::namespace::Namespace::Term
+            );
+            assert_eq!(name.as_str(), "duplicate");
         }
         other => panic!("expected a duplicate local declaration diagnostic, got {other:?}"),
     }

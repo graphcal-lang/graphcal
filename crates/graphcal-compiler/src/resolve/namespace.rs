@@ -9,7 +9,7 @@ use crate::syntax::names::NameNamespace;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace};
 
-use super::category::SurfaceNameKind;
+use super::category::{SurfaceNameKind, SymbolTable};
 
 /// The unit of collision checking and name lookup.
 ///
@@ -29,15 +29,13 @@ pub enum Namespace {
     Unit,
 }
 
-impl Namespace {
-    /// Diagnostic label of this namespace.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Self::Term => "Term",
             Self::Static => "Static",
             Self::Unit => "Unit",
-        }
+        })
     }
 }
 
@@ -56,12 +54,6 @@ impl Namespace {
     }
 }
 
-impl std::fmt::Display for Namespace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.label())
-    }
-}
-
 /// A symbol-table namespace marker together with the slot its names occupy
 /// and the category diagnostics report for them.
 pub(super) trait Namespaced: NameNamespace {
@@ -69,36 +61,44 @@ pub(super) trait Namespaced: NameNamespace {
     const NAMESPACE: Namespace;
     /// The category reported when a name is found in the wrong universe.
     const SURFACE_KIND: SurfaceNameKind;
+    /// The symbol table holding names of this namespace.
+    const TABLE: SymbolTable;
 }
 
 impl Namespaced for DeclNameNamespace {
     const NAMESPACE: Namespace = Namespace::Term;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Value;
+    const TABLE: SymbolTable = SymbolTable::Decl;
 }
 
 impl Namespaced for ConstructorNameNamespace {
     const NAMESPACE: Namespace = Namespace::Term;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Constructor;
+    const TABLE: SymbolTable = SymbolTable::Constructor;
 }
 
 impl Namespaced for DimNameNamespace {
     const NAMESPACE: Namespace = Namespace::Static;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
+    const TABLE: SymbolTable = SymbolTable::Dimension;
 }
 
 impl Namespaced for StructTypeNameNamespace {
     const NAMESPACE: Namespace = Namespace::Static;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
+    const TABLE: SymbolTable = SymbolTable::StructType;
 }
 
 impl Namespaced for IndexNameNamespace {
     const NAMESPACE: Namespace = Namespace::Static;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
+    const TABLE: SymbolTable = SymbolTable::Index;
 }
 
 impl Namespaced for UnitNameNamespace {
     const NAMESPACE: Namespace = Namespace::Unit;
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
+    const TABLE: SymbolTable = SymbolTable::Unit;
 }
 
 /// The binding that occupies one slot of a module's collision unit.

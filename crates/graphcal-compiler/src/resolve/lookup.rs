@@ -19,7 +19,7 @@ use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace
 
 use super::ModuleResolver;
 use super::category::{DeclSymbolKind, SurfaceNameKind};
-use super::error::ModuleResolveError;
+use super::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use super::exports::{ExportedBinding, ExportedBindingTarget, ExportedImportItem};
 use super::namespace::Namespace;
 use super::scope::Access;
@@ -193,7 +193,7 @@ impl ModuleResolver {
         } else {
             Err(ModuleResolveError::UnexpectedDeclKind {
                 name: resolved,
-                expected: "const",
+                expected: ExpectedDeclKind::Const,
                 actual,
             })
         }
@@ -512,15 +512,15 @@ impl ModuleResolver {
             if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
                     owner: owner.clone(),
-                    name: atom.to_string(),
+                    name: path.clone(),
                     expected: Ns::SURFACE_KIND,
                     actual,
                 });
             }
             return Err(ModuleResolveError::UnknownName {
                 owner: owner.clone(),
-                namespace: Ns::DISPLAY_NAME,
-                name: atom.to_string(),
+                category: NameCategory::Table(Ns::TABLE),
+                name: atom.clone(),
             });
         };
 
@@ -540,8 +540,8 @@ impl ModuleResolver {
             if requires_public && !visibility.is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: target_ref.owner,
-                    namespace: Ns::DISPLAY_NAME,
-                    name: leaf.to_string(),
+                    category: NameCategory::Table(Ns::TABLE),
+                    name: leaf.clone(),
                 });
             }
             return Ok(resolved.clone());
@@ -552,7 +552,7 @@ impl ModuleResolver {
         {
             return Err(ModuleResolveError::WrongUniverseName {
                 owner: target_ref.owner,
-                name: path.display_path(),
+                name: path.clone(),
                 expected: Ns::SURFACE_KIND,
                 actual,
             });
@@ -560,8 +560,8 @@ impl ModuleResolver {
 
         Err(ModuleResolveError::UnknownName {
             owner: target_ref.owner,
-            namespace: Ns::DISPLAY_NAME,
-            name: leaf.to_string(),
+            category: NameCategory::Table(Ns::TABLE),
+            name: leaf.clone(),
         })
     }
 
@@ -622,8 +622,8 @@ impl ModuleResolver {
                 if alias_target.access.requires_public() && !nested_alias.visibility().is_public() {
                     return Err(ModuleResolveError::PrivateName {
                         owner: target,
-                        namespace: "dag alias",
-                        name: segment.to_string(),
+                        category: NameCategory::DagAlias,
+                        name: segment.clone(),
                     });
                 }
                 target = nested_alias.target().clone();
@@ -678,13 +678,13 @@ impl ModuleResolver {
                 // source DAG declarations, and therefore carry no visibility.
                 return Ok(());
             };
-            let Some(symbol) = child
+            let Some((name, symbol)) = child
                 .leaf()
                 .spelling()
                 // `DagSegment` spells source modules as text; classify the
                 // leaf into the declaration namespace at this boundary.
                 .and_then(|name| DeclName::try_new(name).ok())
-                .and_then(|name| parent_symbols.decls.get(&name))
+                .and_then(|name| parent_symbols.decls.get_key_value(&name))
             else {
                 // Synthetic include namespaces have a semantic parent but no
                 // source `dag` declaration on that edge.
@@ -696,8 +696,8 @@ impl ModuleResolver {
             if !symbol.visibility().is_public() {
                 return Err(ModuleResolveError::PrivateName {
                     owner: parent,
-                    namespace: "dag",
-                    name: child.leaf().to_string(),
+                    category: NameCategory::Dag,
+                    name: name.atom().clone(),
                 });
             }
             child = parent;

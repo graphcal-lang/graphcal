@@ -8,9 +8,7 @@ use crate::resolved_name::ResolvedName;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
-use crate::syntax::index_name::{
-    IndexName, IndexNameNamespace, IndexVariantName, IndexVariantNameNamespace,
-};
+use crate::syntax::index_name::{IndexName, IndexNameNamespace, IndexVariantName};
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace};
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
@@ -136,8 +134,9 @@ impl ModuleSymbols {
     /// # Errors
     ///
     /// Returns [`ModuleResolveError::DuplicateSymbol`] when two definitions
-    /// occupy the same slot of the module's collision unit, or one index
-    /// declares a variant twice.
+    /// occupy the same slot of the module's collision unit, or
+    /// [`ModuleResolveError::DuplicateIndexVariant`] when one index declares a
+    /// variant twice.
     pub(super) fn from_declarations(
         owner: DagId,
         declarations: &[ast::Declaration],
@@ -314,10 +313,9 @@ impl ModuleSymbols {
         if let ast::IndexDeclKind::Named { variants: declared } = &index.kind {
             for variant in declared {
                 if let Some(first) = variants.insert(variant.value.clone(), variant.span) {
-                    return Err(ModuleResolveError::DuplicateSymbol {
+                    return Err(ModuleResolveError::DuplicateIndexVariant {
                         owner: self.owner.clone(),
-                        namespace: IndexVariantNameNamespace::DISPLAY_NAME,
-                        name: variant.value.qualified_by(&index.name.value).to_string(),
+                        variant: variant.value.qualified_by(&index.name.value),
                         first,
                         duplicate: variant.span,
                     });
@@ -343,8 +341,8 @@ impl ModuleSymbols {
         if let Some(first) = self.occupant(Ns::NAMESPACE, name.value.atom()) {
             return Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
-                namespace: Ns::NAMESPACE.label(),
-                name: name.value.to_string(),
+                namespace: Ns::NAMESPACE,
+                name: name.value.atom().clone(),
                 first: first.span,
                 duplicate: name.span,
             });

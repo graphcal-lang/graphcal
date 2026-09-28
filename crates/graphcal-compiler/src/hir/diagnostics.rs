@@ -1,7 +1,5 @@
 //! Conversions from HIR lowering diagnostics to spanned [`GraphcalError`]s.
 
-use crate::syntax::decl_name::DeclNameNamespace;
-use crate::syntax::index_name::IndexNameNamespace;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -9,10 +7,11 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::registry::error::GraphcalError;
-use crate::resolve::error::ModuleResolveError;
+use crate::resolve::category::SymbolTable;
+use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
-use crate::syntax::names::{NameNamespace, NamePath};
+use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
 /// Reject source-only type syntax that has no valid HIR representation.
@@ -419,7 +418,7 @@ pub fn expr_lower_error_to_graphcal(
             span,
         } => {
             return GraphcalError::ImportPrivateItem {
-                name: name.clone(),
+                name: name.to_string(),
                 file_path: owner.to_string(),
                 src: src.clone(),
                 span: (*span).into(),
@@ -439,27 +438,29 @@ pub fn expr_lower_error_to_graphcal(
         hir::ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
-                    namespace, name, ..
+                    category: NameCategory::Table(SymbolTable::Index),
+                    name,
+                    ..
                 },
             span,
-        } if *namespace == IndexNameNamespace::DISPLAY_NAME => {
-            if let Ok(index_name) = IndexName::try_new(name.clone()) {
-                return GraphcalError::UnknownIndex {
-                    name: index_name.into(),
-                    src: src.clone(),
-                    span: (*span).into(),
-                };
-            }
+        } => {
+            return GraphcalError::UnknownIndex {
+                name: IndexName::classify(name.clone()).into(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
         }
         hir::ExprLowerError::ModuleResolve {
             source:
                 ModuleResolveError::UnknownName {
-                    namespace, name, ..
+                    category: NameCategory::Table(SymbolTable::Decl),
+                    name,
+                    ..
                 },
             span,
-        } if *namespace == DeclNameNamespace::DISPLAY_NAME => {
+        } => {
             return GraphcalError::UnknownLocalRef {
-                name: name.clone(),
+                name: name.to_string(),
                 src: src.clone(),
                 span: (*span).into(),
             };

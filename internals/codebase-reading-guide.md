@@ -1626,9 +1626,9 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 126. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
 127. `crates/graphcal-compiler/src/resolve/category.rs`
 128. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
-129. `crates/graphcal-compiler/src/resolve/error.rs`
-130. `crates/graphcal-compiler/src/resolve/exports.rs`
-131. `crates/graphcal-compiler/src/resolve/namespace.rs`
+129. `crates/graphcal-compiler/src/resolve/exports.rs`
+130. `crates/graphcal-compiler/src/resolve/namespace.rs`
+131. `crates/graphcal-compiler/src/resolve/error.rs`
 132. `crates/graphcal-compiler/src/registry/resolve_types.rs`
 133. `crates/graphcal-compiler/src/registry/reserved_name.rs`
 134. `crates/graphcal-compiler/src/registry/error.rs`
