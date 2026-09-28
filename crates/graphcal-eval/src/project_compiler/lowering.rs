@@ -686,7 +686,7 @@ fn process_dag_body_import_declarations<'a>(
         };
         let Some(crate::loader::InlineBodyImportResolution::Resolved(target)) = loaded_dag
             .resolved_imports()
-            .get(&crate::loader::ModulePathKey::from_path(&import_decl.path))
+            .get(&crate::loader::ModulePathKey::from_path(import_decl.path()))
         else {
             continue;
         };
@@ -696,8 +696,7 @@ fn process_dag_body_import_declarations<'a>(
         imports::process_pure_import(
             project,
             target,
-            &import_decl.path,
-            &import_decl.kind,
+            import_decl,
             dag_body,
             file_src,
             module_artifacts,

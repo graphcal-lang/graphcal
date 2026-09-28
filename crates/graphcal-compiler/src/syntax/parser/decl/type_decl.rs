@@ -11,7 +11,10 @@ use super::super::{Expected, Found, ParseError, Parser};
 impl Parser<'_> {
     // --- type declaration ---
 
-    pub(super) fn parse_type_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_type_decl(
+        &mut self,
+        visibility: BindableVisibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Type)?;
         let name: Spanned<StructTypeName> = self.parse_any_ident()?.classify();
 
@@ -26,7 +29,7 @@ impl Parser<'_> {
             Some(&Token::LBrace) => {
                 // Unified body: either record (fields) or union (constructors).
                 self.lexer.next_token(); // consume `{`
-                self.parse_unified_type_body(name, generic_params, start_span)
+                self.parse_unified_type_body(visibility, name, generic_params, start_span)
             }
             Some(&Token::Semicolon) => {
                 // Required type: `type Foo;` — bound from outside via include.
@@ -36,7 +39,7 @@ impl Parser<'_> {
                     doc: None,
                     attributes: vec![],
                     kind: DeclKind::Type(TypeDecl {
-                        visibility: BindableVisibility::Private,
+                        visibility,
                         name,
                         generic_params,
                         body: TypeDeclBody::Required,
@@ -58,6 +61,7 @@ impl Parser<'_> {
     /// must agree on form; mixing produces a precise syntax error.
     fn parse_unified_type_body(
         &mut self,
+        visibility: BindableVisibility,
         name: Spanned<StructTypeName>,
         generic_params: Vec<crate::syntax::ast::GenericParam>,
         start_span: Span,
@@ -100,7 +104,7 @@ impl Parser<'_> {
                     doc: None,
                     attributes: vec![],
                     kind: DeclKind::Type(TypeDecl {
-                        visibility: BindableVisibility::Private,
+                        visibility,
                         name,
                         generic_params,
                         body: TypeDeclBody::Constructors(members),

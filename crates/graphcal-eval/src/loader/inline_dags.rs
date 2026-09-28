@@ -81,7 +81,7 @@ where
 {
     body.iter()
         .filter_map(|body_decl| match &body_decl.kind {
-            DeclKind::Import(import_decl) => Some(&import_decl.path),
+            DeclKind::Import(import_decl) => Some(import_decl.path()),
             DeclKind::Include(include_decl) => Some(&include_decl.path),
             _ => None,
         })

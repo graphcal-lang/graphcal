@@ -1676,7 +1676,7 @@ fn collect_import_links(
 
     let import_links = root_file
         .imports_with_targets()
-        .map(|(_, import_decl, target)| (import_decl.path.span(), target));
+        .map(|(_, import_decl, target)| (import_decl.path().span(), target));
     let include_links = root_file
         .includes_with_targets()
         .map(|(_, include_decl, target)| (include_decl.path.span(), target));
@@ -2013,7 +2013,7 @@ fn collect_import_surfaces(
             continue;
         };
         let path = import
-            .path
+            .path()
             .segments
             .clone()
             .map(|segment| segment.name.to_string());
@@ -2080,6 +2080,43 @@ fn build_project_symbol_documents(
         .collect()
 }
 
+/// The names one `import` / `include` introduces into its owner.
+#[derive(Clone, Copy)]
+enum ImportedNames<'a> {
+    Selective(&'a [graphcal_compiler::desugar::desugared_ast::ImportItem]),
+    Module(
+        Option<
+            &'a graphcal_compiler::syntax::span::Spanned<
+                graphcal_compiler::syntax::module_name::ModuleAliasName,
+            >,
+        >,
+    ),
+}
+
+impl<'a> ImportedNames<'a> {
+    fn of_import(import: &'a graphcal_compiler::desugar::desugared_ast::ImportDecl) -> Self {
+        match import {
+            graphcal_compiler::desugar::desugared_ast::ImportDecl::Selective { items, .. } => {
+                Self::Selective(items)
+            }
+            graphcal_compiler::desugar::desugared_ast::ImportDecl::Module { alias, .. } => {
+                Self::Module(alias.as_ref())
+            }
+        }
+    }
+
+    fn of_include(kind: &'a graphcal_compiler::desugar::desugared_ast::ImportKind) -> Self {
+        match kind {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
+                Self::Selective(items)
+            }
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+                Self::Module(alias.as_ref())
+            }
+        }
+    }
+}
+
 fn collect_file_imported_symbols(
     file_id: &graphcal_compiler::dag_id::DagId,
     loaded_file: &graphcal_eval::loader::LoadedFile,
@@ -2094,17 +2131,24 @@ fn collect_file_imported_symbols(
     };
     let imports = loaded_file
         .imports_with_targets()
-        .map(|(_, decl, target)| (&decl.path, &decl.kind, target, true));
+        .map(|(_, decl, target)| (decl.path(), ImportedNames::of_import(decl), target, true));
     let includes = loaded_file
         .includes_with_targets()
-        .map(|(_, decl, target)| (&decl.path, &decl.kind, target, false));
-    for (path, kind, resolved_module, is_import) in imports.chain(includes) {
+        .map(|(_, decl, target)| {
+            (
+                &decl.path,
+                ImportedNames::of_include(&decl.kind),
+                target,
+                false,
+            )
+        });
+    for (path, names, resolved_module, is_import) in imports.chain(includes) {
         cancellation.checkpoint()?;
         let Some(target) = documents.get(resolved_module.source_file()) else {
             continue;
         };
-        match kind {
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
+        match names {
+            ImportedNames::Selective(items) => {
                 if is_import {
                     imported.bindings.extend(items.iter().filter_map(|item| {
                         resolve_selective_binding(file_id, item, module_resolver)
@@ -2120,8 +2164,8 @@ fn collect_file_imported_symbols(
                     cancellation,
                 )?;
             }
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-                let module_name = alias.as_ref().map_or_else(
+            ImportedNames::Module(alias) => {
+                let module_name = alias.map_or_else(
                     || path.leaf().name.atom().clone(),
                     |alias_ident| alias_ident.value.atom().clone(),
                 );

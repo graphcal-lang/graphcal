@@ -1,20 +1,26 @@
 use crate::syntax::ast::DeclKind;
 use crate::syntax::ast::Declaration;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::ast::ImportDecl;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
+use crate::syntax::ast::Visibility;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{Expected, Found, ParseError, ParseErrorKind, Parser};
+use super::visibility::VisibilityPrefix;
 
 impl Parser<'_> {
     /// Parse an import declaration:
     ///   `import nasa.rocket;`
     ///   `import nasa.rocket as nr;`
     ///   `import nasa.rocket::{type Orbit, compute_thrust as ct};`
-    pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_import_decl(
+        &mut self,
+        prefix: VisibilityPrefix,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
         // `import plugin "path" as alias { ... }` — the contextual keyword
@@ -24,7 +30,9 @@ impl Parser<'_> {
         if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Plugin))
             && self.lexer.peek_second() == Some(&Token::StringLiteral)
         {
-            return self.parse_plugin_import_decl(start_span);
+            let decl = self.parse_plugin_import_decl(start_span)?;
+            prefix.accept_non_dag_import()?;
+            return Ok(decl);
         }
 
         let path = self.parse_module_path()?;
@@ -41,15 +49,22 @@ impl Parser<'_> {
 
         let (kind, end_span) = self.parse_import_tail(Expected::ImportTail)?;
         let span = start_span.merge(end_span);
+        let import = match kind {
+            ImportKind::Module { alias } => ImportDecl::Module {
+                visibility: prefix.accept_public(Expected::NonBindableVisibility)?,
+                path,
+                alias,
+            },
+            ImportKind::Selective(items) => {
+                prefix.accept_non_dag_import()?;
+                ImportDecl::Selective { path, items }
+            }
+        };
 
         Ok(Declaration {
             doc: None,
             attributes: vec![],
-            kind: DeclKind::Import(crate::syntax::ast::ImportDecl {
-                visibility: crate::syntax::ast::Visibility::Private,
-                path,
-                kind,
-            }),
+            kind: DeclKind::Import(import),
             span,
         })
     }
@@ -301,7 +316,7 @@ impl Parser<'_> {
 
             // Optional `pub` prefix marks the item for re-export (issue #452).
             // `pub(bind)` is rejected — re-exports are use-sites, not declarations.
-            let is_pub = if p.lexer.peek() == Some(&Token::Pub) {
+            let visibility = if p.lexer.peek() == Some(&Token::Pub) {
                 let (_, pub_span) = p.advance()?;
                 if p.lexer.peek() == Some(&Token::LParen) {
                     return Err(Self::unexpected(
@@ -310,9 +325,9 @@ impl Parser<'_> {
                         pub_span,
                     ));
                 }
-                true
+                Visibility::Public
             } else {
-                false
+                Visibility::Private
             };
 
             let namespace = match p.lexer.peek() {
@@ -352,7 +367,7 @@ impl Parser<'_> {
 
             Ok(crate::syntax::ast::ImportItem {
                 attributes: item_attributes,
-                is_pub,
+                visibility,
                 namespace,
                 name,
                 alias,

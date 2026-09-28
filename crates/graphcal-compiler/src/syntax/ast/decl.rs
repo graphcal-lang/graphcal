@@ -2,7 +2,7 @@ use graphcal_ast_derive::PhaseLift;
 
 use crate::dag_id::IncludeInstanceId;
 use crate::syntax::ast::common::{
-    Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
+    Attribute, BindableVisibility, ImportItem, ImportKind, ModulePath, Visibility,
 };
 use crate::syntax::ast::multi_decl::MultiDecl;
 use crate::syntax::ast::value::{
@@ -416,12 +416,30 @@ pub struct LayerDecl<P: Phase = Raw> {
 ///
 /// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone, FormatEquivalent)]
-pub struct ImportDecl {
-    /// Leading `pub` applies only to whole-DAG aliases. Selective re-exports
-    /// carry visibility per item.
-    pub visibility: Visibility,
-    pub path: ModulePath,
-    pub kind: ImportKind,
+pub enum ImportDecl {
+    /// Whole-DAG import, `[pub] import path [as alias];`. Only this form
+    /// accepts a leading `pub`.
+    Module {
+        visibility: Visibility,
+        path: ModulePath,
+        alias: Option<Spanned<ModuleAliasName>>,
+    },
+    /// Selective import, `import path::{items};`. Re-exports are marked per
+    /// item, so the declaration itself has no visibility.
+    Selective {
+        path: ModulePath,
+        items: Vec<ImportItem>,
+    },
+}
+
+impl ImportDecl {
+    /// The imported module path.
+    #[must_use]
+    pub const fn path(&self) -> &ModulePath {
+        match self {
+            Self::Module { path, .. } | Self::Selective { path, .. } => path,
+        }
+    }
 }
 
 /// Extern plugin import (issue #943, Phase A of #25):

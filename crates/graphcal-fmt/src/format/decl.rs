@@ -64,8 +64,9 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::Param(_)
         | DeclKind::Include(_)
         | DeclKind::Sugar(_)
-        | DeclKind::PluginImport(_) => RcDoc::nil(),
-        DeclKind::Import(d) => visibility_prefix(d.visibility),
+        | DeclKind::PluginImport(_)
+        | DeclKind::Import(ImportDecl::Selective { .. }) => RcDoc::nil(),
+        DeclKind::Import(ImportDecl::Module { visibility, .. }) => visibility_prefix(*visibility),
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
@@ -544,8 +545,15 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 
 /// `import "path" { name1, name2 };` or `import "path";` or `import "path" as alias;`
 fn format_import_decl(fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
-    let path_doc = format_import_or_include_path("import", &d.path);
-    format_import_or_include_kind(fmt, path_doc, RcDoc::nil(), &d.kind)
+    let path_doc = format_import_or_include_path("import", d.path());
+    match d {
+        ImportDecl::Module { alias, .. } => {
+            format_module_alias_tail(path_doc, RcDoc::nil(), alias.as_ref())
+        }
+        ImportDecl::Selective { items, .. } => {
+            format_selective_items_tail(fmt, path_doc, RcDoc::nil(), items)
+        }
+    }
 }
 
 /// `include path(x: 1.0 km)::{ name };` or `include path() as alias;`.
@@ -620,7 +628,7 @@ fn format_selective_import_or_include_suffix(item_docs: Vec<RcDoc<'static>>) -> 
     flat_alt_group(single_line, multi_line)
 }
 
-/// Format the kind portion (selective/module) of an import/include declaration.
+/// Format the kind portion (selective/module) of an include declaration.
 fn format_import_or_include_kind(
     fmt: &Formatter<'_>,
     path_doc: RcDoc<'static>,
@@ -628,39 +636,62 @@ fn format_import_or_include_kind(
     kind: &graphcal_compiler::syntax::ast::ImportKind,
 ) -> RcDoc<'static> {
     match kind {
-        graphcal_compiler::syntax::ast::ImportKind::Selective(names) => {
-            let name_docs: Vec<RcDoc<'static>> = names
-                .iter()
-                .map(|item| {
-                    let mut doc = RcDoc::nil();
-                    for attr in &item.attributes {
-                        doc = doc
-                            .append(format_attribute(fmt, attr))
-                            .append(RcDoc::text(" "));
-                    }
-                    if item.is_pub {
-                        doc = doc.append(RcDoc::text("pub "));
-                    }
-                    if let Some(marker) = item.namespace.marker() {
-                        doc = doc.append(RcDoc::text(marker)).append(RcDoc::text(" "));
-                    }
-                    doc = doc.append(RcDoc::text(item.name.name.as_str().to_owned()));
-                    if let Some(ref alias) = item.alias {
-                        doc = doc
-                            .append(RcDoc::text(" as "))
-                            .append(RcDoc::text(alias.name.as_str().to_owned()));
-                    }
-                    doc
-                })
-                .collect();
-            format_selective_import_or_include(path_doc.append(bindings_doc), name_docs)
+        graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
+            format_selective_items_tail(fmt, path_doc, bindings_doc, items)
         }
-        graphcal_compiler::syntax::ast::ImportKind::Module { alias: None } => {
-            path_doc.append(bindings_doc).append(RcDoc::text(";"))
+        graphcal_compiler::syntax::ast::ImportKind::Module { alias } => {
+            format_module_alias_tail(path_doc, bindings_doc, alias.as_ref())
         }
-        graphcal_compiler::syntax::ast::ImportKind::Module { alias: Some(a) } => path_doc
+    }
+}
+
+/// `head::{ items };` for a selective import or include.
+fn format_selective_items_tail(
+    fmt: &Formatter<'_>,
+    path_doc: RcDoc<'static>,
+    bindings_doc: RcDoc<'static>,
+    items: &[graphcal_compiler::syntax::ast::ImportItem],
+) -> RcDoc<'static> {
+    let name_docs: Vec<RcDoc<'static>> = items
+        .iter()
+        .map(|item| {
+            let mut doc = RcDoc::nil();
+            for attr in &item.attributes {
+                doc = doc
+                    .append(format_attribute(fmt, attr))
+                    .append(RcDoc::text(" "));
+            }
+            doc = doc.append(visibility_prefix(item.visibility));
+            if let Some(marker) = item.namespace.marker() {
+                doc = doc.append(RcDoc::text(marker)).append(RcDoc::text(" "));
+            }
+            doc = doc.append(RcDoc::text(item.name.name.as_str().to_owned()));
+            if let Some(ref alias) = item.alias {
+                doc = doc
+                    .append(RcDoc::text(" as "))
+                    .append(RcDoc::text(alias.name.as_str().to_owned()));
+            }
+            doc
+        })
+        .collect();
+    format_selective_import_or_include(path_doc.append(bindings_doc), name_docs)
+}
+
+/// `head;` or `head as alias;` for a module-form import or include.
+fn format_module_alias_tail(
+    path_doc: RcDoc<'static>,
+    bindings_doc: RcDoc<'static>,
+    alias: Option<
+        &graphcal_compiler::syntax::span::Spanned<
+            graphcal_compiler::syntax::module_name::ModuleAliasName,
+        >,
+    >,
+) -> RcDoc<'static> {
+    match alias {
+        None => path_doc.append(bindings_doc).append(RcDoc::text(";")),
+        Some(alias) => path_doc
             .append(bindings_doc)
-            .append(RcDoc::text(format!(" as {};", a.value))),
+            .append(RcDoc::text(format!(" as {};", alias.value))),
     }
 }
 

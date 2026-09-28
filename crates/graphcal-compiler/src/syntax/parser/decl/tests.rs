@@ -882,9 +882,9 @@ fn parse_import_brace_list_no_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "helper");
-    assert_eq!(u.path.segments.len(), 1);
-    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+    assert_eq!(u.path().display_path(), "helper");
+    assert_eq!(u.path().segments.len(), 1);
+    let crate::syntax::ast::ImportDecl::Selective { items: names, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 2);
@@ -905,7 +905,7 @@ fn parse_import_brace_list_with_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+    let crate::syntax::ast::ImportDecl::Selective { items: names, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 1);
@@ -924,7 +924,7 @@ fn parse_import_category_items_with_aliases() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+    let crate::syntax::ast::ImportDecl::Selective { items: names, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 4);
@@ -977,7 +977,7 @@ fn parse_import_brace_list_mixed_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+    let crate::syntax::ast::ImportDecl::Selective { items: names, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 3);
@@ -1003,8 +1003,8 @@ fn parse_import_bare_module() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "constants");
-    let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
+    assert_eq!(u.path().display_path(), "constants");
+    let crate::syntax::ast::ImportDecl::Module { alias, .. } = u else {
         panic!("expected Module");
     };
     assert!(alias.is_none());
@@ -1018,8 +1018,8 @@ fn parse_import_bare_module_with_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "constants");
-    let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
+    assert_eq!(u.path().display_path(), "constants");
+    let crate::syntax::ast::ImportDecl::Module { alias, .. } = u else {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().value.as_str(), "consts");
@@ -1042,11 +1042,11 @@ fn parse_import_dotted_path_selective() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.segments.len(), 2);
-    assert_eq!(u.path.segments[0].name.as_str(), "nasa");
-    assert_eq!(u.path.segments[1].name.as_str(), "rocket");
-    assert_eq!(u.path.display_path(), "nasa.rocket");
-    let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
+    assert_eq!(u.path().segments.len(), 2);
+    assert_eq!(u.path().segments[0].name.as_str(), "nasa");
+    assert_eq!(u.path().segments[1].name.as_str(), "rocket");
+    assert_eq!(u.path().display_path(), "nasa.rocket");
+    let crate::syntax::ast::ImportDecl::Selective { items: names, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 1);
@@ -1059,8 +1059,8 @@ fn parse_import_dotted_path_nested() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.segments.len(), 4);
-    assert_eq!(u.path.display_path(), "a.b.c.d");
+    assert_eq!(u.path().segments.len(), 4);
+    assert_eq!(u.path().display_path(), "a.b.c.d");
 }
 
 #[test]
@@ -1071,8 +1071,8 @@ fn parse_import_dotted_path_with_alias() {
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.path.display_path(), "nasa.rocket");
-    let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
+    assert_eq!(u.path().display_path(), "nasa.rocket");
+    let crate::syntax::ast::ImportDecl::Module { alias, .. } = u else {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().value.as_str(), "r");
@@ -1089,7 +1089,7 @@ fn parse_include_dotted_path_with_param_bindings() {
     assert_eq!(u.path.display_path(), "nasa.rocket");
     assert_eq!(u.param_bindings.len(), 1);
     assert_eq!(u.param_bindings[0].name.name.as_str(), "dry_mass");
-    let crate::syntax::ast::ImportKind::Module { alias } = &u.kind else {
+    let ImportKind::Module { alias } = &u.kind else {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().value.as_str(), "stage_1");
@@ -1157,7 +1157,13 @@ fn leading_pub_creates_only_a_whole_dag_import_alias() {
     let DeclKind::Import(import) = &file.declarations[0].kind else {
         panic!("expected import");
     };
-    assert_eq!(import.visibility, crate::syntax::ast::Visibility::Public);
+    assert!(matches!(
+        import,
+        crate::syntax::ast::ImportDecl::Module {
+            visibility: crate::syntax::ast::Visibility::Public,
+            ..
+        }
+    ));
 
     for source in [
         "pub import helper::{x};",
@@ -1178,13 +1184,13 @@ fn parse_import_brace_list_pub_items() {
     let DeclKind::Import(u) = &decl.kind else {
         panic!("expected Import");
     };
-    let crate::syntax::ast::ImportKind::Selective(items) = &u.kind else {
+    let crate::syntax::ast::ImportDecl::Selective { items, .. } = u else {
         panic!("expected Selective");
     };
     assert_eq!(items.len(), 2);
-    assert!(items[0].is_pub);
+    assert!(items[0].visibility.is_public());
     assert_eq!(items[0].name.name.as_str(), "x");
-    assert!(!items[1].is_pub);
+    assert!(!items[1].visibility.is_public());
     assert_eq!(items[1].name.name.as_str(), "Y");
 }
 
@@ -1514,7 +1520,7 @@ fn parse_import_item_no_attributes() {
     let DeclKind::Import(imp) = &file.declarations[0].kind else {
         panic!("expected import");
     };
-    let ImportKind::Selective(items) = &imp.kind else {
+    let crate::syntax::ast::ImportDecl::Selective { items, .. } = imp else {
         panic!("expected selective import");
     };
     assert_eq!(items.len(), 2);
@@ -2140,7 +2146,7 @@ fn parse_import_of_module_path_starting_with_plugin_stays_an_import() {
     let DeclKind::Import(import) = &file.declarations[0].kind else {
         panic!("expected ordinary Import");
     };
-    assert_eq!(import.path.display_path(), "plugin.tools");
+    assert_eq!(import.path().display_path(), "plugin.tools");
 }
 
 #[test]

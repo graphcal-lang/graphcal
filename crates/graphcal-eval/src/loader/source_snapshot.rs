@@ -300,7 +300,7 @@ pub(super) const fn file_root_dependency(
     declaration: &Declaration,
 ) -> Option<(&ModulePath, FileRootDependencyKind)> {
     match &declaration.kind {
-        DeclKind::Import(import) => Some((&import.path, FileRootDependencyKind::Import)),
+        DeclKind::Import(import) => Some((import.path(), FileRootDependencyKind::Import)),
         DeclKind::Include(include) => Some((&include.path, FileRootDependencyKind::Include)),
         _ => None,
     }
@@ -372,7 +372,7 @@ fn inline_dag_dependency_paths(declarations: &[Declaration]) -> Vec<&ModulePath>
                     .body
                     .iter()
                     .filter_map(|body_decl| match &body_decl.kind {
-                        DeclKind::Import(import_decl) => Some(&import_decl.path),
+                        DeclKind::Import(import_decl) => Some(import_decl.path()),
                         DeclKind::Include(include_decl) => Some(&include_decl.path),
                         _ => None,
                     });

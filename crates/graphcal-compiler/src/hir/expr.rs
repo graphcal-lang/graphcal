@@ -3219,9 +3219,7 @@ mod tests {
             let ast::DeclKind::Import(import) = &decl.kind else {
                 continue;
             };
-            resolver
-                .register_import(main_id, &import.path, &import.kind, lib_id)
-                .unwrap();
+            resolver.register_import(main_id, import, lib_id).unwrap();
         }
         resolver
     }

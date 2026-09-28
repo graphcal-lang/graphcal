@@ -681,7 +681,7 @@ impl LoadedFile {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Import(import_decl) = &decl.kind {
                 self.resolved_imports
-                    .get(&ModulePathKey::from_path(&import_decl.path))
+                    .get(&ModulePathKey::from_path(import_decl.path()))
                     .map(|target| (decl, import_decl, target))
             } else {
                 None
@@ -1665,9 +1665,9 @@ fn register_module_imports(
         match &decl.kind {
             DeclKind::Import(import) => {
                 if let Some(target) =
-                    resolved_imports.resolved_target(&ModulePathKey::from_path(&import.path))
+                    resolved_imports.resolved_target(&ModulePathKey::from_path(import.path()))
                 {
-                    resolver.register_import_decl(owner, import, target.target())?;
+                    resolver.register_import(owner, import, target.target())?;
                 }
             }
             DeclKind::Include(include) => {
@@ -4219,7 +4219,7 @@ node result: Dimensionless = @calculation()::out;
                 panic!("expected an import");
             };
             resolve_project_module(
-                &import.path,
+                import.path(),
                 Path::new("/p"),
                 Some(&sources.manifest),
                 &sources.filesystem,
@@ -4269,7 +4269,7 @@ node result: Dimensionless = @calculation()::out;
             panic!("expected an import");
         };
         assert_eq!(
-            resolve_project_module(&import.path, Path::new("/p"), None, &sources.filesystem),
+            resolve_project_module(import.path(), Path::new("/p"), None, &sources.filesystem),
             ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
         );
     }

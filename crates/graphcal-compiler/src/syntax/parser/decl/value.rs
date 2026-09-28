@@ -112,7 +112,10 @@ impl Parser<'_> {
 
     // --- assert declaration ---
 
-    pub(super) fn parse_assert(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_assert(
+        &mut self,
+        visibility: Visibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Assert)?;
         let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
         self.expect(Token::Eq)?;
@@ -139,7 +142,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Assert(AssertDecl {
-                visibility: Visibility::Private,
+                visibility,
                 name,
                 body,
             }),

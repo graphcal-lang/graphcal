@@ -10,7 +10,10 @@ impl Parser<'_> {
     ///
     /// The body is parsed as a list of declarations (same as file-level parsing).
     /// `dag` name must be `lower_snake_case`.
-    pub(super) fn parse_dag_decl(&mut self) -> Result<Declaration, ParseError> {
+    pub(super) fn parse_dag_decl(
+        &mut self,
+        visibility: Visibility,
+    ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Dag)?;
 
         let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
@@ -33,7 +36,7 @@ impl Parser<'_> {
             doc: None,
             attributes: vec![],
             kind: DeclKind::Dag(DagDecl {
-                visibility: Visibility::Private,
+                visibility,
                 name,
                 body,
                 span,

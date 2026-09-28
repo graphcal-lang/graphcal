@@ -1,7 +1,4 @@
-use crate::syntax::ast::{
-    Attribute, AttributeArg, BindableVisibility, DeclKind, Declaration, PlotField, SlotKind,
-    Visibility,
-};
+use crate::syntax::ast::{Attribute, AttributeArg, Declaration, PlotField, SlotKind};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ScopedName;
@@ -25,52 +22,13 @@ mod plot;
 mod tests;
 mod type_decl;
 mod value;
-
-const fn visibility_without_bindability(visibility: BindableVisibility) -> Visibility {
-    match visibility {
-        BindableVisibility::Private => Visibility::Private,
-        BindableVisibility::Public | BindableVisibility::PublicBind => Visibility::Public,
-    }
-}
+mod visibility;
 
 struct CompositionDeclParts {
     name: Spanned<DeclName>,
     plot_names: Vec<Spanned<ScopedName>>,
     fields: Vec<PlotField>,
     span: Span,
-}
-
-const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
-    matches!(
-        decl.kind,
-        DeclKind::Dimension(_) | DeclKind::Type(_) | DeclKind::Index(_)
-    )
-}
-
-const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
-    match &mut decl.kind {
-        // Params and includes carry no blanket visibility. Selective items
-        // carry their own `pub`; whole imports use ImportDecl.visibility.
-        DeclKind::Param(_)
-        | DeclKind::Include(_)
-        | DeclKind::Sugar(_)
-        | DeclKind::PluginImport(_) => {}
-        DeclKind::Import(d) => {
-            d.visibility = visibility_without_bindability(visibility);
-        }
-        DeclKind::Node(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::ConstNode(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::BaseDimension(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Dimension(d) => d.visibility = visibility,
-        DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Type(d) => d.visibility = visibility,
-        DeclKind::Index(d) => d.visibility = visibility,
-        DeclKind::Dag(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Assert(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Plot(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Figure(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Layer(d) => d.visibility = visibility_without_bindability(visibility),
-    }
 }
 
 impl Parser<'_> {
@@ -168,10 +126,6 @@ impl Parser<'_> {
         self.with_nesting_budget(Self::parse_declaration_inner)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "single entry point dispatches across every declaration kind"
-    )]
     fn parse_declaration_inner(&mut self) -> Result<Declaration, ParseError> {
         // Collect any leading attributes: #[name] or #[name(arg1, arg2)]
         let mut attributes = Vec::new();
@@ -179,33 +133,14 @@ impl Parser<'_> {
             attributes.push(self.parse_attribute()?);
         }
 
-        // Optional `pub` or `pub(bind)` visibility modifier.
-        let (visibility, visibility_span) = self.parse_visibility_prefix()?;
-
-        let found = match visibility {
-            BindableVisibility::Private => None,
-            BindableVisibility::Public => Some(Found::Pub),
-            BindableVisibility::PublicBind => Some(Found::PubBind),
-        };
-
-        // Includes have no blanket visibility. Whole-DAG imports accept
-        // leading `pub`; selective imports still use per-item `pub` and are
-        // rejected semantically when the whole declaration is public.
-        if let Some(found) = found
-            && self.lexer.peek() == Some(&Token::Include)
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(Self::unexpected_token(
-                Expected::IncludeWithoutVisibility,
-                found,
-                vis_span,
-            ));
-        }
+        // Optional `pub` or `pub(bind)` prefix; each declaration kind below
+        // accepts it as the visibility type it stores.
+        let prefix = self.parse_visibility_prefix()?;
 
         // Value-declaration paths (`param`, `node`, `const node`) can be
         // either a single declaration or a multi-decl (issue #481). We
-        // consume the kind keyword(s) — which also checks the visibility
-        // prefix against the kind — parse the slot header, then peek at the
+        // consume the kind keyword(s) — which also accepts the visibility
+        // prefix for the kind — parse the slot header, then peek at the
         // next token to decide.
         let is_value_decl = match self.lexer.peek() {
             Some(Token::Param | Token::Node) => true,
@@ -213,105 +148,93 @@ impl Parser<'_> {
             _ => false,
         };
         if is_value_decl {
-            let (kind, kind_span) = self.parse_slot_kind(visibility, visibility_span)?;
-            return self.finish_value_decl_or_multi(kind, kind_span, attributes, visibility_span);
-        }
-        if self.lexer.peek() == Some(&Token::Const) {
-            let (_, const_span) = self.advance()?;
-            match self.lexer.peek() {
-                Some(Token::Unit) => {
-                    // `const unit`: single declaration only (no multi-decl sugar).
-                    let mut decl = self.parse_const_unit(const_span)?;
-                    if visibility == BindableVisibility::PublicBind
-                        && let Some(vis_span) = visibility_span
-                    {
-                        return Err(Self::unexpected_token(
-                            Expected::NonBindableVisibility,
-                            Found::PubBind,
-                            vis_span,
-                        ));
-                    }
-                    set_decl_visibility(&mut decl, visibility);
-                    if let Some(ps) = visibility_span {
-                        decl.span = ps.merge(decl.span);
-                    }
-                    if let Some(first_attr) = attributes.first() {
-                        decl.span = first_attr.span.merge(decl.span);
-                    }
-                    decl.attributes = attributes;
-                    return Ok(decl);
-                }
-                Some(_) | None => {
-                    return Err(self.unexpected_next(Expected::AfterConst));
-                }
-            }
+            let (kind, kind_span) = self.parse_slot_kind(prefix)?;
+            return self.finish_value_decl_or_multi(kind, kind_span, attributes, prefix.span());
         }
 
-        let mut decl = match self.lexer.peek() {
+        let decl = match self.lexer.peek() {
+            Some(Token::Const) => {
+                let (_, const_span) = self.advance()?;
+                match self.lexer.peek() {
+                    Some(Token::Unit) => {
+                        // `const unit`: single declaration only (no multi-decl sugar).
+                        let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                        self.parse_const_unit(const_span, visibility)
+                    }
+                    Some(_) | None => Err(self.unexpected_next(Expected::AfterConst)),
+                }
+            }
             Some(Token::Base) => {
                 let (_, base_span) = self.advance()?;
                 match self.lexer.peek() {
-                    Some(Token::Dimension) => self.parse_base_dimension_decl(base_span),
-                    Some(Token::Unit) => self.parse_base_unit_decl(base_span),
+                    Some(Token::Dimension) => {
+                        let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                        self.parse_base_dimension_decl(base_span, visibility)
+                    }
+                    Some(Token::Unit) => {
+                        let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                        self.parse_base_unit_decl(base_span, visibility)
+                    }
                     Some(_) | None => Err(self.unexpected_next(Expected::AfterBase)),
                 }
             }
-            Some(Token::Dimension) => self.parse_dimension_decl(),
-            Some(Token::Unit) => self.parse_unit_decl(),
-            Some(Token::Type) => self.parse_type_decl(),
-            Some(Token::Index) => self.parse_index_decl(),
-            Some(Token::Import) => self.parse_import_decl(),
-            Some(Token::Include) => self.parse_include_decl(),
-            Some(Token::Dag) => self.parse_dag_decl(),
-            Some(Token::Assert) => self.parse_assert(),
-            Some(Token::Plot) => self.parse_plot(),
-            Some(Token::Figure) => self.parse_figure(),
-            Some(Token::Layer) => self.parse_layer(),
+            Some(Token::Dimension) => self.parse_dimension_decl(prefix.accept_bindable()),
+            Some(Token::Unit) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_unit_decl(visibility)
+            }
+            Some(Token::Type) => self.parse_type_decl(prefix.accept_bindable()),
+            Some(Token::Index) => self.parse_index_decl(prefix.accept_bindable()),
+            Some(Token::Import) => self.parse_import_decl(prefix),
+            Some(Token::Include) => {
+                prefix.accept_none(Expected::IncludeWithoutVisibility)?;
+                self.parse_include_decl()
+            }
+            Some(Token::Dag) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_dag_decl(visibility)
+            }
+            Some(Token::Assert) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_assert(visibility)
+            }
+            Some(Token::Plot) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_plot(visibility)
+            }
+            Some(Token::Figure) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_figure(visibility)
+            }
+            Some(Token::Layer) => {
+                let visibility = prefix.accept_public(Expected::NonBindableVisibility)?;
+                self.parse_layer(visibility)
+            }
             Some(_) | None => Err(self.unexpected_next(Expected::Declaration)),
         }?;
 
-        // Set visibility
-        if visibility == BindableVisibility::PublicBind
-            && !decl_accepts_bindable_visibility(&decl)
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(Self::unexpected_token(
-                Expected::NonBindableVisibility,
-                Found::PubBind,
-                vis_span,
-            ));
-        }
-        if visibility == BindableVisibility::Public
-            && matches!(
-                &decl.kind,
-                DeclKind::Import(crate::syntax::ast::ImportDecl {
-                    kind: crate::syntax::ast::ImportKind::Selective(_),
-                    ..
-                }) | DeclKind::PluginImport(_)
-            )
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(Self::unexpected_token(
-                Expected::PubWholeDagImport,
-                Found::NonDagImport,
-                vis_span,
-            ));
-        }
-        set_decl_visibility(&mut decl, visibility);
+        Ok(Self::with_prefix_and_attributes(
+            decl,
+            prefix.span(),
+            attributes,
+        ))
+    }
 
-        // Extend the declaration span to include `pub` / `pub(bind)` prefix
-        if let Some(ps) = visibility_span {
-            decl.span = ps.merge(decl.span);
+    /// Extend `decl` over its visibility prefix and attributes, and attach the
+    /// attributes.
+    fn with_prefix_and_attributes(
+        mut decl: Declaration,
+        prefix_span: Option<Span>,
+        attributes: Vec<Attribute>,
+    ) -> Declaration {
+        if let Some(prefix_span) = prefix_span {
+            decl.span = prefix_span.merge(decl.span);
         }
-
-        // Extend the declaration span to include the attributes
         if let Some(first_attr) = attributes.first() {
             decl.span = first_attr.span.merge(decl.span);
         }
-
         decl.attributes = attributes;
-
-        Ok(decl)
+        decl
     }
 
     /// Complete parsing of a `param` / `node` / `const node` declaration
@@ -323,7 +246,7 @@ impl Parser<'_> {
         kind: SlotKind,
         kind_span: Span,
         attributes: Vec<Attribute>,
-        visibility_span: Option<Span>,
+        prefix_span: Option<Span>,
     ) -> Result<Declaration, ParseError> {
         let header = self.parse_slot_header_tail(kind, kind_span)?;
 
@@ -342,45 +265,11 @@ impl Parser<'_> {
         }
 
         // Single decl. Continue with the existing param/node/const-node path.
-        let mut decl = self.finish_single_value_decl(header)?;
-        if let Some(ps) = visibility_span {
-            decl.span = ps.merge(decl.span);
-        }
-        if let Some(first_attr) = attributes.first() {
-            decl.span = first_attr.span.merge(decl.span);
-        }
-        decl.attributes = attributes;
-        Ok(decl)
-    }
-
-    /// Parse an optional `pub` / `pub(bind)` visibility prefix.
-    ///
-    /// Returns `(BindableVisibility::Private, None)` when the next token is not
-    /// `pub`. `bind` is a contextual keyword: parsed as a literal identifier
-    /// inside the parens, not reserved as a token elsewhere.
-    fn parse_visibility_prefix(
-        &mut self,
-    ) -> Result<(BindableVisibility, Option<Span>), ParseError> {
-        if self.lexer.peek() != Some(&Token::Pub) {
-            return Ok((BindableVisibility::Private, None));
-        }
-        let (_, pub_span) = self.advance()?;
-        if self.lexer.peek() != Some(&Token::LParen) {
-            return Ok((BindableVisibility::Public, Some(pub_span)));
-        }
-        self.expect(Token::LParen)?;
-        let (bind_tok, bind_span) = self.advance()?;
-        if bind_tok != Token::ContextualKeyword(ContextualKeyword::Bind) {
-            return Err(Self::unexpected(
-                Expected::Token(Token::ContextualKeyword(ContextualKeyword::Bind)),
-                bind_tok,
-                bind_span,
-            ));
-        }
-        let (_, rparen_span) = self.expect(Token::RParen)?;
-        Ok((
-            BindableVisibility::PublicBind,
-            Some(pub_span.merge(rparen_span)),
+        let decl = self.finish_single_value_decl(header)?;
+        Ok(Self::with_prefix_and_attributes(
+            decl,
+            prefix_span,
+            attributes,
         ))
     }
 
