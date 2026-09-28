@@ -5399,13 +5399,11 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
 
     match project.build_module_resolver() {
-        Err(crate::loader::ModuleResolverBuildError::ModuleResolve(
-            graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
-                namespace,
-                name,
-                ..
-            },
-        )) => {
+        Err(graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
+            namespace,
+            name,
+            ..
+        }) => {
             assert_eq!(
                 namespace,
                 graphcal_compiler::resolve::namespace::Namespace::Term

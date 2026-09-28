@@ -24,10 +24,9 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let file = parse_and_desugar(source);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let ir = crate::ir::lower::lower(&file, &src)?;
-    let mut resolver = crate::resolve::ModuleResolver::default();
-    resolver
-        .add_module(ir.dag_id().clone(), &file.declarations)
-        .unwrap();
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(ir.dag_id().clone(), &file.declarations);
+    let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();

@@ -798,7 +798,7 @@ fn collect_bindable_nominals(
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<BindableNominalIdentity>, GraphcalError> {
-    let symbols = ctx.resolver.modules().get(ctx.owner).ok_or_else(|| {
+    let symbols = ctx.resolver.symbols(ctx.owner).ok_or_else(|| {
         GraphcalError::internal_error(
             format!("module symbol table missing for DAG `{}`", ctx.owner),
             src,
@@ -865,7 +865,7 @@ fn collect_resolved_type_defs(
     ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeDefs, GraphcalError> {
     let mut defs = ResolvedTypeDefs::default();
-    if let Some(symbols) = ctx.resolver.modules().get(ctx.owner) {
+    if let Some(symbols) = ctx.resolver.symbols(ctx.owner) {
         for symbol in symbols.struct_types().values() {
             record_resolved_struct_type_def(symbol.resolved(), ctx, &mut defs)?;
         }
@@ -1694,8 +1694,7 @@ impl HirPolicyChecker<'_> {
         let is_pub_bind = self
             .ctx
             .resolver
-            .modules()
-            .get(self.ctx.owner)
+            .symbols(self.ctx.owner)
             .and_then(|symbols| symbols.indexes().get(&index.to_unowned_def_name()))
             .is_some_and(|symbol| {
                 // A bindable index with declared variants.

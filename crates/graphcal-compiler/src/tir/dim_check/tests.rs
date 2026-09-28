@@ -30,31 +30,15 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let (ir, parent_registry) =
         crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id = test_dag_id();
-    let mut resolver = crate::resolve::ModuleResolver::default();
-    resolver
-        .add_module(parent_dag_id.clone(), &file.declarations)
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add_file(&parent_dag_id, &file.declarations);
+    let resolver = modules
+        .build()
         .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module resolver failed for root module: {err}"),
+            message: format!("test module resolver failed: {err}"),
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    for decl in &file.declarations {
-        if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
-            resolver
-                .add_module(
-                    parent_dag_id.inline_dag_child(dag.name.value.clone()),
-                    &dag.body,
-                )
-                .map_err(|err| GraphcalError::InternalError {
-                    message: format!(
-                        "test module resolver failed for inline dag `{}`: {err}",
-                        dag.name.value
-                    ),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                })?;
-        }
-    }
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types
         .insert_graphcal_prelude()
@@ -95,10 +79,9 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let file = desugared;
     let src = make_src(source);
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
-    let mut resolver = crate::resolve::ModuleResolver::default();
-    resolver
-        .add_module(ir.dag_id().clone(), &file.declarations)
-        .unwrap();
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(ir.dag_id().clone(), &file.declarations);
+    let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_hir(&ir).unwrap();
@@ -204,39 +187,24 @@ fn compile_inline_dag_bodies_test(
         })
         .collect::<Vec<_>>();
 
-    let mut resolver = crate::resolve::ModuleResolver::default();
-    resolver
-        .add_module(parent_dag_id.clone(), parent_declarations)
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module resolver failed for parent module: {err}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
-    for (name, body) in &dag_bodies {
-        resolver
-            .add_module(parent_dag_id.inline_dag_child(name.clone()), body)
-            .map_err(|err| GraphcalError::InternalError {
-                message: format!("test module resolver failed for inline dag `{name}`: {err}"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
-    }
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(parent_dag_id.clone(), parent_declarations);
     for (name, body) in &dag_bodies {
         let owner = parent_dag_id.inline_dag_child(name.clone());
+        modules.add(owner.clone(), body);
         for decl in body {
             if let crate::desugar::desugared_ast::DeclKind::Import(import) = &decl.kind {
-                resolver
-                    .register_import(&owner, import, parent_dag_id)
-                    .map_err(|err| GraphcalError::InternalError {
-                        message: format!(
-                            "test module resolver failed to register inline dag import: {err}"
-                        ),
-                        src: src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })?;
+                modules.import(&owner, import, parent_dag_id);
             }
         }
     }
+    let resolver = modules
+        .build()
+        .map_err(|err| GraphcalError::InternalError {
+            message: format!("test module resolver failed: {err}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
     let mut project_types = tir.project_type_store().clone();
 
     for (name, body) in dag_bodies {

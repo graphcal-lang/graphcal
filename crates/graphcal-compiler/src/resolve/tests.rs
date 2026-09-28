@@ -8,7 +8,7 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
-use super::ModuleResolver;
+use super::builder::{SymbolTables, TestModules};
 use super::category::*;
 use super::error::*;
 use super::exports::*;
@@ -47,6 +47,16 @@ fn first_include(file: &ast::File) -> (&ModulePath, &ImportKind) {
         .iter()
         .find_map(|decl| match &decl.kind {
             ast::DeclKind::Include(include) => Some((&include.path, &include.kind)),
+            _ => None,
+        })
+        .expect("source should contain an include")
+}
+
+fn first_include_decl(file: &ast::File) -> &ast::IncludeDecl {
+    file.declarations
+        .iter()
+        .find_map(|decl| match &decl.kind {
+            ast::DeclKind::Include(include) => Some(include),
             _ => None,
         })
         .expect("source should contain an include")
@@ -132,16 +142,11 @@ fn aliases_of_same_index_preserve_label_identity() {
     let main = desugared_source("import lib::{ index Phase, index Phase as P };");
     let imports = imports(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, imports[0], &lib_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, imports[0], &lib_id);
+    let resolver = modules.build().unwrap();
 
     let direct = resolver
         .resolve_index_variant_parts(
@@ -189,10 +194,9 @@ fn exported_surface_uses_canonical_import_item_spellings() {
          pub dim Information = Dimensionless;\n\
          pub index Category = { A };",
     );
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(owner.clone(), &file.declarations)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(owner.clone(), &file.declarations);
+    let resolver = modules.build().unwrap();
 
     let rendered = resolver
         .exported_import_items(&owner)
@@ -242,17 +246,11 @@ fn unit_import_colliding_with_local_unit_is_rejected() {
     let main = desugared_source("base unit m: Dimensionless;\nimport lib::{ unit m };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_import(&main_id, import, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let err = modules.build().unwrap_err();
     assert!(matches!(
         err,
         ModuleResolveError::DuplicateImportName {
@@ -272,17 +270,11 @@ fn constructor_import_colliding_with_local_constructor_is_rejected() {
     let main = desugared_source("type Local { Mk }\nimport lib::{ Mk };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_import(&main_id, import, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let err = modules.build().unwrap_err();
     assert!(matches!(
         err,
         ModuleResolveError::DuplicateImportName {
@@ -312,17 +304,11 @@ fn imported_value_constructor_collisions_are_rejected_in_either_direction() {
         let lib = desugared_source(lib_source);
         let main = desugared_source(main_source);
         let import = first_import(&main);
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(lib_id.clone(), &lib.declarations)
-            .unwrap();
-        resolver
-            .add_module(main_id.clone(), &main.declarations)
-            .unwrap();
-
-        let err = resolver
-            .register_import(&main_id, import, &lib_id)
-            .unwrap_err();
+        let mut modules = TestModules::default();
+        modules.add(lib_id.clone(), &lib.declarations);
+        modules.add(main_id.clone(), &main.declarations);
+        modules.import(&main_id, import, &lib_id);
+        let err = modules.build().unwrap_err();
         assert!(matches!(
             err,
             ModuleResolveError::DuplicateImportName {
@@ -345,18 +331,13 @@ fn equal_labels_under_different_indexes_resolve_by_explicit_owner() {
     let main = desugared_source("import z::{ index ZIndex };\nimport a::{ index AIndex };");
     let imports = imports(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver.add_module(z_id.clone(), &z.declarations).unwrap();
-    resolver.add_module(a_id.clone(), &a.declarations).unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, imports[0], &z_id)
-        .unwrap();
-    resolver
-        .register_import(&main_id, imports[1], &a_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(z_id.clone(), &z.declarations);
+    modules.add(a_id.clone(), &a.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, imports[0], &z_id);
+    modules.import(&main_id, imports[1], &a_id);
+    let resolver = modules.build().unwrap();
 
     let a_label = resolver
         .resolve_index_variant_parts(
@@ -388,22 +369,13 @@ fn selective_import_cross_universe_name_collision_is_rejected() {
     );
     let imports = imports(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(type_lib_id.clone(), &type_lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(index_lib_id.clone(), &index_lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, imports[0], &type_lib_id)
-        .unwrap();
-    let err = resolver
-        .register_import(&main_id, imports[1], &index_lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(type_lib_id.clone(), &type_lib.declarations);
+    modules.add(index_lib_id.clone(), &index_lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, imports[0], &type_lib_id);
+    modules.import(&main_id, imports[1], &index_lib_id);
+    let err = modules.build().unwrap_err();
 
     assert!(matches!(
         err,
@@ -424,14 +396,11 @@ fn resolves_qualified_index_variant_to_canonical_owner() {
     let main = desugared_source("import lib as physics;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let resolved_name = resolver
         .resolve_index_variant_parts(
@@ -454,14 +423,11 @@ fn selective_type_alias_resolves_to_original_owner_and_leaf() {
     let main = desugared_source("import lib::{ type Vec3 as Vector };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let resolved_name = resolver
         .resolve_struct_type_path(&main_id, &path(&["Vector"]))
@@ -493,14 +459,11 @@ fn type_import_in_child_dag_does_not_import_same_named_constructor() {
         })
         .expect("dag body should contain an import");
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.add_module(child_id.clone(), &dag.body).unwrap();
-    resolver
-        .register_import(&child_id, import, &main_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(main_id.clone(), &main.declarations);
+    modules.add(child_id.clone(), &dag.body);
+    modules.import(&child_id, import, &main_id);
+    let resolver = modules.build().unwrap();
 
     let resolved_type = resolver
         .resolve_struct_type_path(&child_id, &path(&["TransferResult"]))
@@ -529,17 +492,11 @@ fn type_marker_importing_index_reports_wrong_universe() {
     let main = desugared_source("import lib::{ type M };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_import(&main_id, import, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let err = modules.build().unwrap_err();
     assert!(err.to_string().contains("did you mean `index M`?"));
 
     assert!(matches!(
@@ -563,17 +520,11 @@ fn bare_importing_type_reports_wrong_category() {
     let main = desugared_source("import lib::{ Foo };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_import(&main_id, import, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let err = modules.build().unwrap_err();
     assert!(err.to_string().contains("did you mean `type Foo`?"));
 
     assert!(matches!(
@@ -600,17 +551,11 @@ fn wrong_import_category_lists_all_legal_same_name_alternatives() {
     let main = desugared_source("import lib::{ dim JPY };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_import(&main_id, import, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let err = modules.build().unwrap_err();
     assert!(
         err.to_string()
             .contains("did you mean `JPY` or `unit JPY`?")
@@ -631,14 +576,11 @@ fn qualified_private_type_is_rejected() {
     let main = desugared_source("import lib as hidden;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let err = resolver
         .resolve_struct_type_path(&main_id, &path(&["hidden", "Secret"]))
@@ -660,19 +602,14 @@ fn include_selective_private_decl_is_rejected() {
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source("node hidden: Dimensionless = 1.0;");
     let main = desugared_source("include lib()::{ hidden };");
-    let (include_path, include_kind) = first_include(&main);
+    let include = first_include_decl(&main);
+    let instance_id = main_id.instance_child(include.instance_scope());
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let err = resolver
-        .register_include(&main_id, include_path, include_kind, &lib_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, &include.path, &lib_id);
+    let err = modules.build().unwrap_err();
 
     assert!(matches!(
         err,
@@ -680,7 +617,7 @@ fn include_selective_private_decl_is_rejected() {
             owner,
             category: _,
             name,
-        } if owner == lib_id && name.as_str() == "hidden"
+        } if owner == instance_id && name.as_str() == "hidden"
     ));
 }
 
@@ -751,9 +688,6 @@ fn include_projection_classification_is_shared_and_exhaustive() {
 fn selective_include_rejects_dag_projection_at_selector() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
-        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
-    ));
     let lib = desugared_source("pub dag child { pub node output: Dimensionless = 1.0; }");
     let main = desugared_source("include lib()::{ child };");
     let (include_path, include_kind) = first_include(&main);
@@ -761,18 +695,11 @@ fn selective_include_rejects_dag_projection_at_selector() {
         panic!("expected selective include")
     };
 
-    let mut resolver = ModuleResolver::default();
-    resolver.add_module(lib_id, &lib.declarations).unwrap();
-    resolver
-        .add_module(instance_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-
-    let error = resolver
-        .register_include(&main_id, include_path, include_kind, &instance_id)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add_file(&lib_id, &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, include_path, &lib_id);
+    let error = modules.build().unwrap_err();
     assert!(matches!(
         error,
         ModuleResolveError::IncludeItemNotProjectable {
@@ -788,36 +715,15 @@ fn selective_include_rejects_dag_projection_at_selector() {
 fn selective_include_constructor_keeps_source_canonical_identity() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
-        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
-    ));
     let lib = desugared_source("pub type Choice { Pick }");
     let main = desugared_source("include lib()::{ Pick as Selected };");
-    let include = main
-        .declarations
-        .iter()
-        .find_map(|declaration| match &declaration.kind {
-            ast::DeclKind::Include(include) => Some(include),
-            _ => None,
-        })
-        .expect("include declaration");
+    let include = first_include_decl(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(instance_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_include(&main_id, &include.path, &include.kind, &instance_id)
-        .unwrap();
-    resolver
-        .apply_include_static_projection_bindings(&main_id, Some(&lib_id), include)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, &include.path, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let constructor_target = resolver
         .resolve_constructor_path(&main_id, &path(&["Selected"]))
@@ -830,43 +736,21 @@ fn selective_include_constructor_keeps_source_canonical_identity() {
 fn selective_include_rejects_constructor_when_owner_type_is_rebound() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
-    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
-        crate::syntax::module_name::ModuleAliasName::expect_valid("projection"),
-    ));
     let lib = desugared_source("pub(bind) type Choice { Pick }");
     let main = desugared_source(
         "type Replacement { Replacement }
          include lib(type Choice: Replacement)::{ Pick };",
     );
-    let include = main
-        .declarations
-        .iter()
-        .find_map(|declaration| match &declaration.kind {
-            ast::DeclKind::Include(include) => Some(include),
-            _ => None,
-        })
-        .expect("include declaration");
+    let include = first_include_decl(&main);
     let ImportKind::Selective(items) = &include.kind else {
         panic!("expected selective include")
     };
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(instance_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_include(&main_id, &include.path, &include.kind, &instance_id)
-        .unwrap();
-
-    let error = resolver
-        .apply_include_static_projection_bindings(&main_id, Some(&lib_id), include)
-        .unwrap_err();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, &include.path, &lib_id);
+    let error = modules.build().unwrap_err();
     assert!(matches!(
         error,
         ModuleResolveError::ConstructorOwnerRebound {
@@ -886,13 +770,10 @@ fn loaded_sibling_file_is_not_callable_without_an_import() {
     let main_id = DagId::new("test", NonEmpty::new("src", vec!["pkg", "main"]));
     let sibling_id = DagId::new("test", NonEmpty::new("src", vec!["pkg", "library"]));
     let empty = desugared_source("");
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(main_id.clone(), &empty.declarations)
-        .unwrap();
-    resolver
-        .add_module(sibling_id, &empty.declarations)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(main_id.clone(), &empty.declarations);
+    modules.add(sibling_id, &empty.declarations);
+    let resolver = modules.build().unwrap();
 
     assert!(matches!(
         resolver.resolve_module_path(&main_id, &module_path(&["library"])),
@@ -908,14 +789,11 @@ fn imported_file_module_alias_is_callable_as_its_exact_target() {
     let main = desugared_source("import lib;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     assert_eq!(
         resolver
@@ -940,17 +818,12 @@ fn imported_inline_dag_alias_is_callable_as_its_exact_target() {
     let main = desugared_source("import lib.helper as imported;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver.add_module(lib_id, &lib.declarations).unwrap();
-    resolver
-        .add_module(helper_id.clone(), &helper.body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, import, &helper_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id, &lib.declarations);
+    modules.add(helper_id.clone(), &helper.body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &helper_id);
+    let resolver = modules.build().unwrap();
 
     assert_eq!(
         resolver
@@ -979,19 +852,12 @@ fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace
     let main = desugared_source("import lib.helper as imported;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id.clone(), &helper.body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, import, &helper_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(helper_id.clone(), &helper.body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &helper_id);
+    let resolver = modules.build().unwrap();
 
     let errors = [
         resolver
@@ -1051,19 +917,14 @@ fn selective_import_from_private_inline_dag_is_rejected() {
     let main = desugared_source("import lib.helper::{ result };");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id.clone(), &helper.body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(helper_id.clone(), &helper.body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &helper_id);
 
     assert!(matches!(
-        resolver.register_import(&main_id, import, &helper_id),
+        modules.build(),
         Err(ModuleResolveError::PrivateName {
             owner,
             category: NameCategory::Dag,
@@ -1097,20 +958,13 @@ fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
     let main = desugared_source("import lib.private_parent.public_child as child;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver.add_module(private_id, &private_dag.body).unwrap();
-    resolver
-        .add_module(child_id.clone(), &public_child.body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, import, &child_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(private_id, &private_dag.body);
+    modules.add(child_id.clone(), &public_child.body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &child_id);
+    let resolver = modules.build().unwrap();
 
     for error in [
         resolver
@@ -1144,17 +998,12 @@ fn selectively_imported_dag_alias_is_callable() {
     let main = desugared_source("import lib::{helper as imported};");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id.clone(), &helper.body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(helper_id.clone(), &helper.body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     assert_eq!(
         resolver
@@ -1182,12 +1031,11 @@ fn local_inline_dag_can_qualify_its_nested_child() {
         })
         .expect("outer should contain inner");
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.add_module(outer_id, &outer.body).unwrap();
-    resolver.add_module(inner_id.clone(), &inner.body).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(main_id.clone(), &main.declarations);
+    modules.add(outer_id, &outer.body);
+    modules.add(inner_id.clone(), &inner.body);
+    let resolver = modules.build().unwrap();
 
     assert_eq!(
         resolver
@@ -1203,18 +1051,13 @@ fn included_instance_alias_is_not_callable() {
     let main_id = DagId::root_in_package("test", "main");
     let lib = desugared_source("pub node result: Dimensionless = 1.0;");
     let main = desugared_source("include lib() as instance;");
-    let (include_path, include_kind) = first_include(&main);
+    let (include_path, _) = first_include(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_include(&main_id, include_path, include_kind, &lib_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, include_path, &lib_id);
+    let resolver = modules.build().unwrap();
 
     assert!(matches!(
         resolver.resolve_module_path(&main_id, &module_path(&["instance"])),
@@ -1228,26 +1071,15 @@ fn aliased_include_does_not_expose_same_named_file_module() {
     let main_id = DagId::root_in_package("test", "app");
     let defaults_id =
         DagId::from_relative_path("test", std::path::Path::new("app/defaults.gcl")).unwrap();
-    let instance_id = main_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
-        crate::syntax::module_name::ModuleAliasName::expect_valid("configured"),
-    ));
     let defaults = desugared_source("pub node result: Dimensionless = 1.0;");
     let main = desugared_source("include app.defaults() as configured;");
-    let (include_path, include_kind) = first_include(&main);
+    let (include_path, _) = first_include(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(defaults_id, &defaults.declarations)
-        .unwrap();
-    resolver
-        .add_module(instance_id.clone(), &defaults.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_include(&main_id, include_path, include_kind, &instance_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(defaults_id.clone(), &defaults.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&main_id, include_path, &defaults_id);
+    let resolver = modules.build().unwrap();
 
     assert!(matches!(
         resolver.resolve_module_path(&main_id, &module_path(&["defaults"])),
@@ -1267,7 +1099,7 @@ fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
 
     // The alias occupies the Term slot as soon as its declaration is
     // collected, before (and whether or not) the loader registers the edge.
-    let result = ModuleResolver::default().add_module(main_id, &main.declarations);
+    let result = SymbolTables::default().add_module(main_id, &main.declarations);
     assert!(matches!(
         result,
         Err(ModuleResolveError::DuplicateImportName {
@@ -1283,7 +1115,7 @@ fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
 /// Collect `source` as module `main`, returning the duplicate Term name, if any.
 fn duplicate_term_alias(source: &str) -> Option<(String, Span, Span)> {
     let main = desugared_source(source);
-    match ModuleResolver::default()
+    match SymbolTables::default()
         .add_module(DagId::root_in_package("test", "main"), &main.declarations)
     {
         Ok(()) => None,
@@ -1377,19 +1209,12 @@ fn local_and_selected_bindings_to_same_dag_are_one_callable() {
         })
         .expect("calculation imports its parent");
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(root_id.clone(), &root.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id.clone(), &helper.body)
-        .unwrap();
-    resolver
-        .add_module(calculation_id.clone(), &calculation.body)
-        .unwrap();
-    resolver
-        .register_import(&calculation_id, import, &root_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(root_id.clone(), &root.declarations);
+    modules.add(helper_id.clone(), &helper.body);
+    modules.add(calculation_id.clone(), &calculation.body);
+    modules.import(&calculation_id, import, &root_id);
+    let resolver = modules.build().unwrap();
 
     assert_eq!(
         resolver
@@ -1413,17 +1238,12 @@ fn qualified_private_dag_path_is_rejected() {
     let main = desugared_source("import lib as lib;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id, &first_dag(&lib).body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(helper_id, &first_dag(&lib).body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let err = resolver
         .resolve_module_path(&main_id, &module_path(&["lib", "helper"]))
@@ -1456,17 +1276,12 @@ fn qualified_symbol_path_through_private_dag_is_rejected() {
     let main = desugared_source("import lib as lib;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(helper_id, &first_dag(&lib).body)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(helper_id, &first_dag(&lib).body);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let err = resolver
         .resolve_decl_path(&main_id, &path(&["lib", "helper", "shown"]))
@@ -1493,14 +1308,11 @@ fn qualified_constructor_resolves_to_canonical_owner() {
     let main = desugared_source("import lib as mission;");
     let import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver.register_import(&main_id, import, &lib_id).unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, import, &lib_id);
+    let resolver = modules.build().unwrap();
 
     let resolved_name = resolver
         .resolve_constructor_path(&main_id, &path(&["mission", "Impulsive"]))
@@ -1521,22 +1333,13 @@ fn selective_pub_reexport_resolves_to_original_owner() {
     let middle_import = first_import(&middle);
     let main_import = first_import(&main);
 
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(leaf_id.clone(), &leaf.declarations)
-        .unwrap();
-    resolver
-        .add_module(middle_id.clone(), &middle.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&middle_id, middle_import, &leaf_id)
-        .unwrap();
-    resolver
-        .register_import(&main_id, main_import, &middle_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(leaf_id.clone(), &leaf.declarations);
+    modules.add(middle_id.clone(), &middle.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&middle_id, middle_import, &leaf_id);
+    modules.import(&main_id, main_import, &middle_id);
+    let resolver = modules.build().unwrap();
     assert_eq!(
         resolver
             .exported_import_items(&middle_id)
@@ -1684,13 +1487,9 @@ fn file_submodule_and_inline_dag_with_one_spelling_are_ambiguous() {
     let inline_id = lib_id.inline_dag_child(decl("x"));
     let file_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
 
-    let mut resolver = ModuleResolver::default();
-    resolver.add_module(lib_id, &lib.declarations).unwrap();
-    let ast::DeclKind::Dag(dag) = &lib.declarations[0].kind else {
-        panic!("expected a dag declaration");
-    };
-    resolver.add_module(inline_id.clone(), &dag.body).unwrap();
-    let error = resolver
+    let mut tables = SymbolTables::default();
+    tables.add_file(lib_id, &lib.declarations).unwrap();
+    let error = tables
         .add_module(file_id.clone(), &lib_x.declarations)
         .unwrap_err();
 
@@ -1711,27 +1510,19 @@ fn file_submodule_and_inline_dag_with_one_spelling_are_ambiguous() {
 fn same_spelling_in_another_package_or_instance_is_not_ambiguous() {
     let body = desugared_source("pub const node a: Dimensionless = 2.0;");
     let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &body.declarations)
-        .unwrap();
-    resolver
-        .add_module(lib_id.inline_dag_child(decl("x")), &body.declarations)
-        .unwrap();
-    resolver
-        .add_module(
-            DagId::new("other", NonEmpty::new("pkg", vec!["lib", "x"])),
-            &body.declarations,
-        )
-        .unwrap();
-    resolver
-        .add_module(
-            lib_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
-                crate::syntax::module_name::ModuleAliasName::expect_valid("x"),
-            )),
-            &body.declarations,
-        )
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &body.declarations);
+    modules.add(lib_id.inline_dag_child(decl("x")), &body.declarations);
+    modules.add(
+        DagId::new("other", NonEmpty::new("pkg", vec!["lib", "x"])),
+        &body.declarations,
+    );
+    modules.add(
+        lib_id.instance_child(crate::syntax::module_name::ScopeSegment::Named(
+            crate::syntax::module_name::ModuleAliasName::expect_valid("x"),
+        )),
+        &body.declarations,
+    );
 }
 
 #[test]
@@ -1742,17 +1533,12 @@ fn alias_qualifier_does_not_reach_a_file_submodule() {
     let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
     let lib_x_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
     let main_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["main"]));
-    let mut resolver = ModuleResolver::default();
-    resolver
-        .add_module(lib_id.clone(), &lib.declarations)
-        .unwrap();
-    resolver.add_module(lib_x_id, &lib_x.declarations).unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, first_import(&main), &lib_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(lib_x_id, &lib_x.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, first_import(&main), &lib_id);
+    let resolver = modules.build().unwrap();
 
     // `l.x` names an inline `dag x` of `lib`, never the file `lib/x.gcl`.
     assert_eq!(
@@ -1770,6 +1556,101 @@ fn alias_qualifier_does_not_reach_a_file_submodule() {
 }
 
 #[test]
+fn recursive_include_expansion_is_rejected_with_its_template_cycle() {
+    let main = desugared_source(
+        "dag first { include second() as next; }
+         dag second { include first() as next; }",
+    );
+    let main_id = DagId::root_in_package("test", "main");
+    let first = main_id.inline_dag_child(decl("first"));
+    let second = main_id.inline_dag_child(decl("second"));
+    let mut modules = TestModules::default();
+    modules.add_file(&main_id, &main.declarations);
+    modules.edge(&first, &module_path(&["second"]), &second);
+    modules.edge(&second, &module_path(&["first"]), &first);
+
+    assert_eq!(
+        modules.build(),
+        Err(ModuleResolveError::RecursiveIncludeExpansion {
+            module: first.clone(),
+            cycle: vec![first.clone(), second, first],
+        })
+    );
+}
+
+#[test]
+fn include_of_a_later_sibling_sees_its_completed_scope() {
+    // `a` precedes `b`, but its include selects a re-export that only `b`'s
+    // own import introduces, so `b`'s scope must be completed first.
+    let lib = desugared_source("pub const node k: Dimensionless = 1.0;");
+    let main = desugared_source(
+        "dag a { include b()::{ k }; }
+         dag b { import lib::{ pub k }; }",
+    );
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let a = main_id.inline_dag_child(decl("a"));
+    let b = main_id.inline_dag_child(decl("b"));
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add_file(&main_id, &main.declarations);
+    modules.edge(&a, &module_path(&["b"]), &b);
+    modules.edge(&b, &module_path(&["lib"]), &lib_id);
+    let resolver = modules.build().unwrap();
+
+    let k = resolver.resolve_decl_path(&a, &path(&["k"])).unwrap();
+    assert_eq!((k.owner(), k.as_str()), (&lib_id, "k"));
+
+    // The instance carries `b`'s completed scope as well.
+    let include = first_include_decl(&ast::File {
+        declarations: first_dag(&main).body.clone(),
+    })
+    .clone();
+    let instance = a.instance_child(include.instance_scope());
+    assert!(resolver.symbols(&instance).is_some());
+    assert_eq!(resolver.resolve_decl_path(&instance, &path(&["k"])), Ok(k));
+}
+
+#[test]
+fn include_instances_are_expanded_through_nested_templates() {
+    let leaf = desugared_source("pub node value: Dimensionless = 1.0;");
+    let middle = desugared_source("include leaf() as inner;");
+    let main = desugared_source("include middle() as outer;");
+    let leaf_id = DagId::root_in_package("test", "leaf");
+    let middle_id = DagId::root_in_package("test", "middle");
+    let main_id = DagId::root_in_package("test", "main");
+    let mut modules = TestModules::default();
+    modules.add(leaf_id.clone(), &leaf.declarations);
+    modules.add(middle_id.clone(), &middle.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.edge(&middle_id, &module_path(&["leaf"]), &leaf_id);
+    modules.edge(&main_id, &module_path(&["middle"]), &middle_id);
+    let resolver = modules.build().unwrap();
+
+    let named = |alias: &str| {
+        crate::syntax::module_name::ScopeSegment::Named(
+            crate::syntax::module_name::ModuleAliasName::expect_valid(alias),
+        )
+    };
+    let outer = main_id.instance_child(named("outer"));
+    let inner = outer.instance_child(named("inner"));
+    assert!(resolver.symbols(&outer).is_some());
+    assert!(resolver.symbols(&inner).is_some());
+    // The nested instance inherits `middle`'s scope, whose alias names it.
+    assert_eq!(
+        resolver.module_alias_role(
+            &outer,
+            &crate::syntax::module_name::ModuleAliasName::expect_valid("inner")
+        ),
+        Some(super::scope::ModuleAliasRole::IncludedInstance)
+    );
+    let value = resolver
+        .resolve_decl_path(&inner, &path(&["value"]))
+        .unwrap();
+    assert_eq!(value.owner(), &inner);
+}
+
+#[test]
 fn file_submodule_does_not_inherit_the_visibility_of_a_parent_file_dag() {
     // A private non-`dag` declaration `x` in `lib.gcl` has no bearing on the
     // file `lib/x.gcl`, and neither would a private `dag x` (which would be
@@ -1780,17 +1661,12 @@ fn file_submodule_does_not_inherit_the_visibility_of_a_parent_file_dag() {
     let lib_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib"]));
     let lib_x_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["lib", "x"]));
     let main_id = DagId::new("pkg", NonEmpty::new("pkg", vec!["main"]));
-    let mut resolver = ModuleResolver::default();
-    resolver.add_module(lib_id, &lib.declarations).unwrap();
-    resolver
-        .add_module(lib_x_id.clone(), &lib_x.declarations)
-        .unwrap();
-    resolver
-        .add_module(main_id.clone(), &main.declarations)
-        .unwrap();
-    resolver
-        .register_import(&main_id, first_import(&main), &lib_x_id)
-        .unwrap();
+    let mut modules = TestModules::default();
+    modules.add(lib_id, &lib.declarations);
+    modules.add(lib_x_id.clone(), &lib_x.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    modules.import(&main_id, first_import(&main), &lib_x_id);
+    let resolver = modules.build().unwrap();
     assert_eq!(
         resolver
             .resolve_decl_path(&main_id, &path(&["a"]))

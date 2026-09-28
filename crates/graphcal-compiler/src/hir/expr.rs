@@ -2409,7 +2409,7 @@ impl<'a> ExprLowerer<'a> {
             .fold(self.ctx.owner.clone(), |owner, segment| {
                 owner.inline_dag_child(DeclName::classify(segment.clone()))
             });
-        self.ctx.resolver.modules().get(&owner).and_then(|module| {
+        self.ctx.resolver.symbols(&owner).and_then(|module| {
             let decl_name = DeclName::classify(leaf.clone());
             module
                 .decls()
@@ -3173,10 +3173,8 @@ mod tests {
     fn strict_lowering_publishes_identity_and_source_coverage_for_every_child() {
         let owner = DagId::root_in_package("test", "identities");
         let file = desugared_source("node value: Dimensionless = 1.0 + 2.0;");
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
         let body = lower_expr(
             node_value(&file, "value"),
@@ -3212,20 +3210,17 @@ mod tests {
         lib: &ast::File,
         main: &ast::File,
     ) -> ModuleResolver {
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(lib_id.clone(), &lib.declarations)
-            .unwrap();
-        resolver
-            .add_module(main_id.clone(), &main.declarations)
-            .unwrap();
-        for decl in &main.declarations {
-            let ast::DeclKind::Import(import) = &decl.kind else {
-                continue;
-            };
-            resolver.register_import(main_id, import, lib_id).unwrap();
-        }
-        resolver
+        // Every import of `main` names `lib`.
+        ModuleResolver::build(
+            [
+                (lib_id.clone(), lib.declarations.as_slice()),
+                (main_id.clone(), main.declarations.as_slice()),
+            ],
+            &|owner: &DagId, _: &crate::syntax::ast::ModulePath| {
+                (owner == main_id).then(|| lib_id.clone())
+            },
+        )
+        .unwrap()
     }
 
     #[test]
@@ -3325,10 +3320,8 @@ mod tests {
         let file = desugared_source(
             "node t: Datetime = datetime(\"2024-07-15T17:30:00\", \"America/New_York\");",
         );
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
 
         let expr = lower_expr(
@@ -3360,10 +3353,8 @@ mod tests {
     fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
         let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");");
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
 
         let expr = lower_expr(
@@ -3390,10 +3381,8 @@ mod tests {
         let file = desugared_source(
             "index Phase = { Burn }; node x: Dimensionless[Phase] = for p: Phase { p };",
         );
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
 
         let expr = lower_expr(
@@ -3499,10 +3488,8 @@ mod tests {
     fn lower_tolerant_node(source: &str, name: &str) -> (Expr, Vec<ExprLowerError>) {
         let owner = DagId::root_in_package("test", "main");
         let file = desugared_source(source);
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
         lower_expr_tolerant(
             node_value(&file, name),
@@ -3618,10 +3605,8 @@ mod tests {
     fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
         let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("param p: Dimensionless; node x: Dimensionless = p;");
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner.clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
         let scope = GenericScope::new();
         let scoped_name = ScopedName::from(DeclName::expect_valid("p"));
         let bindings = HashMap::from([(
@@ -3661,10 +3646,9 @@ mod tests {
             let file = desugared_source(&format!(
                 "{declaration} node output: Dimensionless = target;"
             ));
-            let mut resolver = ModuleResolver::default();
-            resolver
-                .add_module(owner.clone(), &file.declarations)
-                .unwrap();
+            let resolver =
+                ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())])
+                    .unwrap();
             let scope = GenericScope::new();
 
             let err = lower_expr(

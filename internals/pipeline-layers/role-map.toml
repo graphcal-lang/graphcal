@@ -912,6 +912,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["resolve", "builder"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["resolve", "category"]
 role = "contracts"
 

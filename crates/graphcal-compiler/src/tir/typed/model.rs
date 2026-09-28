@@ -536,11 +536,12 @@ impl ProjectTypeStore {
         resolver: &ModuleResolver,
     ) -> Result<(), ProjectTypeStoreInsertError> {
         let owner = hir.dag_id();
-        let symbols = resolver.modules().get(owner).ok_or_else(|| {
-            ProjectTypeStoreInsertError::MissingModule {
-                owner: owner.clone(),
-            }
-        })?;
+        let symbols =
+            resolver
+                .symbols(owner)
+                .ok_or_else(|| ProjectTypeStoreInsertError::MissingModule {
+                    owner: owner.clone(),
+                })?;
 
         for name in symbols.dimensions().keys() {
             let identity = ResolvedDimName::from_def(owner.clone(), name.clone());

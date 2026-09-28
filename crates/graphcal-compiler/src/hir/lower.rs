@@ -1073,14 +1073,11 @@ mod tests {
         );
         let import = first_import(&main);
 
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(lib_id.clone(), &lib.declarations)
-            .unwrap();
-        resolver
-            .add_module(main_id.clone(), &main.declarations)
-            .unwrap();
-        resolver.register_import(&main_id, import, &lib_id).unwrap();
+        let mut modules = crate::resolve::builder::TestModules::default();
+        modules.add(lib_id.clone(), &lib.declarations);
+        modules.add(main_id.clone(), &main.declarations);
+        modules.import(&main_id, import, &lib_id);
+        let resolver = modules.build().unwrap();
 
         let scope = GenericScope::new();
         let lowered = lower_type_expr(
@@ -1123,10 +1120,9 @@ mod tests {
         let file = desugared_source(
             "type Series<D: Dim, I: Index, N: Nat, F: Type> { Series(value: F, samples: D[I, Fin(N)]) }",
         );
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(owner_id.clone(), &file.declarations)
-            .unwrap();
+        let mut modules = crate::resolve::builder::TestModules::default();
+        modules.add(owner_id.clone(), &file.declarations);
+        let resolver = modules.build().unwrap();
 
         let type_decl = first_type_decl(&file);
         let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(

@@ -386,10 +386,9 @@ mod tests {
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = lower(&file, &src).unwrap();
-        let mut resolver = ModuleResolver::default();
-        resolver
-            .add_module(ir.dag_id().clone(), &file.declarations)
-            .unwrap();
+        let resolver =
+            ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
+                .unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_local_hir(&ir).unwrap();

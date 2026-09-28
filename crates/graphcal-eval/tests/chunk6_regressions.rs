@@ -117,7 +117,9 @@ dag second { include first() as next; }
 
     assert!(matches!(
         project.build_module_resolver(),
-        Err(graphcal_eval::loader::ModuleResolverBuildError::RecursiveIncludeExpansion { .. })
+        Err(
+            graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion { .. }
+        )
     ));
 }
 

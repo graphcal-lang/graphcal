@@ -61,10 +61,7 @@ impl<'project, Host> ProjectCompiler<'project, Host> {
             self.project
                 .build_module_resolver()
                 .map_err(|error| match error {
-                    crate::loader::ModuleResolverBuildError::ModuleResolve(error) => {
-                        lowering::module_resolve_compile_error(error, root_source)
-                    }
-                    crate::loader::ModuleResolverBuildError::RecursiveIncludeExpansion {
+                    graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
                         cycle,
                         ..
                     } => CompileError::Eval(
@@ -81,6 +78,7 @@ impl<'project, Host> ProjectCompiler<'project, Host> {
                             DiagnosticAnchor::WholeFile,
                         ),
                     ),
+                    error => lowering::module_resolve_compile_error(error, root_source),
                 })?;
         pipeline::lower_project_perfile(self.project, module_resolver, &self.cancellation)
     }

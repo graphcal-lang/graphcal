@@ -378,7 +378,7 @@ pub(crate) fn lower_nominal_type_registry(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<NominalTypeRegistry, GraphcalError> {
-    let symbols = resolver.modules().get(owner).ok_or_else(|| {
+    let symbols = resolver.symbols(owner).ok_or_else(|| {
         GraphcalError::internal_error(
             format!("module resolver is missing HIR DAG `{owner}`"),
             src,

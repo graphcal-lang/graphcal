@@ -427,23 +427,6 @@ pub enum ResolvedModuleTargetError {
     UnknownOwner { target: DagId },
 }
 
-/// Failure to construct a total module resolver from an immutable loaded project.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ModuleResolverBuildError {
-    /// The source template include graph contains a cycle and therefore has no
-    /// finite concrete-instance expansion.
-    #[error("recursive include expansion involving module `{module}`")]
-    RecursiveIncludeExpansion {
-        /// First repeated source module observed by the typed DFS.
-        module: DagId,
-        /// Canonical source-module cycle, including the repeated endpoint.
-        cycle: Vec<DagId>,
-    },
-    /// Ordinary symbol-table construction failed.
-    #[error(transparent)]
-    ModuleResolve(#[from] graphcal_compiler::resolve::error::ModuleResolveError),
-}
-
 /// Span-free identity for an `import`/`include` path.
 ///
 /// Used as a `HashMap` key in `LoadedFile::resolved_imports` /
@@ -1388,304 +1371,56 @@ impl LoadedProject {
             })
     }
 
-    /// Build module-aware symbol tables for every loaded file and inline DAG.
+    /// Build the module resolver for every loaded file and inline DAG.
     ///
-    /// The loader resolves filesystem and package import paths to canonical
-    /// [`DagId`]s. This method hands those edges to the compiler's pure module
-    /// resolver; same-file and synthetic include scopes may then be resolved
-    /// against the module scopes already constructed here.
+    /// The loader decides which module each `import` / `include` path names
+    /// (see the [`ModuleTargets`](graphcal_compiler::resolve::builder::ModuleTargets)
+    /// impl); the compiler's pure resolver builds every scope from those
+    /// edges and expands includes into their instances.
     ///
     /// # Errors
     ///
-    /// Returns [`ModuleResolverBuildError`] for recursive expansion, duplicate
-    /// symbols, or invalid resolved import surfaces.
+    /// Returns [`ModuleResolveError`](graphcal_compiler::resolve::error::ModuleResolveError)
+    /// for duplicate or ambiguous modules, duplicate symbols, recursive
+    /// include expansion, or invalid resolved import surfaces.
     pub fn build_module_resolver(
         &self,
-    ) -> Result<graphcal_compiler::resolve::ModuleResolver, ModuleResolverBuildError> {
-        ensure_acyclic_include_expansion(self)?;
-        let mut resolver = graphcal_compiler::resolve::ModuleResolver::default();
-
+    ) -> Result<
+        graphcal_compiler::resolve::ModuleResolver,
+        graphcal_compiler::resolve::error::ModuleResolveError,
+    > {
+        let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
         for loaded in &self.files {
-            resolver.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
+            tables.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
             for inline in &loaded.inline_dags {
-                resolver.add_module(inline.dag_id.clone(), inline.body(loaded))?;
+                tables.add_module(inline.dag_id.clone(), inline.body(loaded))?;
             }
         }
-
-        for loaded in &self.files {
-            add_include_instance_modules(
-                &mut resolver,
-                &loaded.dag_id,
-                &loaded.ast.declarations,
-                &loaded.resolved_imports,
-                self,
-            )?;
-            for inline in &loaded.inline_dags {
-                add_include_instance_modules(
-                    &mut resolver,
-                    &inline.dag_id,
-                    inline.body(loaded),
-                    &inline.resolved_imports,
-                    self,
-                )?;
-            }
-        }
-
-        // Load order is dependency-first. Before registering one owner's
-        // include edges, give each synthetic target the already-completed scope
-        // of its canonical dependency; public re-exports are then selectable at
-        // the next composition level.
-        for loaded in &self.files {
-            inherit_include_instance_scopes(
-                &mut resolver,
-                &loaded.dag_id,
-                &loaded.ast.declarations,
-                &loaded.resolved_imports,
-                self,
-            )?;
-            register_module_imports(
-                &mut resolver,
-                &loaded.dag_id,
-                &loaded.ast.declarations,
-                &loaded.resolved_imports,
-            )?;
-            for inline in &loaded.inline_dags {
-                inherit_include_instance_scopes(
-                    &mut resolver,
-                    &inline.dag_id,
-                    inline.body(loaded),
-                    &inline.resolved_imports,
-                    self,
-                )?;
-                register_module_imports(
-                    &mut resolver,
-                    &inline.dag_id,
-                    inline.body(loaded),
-                    &inline.resolved_imports,
-                )?;
-            }
-        }
-
-        Ok(resolver)
+        tables.scopes(self)?.freeze()
     }
-}
 
-#[derive(Debug)]
-enum IncludeGraphVisit {
-    Enter(DagId),
-    Exit(DagId),
-}
-
-fn ensure_acyclic_include_expansion(
-    project: &LoadedProject,
-) -> Result<(), ModuleResolverBuildError> {
-    let module_ids = project.files.iter().flat_map(|file| {
-        std::iter::once(file.dag_id.clone())
-            .chain(file.inline_dags.iter().map(|inline| inline.dag_id.clone()))
-    });
-    let mut complete = HashSet::new();
-    let mut active_positions = HashMap::new();
-    let mut active_path = Vec::new();
-
-    for root in module_ids {
-        if complete.contains(&root) {
-            continue;
-        }
-        let mut visits = vec![IncludeGraphVisit::Enter(root)];
-        while let Some(visit) = visits.pop() {
-            match visit {
-                IncludeGraphVisit::Enter(module) => {
-                    if complete.contains(&module) {
-                        continue;
-                    }
-                    if let Some(cycle_start) = active_positions.get(&module).copied() {
-                        let mut cycle = active_path[cycle_start..].to_vec();
-                        cycle.push(module.clone());
-                        return Err(ModuleResolverBuildError::RecursiveIncludeExpansion {
-                            module,
-                            cycle,
-                        });
-                    }
-                    active_positions.insert(module.clone(), active_path.len());
-                    active_path.push(module.clone());
-                    visits.push(IncludeGraphVisit::Exit(module.clone()));
-                    visits.extend(
-                        module_include_targets(&module, project)
-                            .into_iter()
-                            .rev()
-                            .map(IncludeGraphVisit::Enter),
-                    );
-                }
-                IncludeGraphVisit::Exit(module) => {
-                    active_positions.remove(&module);
-                    let popped = active_path.pop();
-                    debug_assert_eq!(popped.as_ref(), Some(&module));
-                    complete.insert(module);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn module_include_targets(source: &DagId, project: &LoadedProject) -> Vec<DagId> {
-    module_declarations(source, project).map_or_else(Vec::new, |declarations| {
-        declarations
-            .iter()
-            .filter_map(|declaration| {
-                let DeclKind::Include(include) = &declaration.kind else {
-                    return None;
-                };
-                resolved_module_target_from(source, &include.path, project)
-            })
-            .collect()
-    })
-}
-
-trait ResolvedModuleLookup {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget>;
-}
-
-impl ResolvedModuleLookup for HashMap<ModulePathKey, ResolvedModuleTarget> {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget> {
-        self.get(key)
-    }
-}
-
-impl ResolvedModuleLookup for HashMap<ModulePathKey, InlineBodyImportResolution> {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget> {
-        match self.get(key) {
-            Some(InlineBodyImportResolution::Resolved(target)) => Some(target),
-            Some(InlineBodyImportResolution::Unresolved) | None => None,
-        }
-    }
-}
-
-fn add_include_instance_modules(
-    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &impl ResolvedModuleLookup,
-    project: &LoadedProject,
-) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
-    for decl in declarations {
-        let DeclKind::Include(include) = &decl.kind else {
-            continue;
+    /// The top-level `dag` of the file root `owner` that a single-segment
+    /// module path names. File-root includes of their own DAGs are same-file
+    /// references, which never drive loading.
+    fn file_root_local_dag(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
+        self.file(owner)?;
+        let [segment] = path.segments() else {
+            return None;
         };
-        let Some(target) =
-            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
-        else {
-            continue;
-        };
-        let Some(target_decls) = module_declarations(target.target(), project) else {
-            continue;
-        };
-        let instance = owner.instance_child(include.instance_scope());
-        resolver.add_module(instance.clone(), target_decls)?;
-        add_nested_include_instance_modules(resolver, target.target(), &instance, project)?;
+        let dag_id = owner.inline_dag_child(DeclName::classify(segment.name.atom().clone()));
+        self.inline_dag(&dag_id).map(|_| dag_id)
     }
-    Ok(())
 }
 
-/// Give every synthetic include module the completed import scope of its
-/// canonical source module.
-///
-/// The synthetic module starts with the source declarations, while this pass
-/// adds the source's selective public re-exports and module aliases after all
-/// canonical import edges have been registered.
-fn inherit_include_instance_scopes(
-    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &impl ResolvedModuleLookup,
-    project: &LoadedProject,
-) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
-    for declaration in declarations {
-        let DeclKind::Include(include) = &declaration.kind else {
-            continue;
-        };
-        let Some(source) =
-            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
-        else {
-            continue;
-        };
-        let instance = owner.instance_child(include.instance_scope());
-        resolver.inherit_module_scope(source.target(), &instance)?;
-        inherit_nested_include_instance_scopes(resolver, source.target(), &instance, project)?;
+impl graphcal_compiler::resolve::builder::ModuleTargets for LoadedProject {
+    fn import_target(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
+        resolved_module_target_from(owner, path, self)
     }
-    Ok(())
-}
 
-struct NestedIncludeInstance {
-    source: DagId,
-    instance: DagId,
-}
-
-fn nested_include_instances(
-    source: &DagId,
-    instance: &DagId,
-    project: &LoadedProject,
-) -> Vec<NestedIncludeInstance> {
-    module_declarations(source, project).map_or_else(Vec::new, |declarations| {
-        declarations
-            .iter()
-            .filter_map(|declaration| {
-                let DeclKind::Include(include) = &declaration.kind else {
-                    return None;
-                };
-                let source = resolved_module_target_from(source, &include.path, project)?;
-                Some(NestedIncludeInstance {
-                    source,
-                    instance: instance.instance_child(include.instance_scope()),
-                })
-            })
-            .collect()
-    })
-}
-
-fn add_nested_include_instance_modules(
-    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
-    source: &DagId,
-    instance: &DagId,
-    project: &LoadedProject,
-) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
-    let mut pending = nested_include_instances(source, instance, project)
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    while let Some(child) = pending.pop() {
-        let Some(child_declarations) = module_declarations(&child.source, project) else {
-            continue;
-        };
-        resolver.add_module(child.instance.clone(), child_declarations)?;
-        pending.extend(
-            nested_include_instances(&child.source, &child.instance, project)
-                .into_iter()
-                .rev(),
-        );
+    fn include_target(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
+        resolved_module_target_from(owner, path, self)
+            .or_else(|| self.file_root_local_dag(owner, path))
     }
-    Ok(())
-}
-
-fn inherit_nested_include_instance_scopes(
-    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
-    source: &DagId,
-    instance: &DagId,
-    project: &LoadedProject,
-) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
-    let mut pending = nested_include_instances(source, instance, project)
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
-    while let Some(child) = pending.pop() {
-        resolver.inherit_module_scope(&child.source, &child.instance)?;
-        pending.extend(
-            nested_include_instances(&child.source, &child.instance, project)
-                .into_iter()
-                .rev(),
-        );
-    }
-    Ok(())
 }
 
 fn resolved_module_target_from(
@@ -1706,71 +1441,6 @@ fn resolved_module_target_from(
         |file| file.resolved_imports.get(&key).cloned(),
     )?;
     Some(resolved.target().clone())
-}
-
-fn module_declarations<'a>(
-    target: &DagId,
-    project: &'a LoadedProject,
-) -> Option<&'a [Declaration]> {
-    project.module(target).map(LoadedModule::declarations)
-}
-
-fn register_module_imports(
-    resolver: &mut graphcal_compiler::resolve::ModuleResolver,
-    owner: &DagId,
-    declarations: &[Declaration],
-    resolved_imports: &impl ResolvedModuleLookup,
-) -> Result<(), graphcal_compiler::resolve::error::ModuleResolveError> {
-    for decl in declarations {
-        match &decl.kind {
-            DeclKind::Import(import) => {
-                if let Some(target) =
-                    resolved_imports.resolved_target(&ModulePathKey::from_path(import.path()))
-                {
-                    resolver.register_import(owner, import, target.target())?;
-                }
-            }
-            DeclKind::Include(include) => {
-                let resolved_edge =
-                    resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path));
-                let source_target = resolved_edge
-                    .map(|target| target.target().clone())
-                    .or_else(|| resolver.resolve_module_path(owner, &include.path).ok());
-                if resolved_edge.is_some() {
-                    let target = owner.instance_child(include.instance_scope());
-                    resolver.register_include(owner, &include.path, &include.kind, &target)?;
-                }
-                resolver.apply_include_static_projection_bindings(
-                    owner,
-                    source_target.as_ref(),
-                    include,
-                )?;
-            }
-            // Only use-site edges register module scope; declarations bind
-            // names through their own module's symbol tables, and plugin
-            // imports are resolved by the plugin host.
-            DeclKind::Param(_)
-            | DeclKind::Node(_)
-            | DeclKind::ConstNode(_)
-            | DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Index(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Dag(_)
-            | DeclKind::Assert(_)
-            | DeclKind::Plot(_)
-            | DeclKind::Figure(_)
-            | DeclKind::Layer(_) => {}
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(sugar) => graphcal_compiler::syntax::phase::never(*sugar),
-        }
-    }
-    Ok(())
 }
 
 /// Load a project starting from `root_path`, recursively loading all

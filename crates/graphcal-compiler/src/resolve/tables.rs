@@ -19,7 +19,7 @@ use super::symbols::{ConstructorSignature, GenericParamSignature, ModuleSymbols,
 ///
 /// Resolution is written once over this trait; each namespace only names its
 /// two tables and the payload its declarations carry.
-pub(super) trait SymbolTables: Namespaced {
+pub(super) trait NamespaceTables: Namespaced {
     /// Payload a local declaration in this namespace carries.
     type Declared;
 
@@ -30,7 +30,7 @@ pub(super) trait SymbolTables: Namespaced {
     fn selected(scope: &ModuleScope) -> &Table<Self>;
 }
 
-impl SymbolTables for DeclNameNamespace {
+impl NamespaceTables for DeclNameNamespace {
     type Declared = DeclSymbolKind;
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {
@@ -42,7 +42,7 @@ impl SymbolTables for DeclNameNamespace {
     }
 }
 
-impl SymbolTables for ConstructorNameNamespace {
+impl NamespaceTables for ConstructorNameNamespace {
     type Declared = ConstructorSignature;
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {
@@ -54,7 +54,7 @@ impl SymbolTables for ConstructorNameNamespace {
     }
 }
 
-impl SymbolTables for DimNameNamespace {
+impl NamespaceTables for DimNameNamespace {
     type Declared = ();
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {
@@ -66,7 +66,7 @@ impl SymbolTables for DimNameNamespace {
     }
 }
 
-impl SymbolTables for StructTypeNameNamespace {
+impl NamespaceTables for StructTypeNameNamespace {
     type Declared = Vec<GenericParamSignature>;
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {
@@ -78,7 +78,7 @@ impl SymbolTables for StructTypeNameNamespace {
     }
 }
 
-impl SymbolTables for IndexNameNamespace {
+impl NamespaceTables for IndexNameNamespace {
     type Declared = HashMap<IndexVariantName, Span>;
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {
@@ -90,7 +90,7 @@ impl SymbolTables for IndexNameNamespace {
     }
 }
 
-impl SymbolTables for UnitNameNamespace {
+impl NamespaceTables for UnitNameNamespace {
     type Declared = UnitConstness;
 
     fn declared(symbols: &ModuleSymbols) -> &Table<Self, Self::Declared> {

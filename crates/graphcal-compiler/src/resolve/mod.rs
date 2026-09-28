@@ -13,11 +13,17 @@
 //! successful lookup carries the canonical [`DagId`] owner, not textual path
 //! conventions.
 //!
+//! A resolver is built in three typed stages
+//! ([`builder::SymbolTables`] → [`builder::ScopeBuilder`] →
+//! [`ModuleResolver`]); only the last one answers queries, and it is
+//! immutable.
+//!
 //! - [`category`]: declaration kinds, import categories, and include projections.
 //! - [`namespace`]: [`Namespace`](namespace::Namespace), the unit of collision
 //!   checking and lookup.
 //! - [`symbols`]: per-module declaration tables of [`Symbol`]s.
 //! - [`scope`]: per-module import scopes (aliases and selective imports).
+//! - [`builder`]: the typestate that builds a [`ModuleResolver`].
 //! - [`exports`]: the public module surface.
 //! - [`error`]: resolver errors.
 //! - `tables`: per-namespace access to the declaration and import tables.
@@ -25,6 +31,7 @@
 //!   selective-include Static projection, and path resolution over
 //!   [`ModuleResolver`].
 
+pub mod builder;
 pub mod category;
 pub mod error;
 pub mod exports;
@@ -41,7 +48,6 @@ mod tests;
 use std::collections::HashMap;
 
 use crate::dag_id::DagId;
-use crate::desugar::desugared_ast as ast;
 use crate::resolved_name::{
     ResolvedDimName, ResolvedIndexName, ResolvedName, ResolvedStructTypeName,
 };
@@ -50,106 +56,41 @@ use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Span;
 
 use self::error::{ModuleResolveError, NameCategory};
-use self::scope::{
-    ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget, declare_aliases,
-};
+use self::scope::{ModuleAliasRole, ModuleAliasTarget, ModuleScope, PluginAliasTarget};
 use self::symbols::{ModuleSymbols, Symbol};
-use self::tables::SymbolTables;
+use self::tables::NamespaceTables;
+
+/// One module the resolver knows: its own declarations and its import scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleEntry {
+    symbols: ModuleSymbols,
+    scope: ModuleScope,
+}
+
+impl ModuleEntry {
+    /// The module's own declarations.
+    #[must_use]
+    pub const fn symbols(&self) -> &ModuleSymbols {
+        &self.symbols
+    }
+
+    /// The module's import scope (aliases and selective imports).
+    #[must_use]
+    pub const fn scope(&self) -> &ModuleScope {
+        &self.scope
+    }
+}
 
 /// Project-wide module resolver backed by canonical [`DagId`] identities.
+///
+/// Built by [`builder::SymbolTables`] and [`builder::ScopeBuilder::freeze`];
+/// immutable once built.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ModuleResolver {
-    modules: HashMap<DagId, ModuleSymbols>,
-    scopes: HashMap<DagId, ModuleScope>,
+    modules: HashMap<DagId, ModuleEntry>,
 }
 
 impl ModuleResolver {
-    /// Build a resolver from `(DagId, File)` pairs without registering any
-    /// import scopes.
-    ///
-    /// Call [`Self::register_import`] / [`Self::register_include`] for each
-    /// loader-resolved edge after all modules have been added.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModuleResolveError`] on duplicate modules or duplicate symbols.
-    pub fn from_modules<'a>(
-        modules: impl IntoIterator<Item = (DagId, &'a ast::File)>,
-    ) -> Result<Self, ModuleResolveError> {
-        let mut resolver = Self::default();
-        for (owner, file) in modules {
-            resolver.add_module(owner, &file.declarations)?;
-        }
-        Ok(resolver)
-    }
-
-    /// Add one module's declaration symbols.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModuleResolveError::DuplicateModule`] when `owner` already has
-    /// a symbol table, or [`ModuleResolveError::DuplicateSymbol`] for duplicate
-    /// namespace-local definitions inside the module.
-    pub fn add_module(
-        &mut self,
-        owner: DagId,
-        declarations: &[ast::Declaration],
-    ) -> Result<(), ModuleResolveError> {
-        if self.modules.contains_key(&owner) {
-            return Err(ModuleResolveError::DuplicateModule { owner });
-        }
-        if let Some(spelling) = owner.module_path_spelling()
-            && let Some(first) = self.modules.keys().find(|existing| {
-                existing.package() == owner.package()
-                    && existing.module_path_spelling().as_ref() == Some(&spelling)
-            })
-        {
-            return Err(ModuleResolveError::AmbiguousModulePath {
-                first: first.clone(),
-                second: owner,
-            });
-        }
-        let symbols = ModuleSymbols::from_declarations(owner.clone(), declarations)?;
-        let scope = self.scopes.entry(owner.clone()).or_default();
-        declare_aliases(scope, &symbols, declarations)?;
-        self.modules.insert(owner, symbols);
-        Ok(())
-    }
-
-    /// Copy a source module's completed import scope onto an instantiated
-    /// synthetic module with the same declaration body.
-    ///
-    /// Synthetic include modules are added before import edges are registered.
-    /// Once the source scope is complete, copying it preserves selective public
-    /// re-exports (including plots) without rebuilding or flattening symbols.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModuleResolveError::UnknownModule`] if either module is absent.
-    pub fn inherit_module_scope(
-        &mut self,
-        source: &DagId,
-        instance: &DagId,
-    ) -> Result<(), ModuleResolveError> {
-        self.module_symbols(source)?;
-        self.module_symbols(instance)?;
-        let scope =
-            self.scopes
-                .get(source)
-                .cloned()
-                .ok_or_else(|| ModuleResolveError::UnknownModule {
-                    owner: source.clone(),
-                })?;
-        let target =
-            self.scopes
-                .get_mut(instance)
-                .ok_or_else(|| ModuleResolveError::UnknownModule {
-                    owner: instance.clone(),
-                })?;
-        *target = scope;
-        Ok(())
-    }
-
     /// Role of one source-visible module alias in the owner's Term scope.
     #[must_use]
     pub(crate) fn module_alias_role(
@@ -157,8 +98,9 @@ impl ModuleResolver {
         owner: &DagId,
         alias: &ModuleAliasName,
     ) -> Option<ModuleAliasRole> {
-        self.scopes
+        self.modules
             .get(owner)?
+            .scope
             .module_aliases
             .get(alias)
             .map(ModuleAliasTarget::role)
@@ -177,9 +119,9 @@ impl ModuleResolver {
         let mut current = Some(owner.clone());
         while let Some(id) = current {
             if let Some(target) = self
-                .scopes
+                .modules
                 .get(&id)
-                .and_then(|scope| scope.plugin_aliases.get(alias))
+                .and_then(|entry| entry.scope.plugin_aliases.get(alias))
             {
                 return Some(target);
             }
@@ -188,10 +130,10 @@ impl ModuleResolver {
         None
     }
 
-    /// Borrow all module symbol tables.
+    /// The declarations of one module, if the resolver knows it.
     #[must_use]
-    pub const fn modules(&self) -> &HashMap<DagId, ModuleSymbols> {
-        &self.modules
+    pub fn symbols(&self, owner: &DagId) -> Option<&ModuleSymbols> {
+        self.modules.get(owner).map(ModuleEntry::symbols)
     }
 
     /// Visibility of a canonical dimension declaration.
@@ -224,22 +166,16 @@ impl ModuleResolver {
         self.declared_symbol(name).map(Symbol::span)
     }
 
-    /// Borrow all module import scopes.
-    #[must_use]
-    pub const fn scopes(&self) -> &HashMap<DagId, ModuleScope> {
-        &self.scopes
-    }
-
     /// The declaration a canonical name denotes, in its owner's own table.
-    fn declared_symbol<Ns: SymbolTables>(
+    fn declared_symbol<Ns: NamespaceTables>(
         &self,
         name: &ResolvedName<Ns>,
     ) -> Option<&Symbol<Ns, Ns::Declared>> {
-        Ns::declared(self.modules.get(name.owner())?).get(&name.to_unowned_def_name())
+        Ns::declared(self.symbols(name.owner())?).get(&name.to_unowned_def_name())
     }
 
     /// The declaration a canonical name denotes.
-    fn declaration<Ns: SymbolTables>(
+    fn declaration<Ns: NamespaceTables>(
         &self,
         name: &ResolvedName<Ns>,
     ) -> Result<&Symbol<Ns, Ns::Declared>, ModuleResolveError> {
@@ -253,14 +189,14 @@ impl ModuleResolver {
     }
 
     /// The payload of the declaration a canonical name denotes.
-    fn declared<Ns: SymbolTables>(
+    fn declared<Ns: NamespaceTables>(
         &self,
         name: &ResolvedName<Ns>,
     ) -> Result<&Ns::Declared, ModuleResolveError> {
         self.declaration(name).map(Symbol::data)
     }
 
-    fn module_symbols(&self, owner: &DagId) -> Result<&ModuleSymbols, ModuleResolveError> {
+    fn entry(&self, owner: &DagId) -> Result<&ModuleEntry, ModuleResolveError> {
         self.modules
             .get(owner)
             .ok_or_else(|| ModuleResolveError::UnknownModule {
@@ -268,19 +204,19 @@ impl ModuleResolver {
             })
     }
 
-    /// Import scope registered for a module, if any.
-    ///
-    /// IDE consumers use this to map canonical owners back to the module
-    /// aliases a file spelled in its imports.
-    #[must_use]
-    pub fn scope(&self, owner: &DagId) -> Option<&ModuleScope> {
-        self.scopes.get(owner)
-    }
-    fn module_scope(&self, owner: &DagId) -> Result<&ModuleScope, ModuleResolveError> {
-        self.scopes
-            .get(owner)
+    fn entry_mut(&mut self, owner: &DagId) -> Result<&mut ModuleEntry, ModuleResolveError> {
+        self.modules
+            .get_mut(owner)
             .ok_or_else(|| ModuleResolveError::UnknownModule {
                 owner: owner.clone(),
             })
+    }
+
+    fn module_symbols(&self, owner: &DagId) -> Result<&ModuleSymbols, ModuleResolveError> {
+        self.entry(owner).map(ModuleEntry::symbols)
+    }
+
+    fn module_scope(&self, owner: &DagId) -> Result<&ModuleScope, ModuleResolveError> {
+        self.entry(owner).map(ModuleEntry::scope)
     }
 }

@@ -530,33 +530,17 @@ fn single_module_resolver(
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::resolve::ModuleResolver, GraphcalError> {
-    fn add_module_with_dags(
-        target: &mut crate::resolve::ModuleResolver,
-        owner: &crate::dag_id::DagId,
-        declarations: &[crate::desugar::desugared_ast::Declaration],
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
-        target
-            .add_module(owner.clone(), declarations)
-            .map_err(|error| {
-                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-            })?;
-        for decl in declarations {
-            if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
-                add_module_with_dags(
-                    target,
-                    &owner.inline_dag_child(dag.name.value.clone()),
-                    &dag.body,
-                    src,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    let mut resolver = crate::resolve::ModuleResolver::default();
-    add_module_with_dags(&mut resolver, dag_id, &ast.declarations, src)?;
-    Ok(resolver)
+    let mut tables = crate::resolve::builder::SymbolTables::default();
+    tables
+        .add_file(dag_id.clone(), &ast.declarations)
+        .and_then(|()| {
+            tables
+                .scopes(&crate::resolve::builder::NoModuleTargets)?
+                .freeze()
+        })
+        .map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })
 }
 
 fn collect_static_ports(ast: &File, owner: &crate::dag_id::DagId) -> Vec<crate::hir::StaticPort> {
