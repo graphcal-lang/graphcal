@@ -865,6 +865,52 @@ fn projected_static_alias(
     }
 }
 
+/// Record one non-Term include projection in the importer's registry seed.
+///
+/// A projection of the dependency's own declaration registers that
+/// declaration. Dimensions and units bind under the importer-local name only
+/// (`dim Rate as R` makes `R`, not `Rate`, visible to the importer's `dim` /
+/// `unit` declarations), exactly like a renamed selective import, so they
+/// need no alias edge. Other projections resolve through a source-visible
+/// alias to their effective target.
+fn record_include_projection(
+    ctx: &mut ImportContext<'_>,
+    dag_id: &graphcal_compiler::dag_id::DagId,
+    import_item: &graphcal_compiler::syntax::ast::ImportItem,
+    projection: ProjectedStaticAlias,
+    unit_projection_aliases: &mut Vec<UnitProjectionAlias>,
+) {
+    if let ProjectedStaticAlias::Unit { alias, target } = &projection {
+        unit_projection_aliases.push(UnitProjectionAlias {
+            source: target.clone(),
+            alias: alias.clone(),
+        });
+    }
+    if projection_uses_source_declaration(import_item, &projection)
+        && projection_requires_source_registration(&projection)
+    {
+        ctx.imported_type_system_names
+            .entry(dag_id.clone())
+            .or_default()
+            .insert_as(
+                import_item.namespace,
+                import_item.name.name.clone(),
+                import_item.local_name_atom().clone(),
+            );
+        if matches!(
+            projection,
+            ProjectedStaticAlias::Dimension { .. } | ProjectedStaticAlias::Unit { .. }
+        ) {
+            return;
+        }
+    }
+    ctx.projected_static_aliases
+        .push(graphcal_compiler::syntax::span::Spanned::new(
+            projection,
+            import_item.local_span(),
+        ));
+}
+
 fn projection_uses_source_declaration(
     item: &graphcal_compiler::syntax::ast::ImportItem,
     projection: &ProjectedStaticAlias,
@@ -1120,25 +1166,12 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                         &index_bindings,
                     )
                 {
-                    if projection_uses_source_declaration(import_item, &projection)
-                        && projection_requires_source_registration(&projection)
-                    {
-                        ctx.imported_type_system_names
-                            .entry(import_dag_id.clone())
-                            .or_default()
-                            .insert(import_item.namespace, orig_name.clone());
-                    }
-                    if let ProjectedStaticAlias::Unit { alias, target } = &projection {
-                        unit_projection_aliases.push(UnitProjectionAlias {
-                            source: target.clone(),
-                            alias: alias.clone(),
-                        });
-                    }
-                    ctx.projected_static_aliases.push(
-                        graphcal_compiler::syntax::span::Spanned::new(
-                            projection,
-                            import_item.local_span(),
-                        ),
+                    record_include_projection(
+                        ctx,
+                        import_dag_id,
+                        import_item,
+                        projection,
+                        &mut unit_projection_aliases,
                     );
                 }
                 let is_plot = is_term_namespace
@@ -1406,25 +1439,12 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                         &index_bindings,
                     )
                 {
-                    if projection_uses_source_declaration(import_item, &projection)
-                        && projection_requires_source_registration(&projection)
-                    {
-                        ctx.imported_type_system_names
-                            .entry(dag_id.clone())
-                            .or_default()
-                            .insert(import_item.namespace, orig_name.clone());
-                    }
-                    if let ProjectedStaticAlias::Unit { alias, target } = &projection {
-                        unit_projection_aliases.push(UnitProjectionAlias {
-                            source: target.clone(),
-                            alias: alias.clone(),
-                        });
-                    }
-                    ctx.projected_static_aliases.push(
-                        graphcal_compiler::syntax::span::Spanned::new(
-                            projection,
-                            import_item.local_span(),
-                        ),
+                    record_include_projection(
+                        ctx,
+                        dag_id,
+                        import_item,
+                        projection,
+                        &mut unit_projection_aliases,
                     );
                 }
                 let is_plot = is_term_namespace
@@ -1696,21 +1716,11 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     // Bind dimensions and units under their importer-local
                     // name only (`dim Rate as R` makes `R`, not `Rate`,
                     // visible; likewise `unit spd as s`).
-                    match import_item.namespace {
-                        ImportItemNamespace::Dimension => selected.insert_dimension_as(
-                            DimName::from_atom(orig_name.clone()),
-                            DimName::from_atom(import_item.local_name_atom().clone()),
-                        ),
-                        ImportItemNamespace::Unit => selected.insert_unit_as(
-                            UnitName::from_atom(orig_name.clone()),
-                            UnitName::from_atom(import_item.local_name_atom().clone()),
-                        ),
-                        ImportItemNamespace::Term
-                        | ImportItemNamespace::Type
-                        | ImportItemNamespace::Index => {
-                            selected.insert(import_item.namespace, orig_name.clone());
-                        }
-                    }
+                    selected.insert_as(
+                        import_item.namespace,
+                        orig_name.clone(),
+                        import_item.local_name_atom().clone(),
+                    );
                     continue;
                 }
 

@@ -1594,6 +1594,112 @@ fn renamed_selective_imports_bind_only_the_local_name_in_declarations() {
 }
 
 #[test]
+fn renamed_include_projections_bind_only_the_local_name_in_declarations() {
+    // `include ...()::{dim X as Y}` / `{unit X as Y}` (from a file module or
+    // a same-file DAG) bind only `Y`; `X` stays unknown to the importer's
+    // `dim` / `unit` declarations, like any undeclared name.
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/proj");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"proj\"\n",
+    )
+    .unwrap();
+    let declarations = "pub dim IRate = Mass / Time;\n\
+                        pub const unit ispd: Length / Time = 3.0 m/s;\n\
+                        pub node one: Dimensionless = 1.0;\n";
+    std::fs::write(root_dir.join("lib.gcl"), declarations).unwrap();
+    let inline_lib = format!("dag lib {{\n{declarations}}}\n");
+
+    let run = |name: &str, source: &str| {
+        let path = root_dir.join(format!("{name}.gcl"));
+        std::fs::write(&path, source).unwrap();
+        let output = graphcal_bin()
+            .args(["eval", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal");
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    let has_line = |stdout: &str, name: &str, value: &str| {
+        stdout.lines().any(|line| {
+            line.split_once('=')
+                .is_some_and(|(lhs, rhs)| lhs.trim() == name && rhs.trim() == value)
+        })
+    };
+
+    for (target, prelude) in [("proj.lib", ""), ("lib", inline_lib.as_str())] {
+        let program = |body: &str| format!("{prelude}{}", body.replace("TARGET", target));
+        let tag = if prelude.is_empty() { "file" } else { "inline" };
+
+        let (ok, stdout, stderr) = run(
+            &format!("{tag}_dim_local"),
+            &program(
+                "include TARGET()::{dim IRate as R};\n\
+                 dim D = R * Time;\n\
+                 node x: D = 2.0 kg;\n",
+            ),
+        );
+        assert!(ok, "{tag} stderr: {stderr}");
+        assert!(has_line(&stdout, "x", "2 kg"), "{tag} stdout: {stdout}");
+
+        let (ok, stdout, stderr) = run(
+            &format!("{tag}_unit_local"),
+            &program(
+                "include TARGET()::{unit ispd as q};\n\
+                 const unit dbl: Length / Time = 2.0 q;\n\
+                 node v: Length / Time = 1.0 dbl;\n",
+            ),
+        );
+        assert!(ok, "{tag} stderr: {stderr}");
+        assert!(has_line(&stdout, "v", "1 dbl"), "{tag} stdout: {stdout}");
+
+        for (name, body, code) in [
+            (
+                "dim_source_leak",
+                "include TARGET()::{dim IRate as R};\n\
+                 dim D = IRate * Time;\n",
+                "D004",
+            ),
+            (
+                "dim_source_leak_in_unit",
+                "include TARGET()::{dim IRate as R};\n\
+                 unit u: IRate = 2.0 kg/s;\n",
+                "D004",
+            ),
+            (
+                "dim_source_leak_in_const_unit",
+                "include TARGET()::{dim IRate as R};\n\
+                 const unit u: IRate = 2.0 kg/s;\n",
+                "D004",
+            ),
+            (
+                "unit_source_leak",
+                "include TARGET()::{unit ispd as q};\n\
+                 const unit dbl: Length / Time = 2.0 ispd;\n",
+                "D003",
+            ),
+            (
+                "unit_source_leak_in_runtime_unit",
+                "include TARGET()::{unit ispd as q};\n\
+                 unit dbl: Length / Time = 2.0 ispd;\n",
+                "D003",
+            ),
+        ] {
+            let (ok, _, stderr) = run(&format!("{tag}_{name}"), &program(body));
+            assert!(
+                !ok && stderr.contains(code),
+                "{tag}_{name} stderr: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn eval_output_view_selects_surface_or_all_include_values() {
     // #394/#480/#909: normal output follows the consumer surface while the
     // explicit debug view retains private instance state.

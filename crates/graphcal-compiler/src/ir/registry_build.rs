@@ -106,6 +106,32 @@ impl SelectedDeclarations {
         }
     }
 
+    /// Record one selective item whose importer-local name may differ from its
+    /// source declaration (`dim Rate as R`, `unit spd as s`).
+    ///
+    /// Dimensions and units bind only the importer-local name; the other
+    /// namespaces record the source declaration.
+    pub fn insert_as(
+        &mut self,
+        namespace: crate::syntax::ast::ImportItemNamespace,
+        source: crate::syntax::names::NameAtom,
+        local: crate::syntax::names::NameAtom,
+    ) {
+        match namespace {
+            crate::syntax::ast::ImportItemNamespace::Dimension => self.insert_dimension_as(
+                crate::syntax::dimension::DimName::from_atom(source),
+                crate::syntax::dimension::DimName::from_atom(local),
+            ),
+            crate::syntax::ast::ImportItemNamespace::Unit => self.insert_unit_as(
+                crate::syntax::dimension::UnitName::from_atom(source),
+                crate::syntax::dimension::UnitName::from_atom(local),
+            ),
+            crate::syntax::ast::ImportItemNamespace::Term
+            | crate::syntax::ast::ImportItemNamespace::Type
+            | crate::syntax::ast::ImportItemNamespace::Index => self.insert(namespace, source),
+        }
+    }
+
     /// Record one selectively imported dimension bound under an importer-local
     /// name that may differ from its source declaration (`dim Rate as R`).
     pub fn insert_dimension_as(
