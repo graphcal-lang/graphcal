@@ -1,5 +1,4 @@
 pub mod attribute_validation;
-mod deps;
 #[cfg(test)]
 mod formal_conformance;
 pub mod include_selection;
@@ -41,7 +40,6 @@ pub use crate::registry::resolve_types::{AttributeTarget, DeclarationKind, Impor
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
-pub(crate) use deps::contains_graph_ref;
 
 // Import helpers from submodules for use within this file.
 pub use names::parse_expected_fail_args;

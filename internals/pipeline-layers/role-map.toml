@@ -337,6 +337,26 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "const_expr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "const_expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["hir", "const_lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "const_lower", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr"]
 role = "contracts"
 
@@ -453,11 +473,6 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "resolve", "attribute_validation", "tests"]
-role = "checking"
-
-[[module]]
-package = "compiler"
-path = ["ir", "resolve", "deps"]
 role = "checking"
 
 [[module]]

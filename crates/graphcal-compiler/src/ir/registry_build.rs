@@ -7,12 +7,14 @@ use miette::NamedSource;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
-use crate::desugar::desugared_ast::{DeclKind, Expr, ExprKind, File, IndexDeclKind, TypeExpr};
+use crate::desugar::desugared_ast::{DeclKind, File, IndexDeclKind, TypeExpr};
 use crate::dimension::Dimension;
-use crate::ir::resolve::contains_graph_ref;
+use crate::hir::const_expr::{ConstExprError, CoordinateAxisError, CoordinateAxisExpr};
+use crate::hir::const_lower::{
+    UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
+};
 use crate::registry::dimension_table::DimensionResolveError;
 use crate::registry::error::GraphcalError;
-use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, RegistryBuilder, UnitScale,
 };
@@ -20,7 +22,6 @@ use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::{DuplicateItemError, NonEmptyUnique};
 use crate::syntax::span::{Span, Spanned};
@@ -695,15 +696,6 @@ fn eval_error(
     }
 }
 
-fn validate_positive_finite_scale(
-    value: f64,
-    context: &str,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<PositiveFiniteScale, GraphcalError> {
-    PositiveFiniteScale::new(value).map_err(|err| scale_error(context, err, src, span))
-}
-
 fn scale_error(
     context: &str,
     err: PositiveFiniteScaleError,
@@ -760,12 +752,13 @@ fn register_unit_decl(
             span: u.name.span.into(),
         });
     }
+    let scale_source = classify_unit_scale(&def.scale_expr);
     if u.constness.is_const() {
-        if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
+        if let UnitScaleSource::Dynamic { first_graph_ref } = &scale_source {
             return Err(GraphcalError::GraphRefInConstUnit {
-                name: graph_ref.value,
+                name: first_graph_ref.value.clone(),
                 src: src.clone(),
-                span: graph_ref.span.into(),
+                span: first_graph_ref.span.into(),
             });
         }
         if let Some(unit_name) = first_non_const_unit_ref(registry, &def.unit_expr) {
@@ -787,63 +780,43 @@ fn register_unit_decl(
         });
     }
     let mut dynamic_unit_scale = None;
-    let scale = if contains_graph_ref(&def.scale_expr) {
-        // Preserve the validated definition in IR so strict HIR lowering,
-        // policy checking, dependency collection, and type checking all
-        // consume the same source-qualified semantic entry.
-        dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
-            spelling: UnitRef::local(u.name.value.clone()),
-            expr: def.scale_expr.clone(),
-            unit_owner: dag_id.clone(),
-            body_resolution_owner: dag_id.clone(),
-            declared_dimension: dim.clone(),
-            base_unit_dimension: resolved_definition.dimension.clone(),
-            span: def.scale_expr.span,
-        });
-        UnitScale::Dynamic {
-            base_unit_scale: resolved_definition.base_scale,
+    let scale = match scale_source {
+        UnitScaleSource::Dynamic { .. } => {
+            // Preserve the validated definition in IR so strict HIR lowering,
+            // policy checking, dependency collection, and type checking all
+            // consume the same source-qualified semantic entry.
+            dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
+                spelling: UnitRef::local(u.name.value.clone()),
+                expr: def.scale_expr.clone(),
+                unit_owner: dag_id.clone(),
+                body_resolution_owner: dag_id.clone(),
+                declared_dimension: dim.clone(),
+                base_unit_dimension: resolved_definition.dimension.clone(),
+                span: def.scale_expr.span,
+            });
+            UnitScale::Dynamic {
+                base_unit_scale: resolved_definition.base_scale,
+            }
         }
-    } else {
-        // Static scale value. A plain `unit` with no `@` still remains a
-        // runtime unit for const-context policy; `const unit` is the
-        // surface marker that makes it available to `const node`.
-        let scale_expr = validate_positive_finite_scale(
-            eval_scale_expr(&def.scale_expr, src)?,
-            "unit scale expression",
-            src,
-            def.scale_expr.span,
-        )?;
-        let scale = scale_expr
-            .checked_mul(resolved_definition.base_scale)
-            .map_err(|err| scale_error("unit scale", err, src, def.span))?;
-        match u.constness {
-            UnitConstness::Const => UnitScale::Const(scale),
-            UnitConstness::Dynamic => UnitScale::Runtime(scale),
+        UnitScaleSource::Static(source) => {
+            // Static scale value. A plain `unit` with no `@` still remains a
+            // runtime unit for const-context policy; `const unit` is the
+            // surface marker that makes it available to `const node`.
+            let scale_expr = source
+                .lower()
+                .and_then(|expr| expr.evaluate())
+                .map_err(|error| const_expr_error(error, src))?;
+            let scale = scale_expr
+                .checked_mul(resolved_definition.base_scale)
+                .map_err(|err| scale_error("unit scale", err, src, def.span))?;
+            match u.constness {
+                UnitConstness::Const => UnitScale::Const(scale),
+                UnitConstness::Dynamic => UnitScale::Runtime(scale),
+            }
         }
     };
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale);
     Ok(dynamic_unit_scale)
-}
-
-fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
-    struct FirstGraphRef(Option<Spanned<ScopedName>>);
-
-    impl ExprVisitor<crate::syntax::phase::Desugared> for FirstGraphRef {
-        type Error = std::convert::Infallible;
-
-        fn visit_graph_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-            if self.0.is_none()
-                && let ExprKind::GraphRef(name) = &expr.kind
-            {
-                self.0 = Some(name.clone());
-            }
-            Ok(())
-        }
-    }
-
-    let mut visitor = FirstGraphRef(None);
-    let _ = visitor.visit_expr(expr);
-    visitor.0
 }
 
 fn first_non_const_unit_ref<'a>(
@@ -1101,32 +1074,30 @@ fn register_index_decl(
                 })?;
             types::IndexKind::Concrete(types::ConcreteIndexKind::Named { variants: unique })
         }
-        crate::desugar::desugared_ast::IndexDeclKind::Range {
-            start: start_expr,
-            end: end_expr,
-            step: step_expr,
-        } => lower_range_index(
-            &idx.name.value,
-            start_expr,
-            end_expr,
-            step_expr,
-            registry,
-            src,
-            decl_span,
-        )?,
-        crate::desugar::desugared_ast::IndexDeclKind::Linspace {
-            start: start_expr,
-            end: end_expr,
-            points,
-        } => lower_linspace_index(
-            &idx.name.value,
-            start_expr,
-            end_expr,
-            points,
-            registry,
-            src,
-            decl_span,
-        )?,
+        crate::desugar::desugared_ast::IndexDeclKind::Range { start, end, step } => {
+            let axis = lower_coordinate_expr(start, registry)
+                .and_then(|start| {
+                    Ok(CoordinateAxisExpr::Range {
+                        start,
+                        end: lower_coordinate_expr(end, registry)?,
+                        step: lower_coordinate_expr(step, registry)?,
+                    })
+                })
+                .map_err(|error| const_expr_error(error, src))?;
+            coordinate_index(&idx.name.value, &axis, registry, src, decl_span)?
+        }
+        crate::desugar::desugared_ast::IndexDeclKind::Linspace { start, end, points } => {
+            let axis = lower_coordinate_expr(start, registry)
+                .and_then(|start| {
+                    Ok(CoordinateAxisExpr::Linspace {
+                        start,
+                        end: lower_coordinate_expr(end, registry)?,
+                        points: lower_static_nat_expr(points)?,
+                    })
+                })
+                .map_err(|error| const_expr_error(error, src))?;
+            coordinate_index(&idx.name.value, &axis, registry, src, decl_span)?
+        }
         crate::desugar::desugared_ast::IndexDeclKind::RequiredNamed => {
             types::IndexKind::Required(types::RequiredIndexKind::Named)
         }
@@ -1431,334 +1402,61 @@ fn find_non_earlier_type_reference(
     }
 }
 
-/// Evaluate a constant scale expression (e.g. `1000`, `PI / 180`) to `f64`.
-///
-/// Scale expressions appear in unit definitions and are restricted to numeric
-/// literals, built-in constants (`PI`, `E`), and basic arithmetic.
-fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, GraphcalError> {
-    match &expr.kind {
-        ExprKind::Number(n) => Ok(*n),
-        #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
-        ExprKind::Integer(n) => Ok(*n as f64),
-        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
-            // Route through the typed builtin-constant table instead of
-            // string-matching a hand-picked subset: all built-in constants
-            // (PI, E, TAU, SQRT2, LN2, LN10) are legal in scale expressions.
-            let builtin = path
-                .as_bare()
-                .and_then(|ident| crate::builtin::BuiltinConst::parse(ident.name.as_str()));
-            builtin
-                .map(crate::builtin::BuiltinConst::value)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "unknown constant `{}` in scale expression; only built-in \
-                         constants (PI, E, TAU, SQRT2, LN2, LN10) are supported",
-                        path.display_path()
-                    ),
-                    src: src.clone(),
-                    span: path.span().into(),
-                })
-        }
-        ExprKind::BinOp { op, lhs, rhs } => {
-            use crate::desugar::desugared_ast::BinOp;
-            use crate::syntax::ast::PowerExponent;
-            let lhs_value = eval_scale_expr(lhs, src)?;
-            if let BinOp::Pow(PowerExponent::Exact(exponent)) = op {
-                return exponent
-                    .pow_f64(lhs_value)
-                    .map_err(|error| GraphcalError::EvalError {
-                        message: error.to_string(),
-                        src: src.clone(),
-                        span: expr.span.into(),
-                    });
-            }
-            let rhs_value = eval_scale_expr(rhs, src)?;
-            match op {
-                BinOp::Add => Ok(lhs_value + rhs_value),
-                BinOp::Sub => Ok(lhs_value - rhs_value),
-                BinOp::Mul => Ok(lhs_value * rhs_value),
-                BinOp::Div => Ok(lhs_value / rhs_value),
-                BinOp::Pow(_) => Ok(lhs_value.powf(rhs_value)),
-                _ => Err(GraphcalError::EvalError {
-                    message: format!(
-                        "unsupported operator `{op:?}` in scale expression; \
-                         only `+`, `-`, `*`, `/`, `^` are allowed"
-                    ),
-                    src: src.clone(),
-                    span: expr.span.into(),
-                }),
-            }
-        }
-        ExprKind::UnaryOp {
-            op: crate::desugar::desugared_ast::UnaryOp::Neg,
-            operand,
-        } => Ok(-eval_scale_expr(operand, src)?),
-        _ => Err(GraphcalError::EvalError {
-            message: "scale expression must be a constant expression \
-                      (numbers, PI, E, and arithmetic)"
-                .to_string(),
+/// Render a constant-expression failure at the registry boundary.
+fn const_expr_error(error: ConstExprError, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    match error {
+        ConstExprError::Unit { error, span } => unit_resolve_to_graphcal(error, src, span),
+        ConstExprError::DimensionOverflow { span } => GraphcalError::DimensionOverflow {
             src: src.clone(),
-            span: expr.span.into(),
-        }),
+            span: span.into(),
+        },
+        error => eval_error(error.to_string(), src, error.span()),
     }
 }
 
-/// Evaluate a statically known coordinate expression to its SI value and dimension.
-///
-/// This is a pure compile-time evaluator: graph references, calls, integer
-/// values, and dynamic units are rejected. Arithmetic over quantity literals is
-/// accepted so coordinate declarations are not limited to a single literal.
-fn eval_coordinate_expr(
-    expr: &Expr,
+/// Evaluate a lowered coordinate axis into a registered index kind.
+fn coordinate_index(
+    name: &IndexName,
+    axis: &CoordinateAxisExpr,
     registry: &RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(f64, crate::dimension::Dimension), GraphcalError> {
-    use crate::desugar::desugared_ast::BinOp;
-    use crate::dimension::Dimension;
-
-    let ensure_finite = |value: f64, span: Span| {
-        value.is_finite().then_some(value).ok_or_else(|| {
-            eval_error(
-                format!("coordinate expression must evaluate to a finite quantity, got {value}"),
-                src,
-                span,
-            )
-        })
-    };
-
-    match &expr.kind {
-        ExprKind::Number(value) => Ok((
-            ensure_finite(*value, expr.span)?,
-            Dimension::dimensionless(),
-        )),
-        ExprKind::QuantityLiteral { value, unit } => {
-            let (dimension, scale) = registry
-                .resolve_unit_expr(unit)
-                .map_err(|error| unit_resolve_to_graphcal(error, src, unit.span))?;
-            Ok((ensure_finite(*value * scale.get(), expr.span)?, dimension))
-        }
-        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
-            let value = path
-                .as_bare()
-                .and_then(|ident| crate::builtin::BuiltinConst::parse(ident.name.as_str()))
-                .map(crate::builtin::BuiltinConst::value)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "coordinate expression must be statically evaluable; `{}` is not a built-in constant",
-                        path.display_path()
-                    ),
-                    src: src.clone(),
-                    span: path.span().into(),
-                })?;
-            Ok((value, Dimension::dimensionless()))
-        }
-        ExprKind::UnaryOp {
-            op: crate::desugar::desugared_ast::UnaryOp::Neg,
-            operand,
-        } => {
-            let (value, dimension) = eval_coordinate_expr(operand, registry, src)?;
-            Ok((ensure_finite(-value, expr.span)?, dimension))
-        }
-        ExprKind::BinOp { op, lhs, rhs } => {
-            let (lhs_value, lhs_dimension) = eval_coordinate_expr(lhs, registry, src)?;
-            let (rhs_value, rhs_dimension) = eval_coordinate_expr(rhs, registry, src)?;
-            let overflow = || GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: expr.span.into(),
-            };
-            let (value, dimension) = match op {
-                BinOp::Add | BinOp::Sub => {
-                    if lhs_dimension != rhs_dimension {
-                        return Err(GraphcalError::EvalError {
-                            message: "addition or subtraction in a coordinate expression requires matching dimensions".to_string(),
-                            src: src.clone(),
-                            span: expr.span.into(),
-                        });
-                    }
-                    let value = if *op == BinOp::Add {
-                        lhs_value + rhs_value
-                    } else {
-                        lhs_value - rhs_value
-                    };
-                    (value, lhs_dimension)
-                }
-                BinOp::Mul => (
-                    lhs_value * rhs_value,
-                    lhs_dimension
-                        .checked_mul(&rhs_dimension)
-                        .map_err(|_| overflow())?,
-                ),
-                BinOp::Div => (
-                    lhs_value / rhs_value,
-                    lhs_dimension
-                        .checked_div(&rhs_dimension)
-                        .map_err(|_| overflow())?,
-                ),
-                _ => {
-                    return Err(eval_error(
-                        "coordinate arguments support only static quantity arithmetic",
-                        src,
-                        expr.span,
-                    ));
-                }
-            };
-            Ok((ensure_finite(value, expr.span)?, dimension))
-        }
-        _ => Err(eval_error(
-            "coordinate arguments must be statically evaluable quantities; Int values and runtime expressions are not supported",
-            src,
-            expr.span,
-        )),
-    }
-}
-
-/// Render a coordinate construction failure, blaming the `linspace` point
-/// count when the failure concerns it and the whole declaration otherwise.
-fn coordinate_invalid(
-    name: &IndexName,
-    error: types::CoordinateIndexError,
-    src: &NamedSource<Arc<String>>,
     decl_span: Span,
-    points_span: Span,
-) -> GraphcalError {
-    let span = if error.concerns_point_count() {
-        points_span
-    } else {
-        decl_span
-    };
-    GraphcalError::CoordinateIndexInvalid {
+) -> Result<types::IndexKind, GraphcalError> {
+    let dimension_mismatch = |message: String| GraphcalError::CoordinateIndexDimensionMismatch {
         name: name.clone(),
-        message: error.to_string(),
-        help: error.help(),
+        message,
         src: src.clone(),
-        span: span.into(),
-    }
-}
-
-fn eval_static_nat_expr(
-    expr: &crate::desugar::desugared_ast::NatExpr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<u64, GraphcalError> {
-    use crate::desugar::desugared_ast::NatExpr;
-    match expr {
-        NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Var(ident) => Err(GraphcalError::EvalError {
-            message: format!(
-                "linspace point count must be statically known; `{}` is not a constant Nat",
-                ident.name
-            ),
-            src: src.clone(),
-            span: ident.span.into(),
-        }),
-        NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
-            sum.checked_add(eval_static_nat_expr(operand, src)?)
-                .ok_or_else(|| eval_error("linspace point-count addition overflow", src, *span))
-        }),
-        NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
-            product
-                .checked_mul(eval_static_nat_expr(operand, src)?)
-                .ok_or_else(|| {
-                    eval_error("linspace point-count multiplication overflow", src, *span)
-                })
-        }),
-    }
-}
-
-fn coordinate_display_unit(
-    start_expr: &Expr,
-    registry: &RegistryBuilder,
-    src: &NamedSource<Arc<String>>,
-) -> Result<types::CoordinateDisplayUnit, GraphcalError> {
-    let unit = match &start_expr.kind {
-        ExprKind::QuantityLiteral { unit, .. } => unit,
-        ExprKind::UnaryOp {
-            op: crate::desugar::desugared_ast::UnaryOp::Neg,
-            operand,
-        } => return coordinate_display_unit(operand, registry, src),
-        _ => return Ok(types::CoordinateDisplayUnit::SI),
+        span: decl_span.into(),
     };
-    match registry.resolve_unit_expr(unit) {
-        Ok((_dimension, scale)) => Ok(types::CoordinateDisplayUnit {
-            label: Some(format_unit_expr_with_config(unit, true)),
-            scale,
-        }),
-        Err(crate::registry::types::UnitResolveError::Overflow(_)) => {
-            Err(GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: unit.span.into(),
-            })
-        }
-        Err(crate::registry::types::UnitResolveError::InvalidScale(err)) => Err(scale_error(
-            "coordinate display unit scale",
-            err,
-            src,
-            unit.span,
-        )),
-        Err(_) => Ok(types::CoordinateDisplayUnit::SI),
-    }
-}
-
-/// Lower `range(start, end, step: delta)` with exact endpoint semantics.
-fn lower_range_index(
-    name: &IndexName,
-    start_expr: &Expr,
-    end_expr: &Expr,
-    step_expr: &Expr,
-    registry: &RegistryBuilder,
-    src: &NamedSource<Arc<String>>,
-    decl_span: Span,
-) -> Result<types::IndexKind, GraphcalError> {
-    let (start, start_dimension) = eval_coordinate_expr(start_expr, registry, src)?;
-    let (end, end_dimension) = eval_coordinate_expr(end_expr, registry, src)?;
-    let (step, step_dimension) = eval_coordinate_expr(step_expr, registry, src)?;
-    if start_dimension != end_dimension || start_dimension != step_dimension {
-        return Err(GraphcalError::CoordinateIndexDimensionMismatch {
-            name: name.clone(),
-            message: format!(
-                "range start, end, and step have dimensions {}, {}, and {}",
-                registry.format_dimension(&start_dimension),
-                registry.format_dimension(&end_dimension),
-                registry.format_dimension(&step_dimension)
-            ),
-            src: src.clone(),
-            span: decl_span.into(),
-        });
-    }
-    let display = coordinate_display_unit(start_expr, registry, src)?;
-    types::CoordinateIndexData::try_range(start, end, step, start_dimension, display)
+    axis.evaluate()
         .map(|data| types::IndexKind::Concrete(types::ConcreteIndexKind::Coordinate(data)))
-        .map_err(|error| coordinate_invalid(name, error, src, decl_span, decl_span))
-}
-
-/// Lower `linspace(start, end, points: N)` with exact endpoint semantics.
-fn lower_linspace_index(
-    name: &IndexName,
-    start_expr: &Expr,
-    end_expr: &Expr,
-    points_expr: &crate::desugar::desugared_ast::NatExpr,
-    registry: &RegistryBuilder,
-    src: &NamedSource<Arc<String>>,
-    decl_span: Span,
-) -> Result<types::IndexKind, GraphcalError> {
-    let (start, start_dimension) = eval_coordinate_expr(start_expr, registry, src)?;
-    let (end, end_dimension) = eval_coordinate_expr(end_expr, registry, src)?;
-    if start_dimension != end_dimension {
-        return Err(GraphcalError::CoordinateIndexDimensionMismatch {
-            name: name.clone(),
-            message: format!(
-                "linspace start and end have dimensions {} and {}",
-                registry.format_dimension(&start_dimension),
-                registry.format_dimension(&end_dimension)
-            ),
-            src: src.clone(),
-            span: decl_span.into(),
-        });
-    }
-    let points = eval_static_nat_expr(points_expr, src)?;
-    let display = coordinate_display_unit(start_expr, registry, src)?;
-    types::CoordinateIndexData::try_linspace(start, end, points, start_dimension, display)
-        .map(|data| types::IndexKind::Concrete(types::ConcreteIndexKind::Coordinate(data)))
-        .map_err(|error| coordinate_invalid(name, error, src, decl_span, points_expr.span()))
+        .map_err(|error| match error {
+            CoordinateAxisError::Expr(error) => const_expr_error(error, src),
+            CoordinateAxisError::RangeDimensionMismatch { start, end, step } => {
+                dimension_mismatch(format!(
+                    "range start, end, and step have dimensions {}, {}, and {}",
+                    registry.format_dimension(&start),
+                    registry.format_dimension(&end),
+                    registry.format_dimension(&step)
+                ))
+            }
+            CoordinateAxisError::LinspaceDimensionMismatch { start, end } => {
+                dimension_mismatch(format!(
+                    "linspace start and end have dimensions {} and {}",
+                    registry.format_dimension(&start),
+                    registry.format_dimension(&end)
+                ))
+            }
+            CoordinateAxisError::Invalid { error, point_count } => {
+                GraphcalError::CoordinateIndexInvalid {
+                    name: name.clone(),
+                    message: error.to_string(),
+                    help: error.help(),
+                    src: src.clone(),
+                    span: point_count.unwrap_or(decl_span).into(),
+                }
+            }
+        })
 }
 
 /// Extract a map of type annotations from const/param/node declarations,
