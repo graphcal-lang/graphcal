@@ -226,10 +226,7 @@ impl ParameterBindingBuilder<'_> {
         if !variants.as_slice().contains(variant) {
             return Err(self.project.binding_value_error(
                 port,
-                &format!(
-                    "unknown category `{variant}` for index `{}`",
-                    index.display_name()
-                ),
+                &format!("unknown category `{variant}` for index `{index}`"),
             ));
         }
         self.insert(

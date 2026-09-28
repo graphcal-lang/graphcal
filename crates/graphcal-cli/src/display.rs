@@ -371,7 +371,7 @@ fn format_table_slices(
     for (variant, inner_val) in entries {
         parts.push(format!(
             "\n  [{}#{}]",
-            index_name.display_name(),
+            index_name,
             value.indexed_entry_display_name(variant)
         ));
         format_table_slices(inner_val, symbols, policy, depth - 1, parts);

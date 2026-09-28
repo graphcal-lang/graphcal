@@ -2,7 +2,7 @@
 
 use crate::expression_id::ExprId;
 use crate::registry::declared_type::IndexTypeRef;
-use crate::registry::index::IndexCardinality;
+use crate::registry::index::{FiniteIndex, IndexCardinality};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,11 +35,11 @@ pub enum Readiness {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{usage} {position} out of bounds for Fin({size})")]
+#[error("{usage} {position} out of bounds for {axis}")]
 pub struct StaticIndexError {
     pub usage: StaticIndexUse,
     pub position: u64,
-    pub size: usize,
+    pub axis: FiniteIndex,
 }
 
 impl StaticIndexRequirement {
@@ -53,7 +53,7 @@ impl StaticIndexRequirement {
             Some(size) => Err(StaticIndexError {
                 usage: self.usage,
                 position: self.position,
-                size: size.get(),
+                axis: FiniteIndex::new(size),
             }),
         }
     }

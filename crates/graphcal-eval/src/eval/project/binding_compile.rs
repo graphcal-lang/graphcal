@@ -268,9 +268,9 @@ impl PreparedProject {
         path: &mut Vec<StructuredBindingPathSegment>,
     ) -> Result<Expr, StructuredBindingError> {
         let expected_count = match axis.kind() {
-            ModelIndexKind::Named { variants } => variants.len(),
+            ModelIndexKind::Named { variants } => variants.len().get(),
             ModelIndexKind::Coordinate { coordinates_si, .. } => coordinates_si.len(),
-            ModelIndexKind::Finite { cardinality } => *cardinality,
+            ModelIndexKind::Finite { index } => index.cardinality().get(),
         };
         if entries.len() != expected_count {
             return Err(structured_error(
@@ -308,7 +308,7 @@ impl PreparedProject {
         path: &[StructuredBindingPathSegment],
     ) -> Result<MapEntryIndex, StructuredBindingError> {
         match axis.kind() {
-            ModelIndexKind::Finite { cardinality } => u64::try_from(*cardinality)
+            ModelIndexKind::Finite { index } => u64::try_from(index.cardinality().get())
                 .map(MapEntryIndex::Finite)
                 .map_err(|_| structured_error(path, "finite index cardinality is too large")),
             ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
@@ -329,7 +329,9 @@ fn structured_map_key(
     path: &[StructuredBindingPathSegment],
 ) -> Result<IndexEntryKey, StructuredBindingError> {
     match axis.kind() {
-        ModelIndexKind::Named { variants } => Ok(IndexEntryKey::Named(variants[index].clone())),
+        ModelIndexKind::Named { variants } => {
+            Ok(IndexEntryKey::Named(variants.as_slice()[index].clone()))
+        }
         ModelIndexKind::Coordinate { .. } | ModelIndexKind::Finite { .. } => u64::try_from(index)
             .map(IndexEntryKey::Position)
             .map_err(|_| structured_error(path, "indexed entry position is too large")),

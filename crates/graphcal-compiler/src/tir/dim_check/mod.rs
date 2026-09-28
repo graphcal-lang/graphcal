@@ -1330,9 +1330,7 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
         ResolvedTypeExpr::Bool => Some("Bool".to_string()),
         ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
         ResolvedTypeExpr::Key { .. } => Some("Key".to_string()),
-        ResolvedTypeExpr::IndexArg(index) => {
-            Some(format!("index {}", index.format_for_diagnostic()))
-        }
+        ResolvedTypeExpr::IndexArg(index) => Some(format!("index {index}")),
         ResolvedTypeExpr::Struct(struct_name, _)
         | ResolvedTypeExpr::GenericStruct {
             name: struct_name, ..

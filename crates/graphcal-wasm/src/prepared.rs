@@ -446,7 +446,7 @@ impl PreparedPlayground {
                 ModelValueSchema::Indexed { element, axis },
             ) => {
                 let axis_name = match axis.kind() {
-                    ModelIndexKind::Finite { cardinality } => format!("Fin({cardinality})"),
+                    ModelIndexKind::Finite { index } => index.to_string(),
                     ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
                         .identity()
                         .declared_resolved()
@@ -626,8 +626,8 @@ fn index_schema_view(axis: &ModelIndexSchema, prepared: &PreparedProject) -> Ind
                 })
                 .collect(),
         },
-        ModelIndexKind::Finite { cardinality } => IndexSchemaView::Finite {
-            cardinality: *cardinality,
+        ModelIndexKind::Finite { index } => IndexSchemaView::Finite {
+            cardinality: index.cardinality().get(),
         },
     }
 }

@@ -174,7 +174,7 @@ fn invert_indexed_variants(
 /// For multi-index paths, formats as `(Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`.
 fn format_indexed_path_part(index: &IndexTypeRef, key: &IndexEntryKey) -> String {
     match key {
-        IndexEntryKey::Named(variant) => format!("{}#{variant}", index.display_name()),
+        IndexEntryKey::Named(variant) => format!("{index}#{variant}"),
         IndexEntryKey::Position(_) => key.to_string(),
     }
 }
@@ -325,8 +325,7 @@ fn collect_failing_paths(
             }
             other => {
                 return Err(format!(
-                    "expected Bool for {}::{variant}, got {other:?}",
-                    index_name.display_name()
+                    "expected Bool for {index_name}::{variant}, got {other:?}"
                 ));
             }
         }
@@ -512,9 +511,7 @@ fn tolerance_entry_or_broadcast<'a>(
         } => {
             if !index_name.matches_ref(axis) {
                 return Err(format!(
-                    "tolerance assertion operand has mismatched index axes: `{}` vs `{}`",
-                    axis.display_name(),
-                    index_name.display_name()
+                    "tolerance assertion operand has mismatched index axes: `{axis}` vs `{index_name}`"
                 ));
             }
             entries.get(variant).ok_or_else(|| {

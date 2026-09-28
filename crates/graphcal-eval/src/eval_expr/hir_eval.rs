@@ -877,7 +877,7 @@ fn eval_hir_key_form(
             let in_range = u64::try_from(position).is_ok_and(|position| position < size);
             if !in_range {
                 return Err(ctx.eval_error(
-                    format!("fin_key: {position} out of bounds for Fin({size})"),
+                    format!("fin_key: {position} out of bounds for {finite}"),
                     span,
                 ));
             }
@@ -1845,7 +1845,7 @@ fn ensure_index_ref_matches_resolved(
         format!(
             "index argument belongs to `{}`, but value is indexed by `{}`",
             expected.as_str(),
-            actual.display_name()
+            actual
         ),
         span,
     ))
@@ -2221,9 +2221,7 @@ fn eval_hir_index_access(
                         if !index_name.matches_ref(label_index) {
                             return Err(ctx.eval_error(
                                 format!(
-                                    "index argument belongs to `{}`, but value is indexed by `{}`",
-                                    label_index.display_name(),
-                                    index_name.display_name()
+                                    "index argument belongs to `{label_index}`, but value is indexed by `{index_name}`"
                                 ),
                                 local.span,
                             ));

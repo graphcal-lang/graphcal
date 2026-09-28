@@ -1336,6 +1336,38 @@ fn finite_index_symbolic_form_to_display_only_index_type_ref()
     Ok(())
 }
 
+#[test]
+fn resolved_index_display_renders_source_spelling() {
+    let span = Span::new(0, 0);
+    let owner =
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let concrete = ResolvedIndex::Concrete(
+        ResolvedIndexName::from_def(
+            owner,
+            crate::syntax::index_name::IndexName::expect_valid("Phase"),
+        ),
+        span,
+    );
+    let generic = ResolvedIndex::GenericParam(GenericParamName::expect_valid("I"), span);
+    let finite = ResolvedIndex::Finite(
+        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+            .add(&NatPolyForm::from_constant(1))
+            .unwrap(),
+        span,
+    );
+    assert_eq!(concrete.to_string(), "Phase");
+    assert_eq!(generic.to_string(), "I");
+    assert_eq!(finite.to_string(), "Fin(N + 1)");
+    assert_eq!(
+        ResolvedTypeExpr::Key {
+            index: finite,
+            span
+        }
+        .format(&make_registry()),
+        "Key<Fin(N + 1)>"
+    );
+}
+
 // -----------------------------------------------------------------------
 // NatPolyForm multiplication tests (Level 2)
 // -----------------------------------------------------------------------
