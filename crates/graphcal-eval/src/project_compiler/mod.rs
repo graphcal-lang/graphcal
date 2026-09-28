@@ -83,7 +83,7 @@ pub(crate) use session::CheckedProjectRuntimeParts;
 pub use session::{CheckedProject, ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_project};
-use template::{ElaboratedModuleTemplate, ModuleTemplateRef, ModuleTemplateStore};
+use template::{ElaboratedModuleTemplate, ModuleTemplateStore};
 
 /// Derive the source-facing module alias from a module path leaf.
 fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {

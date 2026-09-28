@@ -89,10 +89,8 @@ fn static_input_is_bindable(
 }
 
 pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
-    pub(in crate::project_compiler) interface: &'a ModuleInterface,
-    pub(in crate::project_compiler) dag_id: &'a graphcal_compiler::dag_id::DagId,
+    pub(in crate::project_compiler) module: crate::loader::LoadedModule<'a>,
     pub(in crate::project_compiler) dag_name: &'a str,
-    pub(in crate::project_compiler) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -100,10 +98,6 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 /// Both top-level file compilation and recursive file-DAG instantiation use
 /// this path. Keeping import classification here prevents nested instances
 /// from silently dropping their own include graph.
-#[expect(
-    clippy::too_many_lines,
-    reason = "file imports plus file/inline/qualified include routing are one declaration pass"
-)]
 pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_file: &crate::loader::LoadedFile,
@@ -136,7 +130,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         }
         process_file_include(
             project,
-            target.source_file(),
+            target,
             include,
             declaration,
             loaded_file.interface(),
@@ -158,15 +152,13 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         let dag_name = &include.path.segments[0].name;
         // A single-segment include names a top-level `dag` of this file.
         let dag_id = file_dag_id.inline_dag_child(DeclName::classify(dag_name.atom().clone()));
-        let Some((_, loaded_dag)) = project.inline_dag(&dag_id) else {
+        let Some((dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
             continue;
         };
         process_inline_dag_include(
             &InlineDagIncludeTarget {
-                interface: loaded_dag.interface(),
-                dag_id: &dag_id,
-                dag_name: dag_name.as_str(),
-                parent_dag_id: file_dag_id,
+                module: loaded_dag.module(dag_file),
+                dag_name: loaded_dag.declaration(dag_file).name.value.as_str(),
             },
             include,
             declaration,
@@ -204,10 +196,8 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         }
         process_inline_dag_include(
             &InlineDagIncludeTarget {
-                interface: target_dag.interface(),
-                dag_id: target.target(),
+                module: target_dag.module(target_loaded),
                 dag_name: target_dag.declaration(target_loaded).name.value.as_str(),
-                parent_dag_id: target.source_file(),
             },
             include,
             declaration,
@@ -930,7 +920,7 @@ fn validate_required_param_bindings(
 )]
 pub(in crate::project_compiler) fn process_file_include<'a>(
     project: &'a crate::loader::LoadedProject,
-    import_dag_id: &graphcal_compiler::dag_id::DagId,
+    target: &crate::loader::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
@@ -939,8 +929,15 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    let dep_loaded = &project.files()[import_dag_id];
-    let dep = dep_loaded.interface();
+    let dependency = project.module(target.target()).ok_or_else(|| {
+        CompileError::Eval(GraphcalError::InternalError {
+            message: format!("included module `{}` is not loaded", target.target()),
+            src: file_src.clone(),
+            span: include_decl.path.span().into(),
+        })
+    })?;
+    let import_dag_id = dependency.dag_id();
+    let dep = dependency.interface();
     let exported_bindings = exported_bindings(
         module_resolver,
         import_dag_id,
@@ -1170,7 +1167,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     };
 
     ctx.include_instances.push(IncludeInstanceRequest {
-        template: ModuleTemplateRef::file(import_dag_id.clone()),
+        template: dependency,
         instance_scope,
         debug_scope: derive_module_name_from_import_path(&include_decl.path),
         bindings,
@@ -1204,21 +1201,20 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and instance request setup form one pipeline"
 )]
-pub(in crate::project_compiler) fn process_inline_dag_include(
-    target: &InlineDagIncludeTarget<'_>,
+pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
+    target: &InlineDagIncludeTarget<'a>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    ctx: &mut ImportContext<'_>,
+    ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
 
-    let dep = target.interface;
+    let dep = target.module.interface();
     let dag_name = target.dag_name;
-    let dag_id = target.dag_id;
-    let parent_dag_id = target.parent_dag_id;
+    let dag_id = target.module.dag_id();
 
     // As for file-root includes, only the module form introduces an alias.
     // Selective inline-DAG includes receive an opaque private merge scope.
@@ -1406,10 +1402,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     };
 
     ctx.include_instances.push(IncludeInstanceRequest {
-        template: ModuleTemplateRef {
-            source_file: parent_dag_id.clone(),
-            dag_id: dag_id.clone(),
-        },
+        template: target.module,
         instance_scope,
         debug_scope: ModuleAliasName::expect_valid(dag_name),
         bindings,
