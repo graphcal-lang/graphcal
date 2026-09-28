@@ -282,7 +282,7 @@ fn plot_leaf_kind(
         InferredType::Int => Some(PlotLeafKind::Int),
         InferredType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
         InferredType::Key(index) => Some(PlotLeafKind::Key(index.clone())),
-        InferredType::Complex(_) | InferredType::IndexArg(_) | InferredType::Struct(_, _) => None,
+        InferredType::Complex(_) | InferredType::Struct(_, _) => None,
     }
 }
 

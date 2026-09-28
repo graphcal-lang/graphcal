@@ -69,10 +69,6 @@ pub(crate) enum InferredType {
     /// An index-key value of type `Key<I>`: a first-class element key of
     /// axis `I`.
     Key(IndexTypeRef),
-    /// An index identity carried only while checking an `Index`-sorted generic
-    /// argument. This may be a declared or structural finite index and is not a
-    /// Graphcal value type.
-    IndexArg(IndexTypeRef),
     /// A struct type with sort-aware generic arguments.
     Struct(StructTypeRef, Vec<InferredGenericArg>),
     Indexed {
@@ -1328,7 +1324,6 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
         ResolvedTypeExpr::Bool => Some("Bool".to_string()),
         ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
         ResolvedTypeExpr::Key { .. } => Some("Key".to_string()),
-        ResolvedTypeExpr::IndexArg(index) => Some(format!("index {index}")),
         ResolvedTypeExpr::Struct(struct_name, _)
         | ResolvedTypeExpr::GenericStruct {
             name: struct_name, ..
@@ -1581,7 +1576,6 @@ fn expected_bound_from_inferred(inferred: &InferredType) -> Option<ExpectedBound
         InferredType::Complex(_)
         | InferredType::Bool
         | InferredType::Key(_)
-        | InferredType::IndexArg(_)
         | InferredType::Struct(..) => None,
     }
 }

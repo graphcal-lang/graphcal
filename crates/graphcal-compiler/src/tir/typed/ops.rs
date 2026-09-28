@@ -50,11 +50,6 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
-        ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::EvalError {
-            message: format!("index `{index}` cannot be used as a value type"),
-            src: src.clone(),
-            span: resolved_index_span(index).into(),
-        }),
         ResolvedTypeExpr::Quantity(dim) => Ok(DeclaredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Complex { dimension, span } => {
             resolved_complex_to_declared(dimension, *span, src)
@@ -199,14 +194,6 @@ fn resolved_generic_arg_to_declared(
     }
 }
 
-const fn resolved_index_span(index: &ResolvedIndex) -> Span {
-    match index {
-        ResolvedIndex::Concrete(_, span)
-        | ResolvedIndex::GenericParam(_, span)
-        | ResolvedIndex::Finite(_, span) => *span,
-    }
-}
-
 fn resolved_index_to_declared_ref(
     index: &ResolvedIndex,
     src: &NamedSource<Arc<String>>,
@@ -225,29 +212,6 @@ fn resolved_index_to_declared_ref(
             span: (*span).into(),
         }),
     }
-}
-
-fn resolved_index_to_inferred(
-    index: &ResolvedIndex,
-    src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
-    let reference = match index {
-        ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
-        ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
-            .map_err(|err| GraphcalError::EvalError {
-                message: err.describe_finite_index(),
-                src: src.clone(),
-                span: (*span).into(),
-            })?,
-        ResolvedIndex::GenericParam(name, span) => {
-            return Err(GraphcalError::EvalError {
-                message: format!("generic index parameter `{name}` is not bound"),
-                src: src.clone(),
-                span: (*span).into(),
-            });
-        }
-    };
-    Ok(reference)
 }
 
 #[cfg(test)]
@@ -685,27 +649,6 @@ pub(in crate::tir::typed) fn unify_resolved_type(
             Ok(())
         }
 
-        ResolvedTypeExpr::IndexArg(expected_index) => {
-            let InferredType::IndexArg(actual_index) = actual else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("index {expected_index}"),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
-                    help: "expected an index generic argument".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            };
-            if !resolved_index_matches_inferred(expected_index, actual_index) {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: resolved_index_display_name(expected_index),
-                    found: actual_index.display_name(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            Ok(())
-        }
-
         ResolvedTypeExpr::Dimensionless => {
             let actual_dim = crate::tir::dim_check::expect_quantity(actual, registry, src, span)?;
             if !actual_dim.is_dimensionless() {
@@ -1037,16 +980,16 @@ fn unify_resolved_generic_arg(
             )
         }
         (ResolvedGenericArg::Index(expected), InferredGenericArg::Index(actual)) => {
-            unify_resolved_type(
-                &ResolvedTypeExpr::IndexArg(expected.clone()),
-                &crate::tir::dim_check::InferredType::IndexArg(actual.clone()),
-                dim_sub,
-                index_sub,
-                nat_sub,
-                registry,
-                src,
-                span,
-            )
+            if resolved_index_matches_inferred(expected, actual) {
+                Ok(())
+            } else {
+                Err(GraphcalError::IndexMismatch {
+                    expected: resolved_index_display_name(expected),
+                    found: actual.display_name(),
+                    src: src.clone(),
+                    span: span.into(),
+                })
+            }
         }
         (ResolvedGenericArg::Nat(expected, _), InferredGenericArg::Nat(actual)) => {
             if actual.is_constant() {
@@ -1220,9 +1163,6 @@ pub fn substitute_resolved_type_with_types(
         ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::IndexArg(index) => {
-            resolved_index_to_inferred(index, src).map(InferredType::IndexArg)
-        }
         ResolvedTypeExpr::Quantity(dim) => Ok(InferredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Complex { dimension, span } => {
             let resolved_dimension = resolved_dim_arg_as_type(dimension);

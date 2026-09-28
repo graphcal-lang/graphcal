@@ -159,22 +159,6 @@ pub(super) fn binop_rule(
         BinOp::Eq | BinOp::Ne => {
             let lhs_type = comparison_operand_type(lhs, registry, src)?;
             let rhs_type = comparison_operand_type(rhs, registry, src)?;
-            if matches!(lhs_type, InferredType::IndexArg(_))
-                || matches!(rhs_type, InferredType::IndexArg(_))
-            {
-                let (found, span) = if matches!(lhs_type, InferredType::IndexArg(_)) {
-                    (lhs_type, lhs.span)
-                } else {
-                    (rhs_type, rhs.span)
-                };
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "value expression".to_string(),
-                    found: format_inferred_type(found, registry),
-                    help: "Index arguments are type-level identities, not values".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
             if lhs_type == rhs_type {
                 return Ok(InferredType::Bool);
             }

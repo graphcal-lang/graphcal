@@ -21,12 +21,13 @@ use crate::resolve::error::ModuleResolveError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::{NameAtom, NameDef, NamePath};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
-    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamId, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
+    GenericParamId, IndexRef, NatExpr, ValueType, ValueTypeKind,
 };
 
 /// Errors produced while lowering syntax type expressions into HIR.
@@ -49,6 +50,15 @@ pub enum HirLowerError {
         label: IndexVariantName,
         span: Span,
     },
+    /// An index name appeared where a value type is required.
+    #[error("index `{index}` cannot be used as a type")]
+    IndexAsType { index: IndexRef },
+    /// An indexed type was itself used as the element of an indexed type.
+    ///
+    /// The parser spells every axis in one bracket list, so only a synthetic
+    /// syntax tree can reach this.
+    #[error("an indexed type cannot be indexed again; list every axis in one bracket list")]
+    NestedIndexedType { span: Span },
     /// A natural-number expression referenced a non-Nat generic parameter.
     #[error(
         "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {expected}"
@@ -284,29 +294,95 @@ impl<'a> TypeLoweringContext<'a> {
     }
 }
 
-/// Lower a syntax type expression into a HIR type expression.
+/// A single type-syntax slot lowered before its position decides whether an
+/// index is acceptable there.
+///
+/// A single-term name in type syntax (`Phase`, `I`) may denote an index, but
+/// an index is never a [`ValueType`]: only `Index`-sorted generic arguments
+/// (including `Key<I>`) accept one. This private classification lets each
+/// syntactic position report its own diagnostic without ever placing an index
+/// inside a value type.
+enum TypeSlot {
+    Value(ValueType),
+    Index(IndexRef),
+}
+
+impl TypeSlot {
+    /// Commit this slot to a value-type position.
+    fn into_value_type(self) -> Result<ValueType, HirLowerError> {
+        match self {
+            Self::Value(value_type) => Ok(value_type),
+            Self::Index(index) => Err(HirLowerError::IndexAsType { index }),
+        }
+    }
+}
+
+/// Type syntax lowered without committing to a syntactic position.
+enum LoweredTypeSyntax {
+    Slot(TypeSlot),
+    Indexed {
+        element: TypeSlot,
+        indexes: NonEmpty<IndexRef>,
+        span: Span,
+    },
+}
+
+/// Lower a syntax declaration type annotation into a HIR [`DeclType`].
 ///
 /// # Errors
 ///
 /// Returns [`HirLowerError`] when a source path cannot be resolved to the
-/// namespace required by its syntactic position.
-pub(crate) fn lower_type_expr(
+/// namespace required by its syntactic position, or when an index name is
+/// used as a value type.
+pub(crate) fn lower_decl_type(
     type_ann: &ast::TypeExpr,
     ctx: TypeLoweringContext<'_>,
-) -> Result<TypeExpr, HirLowerError> {
+) -> Result<DeclType, HirLowerError> {
+    match lower_type_syntax(type_ann, ctx)? {
+        LoweredTypeSyntax::Slot(slot) => slot.into_value_type().map(DeclType::Value),
+        LoweredTypeSyntax::Indexed {
+            element,
+            indexes,
+            span,
+        } => Ok(DeclType::Indexed {
+            element: element.into_value_type()?,
+            indexes,
+            span,
+        }),
+    }
+}
+
+fn lower_type_syntax(
+    type_ann: &ast::TypeExpr,
+    ctx: TypeLoweringContext<'_>,
+) -> Result<LoweredTypeSyntax, HirLowerError> {
+    match &type_ann.kind {
+        ast::TypeExprKind::Indexed { base, indexes } => Ok(LoweredTypeSyntax::Indexed {
+            element: lower_type_slot(base, ctx)?,
+            indexes: indexes.try_map_ref(|index| lower_index_expr(index, ctx))?,
+            span: type_ann.span,
+        }),
+        _ => lower_type_slot(type_ann, ctx).map(LoweredTypeSyntax::Slot),
+    }
+}
+
+fn lower_type_slot(
+    type_ann: &ast::TypeExpr,
+    ctx: TypeLoweringContext<'_>,
+) -> Result<TypeSlot, HirLowerError> {
     let kind = match &type_ann.kind {
-        ast::TypeExprKind::Dimensionless => TypeExprKind::Builtin(BuiltinType::Dimensionless),
-        ast::TypeExprKind::Bool => TypeExprKind::Builtin(BuiltinType::Bool),
-        ast::TypeExprKind::Int => TypeExprKind::Builtin(BuiltinType::Int),
-        ast::TypeExprKind::Datetime => TypeExprKind::Builtin(BuiltinType::datetime_utc()),
-        ast::TypeExprKind::DatetimeApplication { type_args } => TypeExprKind::Builtin(
+        ast::TypeExprKind::Dimensionless => ValueTypeKind::Builtin(BuiltinType::Dimensionless),
+        ast::TypeExprKind::Bool => ValueTypeKind::Builtin(BuiltinType::Bool),
+        ast::TypeExprKind::Int => ValueTypeKind::Builtin(BuiltinType::Int),
+        ast::TypeExprKind::Datetime => ValueTypeKind::Builtin(BuiltinType::datetime_utc()),
+        ast::TypeExprKind::DatetimeApplication { type_args } => ValueTypeKind::Builtin(
             lower_datetime_application(type_ann.span, type_args.as_slice())?,
         ),
         ast::TypeExprKind::ComplexApplication { generic_args } => {
-            TypeExprKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
         }
         ast::TypeExprKind::KeyApplication { generic_args } => {
-            TypeExprKind::Key(lower_key_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Key(lower_key_application(type_ann.span, generic_args, ctx)?)
         }
         ast::TypeExprKind::IndexLabel { index, label } => {
             return Err(HirLowerError::IndexLabelAsType {
@@ -315,11 +391,14 @@ pub(crate) fn lower_type_expr(
                 span: type_ann.span,
             });
         }
-        ast::TypeExprKind::DimExpr(dim_expr) => lower_dim_expr_as_type(dim_expr, ctx)?,
-        ast::TypeExprKind::Indexed { base, indexes } => TypeExprKind::Indexed {
-            base: Box::new(lower_type_expr(base, ctx)?),
-            indexes: indexes.try_map_ref(|index| lower_index_expr(index, ctx))?,
-        },
+        ast::TypeExprKind::DimExpr(dim_expr) => {
+            return lower_dim_expr_as_type(dim_expr, type_ann.span, ctx);
+        }
+        ast::TypeExprKind::Indexed { .. } => {
+            return Err(HirLowerError::NestedIndexedType {
+                span: type_ann.span,
+            });
+        }
         ast::TypeExprKind::TypeApplication { name, generic_args } => {
             let struct_type = ctx
                 .resolver
@@ -336,14 +415,14 @@ pub(crate) fn lower_type_expr(
                 type_ann.span,
                 ctx,
             )?;
-            TypeExprKind::TypeApplication {
+            ValueTypeKind::TypeApplication {
                 name: Spanned::new(resolved_name, name.span),
                 generic_args,
             }
         }
     };
 
-    Ok(TypeExpr::new(kind, type_ann.span))
+    Ok(TypeSlot::Value(ValueType::new(kind, type_ann.span)))
 }
 
 fn lower_complex_application(
@@ -451,13 +530,17 @@ pub(crate) fn lower_generic_arg_for_constraint(
 ) -> Result<GenericArg, HirLowerError> {
     match constraint {
         GenericConstraint::Dim => {
-            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
-            match type_expr.kind {
-                TypeExprKind::Builtin(BuiltinType::Dimensionless) => {
-                    Ok(GenericArg::Dim(DimArg::Dimensionless(type_expr.span)))
-                }
-                TypeExprKind::DimExpr(dim_expr) => Ok(GenericArg::Dim(DimArg::Expr(dim_expr))),
-                _ => Err(generic_arg_sort_mismatch(
+            match lower_generic_arg_as_type_syntax(arg, parameter, constraint, ctx)? {
+                LoweredTypeSyntax::Slot(TypeSlot::Value(ValueType {
+                    kind: ValueTypeKind::Builtin(BuiltinType::Dimensionless),
+                    span,
+                })) => Ok(GenericArg::Dim(DimArg::Dimensionless(span))),
+                LoweredTypeSyntax::Slot(TypeSlot::Value(ValueType {
+                    kind: ValueTypeKind::DimExpr(dim_expr),
+                    ..
+                })) => Ok(GenericArg::Dim(DimArg::Expr(dim_expr))),
+                LoweredTypeSyntax::Slot(TypeSlot::Value(_) | TypeSlot::Index(_))
+                | LoweredTypeSyntax::Indexed { .. } => Err(generic_arg_sort_mismatch(
                     parameter,
                     constraint,
                     "non-dimension type argument",
@@ -472,10 +555,10 @@ pub(crate) fn lower_generic_arg_for_constraint(
                 span: nat.span(),
             }),
             ast::GenericArg::Type(_) | ast::GenericArg::Ambiguous(_) => {
-                let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
-                match type_expr.kind {
-                    TypeExprKind::Index(index) => Ok(GenericArg::Index(index)),
-                    _ => Err(generic_arg_sort_mismatch(
+                match lower_generic_arg_as_type_syntax(arg, parameter, constraint, ctx)? {
+                    LoweredTypeSyntax::Slot(TypeSlot::Index(index)) => Ok(GenericArg::Index(index)),
+                    LoweredTypeSyntax::Slot(TypeSlot::Value(_))
+                    | LoweredTypeSyntax::Indexed { .. } => Err(generic_arg_sort_mismatch(
                         parameter,
                         constraint,
                         "non-index type argument",
@@ -512,34 +595,33 @@ pub(crate) fn lower_generic_arg_for_constraint(
             )),
         },
         GenericConstraint::Type => {
-            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
-            let invalid_sort = match &type_expr.kind {
-                TypeExprKind::Index(_) => Some("Index argument"),
-                TypeExprKind::Indexed { .. } => Some("indexed declaration type"),
-                _ => None,
+            let actual = match lower_generic_arg_as_type_syntax(arg, parameter, constraint, ctx)? {
+                LoweredTypeSyntax::Slot(TypeSlot::Value(value_type)) => {
+                    return Ok(GenericArg::Type(value_type));
+                }
+                LoweredTypeSyntax::Slot(TypeSlot::Index(_)) => "Index argument",
+                LoweredTypeSyntax::Indexed { .. } => "indexed declaration type",
             };
-            invalid_sort.map_or(Ok(GenericArg::Type(type_expr)), |actual| {
-                Err(generic_arg_sort_mismatch(
-                    parameter,
-                    constraint,
-                    actual,
-                    arg.span(),
-                ))
-            })
+            Err(generic_arg_sort_mismatch(
+                parameter,
+                constraint,
+                actual,
+                arg.span(),
+            ))
         }
     }
 }
 
-fn lower_generic_arg_as_type(
+fn lower_generic_arg_as_type_syntax(
     arg: &ast::GenericArg,
     parameter: &GenericParamName,
     constraint: GenericConstraint,
     ctx: TypeLoweringContext<'_>,
-) -> Result<TypeExpr, HirLowerError> {
+) -> Result<LoweredTypeSyntax, HirLowerError> {
     match arg {
-        ast::GenericArg::Type(type_expr) => lower_type_expr(type_expr, ctx),
+        ast::GenericArg::Type(type_expr) => lower_type_syntax(type_expr, ctx),
         ast::GenericArg::Ambiguous(ambiguous) => {
-            lower_type_expr(&ambiguous_generic_arg_as_type(ambiguous), ctx)
+            lower_type_syntax(&ambiguous_generic_arg_as_type(ambiguous), ctx)
         }
         ast::GenericArg::Index(_) => Err(generic_arg_sort_mismatch(
             parameter,
@@ -690,12 +772,16 @@ fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError>
 
 fn lower_dim_expr_as_type(
     dim_expr: &ast::DimExpr,
+    span: Span,
     ctx: TypeLoweringContext<'_>,
-) -> Result<TypeExprKind, HirLowerError> {
-    match lower_single_term_nominal_type(dim_expr, ctx)? {
-        NominalTypeLookup::Found(kind) => Ok(kind),
+) -> Result<TypeSlot, HirLowerError> {
+    match lower_single_term_nominal_type(dim_expr, span, ctx)? {
+        NominalTypeLookup::Found(slot) => Ok(slot),
         NominalTypeLookup::Absent { deferred_error } => match lower_dim_expr(dim_expr, ctx) {
-            Ok(dim_expr) => Ok(TypeExprKind::DimExpr(dim_expr)),
+            Ok(dim_expr) => Ok(TypeSlot::Value(ValueType::new(
+                ValueTypeKind::DimExpr(dim_expr),
+                span,
+            ))),
             Err(HirLowerError::UnknownTypePath { path, span }) => deferred_error.map_or(
                 Err(HirLowerError::UnknownTypePath { path, span }),
                 |source| Err(HirLowerError::ModuleResolve { source, span }),
@@ -713,6 +799,7 @@ fn lower_dim_expr_as_type(
 
 fn lower_single_term_nominal_type(
     dim_expr: &ast::DimExpr,
+    type_span: Span,
     ctx: TypeLoweringContext<'_>,
 ) -> Result<NominalTypeLookup, HirLowerError> {
     let [item] = dim_expr.terms.as_slice() else {
@@ -728,15 +815,16 @@ fn lower_single_term_nominal_type(
     {
         match binding.constraint {
             GenericConstraint::Type => {
-                return Ok(NominalTypeLookup::Found(TypeExprKind::GenericTypeParam(
-                    binding.spanned_id(item.term.name.span),
-                )));
+                return Ok(NominalTypeLookup::Found(TypeSlot::Value(ValueType::new(
+                    ValueTypeKind::GenericTypeParam(binding.spanned_id(item.term.name.span)),
+                    type_span,
+                ))));
             }
             // A concrete nominal type with the same leaf takes precedence;
             // if none exists, dimension lowering below resolves this binding.
             GenericConstraint::Dim => {}
             GenericConstraint::Index => {
-                return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
+                return Ok(NominalTypeLookup::Found(TypeSlot::Index(
                     IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),
                 )));
             }
@@ -759,7 +847,7 @@ fn lower_single_term_nominal_type(
             .map(crate::resolve::symbols::SymbolRef::into_resolved),
     ) {
         LookupCandidate::Found(index) => {
-            return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
+            return Ok(NominalTypeLookup::Found(TypeSlot::Index(
                 IndexRef::Concrete(Spanned::new(index, item.term.name.span)),
             )));
         }
@@ -774,7 +862,7 @@ fn lower_single_term_nominal_type(
             let generic_params = symbol.kind();
             let struct_type = symbol.into_resolved();
             let kind = if generic_params.is_empty() {
-                TypeExprKind::Struct(Spanned::new(struct_type, item.term.name.span))
+                ValueTypeKind::Struct(Spanned::new(struct_type, item.term.name.span))
             } else {
                 check_generic_arg_count(
                     struct_type.as_str(),
@@ -782,12 +870,14 @@ fn lower_single_term_nominal_type(
                     0,
                     item.term.name.span,
                 )?;
-                TypeExprKind::TypeApplication {
+                ValueTypeKind::TypeApplication {
                     name: Spanned::new(struct_type, item.term.name.span),
                     generic_args: Vec::new(),
                 }
             };
-            return Ok(NominalTypeLookup::Found(kind));
+            return Ok(NominalTypeLookup::Found(TypeSlot::Value(ValueType::new(
+                kind, type_span,
+            ))));
         }
         LookupCandidate::Absent => {}
         LookupCandidate::Error(source) => {
@@ -973,7 +1063,7 @@ pub(crate) fn lower_nat_expr(
 }
 
 enum NominalTypeLookup {
-    Found(TypeExprKind),
+    Found(TypeSlot),
     Absent {
         deferred_error: Option<ModuleResolveError>,
     },
@@ -1082,13 +1172,18 @@ mod tests {
         let resolver = modules.build().unwrap();
 
         let scope = GenericScope::new();
-        let lowered = lower_type_expr(
+        let lowered = lower_decl_type(
             first_param_type(&main),
             TypeLoweringContext::new(&main_id, &resolver, &scope),
         )
         .unwrap();
 
-        let TypeExprKind::Indexed { base, indexes } = lowered.kind else {
+        let DeclType::Indexed {
+            element: base,
+            indexes,
+            ..
+        } = lowered
+        else {
             panic!("expected indexed type, got {lowered:?}");
         };
         let [IndexRef::Concrete(index)] = indexes.as_slice() else {
@@ -1097,7 +1192,7 @@ mod tests {
         assert_eq!(index.value.owner(), &lib_id);
         assert_eq!(index.value.as_str(), "Phase");
 
-        let TypeExprKind::TypeApplication { name, generic_args } = base.kind else {
+        let ValueTypeKind::TypeApplication { name, generic_args } = base.kind else {
             panic!("expected type application, got {base:?}");
         };
         assert_eq!(name.value.owner(), &lib_id);
@@ -1150,25 +1245,34 @@ mod tests {
             .payload
             .as_ref()
             .expect("Series constructor should have payload");
-        let value_type = lower_type_expr(
+        let value_type = lower_decl_type(
             &payload[0].type_ann,
             TypeLoweringContext::new(&owner_id, &resolver, &scope),
         )
         .unwrap();
-        let TypeExprKind::GenericTypeParam(value_param) = value_type.kind else {
+        let DeclType::Value(ValueType {
+            kind: ValueTypeKind::GenericTypeParam(value_param),
+            ..
+        }) = value_type
+        else {
             panic!("expected generic type parameter, got {value_type:?}");
         };
         assert_eq!(value_param.value.name.as_str(), "F");
 
-        let samples_type = lower_type_expr(
+        let samples_type = lower_decl_type(
             &payload[1].type_ann,
             TypeLoweringContext::new(&owner_id, &resolver, &scope),
         )
         .unwrap();
-        let TypeExprKind::Indexed { base, indexes } = samples_type.kind else {
+        let DeclType::Indexed {
+            element: base,
+            indexes,
+            ..
+        } = samples_type
+        else {
             panic!("expected indexed type, got {samples_type:?}");
         };
-        let TypeExprKind::DimExpr(dim_expr) = base.kind else {
+        let ValueTypeKind::DimExpr(dim_expr) = base.kind else {
             panic!("expected dimension base, got {base:?}");
         };
         let [dim_item] = dim_expr.terms.as_slice() else {
@@ -1188,5 +1292,179 @@ mod tests {
         };
         assert_eq!(index_param.value.name.as_str(), "I");
         assert_eq!(nat_param.value.name.as_str(), "N");
+    }
+
+    const INDEX_PRELUDE: &str = "base dim Length; index M = { A, B }; index J = { X, Y }; \
+         type Box<F: Type> { Box(value: Dimensionless) } \
+         type Vec<D: Dim> { Vec(x: D) } \
+         type Axis<I: Index> { Axis(v: Dimensionless[I]) }";
+
+    fn lower_param_type(param_type: &str) -> Result<DeclType, HirLowerError> {
+        let owner_id = DagId::root_in_package("test", "main");
+        let file = desugared_source(&format!("{INDEX_PRELUDE} param p: {param_type};"));
+        let mut modules = crate::resolve::builder::TestModules::default();
+        modules.add(owner_id.clone(), &file.declarations);
+        let resolver = modules.build().unwrap();
+        let scope = GenericScope::new();
+        lower_decl_type(
+            first_param_type(&file),
+            TypeLoweringContext::new(&owner_id, &resolver, &scope),
+        )
+    }
+
+    #[test]
+    fn index_names_are_rejected_in_every_value_type_position() {
+        // (declaration type, expected diagnostic)
+        let cases = [
+            ("M", "index `M` cannot be used as a type"),
+            ("M[J]", "index `M` cannot be used as a type"),
+            (
+                "Box<M>",
+                "generic parameter `F` expects an argument of sort `Type`, got Index argument",
+            ),
+            (
+                "Box<M[J]>",
+                "generic parameter `F` expects an argument of sort `Type`, got indexed declaration type",
+            ),
+            (
+                "Box<Length[J]>",
+                "generic parameter `F` expects an argument of sort `Type`, got indexed declaration type",
+            ),
+            (
+                "Vec<M>",
+                "generic parameter `D` expects an argument of sort `Dim`, got non-dimension type argument",
+            ),
+            (
+                "Complex<M>",
+                "generic parameter `D` expects an argument of sort `Dim`, got non-dimension type argument",
+            ),
+            (
+                "Axis<Length>",
+                "generic parameter `I` expects an argument of sort `Index`, got non-index type argument",
+            ),
+            (
+                "Axis<Length[J]>",
+                "generic parameter `I` expects an argument of sort `Index`, got non-index type argument",
+            ),
+        ];
+        for (param_type, expected) in cases {
+            let error = lower_param_type(param_type).expect_err(param_type);
+            assert_eq!(error.to_string(), expected, "for `{param_type}`");
+        }
+    }
+
+    #[test]
+    fn index_as_type_error_points_at_the_index_name() {
+        let error = lower_param_type("M[J]").unwrap_err();
+        let HirLowerError::IndexAsType { index } = &error else {
+            panic!("expected IndexAsType, got {error:?}");
+        };
+        let IndexRef::Concrete(name) = index else {
+            panic!("expected concrete index, got {index:?}");
+        };
+        assert_eq!(name.value.as_str(), "M");
+        let source = format!("{INDEX_PRELUDE} param p: M[J];");
+        assert_eq!(
+            &source[name.span.offset()..name.span.offset() + name.span.len()],
+            "M"
+        );
+    }
+
+    #[test]
+    fn index_positions_accept_index_names() {
+        let DeclType::Value(ValueType {
+            kind: ValueTypeKind::Key(IndexRef::Concrete(key)),
+            ..
+        }) = lower_param_type("Key<M>").unwrap()
+        else {
+            panic!("expected Key<M>");
+        };
+        assert_eq!(key.value.as_str(), "M");
+
+        let DeclType::Value(ValueType {
+            kind: ValueTypeKind::TypeApplication { generic_args, .. },
+            ..
+        }) = lower_param_type("Axis<M>").unwrap()
+        else {
+            panic!("expected Axis<M>");
+        };
+        assert!(matches!(
+            generic_args.as_slice(),
+            [GenericArg::Index(IndexRef::Concrete(name))] if name.value.as_str() == "M"
+        ));
+
+        let DeclType::Indexed { element, .. } = lower_param_type("Box<Length>[M]").unwrap() else {
+            panic!("expected indexed Box<Length>");
+        };
+        assert!(matches!(
+            element.kind,
+            ValueTypeKind::TypeApplication { ref generic_args, .. }
+                if matches!(generic_args.as_slice(), [GenericArg::Type(_)])
+        ));
+    }
+
+    #[test]
+    fn nested_indexed_syntax_is_rejected() {
+        let owner_id = DagId::root_in_package("test", "main");
+        let file = desugared_source(&format!("{INDEX_PRELUDE} param p: Length[M];"));
+        let mut modules = crate::resolve::builder::TestModules::default();
+        modules.add(owner_id.clone(), &file.declarations);
+        let resolver = modules.build().unwrap();
+        let scope = GenericScope::new();
+        let inner = first_param_type(&file).clone();
+        let ast::TypeExprKind::Indexed { indexes, .. } = &inner.kind else {
+            panic!("expected indexed syntax");
+        };
+        let nested = ast::TypeExpr {
+            kind: ast::TypeExprKind::Indexed {
+                indexes: indexes.clone(),
+                base: Box::new(inner.clone()),
+            },
+            constraints: Vec::new(),
+            span: inner.span,
+        };
+        let error = lower_decl_type(
+            &nested,
+            TypeLoweringContext::new(&owner_id, &resolver, &scope),
+        )
+        .unwrap_err();
+        assert_eq!(error, HirLowerError::NestedIndexedType { span: inner.span });
+    }
+
+    #[test]
+    fn index_refs_render_their_leaf_spelling() {
+        let owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+            DagId::root_in_package("test", "main"),
+            StructTypeName::expect_valid("T"),
+        ));
+        let span = Span::new(0, 1);
+        let param = |name: &str| {
+            NatExpr::Param(Spanned::new(
+                GenericParamId::new(owner.clone(), GenericParamName::expect_valid(name)),
+                span,
+            ))
+        };
+        let sum = NatExpr::Add(
+            crate::syntax::non_empty::AtLeastTwo::new(
+                NatExpr::Mul(
+                    crate::syntax::non_empty::AtLeastTwo::new(
+                        NatExpr::Literal(2, span),
+                        param("N"),
+                    ),
+                    span,
+                ),
+                NatExpr::Literal(1, span),
+            ),
+            span,
+        );
+        assert_eq!(IndexRef::Finite(sum).to_string(), "Fin(2 * N + 1)");
+        assert_eq!(
+            IndexRef::GenericParam(Spanned::new(
+                GenericParamId::new(owner, GenericParamName::expect_valid("I")),
+                span,
+            ))
+            .to_string(),
+            "I"
+        );
     }
 }

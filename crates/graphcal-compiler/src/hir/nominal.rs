@@ -568,7 +568,7 @@ fn lower_nominal_field(
     let prelude = super::PreludeTypeScope::graphcal();
     let type_ctx = super::TypeLoweringContext::new(identity.owner(), ctx.resolver, generic_scope)
         .with_prelude(&prelude);
-    let type_expr = super::lower_type_expr(field.type_ann(), type_ctx).map_err(|error| {
+    let decl_type = super::lower_decl_type(field.type_ann(), type_ctx).map_err(|error| {
         super::diagnostics::type_lower_error_to_graphcal(&error, field.type_ann(), ctx.src)
     })?;
     let expr_ctx = super::ExprLoweringContext::new(
@@ -596,7 +596,7 @@ fn lower_nominal_field(
     Ok(NominalField::new(
         field.name().clone(),
         super::TypeAnnotation {
-            type_expr,
+            decl_type,
             domain_bounds,
             span: field.type_ann().span,
         },

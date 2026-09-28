@@ -91,7 +91,9 @@ impl ResolvedGenericArg {
 /// A fully-resolved type expression.
 ///
 /// Unlike the raw AST `TypeExpr`, every name here has been classified as a
-/// concrete dimension, struct, generic dim param, or index generic argument.
+/// concrete dimension, struct, or generic parameter. Index arguments are
+/// never type expressions; they live only in [`ResolvedGenericArg::Index`]
+/// and the index axes of `Key` / `Indexed`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedTypeExpr {
     /// `Dimensionless`
@@ -102,11 +104,6 @@ pub enum ResolvedTypeExpr {
     Int,
     /// A datetime instant in a specific time scale (e.g., `Datetime` = UTC, `Datetime<TT>`).
     Datetime(TimeScale),
-    /// An index argument to a generic type parameter constrained as `Index`.
-    ///
-    /// This is not a standalone value type and must not appear as a resolved
-    /// declaration annotation.
-    IndexArg(ResolvedIndex),
     /// A concrete quantity type, e.g. `Length * Time^-2`.
     Quantity(Dimension),
     /// A dimension-aware complex quantity type, e.g. `Complex<Length>`.
@@ -156,7 +153,6 @@ impl ResolvedTypeExpr {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::IndexArg(index) => format!("index {index}"),
             Self::Quantity(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {

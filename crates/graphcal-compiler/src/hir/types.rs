@@ -64,7 +64,7 @@ impl BuiltinType {
 /// A canonically resolved declaration type and its HIR domain bounds.
 #[derive(Debug, Clone)]
 pub struct TypeAnnotation {
-    pub type_expr: TypeExpr,
+    pub decl_type: DeclType,
     pub domain_bounds: Vec<DomainBound>,
     pub span: Span,
 }
@@ -77,38 +77,52 @@ pub struct DomainBound {
     pub span: Span,
 }
 
-/// A resolved type expression that still preserves source-level structure.
+/// The type of a declaration or struct field: a value type, optionally
+/// indexed by one or more axes (`T[I, J]`).
+///
+/// Indexing is a declaration-level shape, not a value type: an indexed type
+/// cannot appear as a `Type`-sorted generic argument, and the element of an
+/// indexed type is always a [`ValueType`] (never another indexed type).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclType {
+    /// A scalar (non-indexed) value type.
+    Value(ValueType),
+    /// An indexed type expression.
+    Indexed {
+        element: ValueType,
+        indexes: NonEmpty<IndexRef>,
+        span: Span,
+    },
+}
+
+/// A resolved value type that still preserves source-level structure.
 ///
 /// This is not TIR's semantic `ResolvedTypeExpr`: HIR keeps references to named
 /// dimensions/types/indexes as canonical identities instead of immediately
-/// collapsing them to registry values such as `Dimension`.
+/// collapsing them to registry values such as `Dimension`. An index name is
+/// never a value type; it appears only as an [`IndexRef`] (in `Key<I>`, an
+/// indexed declaration type, or an `Index`-sorted [`GenericArg`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeExpr {
-    pub kind: TypeExprKind,
+pub struct ValueType {
+    pub kind: ValueTypeKind,
     pub(crate) span: Span,
 }
 
-impl TypeExpr {
-    /// Create a HIR type expression.
+impl ValueType {
+    /// Create a HIR value type.
     #[must_use]
-    pub(crate) const fn new(kind: TypeExprKind, span: Span) -> Self {
+    pub(crate) const fn new(kind: ValueTypeKind, span: Span) -> Self {
         Self { kind, span }
     }
 }
 
-/// The resolved shape of a type expression.
+/// The resolved shape of a value type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeExprKind {
+pub enum ValueTypeKind {
     /// A built-in type with closed meaning.
     Builtin(BuiltinType),
     /// A dimension expression denoting a quantity type.
     DimExpr(DimExpr),
-    /// An index name in a type-expression syntactic slot.
-    ///
-    /// This is not a value type. It is accepted only where the surrounding
-    /// generic parameter expects an `Index` argument; declaration annotations
-    /// reject it before TIR construction.
-    Index(IndexRef),
     /// A user-defined non-generic struct/tagged-union type.
     Struct(Spanned<ResolvedStructTypeName>),
     /// A generic type parameter (`F: Type`).
@@ -122,11 +136,6 @@ pub enum TypeExprKind {
     TypeApplication {
         name: Spanned<ResolvedStructTypeName>,
         generic_args: Vec<GenericArg>,
-    },
-    /// An indexed type expression.
-    Indexed {
-        base: Box<TypeExpr>,
-        indexes: NonEmpty<IndexRef>,
     },
 }
 
@@ -156,7 +165,8 @@ pub enum GenericArg {
     Dim(DimArg),
     Index(IndexRef),
     Nat(NatExpr),
-    Type(TypeExpr),
+    /// A `Type`-sorted argument: always a (non-indexed) value type.
+    Type(ValueType),
 }
 
 impl GenericArg {
@@ -165,13 +175,9 @@ impl GenericArg {
     pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Dim(arg) => arg.span(),
-            Self::Index(index) => match index {
-                IndexRef::Concrete(name) => name.span,
-                IndexRef::GenericParam(param) => param.span,
-                IndexRef::Finite(cardinality) => cardinality.span(),
-            },
+            Self::Index(index) => index.span(),
             Self::Nat(nat) => nat.span(),
-            Self::Type(type_expr) => type_expr.span,
+            Self::Type(value_type) => value_type.span,
         }
     }
 }
@@ -219,6 +225,29 @@ pub enum IndexRef {
     Finite(NatExpr),
 }
 
+impl std::fmt::Display for IndexRef {
+    /// Leaf-only diagnostic spelling (`Phase`, `I`, `Fin(N + 1)`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Concrete(name) => f.write_str(name.value.as_str()),
+            Self::GenericParam(param) => write!(f, "{}", param.value.name),
+            Self::Finite(cardinality) => write!(f, "Fin({cardinality})"),
+        }
+    }
+}
+
+impl IndexRef {
+    /// Source span for diagnostics.
+    #[must_use]
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Concrete(name) => name.span,
+            Self::GenericParam(param) => param.span,
+            Self::Finite(cardinality) => cardinality.span(),
+        }
+    }
+}
+
 /// A resolved type-level natural-number expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NatExpr {
@@ -230,6 +259,31 @@ pub enum NatExpr {
     Add(AtLeastTwo<Self>, Span),
     /// Multiplication of two or more operands.
     Mul(AtLeastTwo<Self>, Span),
+}
+
+impl std::fmt::Display for NatExpr {
+    /// Diagnostic spelling (`N + 1`, `2 * N`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn join(
+            f: &mut std::fmt::Formatter<'_>,
+            operands: &AtLeastTwo<NatExpr>,
+            separator: &str,
+        ) -> std::fmt::Result {
+            for (position, operand) in operands.iter().enumerate() {
+                if position > 0 {
+                    f.write_str(separator)?;
+                }
+                write!(f, "{operand}")?;
+            }
+            Ok(())
+        }
+        match self {
+            Self::Literal(value, _) => write!(f, "{value}"),
+            Self::Param(param) => write!(f, "{}", param.value.name),
+            Self::Add(operands, _) => join(f, operands, " + "),
+            Self::Mul(operands, _) => join(f, operands, " * "),
+        }
+    }
 }
 
 impl NatExpr {
