@@ -120,7 +120,7 @@ pub fn preprocess_dag_body_self_imports(
                         ImportItemPresence::Missing => {
                             return Err(import_item_not_found_error(
                                 parent_ast,
-                                orig_name,
+                                orig_name.atom(),
                                 item.namespace,
                                 &import_decl.path.display_path(),
                                 src,
@@ -138,7 +138,7 @@ pub fn preprocess_dag_body_self_imports(
                         ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => {}
                     }
                     if let Some(binding) = exported_bindings.iter().find(|binding| {
-                        binding.name == *orig_name
+                        &binding.name == orig_name.atom()
                             && binding.target.kind().namespace() == item.namespace
                     }) {
                         validate_constructor_alias(binding.target.kind(), item, src)?;
@@ -154,18 +154,20 @@ pub fn preprocess_dag_body_self_imports(
                             // bare term item.
                         }
                         ImportItemNamespace::Term => {
-                            let disposition =
-                                pure_import_term_disposition(&parent_ast.declarations, orig_name)
-                                    .ok_or_else(|| {
-                                    import_item_not_found_error(
-                                        parent_ast,
-                                        orig_name,
-                                        item.namespace,
-                                        &import_decl.path.display_path(),
-                                        src,
-                                        span,
-                                    )
-                                })?;
+                            let disposition = pure_import_term_disposition(
+                                &parent_ast.declarations,
+                                orig_name.as_str(),
+                            )
+                            .ok_or_else(|| {
+                                import_item_not_found_error(
+                                    parent_ast,
+                                    orig_name.atom(),
+                                    item.namespace,
+                                    &import_decl.path.display_path(),
+                                    src,
+                                    span,
+                                )
+                            })?;
                             match disposition {
                                 PureImportTermDisposition::BindConstant => {
                                     let scoped = ScopedName::local(local_name);
@@ -174,13 +176,13 @@ pub fn preprocess_dag_body_self_imports(
                                         scoped,
                                         graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
                                             parent_dag_id.clone(),
-                                            DeclName::from_atom(orig_name.clone()),
+                                            DeclName::from_atom(orig_name.atom().clone()),
                                         ),
                                     );
                                 }
                                 PureImportTermDisposition::ResolverOnly => {}
                                 PureImportTermDisposition::Reject(reason) => {
-                                    return Err(reason.diagnostic(orig_name, src, span));
+                                    return Err(reason.diagnostic(orig_name.atom(), src, span));
                                 }
                             }
                         }

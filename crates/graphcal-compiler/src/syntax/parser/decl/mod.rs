@@ -114,9 +114,13 @@ impl Parser<'_> {
             } else {
                 if fields
                     .iter()
-                    .any(|f: &PlotField| f.name.value.as_str() == field_name.name)
+                    .any(|f: &PlotField| f.name.value.as_str() == field_name.name.as_str())
                 {
-                    return Err(self.duplicate_plot_field(&field_name.name, kind, field_start));
+                    return Err(self.duplicate_plot_field(
+                        field_name.name.as_str(),
+                        kind,
+                        field_start,
+                    ));
                 }
                 let value = self.parse_expr()?;
                 let field_end = value.span;

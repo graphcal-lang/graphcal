@@ -263,7 +263,7 @@ pub fn normalize_nat_expr(
                 .iter()
                 .find(|p| p.as_str() == ident.name.as_str())
                 .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: IndexName::from_atom(ident.name.clone()).into(),
+                    name: IndexName::from_atom(ident.name.atom().clone()).into(),
                     src: src.clone(),
                     span: ident.span.into(),
                 })?;

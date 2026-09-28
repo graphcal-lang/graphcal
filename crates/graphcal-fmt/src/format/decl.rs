@@ -101,7 +101,7 @@ fn visibility_prefix(visibility: Visibility) -> RcDoc<'static> {
 }
 
 fn format_attribute(fmt: &Formatter<'_>, attr: &Attribute) -> RcDoc<'static> {
-    let mut doc = RcDoc::text("#[").append(RcDoc::text(attr.name.name.clone()));
+    let mut doc = RcDoc::text("#[").append(RcDoc::text(attr.name.name.as_str().to_owned()));
     if !attr.args.is_empty() {
         let args = attr
             .args
@@ -646,11 +646,11 @@ fn format_import_or_include_kind(
                     if let Some(marker) = item.namespace.marker() {
                         doc = doc.append(RcDoc::text(marker)).append(RcDoc::text(" "));
                     }
-                    doc = doc.append(RcDoc::text(item.name.name.clone()));
+                    doc = doc.append(RcDoc::text(item.name.name.as_str().to_owned()));
                     if let Some(ref alias) = item.alias {
                         doc = doc
                             .append(RcDoc::text(" as "))
-                            .append(RcDoc::text(alias.name.clone()));
+                            .append(RcDoc::text(alias.name.as_str().to_owned()));
                     }
                     doc
                 })
@@ -684,7 +684,7 @@ fn format_include_param_bindings(
                 graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
             };
             RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.clone()))
+                .append(RcDoc::text(b.name.name.as_str().to_owned()))
                 .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &b.value))
         })

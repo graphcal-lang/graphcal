@@ -157,11 +157,13 @@ impl IdentPath {
     #[must_use]
     pub(crate) fn to_name_path(&self) -> crate::syntax::names::NamePath {
         self.owner.as_ref().map_or_else(
-            || NamePath::local(self.member.name.clone()),
+            || NamePath::local(self.member.name.atom().clone()),
             |owner| {
                 NamePath::member(
-                    crate::syntax::names::NamespacePath::new(owner.clone().map(|ident| ident.name)),
-                    self.member.name.clone(),
+                    crate::syntax::names::NamespacePath::new(
+                        owner.clone().map(|ident| ident.name.into_atom()),
+                    ),
+                    self.member.name.atom().clone(),
                 )
             },
         )
@@ -222,10 +224,10 @@ impl IdentPath {
         let member = self.member.name;
         match self.owner {
             Some(owner) => NamePath::member(
-                crate::syntax::names::NamespacePath::new(owner.map(|ident| ident.name)),
-                member,
+                crate::syntax::names::NamespacePath::new(owner.map(|ident| ident.name.into_atom())),
+                member.into_atom(),
             ),
-            None => NamePath::local(member),
+            None => NamePath::local(member.into_atom()),
         }
     }
 
@@ -1100,7 +1102,7 @@ impl NatExpr {
         }
         match self {
             Self::Literal(n, _) => write!(f, "{n}")?,
-            Self::Var(ident) => f.write_str(&ident.name)?,
+            Self::Var(ident) => f.write_str(ident.name.as_str())?,
             Self::Add(operands, _) => {
                 Self::fmt_operands(operands, " + ", precedence, f)?;
             }
@@ -1189,7 +1191,7 @@ impl AmbiguousGenericArg {
             f.write_str("(")?;
         }
         match self {
-            Self::Name(ident) => f.write_str(&ident.name)?,
+            Self::Name(ident) => f.write_str(ident.name.as_str())?,
             Self::Mul(operands, _) => {
                 for (index, operand) in operands.iter().enumerate() {
                     if index > 0 {

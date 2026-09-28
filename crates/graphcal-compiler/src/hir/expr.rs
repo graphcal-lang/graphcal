@@ -1940,7 +1940,8 @@ impl<'a> ExprLowerer<'a> {
     /// Static atom into the expression HIR.
     fn lower_bare_name_ref(&self, ident: &Ident) -> Result<ExprKind, ExprLowerError> {
         let span = ident.span;
-        if let Ok(local) = self.lookup_local(&LocalName::from_atom(ident.name.clone()), span) {
+        if let Ok(local) = self.lookup_local(&LocalName::from_atom(ident.name.atom().clone()), span)
+        {
             return Ok(ExprKind::LocalRef(Spanned::new(local, span)));
         }
         if let Some(builtin) = BuiltinConst::parse(ident.name.as_str()) {
@@ -1949,7 +1950,7 @@ impl<'a> ExprLowerer<'a> {
                 span,
             )));
         }
-        let path = NamePath::local(ident.name.clone());
+        let path = NamePath::local(ident.name.atom().clone());
         let constructor_result = self
             .ctx
             .resolver
@@ -1962,7 +1963,7 @@ impl<'a> ExprLowerer<'a> {
             });
         }
 
-        let scoped_name = ScopedName::from(ident.name.clone());
+        let scoped_name = ScopedName::from(ident.name.atom().clone());
         match self.resolve_decl_scoped_name(&scoped_name, span) {
             Ok(resolved) => {
                 let kind = self
@@ -2020,7 +2021,7 @@ impl<'a> ExprLowerer<'a> {
         let mut params = Vec::new();
         let mut static_bindings = DagCallStaticBindings::default();
         for binding in bindings {
-            let input_path = NamePath::local(binding.name.name.clone());
+            let input_path = NamePath::local(binding.name.name.atom().clone());
             match binding.category {
                 InputBindingCategory::Unmarked => {
                     params.push(self.lower_param_binding(target, binding)?);
@@ -2102,12 +2103,12 @@ impl<'a> ExprLowerer<'a> {
                         }) => crate::registry::types::FiniteIndex::try_from_u64(cardinality)
                             .map(DagCallIndexBinding::Finite)
                             .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
-                                name: binding.name.name.clone(),
+                                name: binding.name.name.atom().clone(),
                                 span: binding.value.span,
                             })?,
                         _ => {
                             return Err(ExprLowerError::InvalidStaticBindingValue {
-                                name: binding.name.name.clone(),
+                                name: binding.name.name.atom().clone(),
                                 span: binding.value.span,
                             });
                         }
@@ -2124,7 +2125,7 @@ impl<'a> ExprLowerer<'a> {
         target: &DagId,
         binding: &ast::ParamBinding,
     ) -> Result<ParamBinding, ExprLowerError> {
-        let path = NamePath::local(binding.name.name.clone());
+        let path = NamePath::local(binding.name.name.atom().clone());
         let target_name = self
             .ctx
             .resolver
@@ -2458,7 +2459,7 @@ impl<'a> ExprLowerer<'a> {
         };
         let scale = ident.name.as_str().parse::<TimeScale>().map_err(|_| {
             ExprLowerError::UnsupportedEpochTimeScale {
-                name: ident.name.clone(),
+                name: ident.name.atom().clone(),
                 span: ident.span,
             }
         })?;
@@ -2706,17 +2707,17 @@ impl<'a> ExprLowerer<'a> {
                 .resolver
                 .plugin_alias(self.ctx.owner, qualifier.name.as_str())
         {
-            let name = crate::syntax::function_name::FnName::from_atom(leaf.name.clone());
+            let name = crate::syntax::function_name::FnName::from_atom(leaf.name.atom().clone());
             if !target.functions().contains_key(&name) {
                 return Err(ExprLowerError::UnknownExternFunction {
-                    alias: ModuleAliasName::from_atom(qualifier.name.clone()),
+                    alias: ModuleAliasName::from_atom(qualifier.name.atom().clone()),
                     name,
                     span: callee.span(),
                 });
             }
             return Ok(UnappliedFunctionRef::External(ExternFnRef {
                 plugin: target.path().clone(),
-                alias: ModuleAliasName::from_atom(qualifier.name.clone()),
+                alias: ModuleAliasName::from_atom(qualifier.name.atom().clone()),
                 name,
             }));
         }
@@ -2841,7 +2842,7 @@ impl<'a> ExprLowerer<'a> {
                 }))
             }
             ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
-                self.lookup_local(&LocalName::from_atom(ident.name.clone()), ident.span)?,
+                self.lookup_local(&LocalName::from_atom(ident.name.atom().clone()), ident.span)?,
                 ident.span,
             ))),
             ast::IndexArg::Expr(expr) => Ok(IndexArg::Expr(Box::new(self.lower_expr(expr)))),
@@ -2965,7 +2966,8 @@ impl<'a> ExprLowerer<'a> {
         match binding {
             ast::PatternBinding::Bind { field, var } => Ok(PatternBinding::Bind {
                 field: field.clone(),
-                local: self.allocate_local(LocalName::from_atom(var.name.clone()), var.span)?,
+                local: self
+                    .allocate_local(LocalName::from_atom(var.name.atom().clone()), var.span)?,
             }),
             ast::PatternBinding::Wildcard { field, span } => Ok(PatternBinding::Wildcard {
                 field: field.clone(),

@@ -438,7 +438,7 @@ node x: Dimensionless = match @r {
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
-                    assert_eq!(callee.as_bare().unwrap().name, "TransferResult");
+                    assert_eq!(callee.as_bare().unwrap().name.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
                     assert_eq!(fields[0].name.value.as_str(), "dv1");
                     assert_eq!(fields[1].name.value.as_str(), "dv2");
@@ -456,8 +456,8 @@ node x: Dimensionless = match @r {
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
-                    assert_eq!(callee.owner_segments().unwrap()[0].name, "module");
-                    assert_eq!(callee.leaf().name, "TransferResult");
+                    assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "module");
+                    assert_eq!(callee.leaf().name.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 1);
                 }
                 other => panic!("expected ConstructorCall, got {other:?}"),
@@ -498,7 +498,7 @@ node x: Dimensionless = match @r {
                     generic_args,
                     fields,
                 } => {
-                    assert_eq!(callee.as_bare().unwrap().name, "Vec3");
+                    assert_eq!(callee.as_bare().unwrap().name.as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 2);
                     assert!(matches!(
                         &generic_args[0],
@@ -685,7 +685,9 @@ node x: Dimensionless = match @r {
                     ExprKind::IndexAccess { args, .. } => {
                         assert_eq!(args.len(), 1);
                         match &args[0] {
-                            crate::syntax::ast::IndexArg::Var(ident) => assert_eq!(ident.name, "m"),
+                            crate::syntax::ast::IndexArg::Var(ident) => {
+                                assert_eq!(ident.name.as_str(), "m");
+                            }
                             other @ (crate::syntax::ast::IndexArg::Variant { .. }
                             | crate::syntax::ast::IndexArg::Expr(_)) => {
                                 panic!("expected Var, got {other:?}")
@@ -770,13 +772,13 @@ node x: Dimensionless = match @r {
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
                         panic!("expected syntactic path pattern");
                     };
-                    assert_eq!(path.as_bare().unwrap().name, "LowThrust");
+                    assert_eq!(path.as_bare().unwrap().name.as_str(), "LowThrust");
                     assert_eq!(bindings.len(), 2);
                     assert!(matches!(bindings, PatternBindings::Parenthesized(_)));
                     match &bindings.as_slice()[0] {
                         PatternBinding::Bind { field, var } => {
                             assert_eq!(field.value.as_str(), "thrust");
-                            assert_eq!(var.name, "thrust");
+                            assert_eq!(var.name.as_str(), "thrust");
                         }
                         other @ PatternBinding::Wildcard { .. } => {
                             panic!("expected bind, got {other:?}")

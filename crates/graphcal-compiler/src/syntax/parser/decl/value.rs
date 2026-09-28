@@ -104,8 +104,8 @@ impl Parser<'_> {
             let name = ScopedName::qualified_path(
                 owner
                     .iter()
-                    .map(|part| ModuleAliasName::from_atom(part.name.clone())),
-                DeclName::from_atom(member.name.clone()),
+                    .map(|part| ModuleAliasName::from_atom(part.name.atom().clone())),
+                DeclName::from_atom(member.name.atom().clone()),
             );
             Ok(Spanned::new(name, at.merge(path.span())))
         })?;

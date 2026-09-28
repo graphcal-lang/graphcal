@@ -246,7 +246,7 @@ pub(super) fn reject_file_root_stem_imports(
             return Ok(());
         };
         let is_file_root_self_import = path.segments.len() == 1
-            && path.segments[0].name == file_stem
+            && path.segments[0].name.as_str() == file_stem
             && !dag_names.contains(path.segments[0].name.as_str());
         if is_file_root_self_import {
             Err(file_root_self_import_error(path, src))

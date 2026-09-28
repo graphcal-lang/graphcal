@@ -33,6 +33,7 @@ use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath, NamespacePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
+use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_compiler::syntax::type_name::FieldName;
 
 /// A synthetic span used for all AST nodes constructed from JSON input.
@@ -45,21 +46,22 @@ fn synth_ident_path(
 ) -> Result<IdentPath, JsonInputError> {
     let path = parse_name_path(name, param, role)?;
     let (owner, member) = path.into_parts();
-    Ok(match owner {
-        Some(owner) => IdentPath::member(
-            owner.into_segments().map(|name| Ident {
+    let ident = |atom: NameAtom| {
+        SourceIdentifier::parse(atom.as_str())
+            .map(|name| Ident {
                 name,
                 span: SYNTH_SPAN,
-            }),
-            Ident {
-                name: member,
-                span: SYNTH_SPAN,
-            },
-        ),
-        None => IdentPath::bare(Ident {
-            name: member,
-            span: SYNTH_SPAN,
-        }),
+            })
+            .map_err(|reason| JsonInputError::InvalidIdentifier {
+                param: param.to_string(),
+                role,
+                value: name.to_string(),
+                reason,
+            })
+    };
+    Ok(match owner {
+        Some(owner) => IdentPath::member(owner.into_segments().try_map(ident)?, ident(member)?),
+        None => IdentPath::bare(ident(member)?),
     })
 }
 
@@ -406,6 +408,13 @@ pub enum JsonInputError {
         value: String,
         reason: NameAtomError,
     },
+    /// A JSON-provided constructor path segment is not a source identifier.
+    InvalidIdentifier {
+        param: String,
+        role: &'static str,
+        value: String,
+        reason: SourceIdentifierError,
+    },
     /// A GCL expression string could not be parsed.
     ///
     /// Carries the typed [`graphcal_compiler::syntax::parser::ParseError`]
@@ -462,6 +471,14 @@ impl fmt::Display for JsonInputError {
             Self::Json(e) => write!(f, "invalid JSON: {e}"),
             Self::TopLevelNotObject => write!(f, "top-level JSON value must be an object"),
             Self::InvalidName {
+                param,
+                role,
+                value,
+                reason,
+            } => {
+                write!(f, "invalid {role} name `{value}` for `{param}`: {reason}")
+            }
+            Self::InvalidIdentifier {
                 param,
                 role,
                 value,
@@ -847,7 +864,7 @@ mod tests {
         let expr = &overrides[&DeclName::expect_valid("transfer")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
-                assert_eq!(callee.as_bare().unwrap().name, "TransferResult");
+                assert_eq!(callee.as_bare().unwrap().name.as_str(), "TransferResult");
                 assert_eq!(fields.len(), 2);
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
@@ -887,7 +904,7 @@ mod tests {
         let expr = &overrides[&DeclName::expect_valid("maneuver")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
-                assert_eq!(callee.as_bare().unwrap().name, "LowThrust");
+                assert_eq!(callee.as_bare().unwrap().name.as_str(), "LowThrust");
                 assert_eq!(fields.len(), 2);
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
@@ -901,7 +918,7 @@ mod tests {
         let expr = &overrides[&DeclName::expect_valid("status")];
         match &expr.kind {
             ExprKind::ConstructorCall { callee, fields, .. } => {
-                assert_eq!(callee.as_bare().unwrap().name, "Nominal");
+                assert_eq!(callee.as_bare().unwrap().name.as_str(), "Nominal");
                 assert!(fields.is_empty());
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
@@ -979,8 +996,8 @@ mod tests {
 
         match &overrides[&DeclName::expect_valid("status")].kind {
             ExprKind::ConstructorCall { callee, .. } => {
-                assert_eq!(callee.owner_segments().unwrap()[0].name, "lib");
-                assert_eq!(callee.leaf().name, "Pick");
+                assert_eq!(callee.owner_segments().unwrap()[0].name.as_str(), "lib");
+                assert_eq!(callee.leaf().name.as_str(), "Pick");
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
         }
@@ -1097,5 +1114,40 @@ mod tests {
             ),
             "expected InvalidName for dotted parameter key, got {result:?}",
         );
+    }
+
+    #[test]
+    fn constructor_names_must_be_source_identifiers() {
+        for (json, value) in [
+            (r#"{"status": {"variant": "node"}}"#, "node"),
+            (
+                r#"{"status": {"variant": "lib::bad-name"}}"#,
+                "lib::bad-name",
+            ),
+            (r#"{"status": {"variant": "1st::Pick"}}"#, "1st::Pick"),
+        ] {
+            match &json_to_overrides(json) {
+                Err(
+                    error @ JsonInputError::InvalidIdentifier {
+                        param,
+                        role,
+                        value: rendered,
+                        ..
+                    },
+                ) => {
+                    assert_eq!(
+                        (param.as_str(), *role, rendered.as_str()),
+                        ("status", "constructor", value)
+                    );
+                    assert!(
+                        error.to_string().starts_with(&format!(
+                            "invalid constructor name `{value}` for `status`: "
+                        )),
+                        "{error}"
+                    );
+                }
+                other => panic!("expected InvalidIdentifier for `{value}`, got {other:?}"),
+            }
+        }
     }
 }

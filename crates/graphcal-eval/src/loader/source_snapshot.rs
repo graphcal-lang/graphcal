@@ -346,7 +346,7 @@ fn is_same_file_reference(path: &ModulePath, dag_names: &HashSet<String>, file_s
     let [segment] = path.segments() else {
         return false;
     };
-    dag_names.contains(segment.name.as_str()) || segment.name == file_stem
+    dag_names.contains(segment.name.as_str()) || segment.name.as_str() == file_stem
 }
 
 pub(super) fn collect_inline_dag_names(declarations: &[Declaration]) -> HashSet<String> {

@@ -105,7 +105,8 @@ where
     let same_file_target =
         resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
             .map(|target| ResolvedModuleTarget::in_file(context.file_dag_id.clone(), target));
-    let file_root_target = (path.segments.len() == 1 && path.segments[0].name == context.file_stem)
+    let file_root_target = (path.segments.len() == 1
+        && path.segments[0].name.as_str() == context.file_stem)
         .then(|| ResolvedModuleTarget::file_root(context.file_dag_id.clone()));
 
     same_file_target

@@ -51,6 +51,7 @@ use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::plugin::PluginPath;
 use crate::syntax::span::Spanned;
+use crate::syntax::token::SourceIdentifier;
 
 /// Structural equality of two [`Raw`](crate::syntax::phase::Raw) syntax trees
 /// modulo formatting — currently, modulo source spans.
@@ -92,6 +93,7 @@ format_equivalent_via_eq!(
     ExactRational,
     // Identifiers and paths — written identity only, never a span.
     NameAtom,
+    SourceIdentifier,
     NamePath,
     ScopedName,
     UnitRef,
