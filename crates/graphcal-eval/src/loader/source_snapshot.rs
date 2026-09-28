@@ -17,31 +17,65 @@ use miette::NamedSource;
 
 use super::{ModulePathKey, ResolvedModuleTarget};
 use crate::eval::CompileError;
+use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::import_cycle::ImportChainFile;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::parser::Parser;
 use graphcal_package::PackageInstanceId;
 
 /// Identity of one source file within a snapshot.
 pub(super) trait SourceKey: Clone + Eq + Hash {
+    /// Package tree that owns a file of this kind.
+    type Package: Clone;
+
+    /// The file at canonical `path` inside `package`'s source tree.
+    fn in_package(package: Self::Package, path: PathBuf) -> Self;
+
+    /// Package tree owning this file.
+    fn package(&self) -> &Self::Package;
+
     /// Canonical path of the file (retained for I/O and diagnostics).
     fn path(&self) -> &Path;
 
     /// Label of this file on an import chain.
     fn chain_file(&self) -> ImportChainFile;
+
+    /// Name under which this file's source text is rendered in diagnostics.
+    fn diagnostic_name(&self) -> String;
 }
 
-/// Single-package projects identify files by canonical path alone.
+/// Single-package projects have one implicit package tree and identify files
+/// by canonical path alone.
 impl SourceKey for PathBuf {
+    type Package = ();
+
+    fn in_package((): (), path: PathBuf) -> Self {
+        path
+    }
+
+    fn package(&self) -> &() {
+        &()
+    }
+
     fn path(&self) -> &Path {
         self
     }
 
     fn chain_file(&self) -> ImportChainFile {
         ImportChainFile::Path(self.clone())
+    }
+
+    /// The canonical path (not just the basename): downstream diagnostic
+    /// emitters recover the file URL via `Url::from_file_path` without an
+    /// external resolver, and basename ambiguity cannot arise. The CLI's
+    /// renderer trims it for display anyway.
+    fn diagnostic_name(&self) -> String {
+        self.display().to_string()
     }
 }
 
@@ -53,6 +87,16 @@ pub(super) struct PackageFileKey {
 }
 
 impl SourceKey for PackageFileKey {
+    type Package = PackageInstanceId;
+
+    fn in_package(package: PackageInstanceId, path: PathBuf) -> Self {
+        Self { package, path }
+    }
+
+    fn package(&self) -> &PackageInstanceId {
+        &self.package
+    }
+
     fn path(&self) -> &Path {
         &self.path
     }
@@ -62,6 +106,10 @@ impl SourceKey for PackageFileKey {
             package: DagPackageId::new(self.package.as_str()),
             path: self.path.clone(),
         }
+    }
+
+    fn diagnostic_name(&self) -> String {
+        format!("{}:{}", self.package, self.path.display())
     }
 }
 
@@ -95,6 +143,33 @@ pub(super) struct ParsedFile {
     pub(super) source: Arc<String>,
     pub(super) named_source: NamedSource<Arc<String>>,
     pub(super) ast: File,
+}
+
+impl ParsedFile {
+    /// Parse and desugar `source` under the diagnostic `name`, rendering a
+    /// parse failure against that same named source. This is the loader's
+    /// only parse sequence.
+    ///
+    /// Until the loader returns `Outcome<_>` itself, cancellation still
+    /// travels inside `CompileError` (as `GraphcalError::Cancelled`).
+    pub(super) fn parse(
+        name: &str,
+        source: Arc<String>,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, CompileError> {
+        let named_source = NamedSource::new(name, Arc::clone(&source));
+        let raw_ast = Parser::new(&source)
+            .parse_file_with_cancellation(cancellation)
+            .map_err(|outcome| match outcome {
+                Outcome::Cancelled => CompileError::from(Cancelled),
+                Outcome::Failed(error) => CompileError::parse(error, named_source.clone()),
+            })?;
+        Ok(Self {
+            source,
+            named_source,
+            ast: File::from(raw_ast),
+        })
+    }
 }
 
 /// Parsed file plus the recorded resolution of each of its dependency paths.
@@ -174,9 +249,10 @@ pub(super) enum ModuleResolution<K> {
     /// The path names this file (possibly the file itself) and, for any
     /// remaining segments, a nested inline DAG inside it.
     Resolved(ResolvedFile<K>),
-    /// The path resolved to a file outside a single-package project's root.
-    /// Unlike [`ResolveFailure`]s, this is rejected in inline-DAG bodies too.
-    OutsideProjectRoot,
+    /// The path resolved to a file outside its package's source root. Unlike
+    /// [`ResolveFailure`]s, this is rejected in inline-DAG bodies too: a
+    /// sandbox escape is never left for the module resolver to report.
+    OutsideRoot,
     /// The path could not be resolved.
     Failed(ResolveFailure),
 }
@@ -212,8 +288,6 @@ pub(super) enum ResolveFailure {
     FileNotFound,
     /// A file without a package manifest cannot import other files.
     CrossFileImportInVirtualPackage,
-    /// The resolved file leaves its package's source root.
-    OutsidePackageRoot,
     /// The locked package graph cannot resolve the path.
     NotLocked { message: String },
     /// The lockfile or package authority is inconsistent.
@@ -253,7 +327,6 @@ impl ResolveFailure {
                     span,
                 }
             }
-            Self::OutsidePackageRoot => outside_root(path, src),
             Self::NotLocked { message } => GraphcalError::EvalError {
                 message: format!("{message}; run `graphcal deps lock` after changing dependencies"),
                 src,

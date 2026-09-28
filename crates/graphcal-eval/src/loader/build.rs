@@ -14,10 +14,9 @@ use miette::NamedSource;
 
 use super::inline_dags::lift_inline_dags;
 use super::source_snapshot::{
-    DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedFile,
-    ParsedSource, ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot,
-    collect_inline_dag_names, file_root_dependency, file_stem, loading_dependency_paths,
-    outside_root,
+    DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
+    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, collect_inline_dag_names,
+    file_root_dependency, file_stem, loading_dependency_paths, outside_root,
 };
 use super::{LoadedFile, ModulePathKey, io_not_found};
 use crate::dependency_ordered::DependencyOrdered;
@@ -141,23 +140,13 @@ impl<K: SourceKey> Builder<K> {
 
         self.loading.pop();
         self.built.insert(file.clone(), dag_id.clone());
-        let ParsedFile {
-            source,
-            named_source,
-            ast,
-        } = parsed.into_file();
-        Ok(LoadedFile {
-            path: file.path().to_path_buf(),
+        Ok(LoadedFile::new(
+            file.path().to_path_buf(),
             dag_id,
-            source,
-            interface: graphcal_compiler::ir::module_interface::ModuleInterface::new(
-                &ast.declarations,
-            ),
-            ast,
-            named_source,
+            parsed.into_file(),
             resolved_imports,
             inline_dags,
-        })
+        ))
     }
 
     /// Load the files named by file-root imports/includes and record each
@@ -177,7 +166,7 @@ impl<K: SourceKey> Builder<K> {
             // An unrecorded path did not resolve to any file.
             let resolved = match parsed.resolution(path) {
                 Some(ModuleResolution::Resolved(resolved)) => resolved,
-                Some(ModuleResolution::OutsideProjectRoot) => {
+                Some(ModuleResolution::OutsideRoot) => {
                     return Err(CompileError::Eval(outside_root(path, src.clone())));
                 }
                 Some(ModuleResolution::Failed(failure)) => return Err(failure.to_error(path, src)),
@@ -213,7 +202,7 @@ impl<K: SourceKey> Builder<K> {
                     self.dependency(&resolved.file)?;
                 }
                 Some(ModuleResolution::Resolved(_) | ModuleResolution::Failed(_)) | None => {}
-                Some(ModuleResolution::OutsideProjectRoot) => {
+                Some(ModuleResolution::OutsideRoot) => {
                     return Err(CompileError::Eval(outside_root(
                         dependency.path,
                         parsed.named_source().clone(),
@@ -268,7 +257,7 @@ mod tests {
     use graphcal_compiler::syntax::decl_name::DeclName;
     use graphcal_package::PackageInstanceId;
 
-    use super::super::source_snapshot::{ModuleLocation, PackageFileKey, ResolvedFile};
+    use super::super::source_snapshot::{ModuleLocation, PackageFileKey, ParsedFile, ResolvedFile};
     use super::super::{InlineBodyImportResolution, ResolvedModuleTarget};
     use super::*;
 
@@ -289,17 +278,12 @@ mod tests {
     }
 
     fn parse(file: &Path, text: &str) -> ParsedFile {
-        let name = file.display().to_string();
-        let source = Arc::new(text.to_string());
-        let named_source = NamedSource::new(name.as_str(), Arc::clone(&source));
-        let raw = graphcal_compiler::syntax::parser::Parser::new(&source)
-            .parse_file()
-            .unwrap();
-        ParsedFile {
-            source,
-            named_source,
-            ast: graphcal_compiler::desugar::desugared_ast::File::from(raw),
-        }
+        ParsedFile::parse(
+            &file.display().to_string(),
+            Arc::new(text.to_string()),
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap()
     }
 
     /// A parsed file whose dependency paths resolve through `table`, keyed by
@@ -638,11 +622,6 @@ mod tests {
             matches!(error, GraphcalError::CrossFileImportInVirtualPackage { ref path, .. } if path == "pkg.b"),
             "{error:?}"
         );
-        let error = failing_import(ResolveFailure::OutsidePackageRoot);
-        assert!(
-            matches!(error, GraphcalError::ImportOutsideRoot { ref path, .. } if path == "pkg.b"),
-            "{error:?}"
-        );
         let error = failing_import(ResolveFailure::NotLocked {
             message: "no dependency `b`".to_string(),
         });
@@ -740,14 +719,14 @@ mod tests {
     }
 
     #[test]
-    fn outside_project_root_is_rejected_at_file_root_and_in_dag_bodies() {
+    fn outside_root_is_rejected_at_file_root_and_in_dag_bodies() {
         for text in ["import pkg.b::{y};", "dag inner { import pkg.b::{y}; }"] {
             let error = build_error(snapshot(
                 "main",
                 [fetched(
                     "main",
                     text,
-                    &[("pkg.b", ModuleResolution::OutsideProjectRoot)],
+                    &[("pkg.b", ModuleResolution::OutsideRoot)],
                 )],
             ));
             assert!(
