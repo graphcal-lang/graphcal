@@ -6,7 +6,7 @@ use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::{ParseError, Parser};
+use super::{Expected, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 enum TableColumnKeys {
     Named(Vec<Spanned<IndexEntryKey>>),
@@ -110,10 +110,8 @@ impl Parser<'_> {
             self.expect(Token::LParen)?;
             let (_, cardinality_span) = self.expect(Token::Number)?;
             let text = self.lexer.slice_at(cardinality_span).replace('_', "");
-            let cardinality = text.parse().map_err(|_| ParseError::InvalidNumber {
-                reason: "table Fin cardinality must be a non-negative integer literal".to_string(),
-                src: self.named_source(),
-                span: cardinality_span.into(),
+            let cardinality = text.parse().map_err(|_| {
+                Self::invalid_number(InvalidNumberReason::TableFinCardinality, cardinality_span)
             })?;
             let (_, end_span) = self.expect(Token::RParen)?;
             return Ok(TableIndexSpec::Finite {
@@ -125,19 +123,17 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let expression = self.lexer.slice_at(span).to_string();
-                Err(ParseError::ExpectedIndexFoundNat {
-                    suggestion: format!("Fin({expression})"),
-                    expression,
-                    src: self.named_source(),
-                    span: span.into(),
-                })
+                Err(ParseError::new(
+                    ParseErrorKind::ExpectedIndexFoundNat { expression },
+                    span,
+                ))
             }
             Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
                 self.parse_ident_path()?.into_spanned_name_path(),
             )),
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("index name or `Fin(N)`", &tok.to_string(), span))
+                Err(Self::unexpected(Expected::TableAxis, tok, span))
             }
         }
     }
@@ -178,31 +174,22 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn table_count_from_len(&self, count: usize, span: Span) -> Result<u64, ParseError> {
-        u64::try_from(count).map_err(|_| ParseError::InvalidNumber {
-            reason: "table value count does not fit in u64".to_string(),
-            src: self.named_source(),
-            span: span.into(),
-        })
+    pub(super) fn table_count_from_len(count: usize, span: Span) -> Result<u64, ParseError> {
+        u64::try_from(count)
+            .map_err(|_| Self::invalid_number(InvalidNumberReason::TableValueCount, span))
     }
 
-    fn table_column_count(&self, columns: &TableColumnKeys, span: Span) -> Result<u64, ParseError> {
+    fn table_column_count(columns: &TableColumnKeys, span: Span) -> Result<u64, ParseError> {
         match columns {
-            TableColumnKeys::Named(keys) => self.table_count_from_len(keys.len(), span),
+            TableColumnKeys::Named(keys) => Self::table_count_from_len(keys.len(), span),
             TableColumnKeys::Finite { cardinality, .. } => Ok(*cardinality),
         }
     }
 
     fn missing_table_data_row(&mut self) -> ParseError {
-        const EXPECTED: &str = "at least one table data row";
-
-        let found = self
-            .lexer
-            .peek_with_span()
-            .map(|(token, span)| (token.to_string(), span));
-        match found {
-            Some((token, span)) => self.unexpected_token(EXPECTED, &token, span),
-            None => self.unexpected_eof(EXPECTED),
+        match self.lexer.peek_with_span() {
+            Some((token, span)) => Self::unexpected(Expected::TableDataRow, *token, span),
+            None => self.unexpected_eof(Expected::TableDataRow),
         }
     }
 
@@ -248,7 +235,7 @@ impl Parser<'_> {
         while self.lexer.peek() != Some(&Token::RBrace) {
             let value = self.parse_expr()?;
             self.expect(Token::Semicolon)?;
-            let i = self.table_count_from_len(entries.len(), value.span)?;
+            let i = Self::table_count_from_len(entries.len(), value.span)?;
             entries.push(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
@@ -258,19 +245,17 @@ impl Parser<'_> {
                 value,
             });
         }
-        let got = self.table_count_from_len(entries.len(), span)?;
+        let got = Self::table_count_from_len(entries.len(), span)?;
         if got != n {
             let end_span = self.lexer.peek_with_span().map_or(span, |(_, s)| s);
             let body_span = Span::new(
                 start_offset,
                 end_span.offset() + end_span.len() - start_offset,
             );
-            return Err(ParseError::TableRowLengthMismatch {
-                expected: n,
-                got,
-                src: self.named_source(),
-                span: body_span.into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::TableRowLengthMismatch { expected: n, got },
+                body_span,
+            ));
         }
         Ok(entries)
     }
@@ -371,15 +356,13 @@ impl Parser<'_> {
             let row_span = row_label_span.merge(row_end_span);
             self.expect(Token::Semicolon)?;
 
-            let expected = self.table_column_count(&col_labels, row_span)?;
-            let got = self.table_count_from_len(row_values.len(), row_span)?;
+            let expected = Self::table_column_count(&col_labels, row_span)?;
+            let got = Self::table_count_from_len(row_values.len(), row_span)?;
             if got != expected {
-                return Err(ParseError::TableRowLengthMismatch {
-                    expected,
-                    got,
-                    src: self.named_source(),
-                    span: row_span.into(),
-                });
+                return Err(ParseError::new(
+                    ParseErrorKind::TableRowLengthMismatch { expected, got },
+                    row_span,
+                ));
             }
 
             for (col_idx, value) in row_values.into_iter().enumerate() {
@@ -392,11 +375,7 @@ impl Parser<'_> {
                     index: col_index_template.clone(),
                     additional_index_spans: Vec::new(),
                     variant: col_labels.key_at(col_idx).ok_or_else(|| {
-                        ParseError::InvalidNumber {
-                            reason: "table column position does not fit in u64".to_string(),
-                            src: self.named_source(),
-                            span: value.span.into(),
-                        }
+                        Self::invalid_number(InvalidNumberReason::TableColumnPosition, value.span)
                     })?,
                 };
                 entries.push(MapEntry {
@@ -411,12 +390,13 @@ impl Parser<'_> {
         if let TableIndexSpec::Finite { cardinality, span } = row_spec
             && row_index_counter != *cardinality
         {
-            return Err(ParseError::TableRowLengthMismatch {
-                expected: *cardinality,
-                got: row_index_counter,
-                src: self.named_source(),
-                span: (*span).into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::TableRowLengthMismatch {
+                    expected: *cardinality,
+                    got: row_index_counter,
+                },
+                *span,
+            ));
         }
 
         Ok(entries)
@@ -446,9 +426,11 @@ impl Parser<'_> {
                     TableIndexSpec::Named(axis) => {
                         let (index, variant, _) = self.parse_index_variant_path()?;
                         if index.value != axis.value {
-                            return Err(self.unexpected_token(
-                                &format!("slice axis `{}`", axis.value.display_path()),
-                                &index.value.display_path(),
+                            return Err(ParseError::new(
+                                ParseErrorKind::SliceAxisMismatch {
+                                    expected: axis.value.clone(),
+                                    found: index.value,
+                                },
                                 index.span,
                             ));
                         }
@@ -462,19 +444,17 @@ impl Parser<'_> {
                         let (_, hash_span) = self.expect(Token::Hash)?;
                         let (_, num_span) = self.expect(Token::Number)?;
                         let text = self.lexer.slice_at(num_span).replace('_', "");
-                        let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                            reason: "expected non-negative integer in slice label".to_string(),
-                            src: self.named_source(),
-                            span: num_span.into(),
+                        let value: u64 = text.parse().map_err(|_| {
+                            Self::invalid_number(InvalidNumberReason::SliceLabel, num_span)
                         })?;
                         if value >= *cardinality {
-                            return Err(ParseError::InvalidNumber {
-                                reason: format!(
-                                    "slice index #{value} out of range for Fin({cardinality})"
-                                ),
-                                src: self.named_source(),
-                                span: num_span.into(),
-                            });
+                            return Err(Self::invalid_number(
+                                InvalidNumberReason::SliceIndexOutOfRange {
+                                    value,
+                                    cardinality: *cardinality,
+                                },
+                                num_span,
+                            ));
                         }
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
@@ -527,9 +507,9 @@ impl Parser<'_> {
             // later `(` would introduce a tuple key, giving the literal mixed
             // key ranks that no formatted rendering could round-trip.
             if let Some((&Token::LParen, span)) = self.lexer.peek_with_span() {
-                return Err(self.unexpected_token(
-                    "single-key map entry (`Index#Variant: value`)",
-                    &Token::LParen.to_string(),
+                return Err(Self::unexpected(
+                    Expected::SingleKeyMapEntry,
+                    Token::LParen,
                     span,
                 ));
             }
@@ -587,14 +567,9 @@ impl Parser<'_> {
                 let scalar_key = self
                     .lexer
                     .peek_with_span()
-                    .filter(|(token, _)| token.is_identifier())
-                    .map(|(token, span)| (token.to_string(), span));
+                    .filter(|(token, _)| token.is_identifier());
                 if let Some((found, span)) = scalar_key {
-                    return Err(self.unexpected_token(
-                        "tuple-key map entry (`(Index#Variant, ...): value`)",
-                        &found,
-                        span,
-                    ));
+                    return Err(Self::unexpected(Expected::TupleKeyMapEntry, *found, span));
                 }
             } else {
                 break;
@@ -610,6 +585,7 @@ impl Parser<'_> {
 mod tests {
     use super::*;
     use crate::syntax::ast::{DeclKind, ExprKind};
+    use crate::syntax::parser::Found;
 
     #[test]
     fn parse_map_literal() {
@@ -652,10 +628,16 @@ mod tests {
         let source = "param x: Dimensionless[A] = { (A#One): 1.0 };";
         let error = Parser::new(source).parse_file().unwrap_err();
 
-        let ParseError::UnexpectedToken { found, .. } = error else {
-            panic!("expected unexpected-token error, got {error:?}");
-        };
-        assert_eq!(found, ")");
+        assert!(
+            matches!(
+                error.kind,
+                ParseErrorKind::UnexpectedToken {
+                    expected: Expected::Token(Token::Comma),
+                    found: Found::Token(Token::RParen),
+                }
+            ),
+            "expected a missing second key, got {error:?}"
+        );
     }
 
     /// A map literal's first entry fixes its key grammar. Mixing ranks would
@@ -666,13 +648,17 @@ mod tests {
         let scalar_first = "param x: Dimensionless[A, B] = { A#One: 1.0, (A#One, B#Two): 2.0 };";
         let tuple_first = "param x: Dimensionless[A, B] = { (A#One, B#Two): 2.0, A#One: 1.0 };";
 
-        for (source, expected_found) in [(scalar_first, "("), (tuple_first, "identifier")] {
+        for (source, expected_entry, expected_found) in [
+            (scalar_first, Expected::SingleKeyMapEntry, Token::LParen),
+            (tuple_first, Expected::TupleKeyMapEntry, Token::Ident),
+        ] {
             let error = Parser::new(source).parse_file().unwrap_err();
 
-            let ParseError::UnexpectedToken { found, .. } = error else {
+            let ParseErrorKind::UnexpectedToken { expected, found } = error.kind else {
                 panic!("expected unexpected-token error for {source}, got {error:?}");
             };
-            assert_eq!(found, expected_found, "source: {source}");
+            assert_eq!(expected, expected_entry, "source: {source}");
+            assert_eq!(found, Found::Token(expected_found), "source: {source}");
         }
     }
 
@@ -738,9 +724,7 @@ mod tests {
         let source = "param v: Dimensionless[Fin(3)] = table[3] { 1.0; 2.0; 3.0; };";
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(
-                error,
-                ParseError::ExpectedIndexFoundNat { ref expression, .. } if expression == "3"
+            matches!(error.kind, ParseErrorKind::ExpectedIndexFoundNat { ref expression, .. } if expression == "3"
             ),
             "unexpected error: {error:?}"
         );
@@ -788,12 +772,11 @@ mod tests {
             let error = Parser::new(source).parse_file().unwrap_err();
             assert!(
                 matches!(
-                    error,
-                    ParseError::UnexpectedToken {
-                        ref expected,
-                        ref found,
-                        ..
-                    } if expected == "at least one table data row" && found == "}"
+                    error.kind,
+                    ParseErrorKind::UnexpectedToken {
+                        expected: Expected::TableDataRow,
+                        found: Found::Token(Token::RBrace),
+                    }
                 ),
                 "unexpected error for {source}: {error:?}"
             );
@@ -813,12 +796,11 @@ mod tests {
 
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
-            error,
-            ParseError::UnexpectedToken {
-                ref expected,
-                ref found,
-                ..
-            } if expected == "at least one table data row" && found == "["
+            error.kind,
+            ParseErrorKind::UnexpectedToken {
+                expected: Expected::TableDataRow,
+                found: Found::Token(Token::LBracket),
+            }
         ));
     }
 
@@ -1079,9 +1061,9 @@ mod tests {
     };";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
-            err,
-            ParseError::UnexpectedToken { expected, found, .. }
-                if expected == "slice axis `Time`" && found == "Phase"
+            err.kind,
+            ParseErrorKind::SliceAxisMismatch { expected, found }
+                if expected.to_string() == "Time" && found.to_string() == "Phase"
         ));
     }
 
@@ -1094,9 +1076,9 @@ mod tests {
     };";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
-            err,
-            ParseError::UnexpectedToken { expected, found, .. }
-                if expected == "slice axis `a::Time`" && found == "b::Time"
+            err.kind,
+            ParseErrorKind::SliceAxisMismatch { expected, found }
+                if expected.to_string() == "a::Time" && found.to_string() == "b::Time"
         ));
     }
 
@@ -1141,8 +1123,8 @@ mod tests {
     fn huge_finite_column_cardinality_is_rejected_without_materializing_keys() {
         let source = "param m: Dimensionless[Fin(1), Fin(18446744073709551615)] = table[Fin(1), Fin(18446744073709551615)] { 1.0; };";
         let error = Parser::new(source).parse_file().unwrap_err();
-        match error {
-            ParseError::TableRowLengthMismatch { expected, got, .. } => {
+        match error.kind {
+            ParseErrorKind::TableRowLengthMismatch { expected, got } => {
                 let expected: u64 = expected;
                 let got: u64 = got;
                 assert_eq!(expected, u64::MAX);
@@ -1160,8 +1142,8 @@ mod tests {
     };";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
-            err,
-            ParseError::TableRowLengthMismatch {
+            err.kind,
+            ParseErrorKind::TableRowLengthMismatch {
                 expected: 3,
                 got: 2,
                 ..

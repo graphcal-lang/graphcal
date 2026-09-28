@@ -83,22 +83,22 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["source_registry"]
-role = "facade"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["source_registry", "tests"]
-role = "facade"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["diagnostic_render"]
-role = "facade"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["diagnostic_render", "tests"]
-role = "facade"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -767,6 +767,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "builtin_type_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "builtin_type_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "comments"]
 role = "contracts"
 
@@ -963,6 +973,26 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["syntax", "parser", "decl", "value"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "error"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "error", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "expected"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "expected", "tests"]
 role = "contracts"
 
 [[module]]

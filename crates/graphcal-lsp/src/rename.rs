@@ -368,7 +368,7 @@ mod tests {
 
     /// Build a minimal `AnalysisResult` from source text.
     fn analysis_from_source(source: &str) -> AnalysisResult {
-        let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_ast = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);

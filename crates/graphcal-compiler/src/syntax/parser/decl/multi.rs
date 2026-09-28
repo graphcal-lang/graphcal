@@ -29,7 +29,10 @@ use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::super::{ParseError, Parser};
+use super::super::{
+    Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser,
+    UnsupportedMultiDeclShape,
+};
 
 /// A parsed slot header: `[pub|pub(bind)] [const] (param|node) IDENT: TypeExpr`.
 #[derive(Debug, Clone)]
@@ -71,60 +74,50 @@ impl Parser<'_> {
         match self.lexer.peek() {
             Some(Token::Param) => {
                 let (_, span) = self.advance()?;
-                self.reject_param_visibility(visibility, visibility_span)?;
+                Self::reject_param_visibility(visibility, visibility_span)?;
                 Ok((SlotKind::Param, span))
             }
             Some(Token::Node) => {
                 let (_, span) = self.advance()?;
-                let visibility = self.node_visibility(visibility, visibility_span)?;
+                let visibility = Self::node_visibility(visibility, visibility_span)?;
                 Ok((SlotKind::Node(visibility), span))
             }
             Some(Token::Const) => {
                 let (_, const_span) = self.advance()?;
                 let (_, node_span) = self.expect(Token::Node)?;
-                let visibility = self.node_visibility(visibility, visibility_span)?;
+                let visibility = Self::node_visibility(visibility, visibility_span)?;
                 Ok((SlotKind::ConstNode(visibility), const_span.merge(node_span)))
             }
-            Some(_) => {
-                let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "`param`, `node`, or `const node` for next multi-decl slot",
-                    &tok.to_string(),
-                    span,
-                ))
-            }
-            None => Err(self.unexpected_eof("`param`, `node`, or `const node`")),
+            Some(_) | None => Err(self.unexpected_next(Expected::MultiDeclSlotKind)),
         }
     }
 
     fn reject_param_visibility(
-        &self,
         visibility: BindableVisibility,
         visibility_span: Option<Span>,
     ) -> Result<(), ParseError> {
         let found = match visibility {
             BindableVisibility::Private => return Ok(()),
-            BindableVisibility::Public => "`pub`",
-            BindableVisibility::PublicBind => "`pub(bind)`",
+            BindableVisibility::Public => Found::Pub,
+            BindableVisibility::PublicBind => Found::PubBind,
         };
         visibility_span.map_or(Ok(()), |vis_span| {
-            Err(self.unexpected_token(
-                "no visibility annotation (`param` declares a named input port)",
+            Err(Self::unexpected_token(
+                Expected::ParamWithoutVisibility,
                 found,
                 vis_span,
             ))
         })
     }
 
-    fn node_visibility(
-        &self,
+    const fn node_visibility(
         visibility: BindableVisibility,
         visibility_span: Option<Span>,
     ) -> Result<Visibility, ParseError> {
         match (visibility, visibility_span) {
-            (BindableVisibility::PublicBind, Some(vis_span)) => Err(self.unexpected_token(
-                "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a named input port)",
-                "`pub(bind)`",
+            (BindableVisibility::PublicBind, Some(vis_span)) => Err(Self::unexpected_token(
+                Expected::NodeVisibility,
+                Found::PubBind,
                 vis_span,
             )),
             (visibility, _) => Ok(super::visibility_without_bindability(visibility)),
@@ -200,22 +193,23 @@ impl Parser<'_> {
         let slots = match slots.zip_exact(slot_axes) {
             Ok(slots) => slots.map(|(header, axis)| header.into_slot(axis)),
             Err(slot_axes) => {
-                return Err(ParseError::MultiDeclTupleArity {
-                    slot_count,
-                    tuple_count: slot_axes.len(),
-                    src: self.named_source(),
-                    span: tuple_span.into(),
-                });
+                return Err(ParseError::new(
+                    ParseErrorKind::MultiDeclTupleArity {
+                        slot_count,
+                        tuple_count: slot_axes.len(),
+                    },
+                    tuple_span,
+                ));
             }
         };
 
         let (_, rbracket_span) = self.expect(Token::RBracket)?;
 
         let Ok(shared_axes) = MultiDeclSharedAxes::try_from_vec(shared_axes) else {
-            return Err(ParseError::MultiDeclNoSharedAxis {
-                src: self.named_source(),
-                span: table_span.merge(rbracket_span).into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::MultiDeclNoSharedAxis,
+                table_span.merge(rbracket_span),
+            ));
         };
 
         // v2: at most one extra-axis slot. This covers the mixed 1-D / 2-D
@@ -229,12 +223,10 @@ impl Parser<'_> {
             })
             .nth(1)
         {
-            return Err(ParseError::MultiDeclUnsupportedShape {
-                reason: "multi-decl with more than one extra-axis slot is not yet supported (v3)"
-                    .to_string(),
-                src: self.named_source(),
-                span: second_extra_span.into(),
-            });
+            return Err(unsupported_shape(
+                UnsupportedMultiDeclShape::MultipleExtraAxisSlots,
+                second_extra_span,
+            ));
         }
 
         // Parse the table body. Supports one shared axis (single body,
@@ -257,17 +249,10 @@ impl Parser<'_> {
                 self.parse_multi_slice_body(&mut builder, slice_prefix, &row_axis_spec)?;
             }
             if builder.slice_count() == 0 {
-                return Err(ParseError::MultiDeclUnsupportedShape {
-                    reason:
-                        "multi-decl with multiple shared axes requires at least one `[slice]` section"
-                            .to_string(),
-                    src: self.named_source(),
-                    span: self
-                        .lexer
-                        .peek_with_span()
-                        .map_or(table_span, |(_, s)| s)
-                        .into(),
-                });
+                return Err(unsupported_shape(
+                    UnsupportedMultiDeclShape::MissingSliceSection,
+                    self.lexer.peek_with_span().map_or(table_span, |(_, s)| s),
+                ));
             }
         }
 
@@ -303,14 +288,13 @@ impl Parser<'_> {
                 TableIndexSpec::Named(axis) => {
                     let (label_axis, variant, _) = self.parse_index_variant_path()?;
                     if label_axis.value != axis.value {
-                        return Err(ParseError::MultiDeclUnsupportedShape {
-                            reason: format!(
-                                "slice label qualifies axis `{}`, but the shared axis at this position is `{}`",
-                                label_axis.value, axis.value,
-                            ),
-                            src: self.named_source(),
-                            span: label_axis.span.into(),
-                        });
+                        return Err(unsupported_shape(
+                            UnsupportedMultiDeclShape::SliceLabelAxis {
+                                label_axis: label_axis.value,
+                                shared_axis: axis.value.clone(),
+                            },
+                            label_axis.span,
+                        ));
                     }
                     keys.push(MapEntryKey {
                         index: Spanned::new(
@@ -325,19 +309,17 @@ impl Parser<'_> {
                     let (_, hash_span) = self.expect(Token::Hash)?;
                     let (_, num_span) = self.expect(Token::Number)?;
                     let text = self.lexer.slice_at(num_span).replace('_', "");
-                    let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                        reason: "expected non-negative integer in slice label".to_string(),
-                        src: self.named_source(),
-                        span: num_span.into(),
+                    let value: u64 = text.parse().map_err(|_| {
+                        Self::invalid_number(InvalidNumberReason::SliceLabel, num_span)
                     })?;
                     if value >= *cardinality {
-                        return Err(ParseError::InvalidNumber {
-                            reason: format!(
-                                "slice index #{value} out of range for Fin({cardinality})"
-                            ),
-                            src: self.named_source(),
-                            span: num_span.into(),
-                        });
+                        return Err(Self::invalid_number(
+                            InvalidNumberReason::SliceIndexOutOfRange {
+                                value,
+                                cardinality: *cardinality,
+                            },
+                            num_span,
+                        ));
                     }
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
@@ -365,7 +347,7 @@ impl Parser<'_> {
         let (header_cells, header_span) = self.parse_multi_header_row()?;
         let mut slice = builder
             .begin_slice(prefix_keys, header_cells)
-            .map_err(|error| self.multi_decl_layout_error(error, header_span))?;
+            .map_err(|error| multi_decl_layout_error(error, header_span))?;
 
         while self.lexer.peek() != Some(&Token::RBrace)
             && self.lexer.peek() != Some(&Token::LBracket)
@@ -387,11 +369,7 @@ impl Parser<'_> {
                         .peek_with_span()
                         .map_or(header_span, |(_, span)| span);
                     let position = u64::try_from(slice.row_count()).map_err(|_| {
-                        ParseError::InvalidNumber {
-                            reason: "finite table row position does not fit u64".to_string(),
-                            src: self.named_source(),
-                            span: label_span.into(),
-                        }
+                        Self::invalid_number(InvalidNumberReason::FiniteRowPosition, label_span)
                     })?;
                     (
                         Spanned::new(IndexEntryKey::position(position), label_span),
@@ -414,67 +392,31 @@ impl Parser<'_> {
             self.expect(Token::Semicolon)?;
 
             slice.push_row(row_label.clone(), values).map_err(|error| {
-                ParseError::MultiDeclRowArity {
-                    expected_count: error.header_count,
-                    got: error.value_count,
-                    row_label: row_label.value.to_string(),
-                    src: self.named_source(),
-                    span: row_span.into(),
-                }
+                ParseError::new(
+                    ParseErrorKind::MultiDeclRowArity {
+                        expected_count: error.header_count,
+                        got: error.value_count,
+                        row_label: row_label.value,
+                    },
+                    row_span,
+                )
             })?;
         }
 
         if let TableIndexSpec::Finite { cardinality, .. } = row_axis
             && u64::try_from(slice.row_count()) != Ok(*cardinality)
         {
-            return Err(ParseError::TableRowLengthMismatch {
-                expected: *cardinality,
-                got: self.table_count_from_len(slice.row_count(), header_span)?,
-                src: self.named_source(),
-                span: header_span.into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::TableRowLengthMismatch {
+                    expected: *cardinality,
+                    got: Self::table_count_from_len(slice.row_count(), header_span)?,
+                },
+                header_span,
+            ));
         }
 
         slice.finish();
         Ok(())
-    }
-
-    fn multi_decl_layout_error(
-        &self,
-        error: MultiDeclLayoutError,
-        header_span: Span,
-    ) -> ParseError {
-        match error {
-            MultiDeclLayoutError::VariantCellForScalarSlot { span, slot_name } => {
-                ParseError::MultiDeclUnsupportedShape {
-                    reason: format!(
-                        "header cell for 1-D slot `{}` must be `_`",
-                        slot_name.as_str()
-                    ),
-                    src: self.named_source(),
-                    span: span.into(),
-                }
-            }
-            MultiDeclLayoutError::HeaderArity {
-                slot_count,
-                header_count,
-            } => ParseError::MultiDeclHeaderArity {
-                slot_count,
-                header_count,
-                src: self.named_source(),
-                span: header_span.into(),
-            },
-            MultiDeclLayoutError::NotEnoughCells { slot_name, span } => {
-                ParseError::MultiDeclUnsupportedShape {
-                    reason: format!(
-                        "slot `{}` is declared with an extra axis but has zero variant cells in the header row",
-                        slot_name.as_str(),
-                    ),
-                    src: self.named_source(),
-                    span: span.into(),
-                }
-            }
-        }
     }
 
     /// Parse a table index spec inside a multi-decl's shared-axis prefix.
@@ -491,10 +433,8 @@ impl Parser<'_> {
             self.expect(Token::LParen)?;
             let (_, cardinality_span) = self.expect(Token::Number)?;
             let text = self.lexer.slice_at(cardinality_span).replace('_', "");
-            let cardinality = text.parse().map_err(|_| ParseError::InvalidNumber {
-                reason: "table Fin cardinality must be a non-negative integer literal".to_string(),
-                src: self.named_source(),
-                span: cardinality_span.into(),
+            let cardinality = text.parse().map_err(|_| {
+                Self::invalid_number(InvalidNumberReason::TableFinCardinality, cardinality_span)
             })?;
             let (_, end_span) = self.expect(Token::RParen)?;
             return Ok(TableIndexSpec::Finite {
@@ -506,19 +446,17 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let expression = self.lexer.slice_at(span).to_string();
-                Err(ParseError::ExpectedIndexFoundNat {
-                    suggestion: format!("Fin({expression})"),
-                    expression,
-                    src: self.named_source(),
-                    span: span.into(),
-                })
+                Err(ParseError::new(
+                    ParseErrorKind::ExpectedIndexFoundNat { expression },
+                    span,
+                ))
             }
             Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
                 self.parse_ident_path()?.into_spanned_name_path(),
             )),
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("index name or `Fin(N)`", &tok.to_string(), span))
+                Err(Self::unexpected(Expected::TableAxis, tok, span))
             }
         }
     }
@@ -557,11 +495,7 @@ impl Parser<'_> {
             )),
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "`_` or an axis identifier path in slot tuple",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(Self::unexpected(Expected::SlotTupleEntry, tok, span))
             }
         }
     }
@@ -598,13 +532,36 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "`_` or a bare label in the axis-determined header row",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(Self::unexpected(Expected::HeaderCell, tok, span))
             }
         }
+    }
+}
+
+const fn unsupported_shape(shape: UnsupportedMultiDeclShape, span: Span) -> ParseError {
+    ParseError::new(ParseErrorKind::MultiDeclUnsupportedShape { shape }, span)
+}
+
+fn multi_decl_layout_error(error: MultiDeclLayoutError, header_span: Span) -> ParseError {
+    match error {
+        MultiDeclLayoutError::VariantCellForScalarSlot { span, slot_name } => unsupported_shape(
+            UnsupportedMultiDeclShape::UnderscoreHeaderRequired { slot: slot_name },
+            span,
+        ),
+        MultiDeclLayoutError::HeaderArity {
+            slot_count,
+            header_count,
+        } => ParseError::new(
+            ParseErrorKind::MultiDeclHeaderArity {
+                slot_count,
+                header_count,
+            },
+            header_span,
+        ),
+        MultiDeclLayoutError::NotEnoughCells { slot_name, span } => unsupported_shape(
+            UnsupportedMultiDeclShape::MissingVariantCells { slot: slot_name },
+            span,
+        ),
     }
 }
 
@@ -662,8 +619,8 @@ param y: Dimensionless[Fin(18446744073709551615)]
   };
 ";
         let error = Parser::new(source).parse_file().unwrap_err();
-        match error {
-            ParseError::TableRowLengthMismatch { expected, got, .. } => {
+        match error.kind {
+            ParseErrorKind::TableRowLengthMismatch { expected, got } => {
                 let expected: u64 = expected;
                 let got: u64 = got;
                 assert_eq!(expected, u64::MAX);
@@ -742,15 +699,16 @@ param a: Int[I], param b: Int[I]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        match err {
-            ParseError::UnexpectedToken {
-                expected, found, ..
-            } => {
-                assert_eq!(expected, "`,`");
-                assert_eq!(found, "(");
-            }
-            other => panic!("expected a missing-comma diagnostic, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                err.kind,
+                ParseErrorKind::UnexpectedToken {
+                    expected: Expected::Token(Token::Comma),
+                    found: Found::Token(Token::LParen),
+                }
+            ),
+            "expected a missing-comma diagnostic, got {err:?}"
+        );
 
         let valid_source = source.replace("table[I (", "table[I, (");
         Parser::new(&valid_source).parse_file().unwrap();
@@ -768,8 +726,8 @@ param a: Int[Component], param b: Int[Component]
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
             matches!(
-                err,
-                ParseError::MultiDeclTupleArity {
+                err.kind,
+                ParseErrorKind::MultiDeclTupleArity {
                     slot_count: 2,
                     tuple_count: 1,
                     ..
@@ -789,16 +747,15 @@ param a: Int[Component], param b: Int[Component]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        match err {
-            ParseError::MultiDeclRowArity {
+        match err.kind {
+            ParseErrorKind::MultiDeclRowArity {
                 expected_count,
                 got,
                 row_label,
-                ..
             } => {
                 assert_eq!(expected_count, 2);
                 assert_eq!(got, 1);
-                assert_eq!(row_label, "X");
+                assert_eq!(row_label.to_string(), "X");
             }
             other => panic!("expected MultiDeclRowArity, got {other:?}"),
         }
@@ -816,7 +773,7 @@ param a: Int[Component], param b: Int[Component]
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(err, ParseError::UnexpectedToken { .. }),
+            matches!(err.kind, ParseErrorKind::UnexpectedToken { .. }),
             "expected UnexpectedToken (attributes forbidden), got {err:?}",
         );
     }
@@ -836,7 +793,7 @@ pub param a: Int[Component], param b: Int[Component]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::UnexpectedToken { .. }));
+        assert!(matches!(err.kind, ParseErrorKind::UnexpectedToken { .. }));
     }
 
     #[test]
@@ -892,7 +849,7 @@ node a: Int[Component], pub param b: Int[Component]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::UnexpectedToken { .. }));
+        assert!(matches!(err.kind, ParseErrorKind::UnexpectedToken { .. }));
     }
 
     #[test]
@@ -909,7 +866,7 @@ node a: Int[Component], pub(bind) node b: Int[Component]
   };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        assert!(matches!(err, ParseError::UnexpectedToken { .. }));
+        assert!(matches!(err.kind, ParseErrorKind::UnexpectedToken { .. }));
     }
 
     #[test]
@@ -949,7 +906,7 @@ param b: Bool[Component, OperationMode]
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(err, ParseError::MultiDeclUnsupportedShape { .. }),
+            matches!(err.kind, ParseErrorKind::MultiDeclUnsupportedShape { .. }),
             "expected MultiDeclUnsupportedShape for two extra-axis slots, got {err:?}",
         );
     }
@@ -996,7 +953,7 @@ param q: Int[Phase, Component]
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(err, ParseError::MultiDeclUnsupportedShape { .. }),
+            matches!(err.kind, ParseErrorKind::MultiDeclUnsupportedShape { .. }),
             "expected MultiDeclUnsupportedShape for wrong slice axis, got {err:?}",
         );
     }

@@ -532,12 +532,13 @@ fn header_only_table_returns_parse_error_instead_of_internal_formatter_error() {
 
     assert!(matches!(
         error,
-        graphcal_fmt::FormatError::Parse(
-            graphcal_compiler::syntax::parser::ParseError::UnexpectedToken {
-                ref expected,
+        graphcal_fmt::FormatError::Parse(graphcal_compiler::syntax::parser::ParseError {
+            kind: graphcal_compiler::syntax::parser::ParseErrorKind::UnexpectedToken {
+                expected: graphcal_compiler::syntax::parser::Expected::TableDataRow,
                 ..
-            }
-        ) if expected == "at least one table data row"
+            },
+            ..
+        })
     ));
 }
 

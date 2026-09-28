@@ -8,7 +8,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
-use super::{ParseError, Parser};
+use super::{Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 impl Parser<'_> {
     // --- Match expression ---
@@ -41,18 +41,13 @@ impl Parser<'_> {
                 }
                 Some((Token::RBrace, _)) => {}
                 Some((tok, span)) => {
-                    let found = tok.to_string();
-                    return Err(self.unexpected_token(
-                        "`,` between match arms or `}` after the final arm",
-                        &found,
-                        span,
-                    ));
+                    return Err(Self::unexpected(Expected::MatchArmSeparator, *tok, span));
                 }
                 None => {
-                    return Err(self.unexpected_token(
-                        "`,` between match arms or `}` after the final arm",
-                        "EOF",
-                        Span::new(self.lexer.source_len(), 0),
+                    return Err(Self::unexpected_token(
+                        Expected::MatchArmSeparator,
+                        Found::EndOfFile,
+                        self.end_of_source(),
                     ));
                 }
             }
@@ -163,20 +158,19 @@ impl Parser<'_> {
             // silently ignore user-written identifiers. Require an exact
             // match, in order, one per binding.
             if tuple_idents.len() != bindings.len() {
-                return Err(self.unexpected_token(
-                    &format!(
-                        "one tuple entry per `for` binding ({} expected)",
-                        bindings.len()
-                    ),
-                    &format!("{} entries", tuple_idents.len()),
+                return Err(Self::unexpected_token(
+                    Expected::ForTupleEntries {
+                        binding_count: bindings.len(),
+                    },
+                    Found::EntryCount(tuple_idents.len()),
                     lparen_span.merge(rparen_span),
                 ));
             }
             for (ident, binding) in tuple_idents.iter().zip(&bindings) {
                 if ident.name.as_str() != binding.var.value.as_str() {
-                    return Err(self.unexpected_token(
-                        &format!("the `for` binding name `{}`", binding.var.value),
-                        ident.name.as_str(),
+                    return Err(Self::unexpected_token(
+                        Expected::ForBindingName(binding.var.value.clone()),
+                        Found::Name(ident.name.clone()),
                         ident.span,
                     ));
                 }
@@ -203,11 +197,10 @@ impl Parser<'_> {
             self.expect(Token::LParen)?;
             let cardinality = self.parse_nat_expr()?;
             let (_, end_span) = self.expect(Token::RParen)?;
-            return Err(ParseError::ObsoleteStructuralRange {
-                cardinality: cardinality.to_string(),
-                src: self.named_source(),
-                span: start_span.merge(end_span).into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::ObsoleteStructuralRange { cardinality },
+                start_span.merge(end_span),
+            ));
         }
         Ok(())
     }
@@ -218,12 +211,10 @@ impl Parser<'_> {
         if self.lexer.peek() == Some(&Token::Number) {
             let (_, span) = self.advance()?;
             let expression = self.lexer.slice_at(span).to_string();
-            return Err(ParseError::ExpectedIndexFoundNat {
-                suggestion: format!("Fin({expression})"),
-                expression,
-                src: self.named_source(),
-                span: span.into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::ExpectedIndexFoundNat { expression },
+                span,
+            ));
         }
         if let Some((Token::ContextualKeyword(ContextualKeyword::Fin), start_span)) =
             self.lexer.peek_with_span()
@@ -262,7 +253,7 @@ impl Parser<'_> {
             lhs = NatExpr::add(lhs, rhs, span);
         }
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
-            return Err(self.nat_subtraction_unsupported(span));
+            return Err(Self::nat_subtraction_unsupported(span));
         }
         Ok(lhs)
     }
@@ -285,11 +276,9 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected a non-negative integer in a Nat expression".to_string(),
-                    src: self.named_source(),
-                    span: span.into(),
-                })?;
+                let value: u64 = text
+                    .parse()
+                    .map_err(|_| Self::invalid_number(InvalidNumberReason::NatLiteral, span))?;
                 Ok(NatExpr::Literal(value, span))
             }
             Some(token) if token.is_identifier() => {
@@ -298,11 +287,7 @@ impl Parser<'_> {
             }
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(
-                    "integer literal or Nat parameter name",
-                    &tok.to_string(),
-                    span,
-                ))
+                Err(Self::unexpected(Expected::NatAtom, tok, span))
             }
         }
     }
@@ -415,19 +400,17 @@ node x: Dimensionless = match @r {
 };
 ";
         let err = Parser::new(source).parse_file().unwrap_err();
-        match err {
-            ParseError::UnexpectedToken {
-                expected,
-                found,
-                span,
-                ..
-            } => {
-                assert!(expected.contains("match arms"));
-                assert_eq!(found, "identifier");
-                assert_eq!(span.offset(), source.find("Err").unwrap());
-            }
-            other => panic!("expected UnexpectedToken, got {other:?}"),
-        }
+        assert!(
+            matches!(
+                err.kind,
+                ParseErrorKind::UnexpectedToken {
+                    expected: Expected::MatchArmSeparator,
+                    found: Found::Token(Token::Ident),
+                }
+            ),
+            "expected a missing match-arm separator, got {err:?}"
+        );
+        assert_eq!(err.span.offset(), source.find("Err").unwrap());
     }
 
     #[test]
@@ -552,8 +535,8 @@ node x: Dimensionless = match @r {
         let source = "node x: Dimensionless[Fin(N)] = for i: range(N - 1) { 1.0 };";
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
-            error,
-            ParseError::NatSubtractionUnsupported { .. }
+            error.kind,
+            ParseErrorKind::NatSubtractionUnsupported
         ));
     }
 
@@ -562,10 +545,12 @@ node x: Dimensionless = match @r {
         let source = "node x: Dimensionless[Fin(3)] = for i: 3 { 1.0 };";
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(
-            matches!(error, ParseError::ExpectedIndexFoundNat { .. }),
+            matches!(
+                &error.kind,
+                ParseErrorKind::ExpectedIndexFoundNat { expression } if expression == "3"
+            ),
             "unexpected error: {error:?}"
         );
-        assert!(error.to_string().contains("expected Index, found Nat `3`"));
     }
 
     #[test]
@@ -578,7 +563,7 @@ node x: Dimensionless = match @r {
         ] {
             let error = Parser::new(source).parse_file().unwrap_err();
             assert!(
-                matches!(error, ParseError::ObsoleteStructuralRange { .. }),
+                matches!(error.kind, ParseErrorKind::ObsoleteStructuralRange { .. }),
                 "unexpected error for `{source}`: {error:?}"
             );
         }

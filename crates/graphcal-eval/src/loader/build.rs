@@ -289,7 +289,7 @@ mod tests {
         let name = file.display().to_string();
         let source = Arc::new(text.to_string());
         let named_source = NamedSource::new(name.as_str(), Arc::clone(&source));
-        let raw = graphcal_compiler::syntax::parser::Parser::with_name(&source, &name)
+        let raw = graphcal_compiler::syntax::parser::Parser::new(&source)
             .parse_file()
             .unwrap();
         ParsedFile {

@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod attribute;
+pub mod builtin_type_name;
 pub mod comments;
 pub mod decl_name;
 pub mod dimension;

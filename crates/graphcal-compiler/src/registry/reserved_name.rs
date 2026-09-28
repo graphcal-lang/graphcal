@@ -7,10 +7,9 @@
 use thiserror::Error;
 
 use crate::builtin::{BuiltinConst, BuiltinFn};
-use crate::registry::prelude::{
-    PRELUDE_BUILTIN_TYPE_NAMES, prelude_dimension_names, prelude_unit_names,
-};
+use crate::registry::prelude::{prelude_dimension_names, prelude_unit_names};
 use crate::registry::time_scale::TimeScale;
+use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::names::NameAtom;
 
 /// Semantic namespace into which a source-visible local name is introduced.
@@ -80,7 +79,7 @@ pub fn validate_reserved_name(
         ReservedNameNamespace::Static => {
             if prelude_dimension_names().any(|prelude| prelude == name.as_str()) {
                 Some(ReservedName::PreludeDimension)
-            } else if PRELUDE_BUILTIN_TYPE_NAMES.contains(&name.as_str()) {
+            } else if BuiltinTypeName::parse(name.as_str()).is_some() {
                 Some(ReservedName::BuiltinType)
             } else if let Ok(scale) = name.as_str().parse::<TimeScale>() {
                 Some(ReservedName::TimeScale(scale))
@@ -126,7 +125,9 @@ mod tests {
 
     #[test]
     fn each_namespace_rejects_its_complete_reserved_vocabulary() {
-        for name in prelude_dimension_names().chain(PRELUDE_BUILTIN_TYPE_NAMES.iter().copied()) {
+        for name in
+            prelude_dimension_names().chain(BuiltinTypeName::ALL.map(BuiltinTypeName::as_str))
+        {
             let atom = NameAtom::parse(name).unwrap();
             assert!(validate_reserved_name(ReservedNameNamespace::Static, &atom).is_err());
         }

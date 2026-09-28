@@ -2773,7 +2773,7 @@ mod tests {
     #[test]
     fn build_symbol_table_basic() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
@@ -2894,7 +2894,7 @@ node y: Dimensionless[Step] = unfold(
     |prev_y, prev_t, t| prev_y + (t - prev_t) / 1.0 s
 );
 ";
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
@@ -2929,7 +2929,7 @@ type Sized<N: Nat, I: Index = Component, M: Nat = N + 1> {
     Sized(values: Dimensionless[I, N]),
 }
 ";
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
@@ -2967,7 +2967,7 @@ param q: Int[I]
       B: 2, 4;
   };
 ";
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
@@ -3002,7 +3002,7 @@ param q: Int[I]
     #[test]
     fn find_reference_at_offset() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
@@ -3047,7 +3047,7 @@ node total: Velocity = @dv[Maneuver#Departure];
 ";
 
     fn table_for(source: &str) -> SymbolTable {
-        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+        let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
             .parse_file()
             .unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);

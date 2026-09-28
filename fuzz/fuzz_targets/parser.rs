@@ -13,5 +13,5 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let _ = Parser::with_name(source, "fuzz.gcl").parse_file();
+    let _ = Parser::new(source).parse_file();
 });

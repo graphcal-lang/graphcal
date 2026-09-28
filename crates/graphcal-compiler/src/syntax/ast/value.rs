@@ -155,12 +155,29 @@ pub enum DomainBoundKind {
     Max,
 }
 
+impl DomainBoundKind {
+    /// Every bound kind, in the order the grammar lists them.
+    pub const ALL: [Self; 2] = [Self::Min, Self::Max];
+
+    /// Source spelling of the bound key.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+
+    /// The bound kind spelled `spelling`, if any.
+    #[must_use]
+    pub fn parse(spelling: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == spelling)
+    }
+}
+
 impl std::fmt::Display for DomainBoundKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Min => write!(f, "min"),
-            Self::Max => write!(f, "max"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

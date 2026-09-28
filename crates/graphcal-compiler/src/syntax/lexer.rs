@@ -76,7 +76,7 @@ pub fn tokenize(source: &str) -> TokenizedSource {
 ///
 /// When the underlying `logos::Lexer` encounters an unrecognized character, the
 /// span of the *first* such character is recorded in `first_error_span` and the
-/// character is skipped. The parser surfaces this as a `ParseError::UnknownToken`
+/// character is skipped. The parser surfaces this as a `ParseErrorKind::UnknownToken`
 /// when a top-level `parse_*` entry point finishes, regardless of whether the
 /// downstream parse happened to succeed.
 #[derive(Clone)]

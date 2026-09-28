@@ -3,13 +3,16 @@
 use std::fmt::Debug;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Args, Subcommand};
-use miette::Diagnostic;
+use miette::{Diagnostic, NamedSource};
 use thiserror::Error;
 
+use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
+use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::lexer::tokenize;
-use graphcal_compiler::syntax::parser::{ParseError, Parser};
+use graphcal_compiler::syntax::parser::{ParseErrorKind, Parser};
 use graphcal_eval::eval::{CompileError, ParameterBindingRow, PreparedProject, ProjectCompiler};
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
@@ -79,7 +82,7 @@ pub enum DumpError {
     Compile(#[from] CompileError),
     #[error(transparent)]
     #[diagnostic(transparent)]
-    Parse(#[from] ParseError),
+    Parse(RenderableDiagnostic<ParseErrorKind>),
     #[error(transparent)]
     #[diagnostic(transparent)]
     Override(#[from] OverrideParseError),
@@ -149,16 +152,14 @@ fn run_tokens(args: &FileArgs) -> Result<DumpStatus, DumpError> {
 
 fn run_ast(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
-    let source_name = source.path.to_string_lossy();
-    let artifact = Parser::with_name(&source.text, &source_name).parse_file()?;
+    let artifact = parse_source(&source)?;
     write_debug(&artifact)?;
     Ok(DumpStatus::Success)
 }
 
 fn run_desugared(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
-    let source_name = source.path.to_string_lossy();
-    let raw = Parser::with_name(&source.text, &source_name).parse_file()?;
+    let raw = parse_source(&source)?;
     let artifact = graphcal_compiler::desugar::desugared_ast::File::from(raw);
     write_debug(&artifact)?;
     Ok(DumpStatus::Success)
@@ -280,6 +281,16 @@ fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError
     })?;
     let path = fs.canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
     Ok(SourceUnit { path, text })
+}
+
+/// Parse `source`, rendering a parse failure against the file it came from.
+fn parse_source(source: &SourceUnit) -> Result<File, DumpError> {
+    Parser::new(&source.text).parse_file().map_err(|error| {
+        let named = NamedSource::new(source.path.to_string_lossy(), Arc::new(source.text.clone()));
+        DumpError::Parse(RenderableDiagnostic::in_source(
+            error.kind, error.span, named,
+        ))
+    })
 }
 
 fn write_debug<T: Debug + ?Sized>(value: &T) -> Result<(), DumpError> {

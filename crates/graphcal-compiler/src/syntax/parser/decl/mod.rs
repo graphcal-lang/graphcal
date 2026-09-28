@@ -8,7 +8,10 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::{ParseError, Parser};
+use super::{
+    CompositionKind, Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser,
+    PlotFieldContext,
+};
 
 mod dag;
 mod dim_unit;
@@ -74,7 +77,7 @@ impl Parser<'_> {
     fn parse_composition_decl_parts(
         &mut self,
         token: Token,
-        kind: &'static str,
+        kind: CompositionKind,
     ) -> Result<CompositionDeclParts, ParseError> {
         let (_, start_span) = self.expect(token)?;
         let name: Spanned<DeclName> = self.parse_any_ident()?.classify();
@@ -93,9 +96,9 @@ impl Parser<'_> {
 
             if field_keyword == Some(ContextualKeyword::Plots) {
                 if plots_seen {
-                    return Err(self.duplicate_plot_field(
-                        ContextualKeyword::Plots.as_str(),
-                        kind,
+                    return Err(Self::duplicate_plot_field(
+                        field_name.name,
+                        PlotFieldContext::Composition(kind),
                         field_start,
                     ));
                 }
@@ -120,9 +123,9 @@ impl Parser<'_> {
                     .iter()
                     .any(|f: &PlotField| f.name.value.as_str() == field_name.name.as_str())
                 {
-                    return Err(self.duplicate_plot_field(
-                        field_name.name.as_str(),
-                        kind,
+                    return Err(Self::duplicate_plot_field(
+                        field_name.name,
+                        PlotFieldContext::Composition(kind),
                         field_start,
                     ));
                 }
@@ -145,11 +148,10 @@ impl Parser<'_> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         if plot_names.is_empty() {
-            return Err(ParseError::EmptyCompositionPlots {
-                kind,
-                src: self.named_source(),
-                span: span.into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::EmptyCompositionPlots { kind },
+                span,
+            ));
         }
 
         Ok(CompositionDeclParts {
@@ -182,8 +184,8 @@ impl Parser<'_> {
 
         let found = match visibility {
             BindableVisibility::Private => None,
-            BindableVisibility::Public => Some("`pub`"),
-            BindableVisibility::PublicBind => Some("`pub(bind)`"),
+            BindableVisibility::Public => Some(Found::Pub),
+            BindableVisibility::PublicBind => Some(Found::PubBind),
         };
 
         // Includes have no blanket visibility. Whole-DAG imports accept
@@ -193,14 +195,12 @@ impl Parser<'_> {
             && self.lexer.peek() == Some(&Token::Include)
             && let Some(vis_span) = visibility_span
         {
-            return Err(self.unexpected_token(
-                "an include without leading visibility; put `pub` on selected outcomes",
+            return Err(Self::unexpected_token(
+                Expected::IncludeWithoutVisibility,
                 found,
                 vis_span,
             ));
         }
-
-        let expected = "`param`, `node`, `const node`, `base dim`, `dim`, `unit`, `const unit`, `type`, `dag`, `index`, `import`, `include`, `assert`, `plot`, `figure`, or `layer`";
 
         // Value-declaration paths (`param`, `node`, `const node`) can be
         // either a single declaration or a multi-decl (issue #481). We
@@ -225,11 +225,11 @@ impl Parser<'_> {
                     if visibility == BindableVisibility::PublicBind
                         && let Some(vis_span) = visibility_span
                     {
-                        return Err(self.unexpected_token(
-                                "`pub` (`pub(bind)` is only valid on bindable declaration kinds: `dim`, `type`, and `index`)",
-                                "`pub(bind)`",
-                                vis_span,
-                            ));
+                        return Err(Self::unexpected_token(
+                            Expected::NonBindableVisibility,
+                            Found::PubBind,
+                            vis_span,
+                        ));
                     }
                     set_decl_visibility(&mut decl, visibility);
                     if let Some(ps) = visibility_span {
@@ -241,16 +241,8 @@ impl Parser<'_> {
                     decl.attributes = attributes;
                     return Ok(decl);
                 }
-                Some(_) => {
-                    let (tok, span) = self.advance()?;
-                    return Err(self.unexpected_token(
-                        "`node` or `unit` after `const`",
-                        &tok.to_string(),
-                        span,
-                    ));
-                }
-                None => {
-                    return Err(self.unexpected_eof("`node` or `unit` after `const`"));
+                Some(_) | None => {
+                    return Err(self.unexpected_next(Expected::AfterConst));
                 }
             }
         }
@@ -261,15 +253,7 @@ impl Parser<'_> {
                 match self.lexer.peek() {
                     Some(Token::Dimension) => self.parse_base_dimension_decl(base_span),
                     Some(Token::Unit) => self.parse_base_unit_decl(base_span),
-                    Some(_) => {
-                        let (tok, span) = self.advance()?;
-                        Err(self.unexpected_token(
-                            "`dim` or `unit` after `base`",
-                            &tok.to_string(),
-                            span,
-                        ))
-                    }
-                    None => Err(self.unexpected_eof("`dim` or `unit` after `base`")),
+                    Some(_) | None => Err(self.unexpected_next(Expected::AfterBase)),
                 }
             }
             Some(Token::Dimension) => self.parse_dimension_decl(),
@@ -283,11 +267,7 @@ impl Parser<'_> {
             Some(Token::Plot) => self.parse_plot(),
             Some(Token::Figure) => self.parse_figure(),
             Some(Token::Layer) => self.parse_layer(),
-            Some(_) => {
-                let (tok, span) = self.advance()?;
-                Err(self.unexpected_token(expected, &tok.to_string(), span))
-            }
-            None => Err(self.unexpected_eof(expected)),
+            Some(_) | None => Err(self.unexpected_next(Expected::Declaration)),
         }?;
 
         // Set visibility
@@ -295,9 +275,9 @@ impl Parser<'_> {
             && !decl_accepts_bindable_visibility(&decl)
             && let Some(vis_span) = visibility_span
         {
-            return Err(self.unexpected_token(
-                "`pub` (`pub(bind)` is only valid on bindable declaration kinds: `dim`, `type`, and `index`)",
-                "`pub(bind)`",
+            return Err(Self::unexpected_token(
+                Expected::NonBindableVisibility,
+                Found::PubBind,
                 vis_span,
             ));
         }
@@ -311,9 +291,9 @@ impl Parser<'_> {
             )
             && let Some(vis_span) = visibility_span
         {
-            return Err(self.unexpected_token(
-                "a whole-DAG import after `pub`; selective re-exports use per-item `pub` and plugin aliases remain private",
-                "non-DAG import",
+            return Err(Self::unexpected_token(
+                Expected::PubWholeDagImport,
+                Found::NonDagImport,
                 vis_span,
             ));
         }
@@ -352,9 +332,9 @@ impl Parser<'_> {
             // attaches to each slot, with the leading prefix consumed by
             // `parse_declaration` becoming the first slot's visibility.
             if let Some(first_attr) = attributes.first() {
-                return Err(self.unexpected_token(
-                    "no attributes on multi-decl (attributes are forbidden on multi-decl surface forms in v1)",
-                    "`#[...]`",
+                return Err(Self::unexpected_token(
+                    Expected::MultiDeclWithoutAttributes,
+                    Found::Attributes,
                     first_attr.span,
                 ));
             }
@@ -391,7 +371,11 @@ impl Parser<'_> {
         self.expect(Token::LParen)?;
         let (bind_tok, bind_span) = self.advance()?;
         if bind_tok != Token::ContextualKeyword(ContextualKeyword::Bind) {
-            return Err(self.unexpected_token("`bind`", &bind_tok.to_string(), bind_span));
+            return Err(Self::unexpected(
+                Expected::Token(Token::ContextualKeyword(ContextualKeyword::Bind)),
+                bind_tok,
+                bind_span,
+            ));
         }
         let (_, rparen_span) = self.expect(Token::RParen)?;
         Ok((
@@ -456,10 +440,8 @@ impl Parser<'_> {
             let (_, hash_span) = self.expect(Token::Hash)?;
             let (_, num_span) = self.expect(Token::Number)?;
             let text = self.lexer.slice_at(num_span).replace('_', "");
-            let position: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                reason: "expected non-negative integer after `#` in attribute argument".to_string(),
-                src: self.named_source(),
-                span: num_span.into(),
+            let position: u64 = text.parse().map_err(|_| {
+                Self::invalid_number(InvalidNumberReason::AttributePosition, num_span)
             })?;
             Ok(AttributeArg::FinitePosition {
                 position,

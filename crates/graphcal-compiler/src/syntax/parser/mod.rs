@@ -1,331 +1,24 @@
-use std::sync::Arc;
-
-use miette::{Diagnostic, NamedSource, SourceSpan};
-use thiserror::Error;
-
 use crate::outcome::Outcome;
 use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
-use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 use crate::syntax::token::{ContextualKeyword, SourceIdentifier, Token};
 
 mod compound;
 mod decl;
+mod error;
+mod expected;
 mod expr;
 mod table;
 mod token_stream;
 mod type_expr;
 
+pub use error::{
+    CompositionKind, InvalidNumberReason, ParseError, ParseErrorKind, PlotFieldContext,
+    UnsupportedMultiDeclShape,
+};
+pub use expected::{Expected, Found};
 use token_stream::ParserTokenStream;
-
-/// Rich parse error with miette diagnostics.
-#[derive(Debug, Clone, Error, Diagnostic)]
-pub enum ParseError {
-    #[error("unexpected token `{found}`")]
-    #[diagnostic(code(graphcal::P001), help("expected {expected}"))]
-    UnexpectedToken {
-        expected: String,
-        found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("here")]
-        span: SourceSpan,
-    },
-
-    #[error("unexpected end of file")]
-    #[diagnostic(code(graphcal::P002), help("expected {expected}"))]
-    UnexpectedEof {
-        expected: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("here")]
-        span: SourceSpan,
-    },
-
-    #[error("invalid number literal")]
-    #[diagnostic(code(graphcal::P003))]
-    InvalidNumber {
-        reason: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("{reason}")]
-        span: SourceSpan,
-    },
-
-    #[error("table row has {got} value(s), but the header has {expected} column(s)")]
-    #[diagnostic(code(graphcal::P004))]
-    TableRowLengthMismatch {
-        expected: u64,
-        got: u64,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this row has {got} value(s)")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown domain constraint key `{key}`")]
-    #[diagnostic(
-        code(graphcal::P005),
-        help("valid domain constraint keys are `min` and `max`")
-    )]
-    InvalidDomainBoundKey {
-        key: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("unknown key")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate domain constraint `{bound}`")]
-    #[diagnostic(
-        code(graphcal::P021),
-        help("each domain constraint may appear at most once")
-    )]
-    DuplicateDomainBound {
-        bound: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("duplicate bound here")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate DAG binding `{name}`")]
-    #[diagnostic(
-        code(graphcal::P025),
-        help("each name may appear at most once in a DAG binding list")
-    )]
-    DuplicateDagBinding {
-        name: NameAtom,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("duplicate binding")]
-        duplicate: SourceSpan,
-        #[label("first bound here")]
-        first: SourceSpan,
-    },
-
-    #[error("stray character in source")]
-    #[diagnostic(
-        code(graphcal::P006),
-        help("remove or replace this character; it is not part of the graphcal grammar")
-    )]
-    UnknownToken {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("stray character")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "multi-decl slot tuple has {tuple_count} entr{}, but the multi-decl declares {slot_count} slot{}",
-        if *tuple_count == 1 { "y" } else { "ies" },
-        if *slot_count == 1 { "" } else { "s" }
-    )]
-    #[diagnostic(
-        code(graphcal::P007),
-        help(
-            "the slot tuple in `table[..., (…)]` must contain exactly one entry per declared slot"
-        )
-    )]
-    MultiDeclTupleArity {
-        slot_count: usize,
-        tuple_count: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("slot tuple here")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "multi-decl header row has {header_count} cell{}, but the multi-decl declares {slot_count} slot{}",
-        if *header_count == 1 { "" } else { "s" },
-        if *slot_count == 1 { "" } else { "s" }
-    )]
-    #[diagnostic(
-        code(graphcal::P008),
-        help("the header row (`: _, _, …;`) must have exactly one cell per slot")
-    )]
-    MultiDeclHeaderArity {
-        slot_count: usize,
-        header_count: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("header row here")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "multi-decl row `{row_label}` has {got} value(s), but the header row declares {expected_count} value column{}",
-        if *expected_count == 1 { "" } else { "s" }
-    )]
-    #[diagnostic(
-        code(graphcal::P009),
-        help("each row must have exactly one value per header column")
-    )]
-    MultiDeclRowArity {
-        expected_count: usize,
-        got: usize,
-        row_label: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this row has {got} value(s)")]
-        span: SourceSpan,
-    },
-
-    #[error("multi-decl requires at least one shared axis")]
-    #[diagnostic(
-        code(graphcal::P011),
-        help("declare the row axis in `table[SharedAxis, (…)]`")
-    )]
-    MultiDeclNoSharedAxis {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("missing shared axis")]
-        span: SourceSpan,
-    },
-
-    #[error("{reason}")]
-    #[diagnostic(
-        code(graphcal::P012),
-        help(
-            "this multi-decl shape is scheduled for a later version; see issue #481 for the incremental plan"
-        )
-    )]
-    MultiDeclUnsupportedShape {
-        reason: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("here")]
-        span: SourceSpan,
-    },
-
-    #[error("inline DAG call requires `::<out>` projection")]
-    #[diagnostic(
-        code(graphcal::P014),
-        help(
-            "add `::<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
-        )
-    )]
-    InlineDagCallMissingProjection {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("expected `::<out>` projection here")]
-        span: SourceSpan,
-    },
-
-    #[error("syntax nesting is too deep")]
-    #[diagnostic(
-        code(graphcal::P015),
-        help(
-            "the parser limits nesting to {MAX_NESTING_DEPTH} levels; simplify the nested syntax"
-        )
-    )]
-    TooDeeplyNested {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("nesting exceeds the limit here")]
-        span: SourceSpan,
-    },
-
-    #[error("`^0` exponent has no effect")]
-    #[diagnostic(
-        code(graphcal::P016),
-        help(
-            "a zero power erases its term; remove the term (or the exponent) instead of raising to zero"
-        )
-    )]
-    ZeroExponent {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("exponent must be a non-zero integer")]
-        span: SourceSpan,
-    },
-
-    #[error("Nat subtraction is not supported")]
-    #[diagnostic(
-        code(graphcal::P022),
-        help(
-            "express the larger size additively instead, for example use `D[Fin(N + 1)]` for the input and `D[Fin(N)]` for the smaller output"
-        )
-    )]
-    NatSubtractionUnsupported {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("`-` is not part of the Nat polynomial algebra")]
-        span: SourceSpan,
-    },
-
-    #[error("expected Index, found Nat `{expression}`")]
-    #[diagnostic(
-        code(graphcal::P023),
-        help("write `{suggestion}` for an explicit finite structural index")
-    )]
-    ExpectedIndexFoundNat {
-        expression: String,
-        suggestion: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("Nat is not implicitly converted to Index")]
-        span: SourceSpan,
-    },
-
-    #[error("`range(N)` is no longer a structural index constructor")]
-    #[diagnostic(
-        code(graphcal::P024),
-        help(
-            "write `Fin({cardinality})`; `range` is reserved for coordinate indexes with an explicit `step:`"
-        )
-    )]
-    ObsoleteStructuralRange {
-        cardinality: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("use `Fin(...)` here")]
-        span: SourceSpan,
-    },
-
-    #[error("duplicate `{field}` in {context}")]
-    #[diagnostic(
-        code(graphcal::P018),
-        help("each field may appear at most once; remove or rename the duplicate")
-    )]
-    DuplicatePlotField {
-        field: String,
-        context: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("duplicate field here")]
-        span: SourceSpan,
-    },
-
-    #[error("plot declaration has no encoding channels")]
-    #[diagnostic(
-        code(graphcal::P019),
-        help(
-            "add an `encode:` block with at least one channel, e.g. `encode: {{ x: ..., y: ... }}`"
-        )
-    )]
-    MissingPlotEncoding {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this plot has an empty or missing `encode:` block")]
-        span: SourceSpan,
-    },
-
-    #[error("{kind} declaration has no plots")]
-    #[diagnostic(
-        code(graphcal::P020),
-        help("add a non-empty `plots:` list, e.g. `plots: [my_plot]`")
-    )]
-    EmptyCompositionPlots {
-        kind: &'static str,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this {kind} has an empty or missing `plots:` list")]
-        span: SourceSpan,
-    },
-}
 
 /// Maximum nesting depth shared by every recursive grammar production:
 /// declarations, attributes, expressions, and dimension, unit, and type
@@ -339,48 +32,15 @@ pub enum ParseError {
 /// and are not limited by this bound.
 const MAX_NESTING_DEPTH: usize = 256;
 
-impl ParseError {
-    /// Return the `NamedSource` embedded in this error.
-    ///
-    /// Every variant carries the file's name and full source text via miette's
-    /// `#[source_code]` field. Exposing it as a typed accessor lets diagnostic
-    /// emitters pair the error's offsets with the exact source they index into
-    /// — instead of inferring (name, source) from external context, which can
-    /// silently desynchronize when an imported file is the origin.
-    #[must_use]
-    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
-        match self {
-            Self::UnexpectedToken { src, .. }
-            | Self::UnexpectedEof { src, .. }
-            | Self::InvalidNumber { src, .. }
-            | Self::TableRowLengthMismatch { src, .. }
-            | Self::InvalidDomainBoundKey { src, .. }
-            | Self::DuplicateDomainBound { src, .. }
-            | Self::DuplicateDagBinding { src, .. }
-            | Self::UnknownToken { src, .. }
-            | Self::MultiDeclTupleArity { src, .. }
-            | Self::MultiDeclHeaderArity { src, .. }
-            | Self::MultiDeclRowArity { src, .. }
-            | Self::MultiDeclNoSharedAxis { src, .. }
-            | Self::MultiDeclUnsupportedShape { src, .. }
-            | Self::InlineDagCallMissingProjection { src, .. }
-            | Self::TooDeeplyNested { src, .. }
-            | Self::ZeroExponent { src, .. }
-            | Self::NatSubtractionUnsupported { src, .. }
-            | Self::ExpectedIndexFoundNat { src, .. }
-            | Self::ObsoleteStructuralRange { src, .. }
-            | Self::DuplicatePlotField { src, .. }
-            | Self::MissingPlotEncoding { src, .. }
-            | Self::EmptyCompositionPlots { src, .. } => src,
-        }
-    }
-}
-
+/// Recursive-descent parser over one source text.
+///
+/// The parser knows nothing about where its source came from: errors carry
+/// only spans into it, and the shell that owns the source attaches its
+/// identity with [`ParseError::located`].
 #[derive(Clone)]
 pub struct Parser<'src> {
     lexer: ParserTokenStream<'src>,
-    source: Arc<String>,
-    source_name: String,
+    source: &'src str,
     /// Current nesting depth of recursive grammar productions; bounded by
     /// [`MAX_NESTING_DEPTH`] via [`Self::with_nesting_budget`].
     nesting_depth: usize,
@@ -391,18 +51,7 @@ impl<'src> Parser<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             lexer: ParserTokenStream::new(source),
-            source: Arc::new(source.to_string()),
-            source_name: "input".to_string(),
-            nesting_depth: 0,
-        }
-    }
-
-    #[must_use]
-    pub fn with_name(source: &'src str, name: &str) -> Self {
-        Self {
-            lexer: ParserTokenStream::new(source),
-            source: Arc::new(source.to_string()),
-            source_name: name.to_string(),
+            source,
             nesting_depth: 0,
         }
     }
@@ -420,12 +69,10 @@ impl<'src> Parser<'src> {
     ) -> Result<T, ParseError> {
         if self.nesting_depth >= MAX_NESTING_DEPTH {
             let span = self.lexer.peek_with_span().map(|(_, span)| span);
-            return Err(ParseError::TooDeeplyNested {
-                src: self.named_source(),
-                span: span
-                    .unwrap_or_else(|| Span::new(self.lexer.source_len(), 0))
-                    .into(),
-            });
+            return Err(ParseError::new(
+                ParseErrorKind::TooDeeplyNested,
+                span.unwrap_or_else(|| self.end_of_source()),
+            ));
         }
         self.nesting_depth += 1;
         let result = crate::stack::with_stack_growth(|| f(self));
@@ -438,46 +85,56 @@ impl<'src> Parser<'src> {
         self.lexer.into_source_metadata()
     }
 
-    fn named_source(&self) -> NamedSource<Arc<String>> {
-        NamedSource::new(self.source_name.clone(), Arc::clone(&self.source))
+    /// Empty span at the end of the source.
+    const fn end_of_source(&self) -> Span {
+        Span::new(self.lexer.source_len(), 0)
     }
 
-    fn unexpected_token(&self, expected: &str, found: &str, span: Span) -> ParseError {
-        ParseError::UnexpectedToken {
-            expected: expected.to_string(),
-            found: found.to_string(),
-            src: self.named_source(),
-            span: span.into(),
-        }
+    /// Reject `found` at `span` where `expected` was required.
+    const fn unexpected_token(expected: Expected, found: Found, span: Span) -> ParseError {
+        ParseError::new(ParseErrorKind::UnexpectedToken { expected, found }, span)
+    }
+
+    /// Reject `token` at `span` where `expected` was required.
+    const fn unexpected(expected: Expected, token: Token, span: Span) -> ParseError {
+        Self::unexpected_token(expected, Found::Token(token), span)
     }
 
     /// Build a duplicate-field error for plot/figure/layer block parsing.
-    fn duplicate_plot_field(&self, field: &str, context: &str, span: Span) -> ParseError {
-        ParseError::DuplicatePlotField {
-            field: field.to_string(),
-            context: context.to_string(),
-            src: self.named_source(),
-            span: span.into(),
+    const fn duplicate_plot_field(
+        field: SourceIdentifier,
+        context: PlotFieldContext,
+        span: Span,
+    ) -> ParseError {
+        ParseError::new(ParseErrorKind::DuplicatePlotField { field, context }, span)
+    }
+
+    const fn unexpected_eof(&self, expected: Expected) -> ParseError {
+        ParseError::new(
+            ParseErrorKind::UnexpectedEof { expected },
+            self.end_of_source(),
+        )
+    }
+
+    /// Reject the next token (or the end of the source) where `expected` was
+    /// required.
+    fn unexpected_next(&mut self, expected: Expected) -> ParseError {
+        match self.lexer.next_token() {
+            Some((token, span)) => Self::unexpected(expected, token, span),
+            None => self.unexpected_eof(expected),
         }
     }
 
-    fn unexpected_eof(&self, expected: &str) -> ParseError {
-        ParseError::UnexpectedEof {
-            expected: expected.to_string(),
-            src: self.named_source(),
-            span: Span::new(self.lexer.source_len(), 0).into(),
-        }
+    const fn invalid_number(reason: InvalidNumberReason, span: Span) -> ParseError {
+        ParseError::new(ParseErrorKind::InvalidNumber { reason }, span)
     }
 
-    fn nat_subtraction_unsupported(&self, span: Span) -> ParseError {
-        ParseError::NatSubtractionUnsupported {
-            src: self.named_source(),
-            span: span.into(),
-        }
+    const fn nat_subtraction_unsupported(span: Span) -> ParseError {
+        ParseError::new(ParseErrorKind::NatSubtractionUnsupported, span)
     }
 
     /// Consume any remaining tokens and, if the lexer encountered an unrecognized
-    /// character at any point, replace `result` with a `ParseError::UnknownToken`
+    /// character at any point, replace `result` with a `ParseErrorKind::UnknownToken`
     /// pointing at the first such span.
     ///
     /// A stray character is a root-cause lex-level failure; it should eclipse any
@@ -488,10 +145,7 @@ impl<'src> Parser<'src> {
             self.lexer.next_token();
         }
         if let Some(span) = self.lexer.first_error_span() {
-            return Err(ParseError::UnknownToken {
-                src: self.named_source(),
-                span: span.into(),
-            });
+            return Err(ParseError::new(ParseErrorKind::UnknownToken, span));
         }
         result
     }
@@ -502,26 +156,21 @@ impl<'src> Parser<'src> {
     fn advance(&mut self) -> Result<(Token, Span), ParseError> {
         self.lexer
             .next_token()
-            .ok_or_else(|| self.unexpected_eof("token"))
+            .ok_or_else(|| self.unexpected_eof(Expected::AnyToken))
     }
 
     /// Parse a finite `f64` literal from already-normalized token text.
-    fn parse_finite_f64_literal(&self, text: &str, span: Span) -> Result<f64, ParseError> {
-        let value: f64 =
-            text.parse()
-                .map_err(|e: std::num::ParseFloatError| ParseError::InvalidNumber {
-                    reason: e.to_string(),
-                    src: self.named_source(),
-                    span: span.into(),
-                })?;
+    fn parse_finite_f64_literal(text: &str, span: Span) -> Result<f64, ParseError> {
+        let value: f64 = text
+            .parse()
+            .map_err(|error| Self::invalid_number(InvalidNumberReason::Float(error), span))?;
         if value.is_finite() {
             Ok(value)
         } else {
-            Err(ParseError::InvalidNumber {
-                reason: "floating-point literal must be finite".to_string(),
-                src: self.named_source(),
-                span: span.into(),
-            })
+            Err(Self::invalid_number(
+                InvalidNumberReason::NonFiniteFloat,
+                span,
+            ))
         }
     }
 
@@ -543,7 +192,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
+            return Err(Self::unexpected(Expected::EndOfInput, tok, span));
         }
         Ok(expr)
     }
@@ -569,7 +218,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_unit_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
+            return Err(Self::unexpected(Expected::EndOfInput, tok, span));
         }
         Ok(expr)
     }
@@ -593,7 +242,7 @@ impl<'src> Parser<'src> {
         let expr = self.parse_dim_expr()?;
         if let Some((tok, span)) = self.lexer.peek_with_span() {
             let tok = *tok;
-            return Err(self.unexpected_token("end of input", &tok.to_string(), span));
+            return Err(Self::unexpected(Expected::EndOfInput, tok, span));
         }
         Ok(expr)
     }
@@ -638,10 +287,10 @@ impl<'src> Parser<'src> {
         }
         self.lexer.checkpoint()?;
         if let Some(span) = self.lexer.first_error_span() {
-            return Err(Outcome::Failed(ParseError::UnknownToken {
-                src: self.named_source(),
-                span: span.into(),
-            }));
+            return Err(Outcome::Failed(ParseError::new(
+                ParseErrorKind::UnknownToken,
+                span,
+            )));
         }
         result.map_err(Outcome::Failed)
     }
@@ -656,7 +305,7 @@ impl<'src> Parser<'src> {
         // blocks can be attached to the declarations they precede.
         crate::syntax::doc_attach::attach_doc_comments(
             &mut file,
-            &self.source,
+            self.source,
             self.lexer.source_metadata(),
         );
         Ok(file)
@@ -665,11 +314,10 @@ impl<'src> Parser<'src> {
     // --- Helper methods ---
 
     fn expect(&mut self, expected: Token) -> Result<(Token, Span), ParseError> {
-        let expected_str = format!("`{expected}`");
         match self.lexer.next_token() {
             Some((tok, span)) if tok == expected => Ok((tok, span)),
-            Some((tok, span)) => Err(self.unexpected_token(&expected_str, &tok.to_string(), span)),
-            None => Err(self.unexpected_eof(&expected_str)),
+            Some((tok, span)) => Err(Self::unexpected(Expected::Token(expected), tok, span)),
+            None => Err(self.unexpected_eof(Expected::Token(expected))),
         }
     }
 
@@ -733,8 +381,8 @@ impl<'src> Parser<'src> {
                 ),
                 span,
             }),
-            Some((tok, span)) => Err(self.unexpected_token("identifier", &tok.to_string(), span)),
-            None => Err(self.unexpected_eof("identifier")),
+            Some((tok, span)) => Err(Self::unexpected(Expected::Identifier, tok, span)),
+            None => Err(self.unexpected_eof(Expected::Identifier)),
         }
     }
 
@@ -775,7 +423,7 @@ impl<'src> Parser<'src> {
 mod tests {
     use crate::outcome::Outcome;
     use crate::syntax::parser::{
-        ParseError, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
+        ParseErrorKind, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
     };
 
     #[test]
@@ -783,14 +431,13 @@ mod tests {
         let input = "param x = 1.0; §";
         let mut parser = Parser::new(input);
         let err = parser.parse_file().expect_err("expected parse error");
-        match err {
-            ParseError::UnknownToken { span, .. } => {
-                let byte_start: usize = span.offset();
-                let byte_end = byte_start + span.len();
-                assert_eq!(&input[byte_start..byte_end], "§");
-            }
-            other => panic!("expected UnknownToken, got {other:?}"),
-        }
+        assert!(
+            matches!(err.kind, ParseErrorKind::UnknownToken),
+            "expected UnknownToken, got {err:?}"
+        );
+        let byte_start: usize = err.span.offset();
+        let byte_end = byte_start + err.span.len();
+        assert_eq!(&input[byte_start..byte_end], "§");
     }
 
     #[test]
@@ -802,7 +449,7 @@ mod tests {
         let mut parser = Parser::new(input);
         let err = parser.parse_file().expect_err("expected parse error");
         assert!(
-            matches!(err, ParseError::UnknownToken { .. }),
+            matches!(err.kind, ParseErrorKind::UnknownToken),
             "expected UnknownToken, got {err:?}"
         );
     }

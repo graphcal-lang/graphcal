@@ -1,12 +1,13 @@
 use crate::syntax::ast::DeclKind;
 use crate::syntax::ast::Declaration;
+use crate::syntax::ast::GenericConstraint;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
-use super::super::{ParseError, Parser};
+use super::super::{Expected, Found, ParseError, ParseErrorKind, Parser};
 
 impl Parser<'_> {
     /// Parse an import declaration:
@@ -30,15 +31,15 @@ impl Parser<'_> {
 
         // Reject param bindings on `import` — use `include` for DAG instantiation.
         if self.lexer.peek() == Some(&Token::LParen) {
-            let (_, span) = self.advance()?;
-            return Err(self.unexpected_token(
-                "`{`, `as`, or `;` after path (`import` cannot have param bindings; use `include` for DAG instantiation)",
-                "(",
+            let (token, span) = self.advance()?;
+            return Err(Self::unexpected(
+                Expected::ImportTailWithoutBindings,
+                token,
                 span,
             ));
         }
 
-        let (kind, end_span) = self.parse_import_tail("`::{`, `as`, or `;` after path")?;
+        let (kind, end_span) = self.parse_import_tail(Expected::ImportTail)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -105,17 +106,8 @@ impl Parser<'_> {
                 self.advance()?;
                 span
             }
-            Some((tok, _)) => {
-                let tok_str = tok.to_string();
-                let (_, span) = self.advance()?;
-                return Err(self.unexpected_token(
-                    "`fn` to declare an extern function, or `}` to close the plugin block",
-                    &tok_str,
-                    span,
-                ));
-            }
-            None => {
-                return Err(self.unexpected_eof("`fn` to declare an extern function, or `}`"));
+            Some(_) | None => {
+                return Err(self.unexpected_next(Expected::ExternFunctionOrBlockClose));
             }
         };
 
@@ -133,23 +125,27 @@ impl Parser<'_> {
                 let var = self.parse_any_ident()?;
                 self.expect(Token::Colon)?;
                 let constraint = self.parse_any_ident()?;
-                let binder = match constraint.name.as_str() {
-                    "Dim" => crate::syntax::ast::ExternGenericBinder::Dim(
+                let binder = match GenericConstraint::parse(constraint.name.as_str()) {
+                    Some(GenericConstraint::Dim) => crate::syntax::ast::ExternGenericBinder::Dim(
                         crate::syntax::span::Spanned::new(
                             crate::syntax::dimension::DimVarName::classify(var.name.into_atom()),
                             var.span,
                         ),
                     ),
-                    "Index" => crate::syntax::ast::ExternGenericBinder::Index(
-                        crate::syntax::span::Spanned::new(
-                            crate::syntax::index_name::IndexVarName::classify(var.name.into_atom()),
-                            var.span,
-                        ),
-                    ),
-                    other => {
-                        return Err(self.unexpected_token(
-                            "`Dim` or `Index` as the binder constraint",
-                            other,
+                    Some(GenericConstraint::Index) => {
+                        crate::syntax::ast::ExternGenericBinder::Index(
+                            crate::syntax::span::Spanned::new(
+                                crate::syntax::index_name::IndexVarName::classify(
+                                    var.name.into_atom(),
+                                ),
+                                var.span,
+                            ),
+                        )
+                    }
+                    Some(GenericConstraint::Nat | GenericConstraint::Type) | None => {
+                        return Err(Self::unexpected_token(
+                            Expected::ExternBinderConstraint,
+                            Found::Name(constraint.name),
                             constraint.span,
                         ));
                     }
@@ -205,15 +201,15 @@ impl Parser<'_> {
         let param_bindings = if self.lexer.peek() == Some(&Token::LParen) {
             self.parse_import_param_bindings()?
         } else {
-            let found = self
-                .lexer
-                .peek()
-                .map_or_else(|| "end of file".to_string(), ToString::to_string);
-            return Err(self.unexpected_token("`(` to begin param bindings", &found, path.span));
+            let found = Found::token_or_end(self.lexer.peek().copied());
+            return Err(Self::unexpected_token(
+                Expected::ParamBindingsOpen,
+                found,
+                path.span,
+            ));
         };
 
-        let (kind, end_span) =
-            self.parse_import_tail("`::{`, `as`, or `;` after param bindings")?;
+        let (kind, end_span) = self.parse_import_tail(Expected::IncludeTail)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -262,22 +258,15 @@ impl Parser<'_> {
     ///   `::{ items, ... } ;`   → brace-list form
     fn parse_import_tail(
         &mut self,
-        hint: &str,
+        hint: Expected,
     ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::DoubleColon) => {
                 self.advance()?;
                 if self.lexer.peek() != Some(&Token::LBrace) {
-                    let found = self
-                        .lexer
-                        .peek()
-                        .map_or_else(|| "end of file".to_string(), ToString::to_string);
+                    let found = Found::token_or_end(self.lexer.peek().copied());
                     let (_, span) = self.advance()?;
-                    return Err(self.unexpected_token(
-                        "`{` to begin a brace-list selector after `::`",
-                        &found,
-                        span,
-                    ));
+                    return Err(Self::unexpected_token(Expected::SelectorBrace, found, span));
                 }
                 let names = self.parse_import_brace_list()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
@@ -293,12 +282,7 @@ impl Parser<'_> {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Module { alias: None }, end_span))
             }
-            Some(tok) => {
-                let tok_str = tok.to_string();
-                let (_, span) = self.advance()?;
-                Err(self.unexpected_token(hint, &tok_str, span))
-            }
-            None => Err(self.unexpected_eof(hint)),
+            Some(_) | None => Err(self.unexpected_next(hint)),
         }
     }
 
@@ -320,9 +304,9 @@ impl Parser<'_> {
             let is_pub = if p.lexer.peek() == Some(&Token::Pub) {
                 let (_, pub_span) = p.advance()?;
                 if p.lexer.peek() == Some(&Token::LParen) {
-                    return Err(p.unexpected_token(
-                        "an identifier (`pub(bind)` is not allowed on import/include items — use `pub`)",
-                        "(",
+                    return Err(Self::unexpected(
+                        Expected::ImportItemName,
+                        Token::LParen,
                         pub_span,
                     ));
                 }
@@ -424,12 +408,13 @@ impl Parser<'_> {
             if let Some(first) =
                 declared.insert((binding.category, &binding.name.name), binding.name.span)
             {
-                return Err(ParseError::DuplicateDagBinding {
-                    name: binding.name.name.atom().clone(),
-                    src: self.named_source(),
-                    duplicate: binding.name.span.into(),
-                    first: first.into(),
-                });
+                return Err(ParseError::new(
+                    ParseErrorKind::DuplicateDagBinding {
+                        name: binding.name.name.atom().clone(),
+                        first,
+                    },
+                    binding.name.span,
+                ));
             }
         }
         Ok(bindings)

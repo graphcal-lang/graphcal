@@ -37,12 +37,12 @@ pub fn capture_package(
                 path: path.to_path_buf(),
                 message: "source is not UTF-8".to_string(),
             })?;
-        let ast = Parser::with_name(source, &path.display().to_string())
-            .parse_file()
-            .map_err(|error| PackageSnapshotError::InvalidSource {
+        let ast = Parser::new(source).parse_file().map_err(|error| {
+            PackageSnapshotError::InvalidSource {
                 path: path.to_path_buf(),
                 message: error.to_string(),
-            })?;
+            }
+        })?;
         for plugin in ast.plugin_imports() {
             if plugin.path.value.source_kind() == PluginSourceKind::WasmModule {
                 plugins.insert(graphcal_package::PluginArtifactPath::new(
