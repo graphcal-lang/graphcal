@@ -351,8 +351,8 @@ impl UnfrozenIR {
                     &generic_scope,
                 )
                 .with_prelude(&prelude);
-                let type_expr =
-                    crate::hir::lower_type_expr(type_ann, type_ctx).map_err(|error| {
+                let decl_type =
+                    crate::hir::lower_decl_type(type_ann, type_ctx).map_err(|error| {
                         crate::hir::diagnostics::type_lower_error_to_graphcal(&error, type_ann, src)
                     })?;
                 let domain_bounds = type_ann
@@ -367,7 +367,7 @@ impl UnfrozenIR {
                     })
                     .collect::<Result<_, GraphcalError>>()?;
                 Ok(crate::hir::TypeAnnotation {
-                    type_expr,
+                    decl_type,
                     domain_bounds,
                     span: type_ann.span,
                 })

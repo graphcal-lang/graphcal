@@ -42,13 +42,14 @@ pub use expr::{
 };
 pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr, visit_expr};
 pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
-pub(crate) use lower::{TypeLoweringContext, lower_type_expr};
+pub(crate) use lower::{TypeLoweringContext, lower_decl_type};
 pub use nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
     NominalTypeKind, NominalTypeRegistry,
 };
 pub use source_interface::{SourceDeclaration, StaticPort, StaticPortIdentity};
 pub use types::{
-    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound, GenericArg,
-    GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, TypeExpr, TypeExprKind,
+    BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound,
+    GenericArg, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, ValueType,
+    ValueTypeKind,
 };

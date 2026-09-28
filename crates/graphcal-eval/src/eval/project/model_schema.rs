@@ -410,13 +410,6 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
                 self.ensure_algebraic_definition(&id)?;
                 Ok(ModelValueSchema::Algebraic(id))
             }
-            DeclaredType::IndexArg(index) => Err(GraphcalError::internal_error(
-                format!(
-                    "unresolved index argument `{index}` cannot be a concrete model value port"
-                ),
-                self.source,
-                DiagnosticAnchor::WholeFile,
-            )),
         }
     }
 

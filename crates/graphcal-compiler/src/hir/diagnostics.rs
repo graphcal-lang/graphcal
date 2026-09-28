@@ -529,6 +529,7 @@ pub fn hir_lower_error_to_graphcal(
         hir::HirLowerError::ModuleResolve { span, .. }
         | hir::HirLowerError::UnknownTypePath { span, .. }
         | hir::HirLowerError::IndexLabelAsType { span, .. }
+        | hir::HirLowerError::NestedIndexedType { span }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
@@ -537,6 +538,7 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::ExpectedTimeScale { span }
         | hir::HirLowerError::UnknownTimeScale { span, .. }
         | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
+        hir::HirLowerError::IndexAsType { index } => index.span(),
         hir::HirLowerError::DuplicateGenericParam { duplicate, .. }
         | hir::HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };

@@ -199,7 +199,7 @@ fn validate(
             validate_index(index, ctx)?;
             validate(element, ctx, stack)
         }
-        DeclaredType::Key(index) | DeclaredType::IndexArg(index) => validate_index(index, ctx),
+        DeclaredType::Key(index) => validate_index(index, ctx),
         DeclaredType::Quantity(_)
         | DeclaredType::Complex(_)
         | DeclaredType::Bool

@@ -481,8 +481,8 @@ impl DeclaredGenericArg {
 }
 
 /// A concrete declared type: primitive, struct, or indexed value type.
-/// `IndexArg` is retained for index-only boundary values; generic struct
-/// metadata uses [`DeclaredGenericArg`] instead.
+/// Index arguments are never types; generic struct metadata carries them as
+/// [`DeclaredGenericArg::Index`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeclaredType {
     Quantity(Dimension),
@@ -492,11 +492,6 @@ pub enum DeclaredType {
     Int,
     /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
     Datetime(TimeScale),
-    /// An index argument captured inside a generic struct instantiation.
-    ///
-    /// This is not a standalone value type; it is carried only as metadata for
-    /// generic type parameters constrained as `Index`.
-    IndexArg(IndexTypeRef),
     /// An index-key value type `Key<I>`: element keys of axis `I`.
     Key(IndexTypeRef),
     /// A struct type, optionally with concrete sorted generic arguments.
@@ -540,7 +535,6 @@ impl DeclaredType {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::IndexArg(index) => format!("index {}", qualification.index(index)),
             Self::Key(index) => format!("Key<{}>", qualification.index(index)),
             Self::Struct(name, args) => {
                 let name = qualification.struct_type(name);

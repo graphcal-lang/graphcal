@@ -662,7 +662,7 @@ fn resolve_declared_type_exprs(
         .chain(hir.nodes.iter().map(|entry| (&entry.name, &entry.type_ann)))
     {
         cancellation.checkpoint()?;
-        let ty = resolve_hir_type_expr(&type_ann.type_expr, src, module_ctx)?;
+        let ty = resolve_hir_decl_type(&type_ann.decl_type, src, module_ctx)?;
         let ty = match projection_substitutions.get(name) {
             Some(substitution) => {
                 specialization::specialize_type(&ty, substitution, module_ctx.types, src)?
@@ -986,14 +986,14 @@ fn collect_public_signature_index_dependencies(
 }
 
 fn collect_public_signature_type_dependencies(
-    type_expr: &hir::TypeExpr,
+    value_type: &hir::ValueType,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<(ResolvedStructTypeName, GenericParamName)>,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
-    match &type_expr.kind {
-        hir::TypeExprKind::Builtin(_) | hir::TypeExprKind::GenericTypeParam(_) => {}
-        hir::TypeExprKind::DimExpr(expr) => {
+    match &value_type.kind {
+        hir::ValueTypeKind::Builtin(_) | hir::ValueTypeKind::GenericTypeParam(_) => {}
+        hir::ValueTypeKind::DimExpr(expr) => {
             dependencies.extend(
                 expr.terms
                     .iter()
@@ -1005,16 +1005,16 @@ fn collect_public_signature_type_dependencies(
                     }),
             );
         }
-        hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
+        hir::ValueTypeKind::Key(index) => {
             collect_public_signature_index_dependencies(index, dependencies);
         }
-        hir::TypeExprKind::Struct(name) => {
+        hir::ValueTypeKind::Struct(name) => {
             dependencies.push(PublicSignatureDependency::Type(name.clone()));
         }
-        hir::TypeExprKind::Complex(arg) => {
+        hir::ValueTypeKind::Complex(arg) => {
             collect_public_signature_dim_arg_dependencies(arg, dependencies);
         }
-        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
             dependencies.push(PublicSignatureDependency::Type(name.clone()));
             for arg in generic_args {
                 collect_public_signature_generic_arg_dependencies(
@@ -1040,12 +1040,6 @@ fn collect_public_signature_type_dependencies(
                     }
                 }
             }
-        }
-        hir::TypeExprKind::Indexed { base, indexes } => {
-            collect_public_signature_type_dependencies(base, defs, visited_defaults, dependencies);
-            indexes.iter().for_each(|index| {
-                collect_public_signature_index_dependencies(index, dependencies);
-            });
         }
     }
 }
@@ -1150,7 +1144,6 @@ fn collect_struct_type_defs_from_declared_type(
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_)
-        | crate::registry::declared_type::DeclaredType::IndexArg(_)
         | crate::registry::declared_type::DeclaredType::Key(_) => {}
     }
     Ok(())
@@ -1184,7 +1177,6 @@ fn collect_struct_type_defs_from_resolved_type(
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::IndexArg(_)
         | ResolvedTypeExpr::Quantity(_)
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericTypeParam(_, _)
@@ -1236,7 +1228,7 @@ fn record_resolved_struct_type_def(
                     field: field.name().clone(),
                 };
                 let annotation = field.type_annotation();
-                let resolved = resolve_hir_type_expr(&annotation.type_expr, definition_src, ctx)?;
+                let resolved = resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?;
                 let bounds = annotation
                     .domain_bounds
                     .iter()
@@ -1951,8 +1943,8 @@ pub(crate) fn rigid_dimension_view(
         )
         .filter(|(_, _, owner)| *owner == dag_id)
         .map(|(name, annotation, _)| {
-            type_expr::resolve_hir_type_expr_with_project_types(
-                &annotation.type_expr,
+            type_expr::resolve_hir_decl_type_with_project_types(
+                &annotation.decl_type,
                 src,
                 &rigid_types,
             )
@@ -1993,7 +1985,7 @@ pub use specialization::instantiate_semantic_edges;
 pub(crate) use specialization::{
     install_semantic_plot_projection_facts, install_semantic_presentation_facts,
 };
-pub use type_expr::resolve_hir_type_expr;
+pub use type_expr::resolve_hir_decl_type;
 use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
 
 #[cfg(test)]

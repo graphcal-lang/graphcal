@@ -154,7 +154,6 @@ fn bind_type_nats(
     let bind_index = |index: &IndexTypeRef| bind_index_nats(index, scope, bindings, src, span);
     let recurse = |ty: &DeclaredType| bind_type_nats(ty, scope, bindings, src, span);
     Ok(match ty {
-        DeclaredType::IndexArg(index) => DeclaredType::IndexArg(bind_index(index)?),
         DeclaredType::Key(index) => DeclaredType::Key(bind_index(index)?),
         DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
             element: Box::new(recurse(element)?),

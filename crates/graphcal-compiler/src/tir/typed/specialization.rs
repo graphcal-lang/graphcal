@@ -156,10 +156,6 @@ pub fn specialize_type(
                 }
             })
         }
-        ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedTypeExpr::IndexArg(specialize_index(
-            index,
-            substitution,
-        ))),
         ResolvedTypeExpr::Key { index, span } => Ok(ResolvedTypeExpr::Key {
             index: specialize_index(index, substitution),
             span: *span,
@@ -282,9 +278,6 @@ pub fn specialize_expression_type(
             tir.project_type_store(),
             src,
         )?),
-        DeclaredType::IndexArg(index) => {
-            DeclaredType::IndexArg(specialize_index_ref(index, substitution))
-        }
         DeclaredType::Key(index) => DeclaredType::Key(specialize_index_ref(index, substitution)),
         DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
             element: Box::new(recurse(element)?),

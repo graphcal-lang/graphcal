@@ -379,7 +379,7 @@ fn type_is_ready(
         DeclaredType::Indexed { element, index } => {
             cardinality(index)?.is_some() & type_is_ready(element, cardinality)?
         }
-        DeclaredType::Key(index) | DeclaredType::IndexArg(index) => cardinality(index)?.is_some(),
+        DeclaredType::Key(index) => cardinality(index)?.is_some(),
         DeclaredType::Struct(_, args) => args.iter().try_fold(true, |ready, arg| {
             Ok::<_, ExpressionFactsError>(
                 ready

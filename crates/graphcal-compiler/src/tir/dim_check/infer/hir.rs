@@ -661,28 +661,28 @@ fn check_hir_generic_arg_override_dependencies(
         hir::GenericArg::Index(index) => {
             check_hir_index_ref_override_dependency(index, local_types, dag, owner_decl)
         }
-        hir::GenericArg::Type(type_expr) => {
-            check_hir_type_override_dependencies(type_expr, local_types, dag, owner_decl)
+        hir::GenericArg::Type(value_type) => {
+            check_hir_type_override_dependencies(value_type, local_types, dag, owner_decl)
         }
         hir::GenericArg::Dim(_) | hir::GenericArg::Nat(_) => Ok(()),
     }
 }
 
 fn check_hir_type_override_dependencies(
-    type_expr: &hir::TypeExpr,
+    value_type: &hir::ValueType,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
     owner_decl: Option<&ResolvedDeclName>,
 ) -> Result<(), GraphcalError> {
-    match &type_expr.kind {
-        hir::TypeExprKind::Struct(name) => check_type_override_dependency(
+    match &value_type.kind {
+        hir::ValueTypeKind::Struct(name) => check_type_override_dependency(
             local_types,
             dag,
             owner_decl,
             &name.value,
             TypeNominalUse::TypeArgument,
         ),
-        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
             check_type_override_dependency(
                 local_types,
                 dag,
@@ -694,19 +694,13 @@ fn check_hir_type_override_dependencies(
                 check_hir_generic_arg_override_dependencies(arg, local_types, dag, owner_decl)
             })
         }
-        hir::TypeExprKind::Indexed { base, indexes } => {
-            check_hir_type_override_dependencies(base, local_types, dag, owner_decl)?;
-            indexes.iter().try_for_each(|index| {
-                check_hir_index_ref_override_dependency(index, local_types, dag, owner_decl)
-            })
-        }
-        hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
+        hir::ValueTypeKind::Key(index) => {
             check_hir_index_ref_override_dependency(index, local_types, dag, owner_decl)
         }
-        hir::TypeExprKind::Builtin(_)
-        | hir::TypeExprKind::DimExpr(_)
-        | hir::TypeExprKind::GenericTypeParam(_)
-        | hir::TypeExprKind::Complex(_) => Ok(()),
+        hir::ValueTypeKind::Builtin(_)
+        | hir::ValueTypeKind::DimExpr(_)
+        | hir::ValueTypeKind::GenericTypeParam(_)
+        | hir::ValueTypeKind::Complex(_) => Ok(()),
     }
 }
 
@@ -1319,14 +1313,6 @@ fn infer_hir_const_ref(
                 type_args,
             ))
         }
-        ConstRef::GenericNatParam(param) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic Nat parameter `{}` is type-level only and is not a runtime value",
-                param.name
-            ),
-            src: src.clone(),
-            span: target.span.into(),
-        }),
     }
 }
 
@@ -3314,9 +3300,7 @@ fn inferred_index_is_concrete(index: &IndexTypeRef) -> bool {
 
 fn inferred_type_is_concrete(inferred: &InferredType) -> bool {
     match inferred {
-        InferredType::Key(index) | InferredType::IndexArg(index) => {
-            inferred_index_is_concrete(index)
-        }
+        InferredType::Key(index) => inferred_index_is_concrete(index),
         InferredType::Struct(_, args) => args.iter().all(|arg| match arg {
             InferredGenericArg::Dim(_) => true,
             InferredGenericArg::Index(index) => inferred_index_is_concrete(index),
@@ -3555,41 +3539,38 @@ fn infer_hir_field_access(
 }
 
 fn infer_hir_generic_type_arg(
-    type_expr: &hir::TypeExpr,
+    value_type: &hir::ValueType,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    match &type_expr.kind {
-        hir::TypeExprKind::Builtin(hir::BuiltinType::Dimensionless) => {
+    match &value_type.kind {
+        hir::ValueTypeKind::Builtin(hir::BuiltinType::Dimensionless) => {
             Ok(InferredType::Quantity(Dimension::dimensionless()))
         }
-        hir::TypeExprKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
-        hir::TypeExprKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
-        hir::TypeExprKind::Builtin(hir::BuiltinType::Datetime(scale)) => {
+        hir::ValueTypeKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
+        hir::ValueTypeKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
+        hir::ValueTypeKind::Builtin(hir::BuiltinType::Datetime(scale)) => {
             Ok(InferredType::Datetime(*scale))
         }
-        hir::TypeExprKind::DimExpr(dim_expr) => {
+        hir::ValueTypeKind::DimExpr(dim_expr) => {
             infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Quantity)
         }
-        hir::TypeExprKind::Complex(dimension) => match dimension {
+        hir::ValueTypeKind::Complex(dimension) => match dimension {
             hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
             hir::DimArg::Expr(dim_expr) => {
                 infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Complex)
             }
         },
-        hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
-            inferred_index_from_type_arg(index, src)?,
-        )),
-        hir::TypeExprKind::Key(index) => {
+        hir::ValueTypeKind::Key(index) => {
             Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
         }
-        hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
+        hir::ValueTypeKind::Struct(name) => Ok(InferredType::Struct(
             StructTypeRef::from_resolved(name.value.clone()),
             vec![],
         )),
-        hir::TypeExprKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
+        hir::ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
             message: format!(
                 "generic type parameter `{}` is not concretely bound",
                 param.value.name
@@ -3597,7 +3578,7 @@ fn infer_hir_generic_type_arg(
             src: src.clone(),
             span: param.span.into(),
         }),
-        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
             let type_def = dag
                 .semantic
                 .type_defs
@@ -3625,17 +3606,6 @@ fn infer_hir_generic_type_arg(
                 )?,
             ))
         }
-        hir::TypeExprKind::Indexed { base, indexes } => {
-            let mut result = infer_hir_generic_type_arg(base, dag, tir, registry, src)?;
-            for index in indexes.iter().rev() {
-                let inferred_index = inferred_index_from_type_arg(index, src)?;
-                result = InferredType::Indexed {
-                    element: Box::new(result),
-                    index: inferred_index,
-                };
-            }
-            Ok(result)
-        }
     }
 }
 
@@ -3657,8 +3627,8 @@ fn infer_hir_sorted_generic_arg(
             inferred_index_from_type_arg(index, src).map(InferredGenericArg::Index)
         }
         hir::GenericArg::Nat(nat) => resolve_hir_nat_form(nat, src).map(InferredGenericArg::Nat),
-        hir::GenericArg::Type(type_expr) => {
-            infer_hir_generic_type_arg(type_expr, dag, tir, registry, src)
+        hir::GenericArg::Type(value_type) => {
+            infer_hir_generic_type_arg(value_type, dag, tir, registry, src)
                 .map(InferredGenericArg::Type)
         }
     }
@@ -4978,9 +4948,6 @@ fn specialize_dag_call_type(
                 span: *type_span,
             }
         }),
-        ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedTypeExpr::IndexArg(
-            specialize_dag_call_index(index, bindings),
-        )),
         ResolvedTypeExpr::Key {
             index,
             span: type_span,

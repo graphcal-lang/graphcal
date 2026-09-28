@@ -331,7 +331,6 @@ fn collect_concrete_nominal_applications(
         | DeclaredType::Bool
         | DeclaredType::Int
         | DeclaredType::Datetime(_)
-        | DeclaredType::IndexArg(_)
         | DeclaredType::Key(_) => Ok(()),
     }
 }
@@ -833,11 +832,6 @@ fn resolve_constraint_target(
         }),
         ResolvedTypeExpr::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Key".to_string(),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: format!("index {index}"),
             src: src.clone(),
             span: decl_span.into(),
         }),

@@ -54,7 +54,7 @@ use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{FieldName, GenericParamName};
+use crate::syntax::type_name::FieldName;
 
 use super::lower::{
     GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext, lower_generic_args,
@@ -1152,7 +1152,6 @@ pub enum ConstRef {
     Decl(ResolvedDeclName),
     Constructor(ResolvedConstructorName),
     Builtin(BuiltinConst),
-    GenericNatParam(super::types::GenericParamId),
 }
 
 /// A resolved function callee before its generic arguments are applied.
@@ -1941,10 +1940,12 @@ impl<'a> ExprLowerer<'a> {
     ///
     /// This is the single classification point of the compiler: it decides,
     /// in one pass, whether a path names a lexical local, a built-in constant,
-    /// a constructor, a type-system entity, a generic `Nat` parameter, or a
-    /// declaration — and resolves it to its canonical identity at the same
-    /// time. Lexical scope shadows module symbols. Time scales are resolved
-    /// only by the dedicated Static contexts that consume them.
+    /// a constructor, a type-system entity, or a declaration — and resolves it
+    /// to its canonical identity at the same time. Generic parameters are
+    /// type-level only: they are classified solely in generic-argument
+    /// positions, never here. Lexical scope shadows module symbols. Time
+    /// scales are resolved only by the dedicated Static contexts that consume
+    /// them.
     fn lower_unresolved_path(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
         path.as_bare().map_or_else(
             || self.lower_dotted_path_ref(path),
@@ -1959,7 +1960,7 @@ impl<'a> ExprLowerer<'a> {
     /// 2. Built-in Term constants (`PI`, `E`, ...)
     /// 3. Constructors (a bare constructor name is a nullary call)
     /// 4. Type-system names (struct types, dimensions, indexes, variants)
-    /// 5. Generic `Nat` parameters and declarations (const/node/param)
+    /// 5. Declarations (const/node/param)
     ///
     /// A time-scale spelling participates only after Term lookup fails, to
     /// produce a targeted wrong-namespace diagnostic rather than resolving a
@@ -2163,18 +2164,6 @@ impl<'a> ExprLowerer<'a> {
     }
 
     fn lower_const_ref(&self, name: &ScopedName, span: Span) -> Result<ConstRef, ExprLowerError> {
-        if !name.is_qualified() {
-            if let Some(builtin) = BuiltinConst::parse(name.leaf().as_str()) {
-                return Ok(ConstRef::Builtin(builtin));
-            }
-            let generic_name = GenericParamName::classify(name.leaf().atom().clone());
-            if let Some(binding) = self.ctx.generic_scope.get(&generic_name)
-                && binding.constraint == ast::GenericConstraint::Nat
-            {
-                return Ok(ConstRef::GenericNatParam(binding.id.clone()));
-            }
-        }
-
         let mut first_error = None;
 
         if let Some(resolved) = self

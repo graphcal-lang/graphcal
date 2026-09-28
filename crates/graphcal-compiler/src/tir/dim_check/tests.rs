@@ -1344,7 +1344,11 @@ node bad: Dimensionless = @x ^ @n;";
 fn hir_normalizes_omitted_dimension_and_unit_powers() {
     let (tir, _) = module_aware_tir("param distance: Length = 1.0 m;");
     let param = tir.root().params().first().unwrap();
-    let crate::hir::TypeExprKind::DimExpr(dimension) = &param.type_ann.type_expr.kind else {
+    let crate::hir::DeclType::Value(crate::hir::ValueType {
+        kind: crate::hir::ValueTypeKind::DimExpr(dimension),
+        ..
+    }) = &param.type_ann.decl_type
+    else {
         panic!("expected dimension expression");
     };
     assert_eq!(

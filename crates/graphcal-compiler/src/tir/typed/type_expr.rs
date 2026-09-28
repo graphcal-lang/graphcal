@@ -56,65 +56,33 @@ struct HirTypeResolutionContext<'a> {
     project_types: &'a ProjectTypeStore,
 }
 
-/// Resolve an already-lowered HIR type expression into the TIR type
+/// Resolve an already-lowered HIR declaration type into the TIR type
 /// representation.
 ///
 /// This is the new semantic entry point for module-aware TIR type resolution:
 /// source paths should be lowered to HIR first, then TIR consumes canonical
 /// `ResolvedName<Ns>` and lexical generic IDs from HIR instead of performing
 /// source-path lookup itself.
-pub fn resolve_hir_type_expr(
-    type_ann: &hir::TypeExpr,
+pub fn resolve_hir_decl_type(
+    decl_type: &hir::DeclType,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    resolve_hir_type_expr_with_project_types(type_ann, src, module_ctx.types)
+    resolve_hir_decl_type_with_project_types(decl_type, src, module_ctx.types)
 }
 
-pub(super) fn resolve_hir_type_expr_with_project_types(
-    type_ann: &hir::TypeExpr,
+pub(super) fn resolve_hir_decl_type_with_project_types(
+    decl_type: &hir::DeclType,
     src: &NamedSource<Arc<String>>,
     project_types: &ProjectTypeStore,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    resolve_hir_type_expr_inner(type_ann, HirTypeResolutionContext { src, project_types })
-}
-
-fn resolve_hir_type_expr_inner(
-    type_ann: &hir::TypeExpr,
-    ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    match &type_ann.kind {
-        hir::TypeExprKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
-        hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
-        hir::TypeExprKind::Complex(dimension) => Ok(ResolvedTypeExpr::Complex {
-            dimension: resolve_hir_dim_arg(dimension, ctx)?,
-            span: type_ann.span,
-        }),
-        hir::TypeExprKind::Key(index) => Ok(ResolvedTypeExpr::Key {
-            index: resolve_hir_index_ref(index, ctx)?,
-            span: type_ann.span,
-        }),
-        hir::TypeExprKind::Index(index) => Err(GraphcalError::EvalError {
-            message: format!(
-                "index `{}` cannot be used as a type",
-                format_hir_index_ref(index)
-            ),
-            src: ctx.src.clone(),
-            span: hir_index_ref_span(index).into(),
-        }),
-        hir::TypeExprKind::Struct(name) => {
-            hir_struct_type_def(&name.value, name.span, ctx)?;
-            Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
-        }
-        hir::TypeExprKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
-            param.value.name.clone(),
-            param.span,
-        )),
-        hir::TypeExprKind::TypeApplication { name, generic_args } => {
-            resolve_hir_type_application(type_ann, name, generic_args, ctx)
-        }
-        hir::TypeExprKind::Indexed { base, indexes } => {
-            let resolved_base = resolve_hir_type_expr_inner(base, ctx)?;
+    let ctx = HirTypeResolutionContext { src, project_types };
+    match decl_type {
+        hir::DeclType::Value(value_type) => resolve_hir_value_type(value_type, ctx),
+        hir::DeclType::Indexed {
+            element, indexes, ..
+        } => {
+            let resolved_base = resolve_hir_value_type(element, ctx)?;
             let resolved_indexes = indexes
                 .iter()
                 .map(|index| resolve_hir_index_ref(index, ctx))
@@ -127,36 +95,32 @@ fn resolve_hir_type_expr_inner(
     }
 }
 
-const fn hir_index_ref_span(index: &hir::IndexRef) -> Span {
-    match index {
-        hir::IndexRef::Concrete(name) => name.span,
-        hir::IndexRef::GenericParam(param) => param.span,
-        hir::IndexRef::Finite(nat_expr) => nat_expr.span(),
-    }
-}
-
-fn format_hir_index_ref(index: &hir::IndexRef) -> String {
-    match index {
-        hir::IndexRef::Concrete(name) => name.value.as_str().to_string(),
-        hir::IndexRef::GenericParam(param) => param.value.name.to_string(),
-        hir::IndexRef::Finite(nat_expr) => format!("Fin({})", format_hir_nat_expr(nat_expr)),
-    }
-}
-
-fn format_hir_nat_expr(nat_expr: &hir::NatExpr) -> String {
-    match nat_expr {
-        hir::NatExpr::Literal(n, _) => n.to_string(),
-        hir::NatExpr::Param(param) => param.value.name.to_string(),
-        hir::NatExpr::Add(operands, _) => operands
-            .iter()
-            .map(format_hir_nat_expr)
-            .collect::<Vec<_>>()
-            .join(" + "),
-        hir::NatExpr::Mul(operands, _) => operands
-            .iter()
-            .map(format_hir_nat_expr)
-            .collect::<Vec<_>>()
-            .join(" * "),
+fn resolve_hir_value_type(
+    value_type: &hir::ValueType,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    match &value_type.kind {
+        hir::ValueTypeKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
+        hir::ValueTypeKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
+        hir::ValueTypeKind::Complex(dimension) => Ok(ResolvedTypeExpr::Complex {
+            dimension: resolve_hir_dim_arg(dimension, ctx)?,
+            span: value_type.span,
+        }),
+        hir::ValueTypeKind::Key(index) => Ok(ResolvedTypeExpr::Key {
+            index: resolve_hir_index_ref(index, ctx)?,
+            span: value_type.span,
+        }),
+        hir::ValueTypeKind::Struct(name) => {
+            hir_struct_type_def(&name.value, name.span, ctx)?;
+            Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
+        }
+        hir::ValueTypeKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
+            param.value.name.clone(),
+            param.span,
+        )),
+        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+            resolve_hir_type_application(value_type, name, generic_args, ctx)
+        }
     }
 }
 
@@ -598,7 +562,7 @@ fn substitute_params_in_resolved_type(
     substitutions: &ResolvedGenericSubstitutions,
 ) -> Result<(), GenericDefaultSubstitutionError> {
     match type_expr {
-        ResolvedTypeExpr::IndexArg(index) | ResolvedTypeExpr::Key { index, .. } => {
+        ResolvedTypeExpr::Key { index, .. } => {
             substitute_params_in_resolved_index(index, substitutions)
         }
         ResolvedTypeExpr::GenericDimParam(name, _) => {
@@ -677,7 +641,7 @@ fn check_type_application_arity(
 }
 
 fn resolve_hir_type_application(
-    type_ann: &hir::TypeExpr,
+    type_ann: &hir::ValueType,
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
     generic_args: &[hir::GenericArg],
     ctx: HirTypeResolutionContext<'_>,
@@ -756,8 +720,8 @@ fn resolve_hir_generic_arg_for_param(
                 .map_err(|err| nat_overflow_error(err, ctx.src, nat.span()))?,
             nat.span(),
         )),
-        (GenericConstraint::Type, hir::GenericArg::Type(type_expr)) => {
-            resolve_hir_type_expr_inner(type_expr, ctx).map(ResolvedGenericArg::Type)
+        (GenericConstraint::Type, hir::GenericArg::Type(value_type)) => {
+            resolve_hir_value_type(value_type, ctx).map(ResolvedGenericArg::Type)
         }
         _ => Err(internal_error(
             format!(

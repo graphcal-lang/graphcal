@@ -1221,7 +1221,7 @@ mod tests {
         };
         assert!(matches!(
             &default.kind,
-            crate::hir::TypeExprKind::Struct(name) if name.value == marker
+            crate::hir::ValueTypeKind::Struct(name) if name.value == marker
         ));
         let [constructor] = definition.union_members().unwrap() else {
             panic!("Box should retain exactly one constructor");
@@ -1230,9 +1230,11 @@ mod tests {
             panic!("Box should retain exactly one field");
         };
         assert!(matches!(
-            &field.type_annotation().type_expr.kind,
-            crate::hir::TypeExprKind::GenericTypeParam(field_param)
-                if &field_param.value == parameter.id()
+            &field.type_annotation().decl_type,
+            crate::hir::DeclType::Value(crate::hir::ValueType {
+                kind: crate::hir::ValueTypeKind::GenericTypeParam(field_param),
+                ..
+            }) if &field_param.value == parameter.id()
         ));
         assert_eq!(definition.source().name(), "test.gcl");
     }

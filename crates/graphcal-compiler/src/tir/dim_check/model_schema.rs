@@ -42,11 +42,6 @@ pub enum ConcreteModelTypeError {
         identity: StructTypeRef,
         parameter: GenericParamName,
     },
-    #[error("generic Type parameter `{parameter}` on `{identity}` cannot accept an Index argument")]
-    IndexTypeArgument {
-        identity: StructTypeRef,
-        parameter: GenericParamName,
-    },
     #[error(
         "generic Type parameter `{parameter}` on `{identity}` cannot accept an indexed declaration type"
     )]
@@ -349,10 +344,6 @@ fn validate_type_argument_shape(
             validate_nominal_signature(tir, nested_identity, nested_args).map(|_| ())
         }
         DeclaredType::Key(index) => validate_index_reference(tir, index),
-        DeclaredType::IndexArg(_) => Err(ConcreteModelTypeError::IndexTypeArgument {
-            identity: identity.clone(),
-            parameter: parameter.clone(),
-        }),
         DeclaredType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
             identity: identity.clone(),
             parameter: parameter.clone(),
@@ -412,10 +403,6 @@ fn validate_bound_type_argument(
             validate_bound_generic_arguments(tir, nested_identity, nested_args)
         }
         DeclaredType::Key(index) => validate_bound_index(tir, index),
-        DeclaredType::IndexArg(_) => Err(ConcreteModelTypeError::IndexTypeArgument {
-            identity: identity.clone(),
-            parameter: parameter.clone(),
-        }),
         DeclaredType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
             identity: identity.clone(),
             parameter: parameter.clone(),

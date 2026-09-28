@@ -31,8 +31,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
         (DeclaredType::Complex(d), InferredType::Complex(inferred)) => d == inferred,
         (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
-        (DeclaredType::IndexArg(d), InferredType::IndexArg(i))
-        | (DeclaredType::Key(d), InferredType::Key(i)) => i.matches_ref(d),
+        (DeclaredType::Key(d), InferredType::Key(i)) => i.matches_ref(d),
         (DeclaredType::Struct(d, d_args), InferredType::Struct(i, i_args)) => {
             i.matches_ref(d)
                 && d_args.len() == i_args.len()
@@ -105,9 +104,6 @@ pub(super) fn resolved_type_matches_inferred(
             ResolvedDimArg::Concrete(expected) => expected == actual,
             ResolvedDimArg::GenericParam(_, _) | ResolvedDimArg::Expr { .. } => false,
         },
-        (ResolvedTypeExpr::IndexArg(expected), InferredType::IndexArg(actual)) => {
-            resolved_index_matches_inferred(expected, actual)
-        }
         (ResolvedTypeExpr::Key { index, .. }, InferredType::Key(actual)) => {
             resolved_index_matches_inferred(index, actual)
         }
@@ -250,7 +246,6 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Bool => Self::Bool,
             InferredType::Int => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::IndexArg(index) => Self::IndexArg(index.clone()),
             InferredType::Key(index) => Self::Key(index.clone()),
             InferredType::Struct(n, args) => Self::Struct(
                 n.clone(),
@@ -294,7 +289,6 @@ impl From<&DeclaredType> for InferredType {
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
-            DeclaredType::IndexArg(index) => Self::IndexArg(index.clone()),
             DeclaredType::Key(index) => Self::Key(index.clone()),
             DeclaredType::Struct(n, args) => Self::Struct(
                 n.clone(),
@@ -321,7 +315,6 @@ pub fn expect_quantity(
         InferredType::Int => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",
         InferredType::Key(_) => "an index-key value",
-        InferredType::IndexArg(_) => "an Index argument",
         InferredType::Struct(..) => "a struct",
         InferredType::Indexed { .. } => "an indexed value",
     };

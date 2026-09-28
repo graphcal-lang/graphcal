@@ -335,7 +335,6 @@ impl<'a> HirRefCollector<'a> {
                     hir::ConstRef::Decl(name) => SymbolKey::Declaration(name.clone()),
                     hir::ConstRef::Constructor(name) => SymbolKey::Constructor(name.clone()),
                     hir::ConstRef::Builtin(builtin) => SymbolKey::BuiltinConstant(*builtin),
-                    hir::ConstRef::GenericNatParam(_) => return,
                 };
                 Self::reference(table, const_ref.span, target);
             }
@@ -624,10 +623,10 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
-    fn walk_type(&self, type_expr: &hir::TypeExpr, table: &mut SymbolTable) {
-        match &type_expr.kind {
-            hir::TypeExprKind::Builtin(_) | hir::TypeExprKind::GenericTypeParam(_) => {}
-            hir::TypeExprKind::Complex(dimension) => {
+    fn walk_type(&self, value_type: &hir::ValueType, table: &mut SymbolTable) {
+        match &value_type.kind {
+            hir::ValueTypeKind::Builtin(_) | hir::ValueTypeKind::GenericTypeParam(_) => {}
+            hir::ValueTypeKind::Complex(dimension) => {
                 if let hir::DimArg::Expr(dim_expr) = dimension {
                     for item in &dim_expr.terms {
                         if let hir::DimTermTarget::Dimension(name) = &item.term.target {
@@ -640,30 +639,22 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::TypeExprKind::DimExpr(dim_expr) => {
+            hir::ValueTypeKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
                     if let hir::DimTermTarget::Dimension(name) = &item.term.target {
                         Self::reference(table, name.span, SymbolKey::Dimension(name.value.clone()));
                     }
                 }
             }
-            hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
+            hir::ValueTypeKind::Key(index) => {
                 if let hir::IndexRef::Concrete(name) = index {
                     Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
                 }
             }
-            hir::TypeExprKind::Struct(name) => {
+            hir::ValueTypeKind::Struct(name) => {
                 Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
             }
-            hir::TypeExprKind::Indexed { base, indexes } => {
-                self.walk_type(base, table);
-                for index in indexes {
-                    if let hir::IndexRef::Concrete(name) = index {
-                        Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
-                    }
-                }
-            }
-            hir::TypeExprKind::TypeApplication { name, generic_args } => {
+            hir::ValueTypeKind::TypeApplication { name, generic_args } => {
                 Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
                 for arg in generic_args {
                     self.walk_generic_arg(arg, table);
@@ -687,7 +678,7 @@ impl<'a> HirRefCollector<'a> {
             hir::GenericArg::Index(hir::IndexRef::Concrete(name)) => {
                 Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
             }
-            hir::GenericArg::Type(type_expr) => self.walk_type(type_expr, table),
+            hir::GenericArg::Type(value_type) => self.walk_type(value_type, table),
         }
     }
 }

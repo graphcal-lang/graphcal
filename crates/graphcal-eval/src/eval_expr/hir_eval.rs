@@ -157,9 +157,7 @@ fn eval_hir_expr_inner(
                     presentation_values,
                     &ctx.current_dag.runtime_decl_identity(target),
                 ),
-                ConstRef::Builtin(_) | ConstRef::Constructor(_) | ConstRef::GenericNatParam(_) => {
-                    PresentationInstance::None
-                }
+                ConstRef::Builtin(_) | ConstRef::Constructor(_) => PresentationInstance::None,
             };
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
@@ -399,10 +397,6 @@ fn eval_hir_const_ref(
         ConstRef::Builtin(builtin) => {
             checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
-        ConstRef::GenericNatParam(param) => Err(ctx.eval_error(
-            format!("generic Nat parameter `{}` is not bound", param.name),
-            target.span,
-        )),
     }
 }
 
