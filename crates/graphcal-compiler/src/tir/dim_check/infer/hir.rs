@@ -160,9 +160,7 @@ impl ExpressionFactCollector {
             .collect();
         let scope = (!scope.is_empty()).then(|| Arc::new(scope));
         hir::visit_expr(root, &mut |expr| {
-            if let Ok(id) = expr.id()
-                && let Some(record) = self.records.borrow_mut().get_mut(id)
-            {
+            if let Some(record) = self.records.borrow_mut().get_mut(expr.id()) {
                 record.nat_parameters.clone_from(&scope);
             }
         });
@@ -181,12 +179,8 @@ impl ExpressionFactCollector {
         let diagnostic = |error: String| {
             GraphcalError::internal_error(error, src, DiagnosticAnchor::Source(expr.span))
         };
-        let id = expr
-            .id()
-            .map_err(|error| diagnostic(error.to_string()))?
-            .clone();
-        let mut record = CheckedExpressionRecord::new(expr, fact, Arc::clone(&self.environment))
-            .map_err(|error| diagnostic(error.to_string()))?;
+        let id = expr.id().clone();
+        let mut record = CheckedExpressionRecord::new(expr, fact, Arc::clone(&self.environment));
         record.constructor_matches = constructor_matches;
         record.static_indexes.extend(
             self.static_indexes
@@ -223,11 +217,7 @@ impl ExpressionFactCollector {
                         .expect("contextual visit counter overflow"),
                 );
             });
-            if result.is_err()
-                || expr
-                    .id()
-                    .is_ok_and(|id| self.records.borrow().contains_key(id))
-            {
+            if result.is_err() || self.records.borrow().contains_key(expr.id()) {
                 return;
             }
             let kind = match expr.kind() {
@@ -419,31 +409,20 @@ impl HirLocalTypes<'_> {
         axis: &IndexTypeRef,
         position: u64,
         usage: crate::tir::expression_facts::StaticIndexUse,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
+    ) {
         if let Some((collector, _)) = &self.control.expression_facts {
-            let id = |expr: &hir::Expr| {
-                expr.id().cloned().map_err(|error| {
-                    GraphcalError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::Source(expr.span),
-                    )
-                })
-            };
             collector
                 .static_indexes
                 .borrow_mut()
-                .entry(id(expr)?)
+                .entry(expr.id().clone())
                 .or_default()
                 .push(crate::tir::expression_facts::StaticIndexRequirement {
-                    operand: id(operand)?,
+                    operand: operand.id().clone(),
                     axis: axis.clone(),
                     position,
                     usage,
                 });
         }
-        Ok(())
     }
 
     fn get(&self, id: hir::LocalId) -> Option<&InferredType> {
@@ -715,17 +694,8 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_expression_facts_and_cancel
     cancellation: &crate::cancellation::CancellationToken,
     collector: ExpressionFactCollector,
 ) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::root_with_expression_facts(
-        cancellation,
-        collector,
-        expr.id()
-            .map_err(|error| GraphcalError::InternalError {
-                message: error.to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            })?
-            .clone(),
-    );
+    let locals =
+        HirLocalTypes::root_with_expression_facts(cancellation, collector, expr.id().clone());
     infer_hir_type(
         expr,
         owner_decl_name,
@@ -2636,8 +2606,7 @@ fn infer_hir_key_form(
                     )
                 })?,
                 crate::tir::expression_facts::StaticIndexUse::Key,
-                src,
-            )?;
+            );
             Ok(InferredType::Key(index_identity))
         }
         KeyFormKind::Fin => {
@@ -2997,8 +2966,7 @@ fn infer_hir_index_access(
                             &index,
                             position,
                             crate::tir::expression_facts::StaticIndexUse::Selection,
-                            src,
-                        )?;
+                        );
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {

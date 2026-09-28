@@ -21,6 +21,8 @@ use crate::syntax::type_name::FieldName;
 
 use crate::hir::types::{GenericArg, NatExpr};
 
+#[cfg(doc)]
+use super::completeness::Draft;
 use super::completeness::{Completeness, Strict};
 
 /// Stable lexical identity for a local expression binding.
@@ -46,10 +48,19 @@ pub struct LocalDef {
 /// HIR expression node. Identity-bearing clones cannot change their semantics.
 ///
 /// ```compile_fail,E0616
-/// use graphcal_compiler::hir::expr::{Expr, ExprKind};
+/// use graphcal_compiler::hir::expr::{Draft, Expr, ExprKind};
 /// use graphcal_compiler::syntax::span::Span;
-/// let mut expr = Expr::new(ExprKind::Bool(true), Span::new(0, 4));
+/// let mut expr = Expr::<Draft>::new(ExprKind::Bool(true), Span::new(0, 4));
 /// expr.kind = ExprKind::Bool(false);
+/// ```
+///
+/// A [`Strict`] node carries an occurrence identity, so it cannot be built
+/// directly; only finishing a [`Draft`] body assigns one:
+///
+/// ```compile_fail,E0599
+/// use graphcal_compiler::hir::expr::{Expr, ExprKind, Strict};
+/// use graphcal_compiler::syntax::span::Span;
+/// let expr = Expr::<Strict>::new(ExprKind::Bool(true), Span::new(0, 4));
 /// ```
 #[derive(Debug)]
 pub struct Expr<C: Completeness = Strict> {
@@ -57,7 +68,7 @@ pub struct Expr<C: Completeness = Strict> {
     // must not be copied through every lowering and checking return value.
     pub(super) kind: Box<ExprKind<C>>,
     pub span: Span,
-    pub(super) id: Option<crate::expression_id::ExprId>,
+    pub(super) id: C::Id,
 }
 
 // Manual impl instead of `#[derive(Clone)]`: derived clone glue recurses
@@ -76,34 +87,37 @@ impl<C: Completeness> Clone for Expr<C> {
 }
 
 impl<C: Completeness> Expr<C> {
-    #[must_use]
-    pub fn new(kind: ExprKind<C>, span: Span) -> Self {
-        Self {
-            kind: Box::new(kind),
-            span,
-            id: None,
-        }
-    }
-
     /// Inspect semantics without allowing an identity-bearing clone to be rewritten.
     #[must_use]
     pub const fn kind(&self) -> &ExprKind<C> {
         &self.kind
     }
 
-    /// Consume the node for reconstruction. `Expr::new` starts without an identity.
+    /// Consume the node for reconstruction. The identity, if any, is dropped.
     #[must_use]
     pub fn into_kind(self) -> ExprKind<C> {
         *self.kind
     }
+}
 
-    /// Identity is available after strict body lowering, never derived from a span.
-    pub fn id(
-        &self,
-    ) -> Result<&crate::expression_id::ExprId, crate::expression_id::UnassignedExprId> {
-        self.id
-            .as_ref()
-            .ok_or(crate::expression_id::UnassignedExprId)
+impl<C: Completeness<Id = ()>> Expr<C> {
+    /// Build an unnumbered node.
+    #[must_use]
+    pub fn new(kind: ExprKind<C>, span: Span) -> Self {
+        Self {
+            kind: Box::new(kind),
+            span,
+            id: (),
+        }
+    }
+}
+
+impl Expr<Strict> {
+    /// Occurrence identity assigned when the body was finished, never derived
+    /// from a span.
+    #[must_use]
+    pub const fn id(&self) -> &crate::expression_id::ExprId {
+        &self.id
     }
 }
 
@@ -464,18 +478,6 @@ impl<C: Completeness> AssertBody<C> {
     /// Assertion operands have independent lexical scopes but one source revision.
     pub fn expressions(&self) -> impl Iterator<Item = &Expr<C>> {
         let operands: [Option<&Expr<C>>; 3] = match self {
-            Self::Expr(expr) => [Some(expr), None, None],
-            Self::Tolerance {
-                actual,
-                expected,
-                tolerance,
-            } => [Some(actual), Some(expected), Some(tolerance)],
-        };
-        operands.into_iter().flatten()
-    }
-
-    pub(super) fn expressions_mut(&mut self) -> impl Iterator<Item = &mut Expr<C>> {
-        let operands: [Option<&mut Expr<C>>; 3] = match self {
             Self::Expr(expr) => [Some(expr), None, None],
             Self::Tolerance {
                 actual,

@@ -3,7 +3,7 @@
 //! The map is sealed alongside strict HIR lowering. Equal spans are valid;
 //! repeated identities and lookups from another body revision are errors.
 
-use crate::expression_id::{ExprId, ExprIdExhausted, UnassignedExprId};
+use crate::expression_id::{ExprId, ExprIdExhausted};
 use crate::syntax::span::Span;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -17,8 +17,6 @@ pub struct ExpressionSourceMap {
 pub enum ExpressionSourceError {
     #[error(transparent)]
     Exhausted(#[from] ExprIdExhausted),
-    #[error(transparent)]
-    Unassigned(#[from] UnassignedExprId),
     #[error("duplicate expression identity in one source map: {0:?}")]
     Duplicate(ExprId),
     #[error("expression identity is absent from this source revision: {0:?}")]

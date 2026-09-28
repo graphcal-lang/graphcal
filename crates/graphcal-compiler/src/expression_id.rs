@@ -12,10 +12,6 @@ pub struct ExprId {
     ordinal: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("HIR expression has no assigned body identity")]
-pub struct UnassignedExprId;
-
 /// Construction-only allocator. Each allocator represents a fresh body revision.
 pub(crate) struct ExprIds {
     revision: FreshIdentity,

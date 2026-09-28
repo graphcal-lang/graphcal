@@ -161,10 +161,7 @@ impl<'a> EvalContext<'a> {
     ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionRecord, GraphcalError>
     {
         self.expression_facts(expr.span)?
-            .executable_value(
-                expr.id()
-                    .map_err(|error| self.internal_error(error.to_string(), expr.span))?,
-            )
+            .executable_value(expr.id())
             .map_err(|error| self.internal_error(error.to_string(), expr.span))
     }
 
@@ -189,12 +186,9 @@ impl<'a> EvalContext<'a> {
         expr: &graphcal_compiler::hir::expr::Expr,
         expected: graphcal_compiler::tir::expression_facts::ContextualOperand,
     ) -> Result<(), GraphcalError> {
-        let id = expr
-            .id()
-            .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
         let record = self
             .expression_facts(expr.span)?
-            .get(id)
+            .get(expr.id())
             .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
         match record.fact {
             graphcal_compiler::tir::expression_facts::ExpressionFact::Contextual(actual)

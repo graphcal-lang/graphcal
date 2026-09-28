@@ -1,6 +1,6 @@
 use super::*;
 use crate::hir::closed_expr::ClosedExpr;
-use crate::hir::expr::visit_expr;
+use crate::hir::expr::{CheckedExpr, visit_expr};
 use crate::registry::index::IndexCardinality;
 use crate::syntax::ast::UnaryOp;
 
@@ -43,7 +43,7 @@ fn rows(root: &Expr, revision: &BodyRevision) -> HashMap<ExprId, Box<CheckedExpr
     let mut records = HashMap::new();
     visit_expr(root, &mut |expr| {
         records.insert(
-            expr.id().unwrap().clone(),
+            expr.id().clone(),
             CheckedExpressionRecord::new(
                 expr,
                 ExpressionFact::Value {
@@ -52,8 +52,7 @@ fn rows(root: &Expr, revision: &BodyRevision) -> HashMap<ExprId, Box<CheckedExpr
                     constructor: None,
                 },
                 std::sync::Arc::clone(&environment),
-            )
-            .unwrap(),
+            ),
         );
     });
     records
@@ -81,9 +80,9 @@ fn constructor_target_coverage_is_exact_even_with_repeated_references() {
         // Isolate target-set coverage from full publication and source typing.
         let seed = body();
         let mut record = rows(&seed, &BodyRevision::fresh())
-            .remove(seed.id().unwrap())
+            .remove(seed.id())
             .unwrap();
-        let body = Expr::new(
+        let body = CheckedExpr::from_draft_for_test(Expr::new(
             ExprKind::Match {
                 scrutinee: Box::new(Expr::new(ExprKind::Integer(0), span)),
                 arms: names
@@ -100,7 +99,7 @@ fn constructor_target_coverage_is_exact_even_with_repeated_references() {
                     .collect(),
             },
             span,
-        );
+        ));
         record.constructor_matches = names
             .iter()
             .map(|name| (constructor(name), target(name)))
@@ -187,7 +186,7 @@ fn publication_rejects_old_semantic_revision_and_rebuilt_source_at_equal_coordin
 fn structural_shape_and_contextual_corruption_is_rejected_without_inference() {
     let body = body();
     let revision = BodyRevision::fresh();
-    let id = body.id().unwrap();
+    let id = body.id();
     let original = rows(&body, &revision);
     let mut wrong_children = original.clone();
     wrong_children.get_mut(id).unwrap().children = None;
@@ -222,7 +221,7 @@ fn structural_shape_and_contextual_corruption_is_rejected_without_inference() {
 #[test]
 fn publication_rejects_wrong_named_cardinality_and_unnecessary_symbolic_shape() {
     let body = body();
-    let root = body.id().unwrap();
+    let root = body.id();
     let revision = BodyRevision::fresh();
     let index = IndexTypeRef::with_owner(
         owner(),
@@ -272,13 +271,12 @@ fn contextual_subtype_and_conflicting_origins_are_rejected() {
             &root,
             ExpressionFact::Contextual(kind),
             CheckingEnvironment::new(owner(), revision.clone()),
-        )
-        .unwrap();
+        );
         let result = publish(
             owner(),
             revision.clone(),
             [&*root],
-            HashMap::from([(root.id().unwrap().clone(), row)]),
+            HashMap::from([(root.id().clone(), row)]),
         );
         assert_eq!(result.is_ok(), kind == ContextualOperand::TimeZone);
     }
@@ -314,7 +312,7 @@ fn static_membership_proof_cannot_be_deleted_misowned_or_invalid() {
         crate::registry::index::FiniteIndex::try_from_u64(2).unwrap(),
     );
     let mut records = rows(&root, &revision);
-    let id = root.id().unwrap();
+    let id = root.id();
     let record = records.get_mut(id).unwrap();
     record.fact = ExpressionFact::Value {
         checked_type: DeclaredType::Key(axis.clone()),
@@ -338,7 +336,7 @@ fn static_membership_proof_cannot_be_deleted_misowned_or_invalid() {
         Err(ExpressionFactsError::Incompatible(_))
     ));
     let mut foreign = records.clone();
-    foreign.get_mut(id).unwrap().static_indexes[0].operand = body().id().unwrap().clone();
+    foreign.get_mut(id).unwrap().static_indexes[0].operand = body().id().clone();
     assert!(matches!(
         publish(owner(), revision.clone(), [&*root], foreign),
         Err(ExpressionFactsError::Incompatible(_))
@@ -364,7 +362,7 @@ fn immutable_source_and_fact_publications_are_shared_by_clones() {
         rows(&original, &revision),
     )
     .unwrap();
-    let row = facts.get(original.id().unwrap()).unwrap();
+    let row = facts.get(original.id()).unwrap();
     let independent = row.clone();
     assert!(std::sync::Arc::ptr_eq(
         &row.operation,
@@ -373,8 +371,8 @@ fn immutable_source_and_fact_publications_are_shared_by_clones() {
     assert!(std::ptr::eq(row.children(), independent.children()));
     let clone = facts.clone();
     assert!(std::ptr::eq(
-        facts.get(original.id().unwrap()).unwrap(),
-        clone.get(original.id().unwrap()).unwrap()
+        facts.get(original.id()).unwrap(),
+        clone.get(original.id()).unwrap()
     ));
 }
 
@@ -386,12 +384,6 @@ fn diagnostic_relocation_preserves_fact_identity() {
     let mut relocated = (*original).clone();
     relocated.span = Span::new(100, 101);
     let facts = publish(owner(), revision, [&relocated], records).unwrap();
-    assert_eq!(
-        facts.span(original.id().unwrap()).unwrap(),
-        Span::new(100, 101)
-    );
-    assert_eq!(
-        facts.get(original.id().unwrap()).unwrap().children().len(),
-        1
-    );
+    assert_eq!(facts.span(original.id()).unwrap(), Span::new(100, 101));
+    assert_eq!(facts.get(original.id()).unwrap().children().len(), 1);
 }

@@ -278,9 +278,12 @@ the single resolution stage of the compiler:
   (`visit.rs`), finished bodies (`checked.rs`), and the evaluation-time local
   environment (`local_env.rs`). Trees are parameterized by completeness
   (`completeness.rs`): `Expr<Strict>` (the default) cannot represent an error
-  node, while `Expr<Tolerant>` (`hir/expr_lower/tolerant.rs`) keeps each
-  unresolved reference as an error node carrying its diagnostic for the LSP;
-  strict lowering refines one into the other (`refine.rs`). The lowerer in
+  node and carries an `ExprId` on every node; `Expr<Draft>` is complete but
+  unnumbered (strict lowering and synthesized trees); `Expr<Tolerant>`
+  (`hir/expr_lower/tolerant.rs`) keeps each unresolved reference as an error
+  node carrying its diagnostic for the LSP. Strict lowering refines tolerant
+  into draft, and finishing a body numbers draft into strict (`refine.rs`),
+  so no consumer handles an unresolved node or a missing identity. The lowerer in
   `hir/expr_lower/` (walk in
   `lower.rs`, name resolution in `resolve.rs`, call and datetime-literal
   lowering in `call.rs`) consumes desugared expressions
@@ -1682,9 +1685,9 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 156. `crates/graphcal-compiler/src/hir/expr_lower/error.rs`
 157. `crates/graphcal-compiler/src/hir/expr/refine.rs`
 158. `crates/graphcal-compiler/src/hir/expr/model.rs`
-159. `crates/graphcal-compiler/src/hir/expr/checked.rs`
-160. `crates/graphcal-compiler/src/hir/expr_lower/lowerer.rs`
-161. `crates/graphcal-compiler/src/hir/expr_lower/resolve.rs`
+159. `crates/graphcal-compiler/src/hir/expr_lower/lowerer.rs`
+160. `crates/graphcal-compiler/src/hir/expr_lower/resolve.rs`
+161. `crates/graphcal-compiler/src/hir/expr/checked.rs`
 162. `crates/graphcal-compiler/src/hir/nominal.rs`
 163. `crates/graphcal-compiler/src/hir/expr_lower/tolerant.rs`
 164. `crates/graphcal-compiler/src/hir/expr_lower/lower.rs`

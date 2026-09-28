@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::builtin::{BuiltinFn, ComplexFn, DatetimeFn};
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
-use crate::hir::expr::{CheckedExpr, ConstRef, Expr, ExprKind, visit_expr};
+use crate::hir::expr::{CheckedExpr, ConstRef, Draft, Expr, ExprKind, visit_expr};
 use crate::syntax::ast::UnaryOp;
 
 /// An input literal whose complete tree excludes value references and authored computations.
@@ -32,7 +32,7 @@ pub enum ClosedExpressionError {
 
 impl ClosedExpr {
     /// Validate the entire literal tree and finish a fresh immutable source revision.
-    pub fn try_new(expression: Expr) -> Result<Self, ClosedExpressionError> {
+    pub fn try_new(expression: Expr<Draft>) -> Result<Self, ClosedExpressionError> {
         let mut validation = Ok(());
         visit_expr(&expression, &mut |node| {
             if validation.is_ok() {
@@ -58,7 +58,7 @@ impl Deref for ClosedExpr {
     }
 }
 
-const fn validate_literal_node(expr: &Expr) -> Result<(), ClosedExpressionError> {
+const fn validate_literal_node(expr: &Expr<Draft>) -> Result<(), ClosedExpressionError> {
     match expr.kind() {
         ExprKind::Number(value) if value.is_finite() => Ok(()),
         ExprKind::Number(_) => Err(ClosedExpressionError::NonFiniteNumber),
@@ -131,12 +131,9 @@ mod tests {
         };
         let first = ClosedExpr::try_new(literal()).unwrap();
         let second = ClosedExpr::try_new(literal()).unwrap();
-        assert_ne!(first.id().unwrap(), second.id().unwrap());
+        assert_ne!(first.id(), second.id());
         visit_expr(&first, &mut |node| {
-            assert_eq!(
-                first.source_map().span(node.id().unwrap()).unwrap(),
-                node.span
-            );
+            assert_eq!(first.source_map().span(node.id()).unwrap(), node.span);
         });
         let nested = Expr::new(
             ExprKind::UnaryOp {

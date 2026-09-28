@@ -38,10 +38,10 @@ pub mod types;
 
 pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
-    AssertBody, CheckedAssertBody, CheckedExpr, Completeness, ConstRef, Expr, ExprDependencies,
-    ExprKind, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr,
-    ResolvedUnitExprItem, ResolvedUnitRef, Strict, UnappliedFunctionRef, collect_expr_dependencies,
-    find_dag_call,
+    AssertBody, CheckedAssertBody, CheckedExpr, Completeness, ConstRef, Draft, Expr,
+    ExprDependencies, ExprKind, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId,
+    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, Strict, UnappliedFunctionRef,
+    collect_expr_dependencies, find_dag_call,
 };
 pub(crate) use expr::{find_extern_call, visit_expr};
 pub use expr_lower::context::ExprLoweringContext;
