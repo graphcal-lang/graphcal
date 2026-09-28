@@ -78,10 +78,9 @@ impl ChannelData {
         self.axes
             .iter()
             .map(|axis| {
-                axis.index.declared_resolved().map_or_else(
-                    || axis.index.display_name().to_string(),
-                    ToString::to_string,
-                )
+                axis.index
+                    .declared_resolved()
+                    .map_or_else(|| axis.index.to_string(), ToString::to_string)
             })
             .collect::<Vec<_>>()
             .join(" × ")
@@ -163,8 +162,7 @@ pub(super) fn channel_data_from_runtime_with_display_unit(
                         .all(|(a, b)| a.matches(b))
                 {
                     return Err(format!(
-                        "entries of `{}` have inconsistent index axes",
-                        index_name.display_name()
+                        "entries of `{index_name}` have inconsistent index axes"
                     ));
                 }
             }
@@ -234,8 +232,7 @@ pub(super) fn channel_data_from_presented_value(
                         .all(|(left, right)| left.matches(right)) => {}
             Some(_) => {
                 return Err(format!(
-                    "entries of `{}` have inconsistent index axes",
-                    index_name.display_name()
+                    "entries of `{index_name}` have inconsistent index axes"
                 ));
             }
         }

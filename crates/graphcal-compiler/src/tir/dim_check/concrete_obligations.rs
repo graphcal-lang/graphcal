@@ -211,7 +211,7 @@ fn validate(
 fn validate_index(index: &IndexTypeRef, ctx: &Context<'_>) -> Result<(), GraphcalError> {
     match index.finite_index_form() {
         Some(form) if !form.is_constant() => Err(GraphcalError::EvalError {
-            message: format!("unresolved finite-index obligation `Fin({form})`"),
+            message: format!("unresolved finite-index obligation `{index}`"),
             src: ctx.src.clone(),
             span: ctx.span.into(),
         }),

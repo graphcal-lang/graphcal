@@ -837,7 +837,7 @@ fn resolve_constraint_target(
             span: decl_span.into(),
         }),
         ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::InvalidDomainTarget {
-            type_kind: format!("index {}", index.format_for_diagnostic()),
+            type_kind: format!("index {index}"),
             src: src.clone(),
             span: decl_span.into(),
         }),

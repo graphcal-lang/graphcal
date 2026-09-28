@@ -553,7 +553,7 @@ pub enum ConcreteIndexKind {
     /// `linspace(..., points: ...)`.
     Coordinate(CoordinateIndexData),
     /// A structural finite index `Fin(N)` with labels `0` through `N - 1`.
-    Finite { cardinality: IndexCardinality },
+    Finite { index: FiniteIndex },
 }
 
 impl ConcreteIndexKind {
@@ -563,7 +563,7 @@ impl ConcreteIndexKind {
         match self {
             Self::Named { variants } => IndexCardinality(variants.len()),
             Self::Coordinate(data) => data.cardinality,
-            Self::Finite { cardinality } => *cardinality,
+            Self::Finite { index } => index.cardinality(),
         }
     }
 
@@ -634,9 +634,7 @@ impl IndexDef {
     pub const fn finite(index: FiniteIndex) -> Self {
         Self {
             name: IndexBindingTarget::Finite(index),
-            kind: IndexKind::Concrete(ConcreteIndexKind::Finite {
-                cardinality: index.cardinality(),
-            }),
+            kind: IndexKind::Concrete(ConcreteIndexKind::Finite { index }),
         }
     }
 
@@ -704,9 +702,7 @@ impl IndexDef {
     #[must_use]
     pub const fn finite_index_size(&self) -> Option<u64> {
         match &self.kind {
-            IndexKind::Concrete(ConcreteIndexKind::Finite { cardinality }) => {
-                Some(cardinality.get() as u64)
-            }
+            IndexKind::Concrete(ConcreteIndexKind::Finite { index }) => Some(index.size_u64()),
             _ => None,
         }
     }
@@ -1266,7 +1262,7 @@ mod tests {
     fn finite_and_coordinate_entry_keys_are_typed_positions() {
         for kind in [
             ConcreteIndexKind::Finite {
-                cardinality: IndexCardinality::try_from_u64(3).unwrap(),
+                index: FiniteIndex::try_from_u64(3).unwrap(),
             },
             ConcreteIndexKind::Coordinate(range(0.0, 2.0, 1.0).unwrap()),
         ] {

@@ -29,7 +29,7 @@ use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{
     ConcreteIndexKind, FormattingRegistry, IndexKind, RequiredIndexKind, UnitScale,
 };
-use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedIndex, ResolvedTypeExpr, TIR};
+use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
@@ -2500,14 +2500,7 @@ fn format_type_with_constraints(
     let constraint_str = format_constraints(constraints);
     if let ResolvedTypeExpr::Indexed { base, indexes } = resolved {
         let base_str = base.format(registry);
-        let idx_strs: Vec<String> = indexes
-            .iter()
-            .map(|i| match i {
-                ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
-                ResolvedIndex::GenericParam(name, _) => name.to_string(),
-                ResolvedIndex::Finite(form, _) => format!("Fin({})", form.format()),
-            })
-            .collect();
+        let idx_strs: Vec<String> = indexes.iter().map(ToString::to_string).collect();
         format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
     } else {
         let type_str = resolved.format(registry);
@@ -2624,8 +2617,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                                 registry.dimensions.format_dimension(dimension)
                             ));
                         }
-                        IndexKind::Concrete(ConcreteIndexKind::Finite { cardinality }) => {
-                            def_mut.type_description = Some(format!("Fin({})", cardinality.get()));
+                        IndexKind::Concrete(ConcreteIndexKind::Finite { index }) => {
+                            def_mut.type_description = Some(index.to_string());
                         }
                     }
                 }

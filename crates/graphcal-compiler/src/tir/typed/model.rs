@@ -12,7 +12,7 @@ use crate::hir;
 use crate::hir::{NominalConstructor, NominalTypeDef};
 use crate::nat::NatPolyForm;
 use crate::ratio::RatioError;
-use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
+use crate::registry::declared_type::{DeclaredType, IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{FormattingRegistry, IndexDef, RegistryBuilder, UnitInfo};
@@ -79,7 +79,7 @@ impl ResolvedGenericArg {
     pub(crate) fn format(&self, registry: &FormattingRegistry) -> String {
         match self {
             Self::Dim(dim) => dim.format(registry),
-            Self::Index(index) => format_resolved_index(index),
+            Self::Index(index) => index.to_string(),
             Self::Nat(form, _) => form.format(),
             Self::Type(type_expr) => type_expr.format(registry),
         }
@@ -154,7 +154,7 @@ impl ResolvedTypeExpr {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::IndexArg(index) => format!("index {}", format_resolved_index(index)),
+            Self::IndexArg(index) => format!("index {index}"),
             Self::Quantity(dim) => {
                 let formatted = registry.dimensions.format_dimension(dim);
                 if formatted.is_empty() {
@@ -167,7 +167,7 @@ impl ResolvedTypeExpr {
                 format!("Complex<{}>", dimension.format(registry))
             }
             Self::Key { index, .. } => {
-                format!("Key<{}>", format_resolved_index(index))
+                format!("Key<{index}>")
             }
             Self::Struct(name, _) => name.as_str().to_string(),
             Self::GenericStruct {
@@ -186,18 +186,10 @@ impl ResolvedTypeExpr {
             }
             Self::Indexed { base, indexes } => {
                 let base_str = base.format(registry);
-                let idx_strs: Vec<String> = indexes.iter().map(format_resolved_index).collect();
+                let idx_strs: Vec<String> = indexes.iter().map(ToString::to_string).collect();
                 format!("{base_str}[{}]", idx_strs.join(", "))
             }
         }
-    }
-}
-
-fn format_resolved_index(index: &ResolvedIndex) -> String {
-    match index {
-        ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
-        ResolvedIndex::GenericParam(name, _) => name.to_string(),
-        ResolvedIndex::Finite(form, _) => format!("Fin({})", form.format()),
     }
 }
 
@@ -325,13 +317,14 @@ pub enum ResolvedIndex {
     Finite(NatPolyForm, Span),
 }
 
-impl ResolvedIndex {
-    #[must_use]
-    pub fn format_for_diagnostic(&self) -> String {
+/// Renders the source-facing spelling: the declared leaf name, the generic
+/// parameter, or `Fin(<Nat form>)` through [`IndexDisplayName`].
+impl std::fmt::Display for ResolvedIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Concrete(name, _) => name.as_str().to_string(),
-            Self::GenericParam(name, _) => name.to_string(),
-            Self::Finite(form, _) => format!("Fin({})", form.format()),
+            Self::Concrete(name, _) => f.write_str(name.as_str()),
+            Self::GenericParam(name, _) => name.fmt(f),
+            Self::Finite(form, _) => IndexDisplayName::Finite(form.clone()).fmt(f),
         }
     }
 }

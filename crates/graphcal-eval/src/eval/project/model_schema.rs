@@ -14,8 +14,9 @@ use graphcal_compiler::registry::declared_type::{
 };
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef, IndexKind};
+use graphcal_compiler::registry::types::{ConcreteIndexKind, FiniteIndex, IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::non_empty::NonEmptyUnique;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use miette::NamedSource;
 
@@ -46,7 +47,7 @@ pub enum ModelIndexKind {
     /// Declared label axis.
     Named {
         /// Labels in declaration order.
-        variants: Vec<IndexVariantName>,
+        variants: NonEmptyUnique<IndexVariantName>,
     },
     /// Fixed physical-coordinate axis.
     Coordinate {
@@ -61,8 +62,8 @@ pub enum ModelIndexKind {
     },
     /// Structural `Fin(N)` axis.
     Finite {
-        /// Exact positive cardinality.
-        cardinality: usize,
+        /// Validated structural identity.
+        index: FiniteIndex,
     },
 }
 
@@ -507,9 +508,7 @@ fn model_index_schema(
     if let Some(finite) = index.finite_index() {
         return Ok(ModelIndexSchema {
             identity: index.clone(),
-            kind: ModelIndexKind::Finite {
-                cardinality: finite.cardinality().get(),
-            },
+            kind: ModelIndexKind::Finite { index: finite },
         });
     }
     let definition = index_def_for_ref(index, tir).ok_or_else(|| {
@@ -521,7 +520,7 @@ fn model_index_schema(
     })?;
     let kind = match &definition.kind {
         IndexKind::Concrete(ConcreteIndexKind::Named { variants }) => ModelIndexKind::Named {
-            variants: variants.as_slice().to_vec(),
+            variants: variants.clone(),
         },
         IndexKind::Concrete(ConcreteIndexKind::Coordinate(data)) => ModelIndexKind::Coordinate {
             coordinates_si: (0..data.cardinality())
@@ -531,9 +530,9 @@ fn model_index_schema(
             display_label: data.display().label.clone(),
             display_scale: data.display().scale,
         },
-        IndexKind::Concrete(ConcreteIndexKind::Finite { cardinality }) => ModelIndexKind::Finite {
-            cardinality: cardinality.get(),
-        },
+        IndexKind::Concrete(ConcreteIndexKind::Finite { index }) => {
+            ModelIndexKind::Finite { index: *index }
+        }
         IndexKind::Required(_) => {
             return Err(GraphcalError::internal_error(
                 format!("required model index `{index}` was not concretely bound"),

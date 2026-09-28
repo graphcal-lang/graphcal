@@ -99,7 +99,7 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
     #[must_use]
     pub(crate) fn display(&self) -> String {
         match self {
-            Self::Named { index, variant, .. } => format!("{}#{variant}", index.display_name()),
+            Self::Named { index, variant, .. } => format!("{index}#{variant}"),
             Self::FinitePosition { position, .. } => format!("#{position}"),
         }
     }

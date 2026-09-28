@@ -13,9 +13,7 @@ use crate::dimension::Rational;
 #[cfg(test)]
 use crate::nat::Monomial;
 use crate::nat::NatPolyForm;
-#[cfg(test)]
-use crate::registry::declared_type::IndexDisplayName;
-use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
+use crate::registry::declared_type::{DeclaredGenericArg, IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 #[cfg(test)]
 use crate::registry::types::FormattingRegistry;
@@ -53,10 +51,7 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
         ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::EvalError {
-            message: format!(
-                "index `{}` cannot be used as a value type",
-                index.format_for_diagnostic()
-            ),
+            message: format!("index `{index}` cannot be used as a value type"),
             src: src.clone(),
             span: resolved_index_span(index).into(),
         }),
@@ -693,7 +688,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         ResolvedTypeExpr::IndexArg(expected_index) => {
             let InferredType::IndexArg(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("index {}", expected_index.format_for_diagnostic()),
+                    expected: format!("index {expected_index}"),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
                     help: "expected an index generic argument".to_string(),
                     src: src.clone(),
@@ -764,7 +759,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         ResolvedTypeExpr::Key { index, .. } => {
             let InferredType::Key(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format!("Key<{}>", resolved_index_display_name(index)),
+                    expected: format!("Key<{index}>"),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
                     help: "expected an index-key value".to_string(),
                     src: src.clone(),
@@ -1183,8 +1178,8 @@ fn substitute_resolved_index(
                 .evaluate(nat_sub)
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
-                        "generic finite index `Fin({})` is not concrete",
-                        form.format()
+                        "generic finite index `{}` is not concrete",
+                        IndexDisplayName::Finite(form.clone())
                     ),
                     src: src.clone(),
                     span: (*span).into(),

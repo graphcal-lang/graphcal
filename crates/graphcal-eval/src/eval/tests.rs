@@ -4297,7 +4297,7 @@ fn prepared_project_binds_coordinate_and_finite_keys() {
     assert!(matches!(
         prepared.parameter_ports()[1].value_schema(),
         ModelValueSchema::Key(index)
-            if matches!(index.kind(), ModelIndexKind::Finite { cardinality: 3 })
+            if matches!(index.kind(), ModelIndexKind::Finite { index } if index.cardinality().get() == 3)
     ));
 
     let mut bindings = prepared.binding_builder();

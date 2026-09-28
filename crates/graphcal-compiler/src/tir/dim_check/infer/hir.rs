@@ -23,7 +23,7 @@ use crate::dimension::{BaseDimId, Dimension, Rational};
 use crate::expression_id::ExprId;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::declared_type::{IndexDisplayName, IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 use crate::syntax::ast::GenericConstraint;
@@ -2637,7 +2637,8 @@ fn infer_hir_key_form(
                 if position_u64 >= size {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "key() position {position} is out of bounds for Fin({size})"
+                            "key() position {position} is out of bounds for {}",
+                            IndexDisplayName::Finite(form.clone())
                         ),
                         src: src.clone(),
                         span: arg.span.into(),
@@ -2663,10 +2664,7 @@ fn infer_hir_key_form(
         KeyFormKind::Fin => {
             if finite_form.is_none() {
                 return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "fin_key() requires a Fin(...) axis, got `{}`",
-                        index_identity.display_name()
-                    ),
+                    message: format!("fin_key() requires a Fin(...) axis, got `{index_identity}`"),
                     src: src.clone(),
                     span: axis_span.into(),
                 });
@@ -2696,7 +2694,7 @@ fn infer_hir_key_form(
                         message: format!(
                             "{}() requires a coordinate axis, got `{}`",
                             kind.as_str(),
-                            index_identity.display_name()
+                            index_identity
                         ),
                         src: src.clone(),
                         span: axis_span.into(),
@@ -2934,8 +2932,7 @@ fn infer_hir_index_access(
                     InferredType::Quantity(_) => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "quantity local cannot index into coordinate index `{}`; use that coordinate index's loop variable",
-                                index.display_name()
+                                "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
                             ),
                             src: src.clone(),
                             span: local.span.into(),
@@ -2991,8 +2988,7 @@ fn infer_hir_index_access(
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "integer expression cannot index into non-finite-index index `{}`",
-                            index.display_name()
+                            "integer expression cannot index into non-finite-index index `{index}`"
                         ),
                         src: src.clone(),
                         span: index_expr.span.into(),
@@ -3006,10 +3002,8 @@ fn infer_hir_index_access(
                         if try_const_int(index_expr).is_none() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
-                                    "a runtime Int cannot index `{}` implicitly; write \
-                                     `fin_key({}, ...)` to make the range check explicit",
-                                    index.display_name(),
-                                    index.display_name(),
+                                    "a runtime Int cannot index `{index}` implicitly; write \
+                                     `fin_key({index}, ...)` to make the range check explicit",
                                 ),
                                 src: src.clone(),
                                 span: index_expr.span.into(),
@@ -3070,8 +3064,8 @@ fn check_constant_finite_index_index(
     if index_u64 >= size {
         return Err(GraphcalError::EvalError {
             message: format!(
-                "index {index} out of bounds for Fin({})",
-                index_form.format()
+                "index {index} out of bounds for {}",
+                IndexDisplayName::Finite(index_form.clone())
             ),
             src: src.clone(),
             span: index_expr.span.into(),
@@ -4009,7 +4003,9 @@ impl MapLiteralVariantKey {
     fn display(&self) -> String {
         match self {
             Self::Declared(resolved) => resolved.to_string(),
-            Self::Finite { form, position } => format!("Fin({}).#{position}", form.format()),
+            Self::Finite { form, position } => {
+                format!("{}.#{position}", IndexDisplayName::Finite(form.clone()))
+            }
         }
     }
 }
@@ -4197,8 +4193,7 @@ fn infer_hir_map_literal(
         if idx_def.is_coordinate() {
             return Err(GraphcalError::EvalError {
                 message: format!(
-                    "coordinate index `{}` cannot be used as a map/table literal key; use a `for` comprehension instead",
-                    index.display_name()
+                    "coordinate index `{index}` cannot be used as a map/table literal key; use a `for` comprehension instead"
                 ),
                 src: src.clone(),
                 span: expr.span.into(),
@@ -4268,7 +4263,7 @@ fn infer_hir_map_literal(
                         (_, IndexEntryKey::Position(position)) => Err(GraphcalError::EvalError {
                             message: format!(
                                 "position #{position} is outside index `{}`",
-                                axes[i].index.display_name()
+                                axes[i].index
                             ),
                             src: src.clone(),
                             span: expr.span.into(),
@@ -4495,10 +4490,7 @@ fn infer_hir_unfold(
             })?;
     if !idx_def.is_coordinate() {
         return Err(GraphcalError::EvalError {
-            message: format!(
-                "unfold requires a coordinate index, got `{}`",
-                index.display_name()
-            ),
+            message: format!("unfold requires a coordinate index, got `{index}`"),
             src: src.clone(),
             span: axis.span.into(),
         });
@@ -4600,8 +4592,7 @@ fn infer_hir_match(
             if index_identity.finite_index_form().is_some() {
                 return Err(GraphcalError::EvalError {
                     message: format!(
-                        "cannot match on `Key<{}>`; only named-axis keys support label matching",
-                        index_identity.display_name()
+                        "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
                     ),
                     src: src.clone(),
                     span: scrutinee.span.into(),
@@ -4625,8 +4616,7 @@ fn infer_hir_match(
                 _ => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "cannot match on coordinate index `{}`; only named indexes can be matched",
-                            index_identity.display_name()
+                            "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
                         ),
                         src: src.clone(),
                         span: scrutinee.span.into(),
