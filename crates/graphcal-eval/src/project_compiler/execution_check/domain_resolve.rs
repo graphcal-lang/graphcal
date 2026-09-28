@@ -656,7 +656,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
             .and_then(struct_type_ref_from_resolved_type);
         check_const_struct_field_constraints(
             value,
-            entry.name.member().as_str(),
+            entry.name.leaf().as_str(),
             entry.span,
             owning_type.as_ref(),
             field_constraints,

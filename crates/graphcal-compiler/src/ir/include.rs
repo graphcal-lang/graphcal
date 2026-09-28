@@ -68,11 +68,11 @@ impl UnfrozenIR {
     pub fn plot_projection_target(&self, name: &DeclName) -> Option<ResolvedDeclName> {
         self.plots
             .iter()
-            .find(|entry| entry.name.member() == name)
+            .find(|entry| entry.name.leaf() == name)
             .map(|entry| {
                 ResolvedDeclName::from_def(
                     entry.body_resolution_owner.clone(),
-                    entry.name.member().clone(),
+                    entry.name.leaf().clone(),
                 )
             })
             .or_else(|| {
@@ -80,7 +80,7 @@ impl UnfrozenIR {
                     instance
                         .plot_projections
                         .iter()
-                        .find(|projection| projection.exposed_name.member() == name)
+                        .find(|projection| projection.exposed_name.leaf() == name)
                         .map(|projection| {
                             ResolvedDeclName::from_def(
                                 instance.instance.id.owner().clone(),
@@ -96,7 +96,7 @@ impl UnfrozenIR {
     pub fn assertion_names(&self) -> Vec<DeclName> {
         self.asserts
             .iter()
-            .map(|entry| entry.name.member().clone())
+            .map(|entry| entry.name.leaf().clone())
             .collect()
     }
 
@@ -295,13 +295,13 @@ impl UnfrozenIR {
         {
             cancellation.checkpoint()?;
             let canonical =
-                ResolvedDeclName::from_def(declaration_owner.clone(), name.member().clone());
+                ResolvedDeclName::from_def(declaration_owner.clone(), name.leaf().clone());
             decl_bindings.insert(name.clone(), canonical);
         }
         for record in &self.semantic_instances {
             let scope = ScopeSegment::from_nested_dag_segment(record.instance.id.owner().leaf());
             for target in record.instance.bindings.value_ports.values() {
-                let name = ScopedName::qualified(scope.clone(), target.to_unowned_def_name());
+                let name = ScopedName::in_scope(scope.clone(), target.to_unowned_def_name());
                 if decl_bindings.insert(name.clone(), target.clone()).is_some() {
                     return Err(GraphcalError::internal_error(
                         format!("semantic instance binding `{name}` collides with a declaration"),
@@ -736,7 +736,7 @@ impl UnfrozenIR {
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
         self.params
             .iter()
-            .filter(|param| !bindings.contains_key(param.name.member()))
+            .filter(|param| !bindings.contains_key(param.name.leaf()))
             .map(|param| {
                 let mut reconciliations = param.override_reconciliations.clone();
                 if let Some(default) = &param.default
@@ -746,14 +746,14 @@ impl UnfrozenIR {
                         index_bindings,
                         type_bindings,
                         type_registry: &dependency_registry.types,
-                        orphan_decl: param.name.member(),
+                        orphan_decl: param.name.leaf(),
                         importer_src,
                         include_span,
                     }
                     .visit_expr(&default.expr)?;
                     reconciliations.push(
                         crate::ir::override_reconciliation::PendingOverrideReconciliation::new(
-                            param.name.member().clone(),
+                            param.name.leaf().clone(),
                             dependency_owner,
                             importer_owner,
                             index_bindings,
@@ -766,7 +766,7 @@ impl UnfrozenIR {
                 Ok((
                     ResolvedDeclName::from_def(
                         param.declaration_owner.clone(),
-                        param.name.member().clone(),
+                        param.name.leaf().clone(),
                     ),
                     reconciliations,
                 ))

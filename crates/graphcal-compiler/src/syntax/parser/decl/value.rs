@@ -4,7 +4,7 @@ use crate::syntax::ast::{
     Visibility,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
@@ -100,12 +100,7 @@ impl Parser<'_> {
         let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
             let (_, at) = parser.expect(Token::At)?;
             let path = parser.parse_ident_path()?;
-            let name = ScopedName::qualified_path(
-                path.qualifier()
-                    .iter()
-                    .map(|part| ModuleAliasName::classify(part.name.atom().clone())),
-                DeclName::classify(path.leaf().name.atom().clone()),
-            );
+            let name = ScopedName::classify_path(&path.to_name_path());
             Ok(Spanned::new(name, at.merge(path.span())))
         })?;
         let (_, end) = self.expect(Token::RBrace)?;

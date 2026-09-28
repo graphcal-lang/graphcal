@@ -277,7 +277,7 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             auto_import_data(name, AutoImportCategory::Term)
         }
         GraphcalError::UnknownGraphRef { name, .. } if name.qualifier().is_empty() => {
-            auto_import_data(name.member().as_str(), AutoImportCategory::Term)
+            auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
         }
         _ => None,
     }

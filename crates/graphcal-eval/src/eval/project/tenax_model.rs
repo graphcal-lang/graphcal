@@ -186,7 +186,7 @@ impl PreparedProject {
                     .root()
                     .source_order()
                     .iter()
-                    .find_map(|(candidate, kind)| (candidate.member() == name).then_some(*kind));
+                    .find_map(|(candidate, kind)| (candidate.leaf() == name).then_some(*kind));
                 return Err(actual_kind.map_or_else(
                     || ModelDefinitionError::UnknownOutput { name: name.clone() },
                     |actual_kind| ModelDefinitionError::OutputNotNode {

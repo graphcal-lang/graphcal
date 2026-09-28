@@ -36,7 +36,9 @@ fn resolve_source_type(
         .collect::<Vec<_>>();
     if params.is_empty() {
         let tir = parse_and_type_resolve(&format!("param x: {source_type};"))?;
-        return Ok(tir.root().resolved_decl_types[&ScopedName::parse("x").unwrap()].clone());
+        return Ok(tir.root().resolved_decl_types
+            [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("x"))]
+            .clone());
     }
 
     let source = format!(
@@ -61,7 +63,9 @@ fn resolve_source_type(
 
 fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedTypeExpr, GraphcalError> {
     let tir = parse_and_type_resolve(program)?;
-    Ok(tir.root().resolved_decl_types[&ScopedName::parse(name).unwrap()].clone())
+    Ok(tir.root().resolved_decl_types
+        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name))]
+        .clone())
 }
 
 #[test]
@@ -70,7 +74,7 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
         parse_and_type_resolve("node known: Dimensionless = 1.0;\nassert valid = @known == 1.0;")
             .unwrap();
 
-    let known = ScopedName::parse("known").unwrap();
+    let known = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("known"));
     match tir.root().lookup_decl_identity(&known) {
         DeclarationIdentityLookup::Bound(identity) => {
             assert_eq!(identity.owner(), tir.root_dag_id());
@@ -81,7 +85,10 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
         }
     }
 
-    let unknown = ScopedName::parse("dependency::missing").unwrap();
+    let unknown = ScopedName::in_scope(
+        crate::syntax::module_name::ModuleAliasName::expect_valid("dependency"),
+        crate::syntax::decl_name::DeclName::expect_valid("missing"),
+    );
     match tir.root().lookup_decl_identity(&unknown) {
         DeclarationIdentityLookup::DiagnosticProbe(probe) => {
             assert_eq!(probe.dag_id(), tir.root_dag_id());
@@ -873,17 +880,23 @@ fn type_resolve_rocket() {
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::parse("dry_mass").unwrap())
+            .contains_key(&ScopedName::local(
+                crate::syntax::decl_name::DeclName::expect_valid("dry_mass")
+            ))
     );
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::parse("delta_v").unwrap())
+            .contains_key(&ScopedName::local(
+                crate::syntax::decl_name::DeclName::expect_valid("delta_v")
+            ))
     );
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::parse("g0").unwrap())
+            .contains_key(&ScopedName::local(
+                crate::syntax::decl_name::DeclName::expect_valid("g0")
+            ))
     );
 }
 
@@ -892,7 +905,8 @@ fn type_resolve_indexed() {
     let source = include_str!("../../../../../tests/fixtures/valid/indexed.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // delta_v should be Velocity[Maneuver]
-    let dv_type = &tir.root().resolved_decl_types[&ScopedName::parse("delta_v").unwrap()];
+    let dv_type = &tir.root().resolved_decl_types
+        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("delta_v"))];
     assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
 }
 
@@ -902,14 +916,14 @@ fn type_resolve_complex() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::parse("a").unwrap()],
+        &tir.root().resolved_decl_types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("a"))],
         ResolvedTypeExpr::Complex {
             dimension: ResolvedDimArg::Concrete(dimension),
             ..
         } if *dimension == Dimension::base(BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length))
     ));
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::parse("series").unwrap()],
+        &tir.root().resolved_decl_types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("series"))],
         ResolvedTypeExpr::Indexed { base, .. }
             if matches!(base.as_ref(), ResolvedTypeExpr::Complex { .. })
     ));
@@ -955,7 +969,8 @@ fn type_resolve_generics() {
     let source = include_str!("../../../../../tests/fixtures/valid/generics.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // pos_eci should be a GenericStruct with type args
-    let pos_type = &tir.root().resolved_decl_types[&ScopedName::parse("pos_eci").unwrap()];
+    let pos_type = &tir.root().resolved_decl_types
+        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("pos_eci"))];
     match pos_type {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -976,7 +991,8 @@ fn type_resolve_generics() {
     }
     // x_pos should be quantity Length
     assert_eq!(
-        tir.root().resolved_decl_types[&ScopedName::parse("x_pos").unwrap()],
+        tir.root().resolved_decl_types
+            [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("x_pos"))],
         ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length
         )))
@@ -989,7 +1005,8 @@ fn type_resolve_default_type_params() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
-    let pos3_eci = &tir.root().resolved_decl_types[&ScopedName::parse("pos3_eci").unwrap()];
+    let pos3_eci = &tir.root().resolved_decl_types
+        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("pos3_eci"))];
     match pos3_eci {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -1010,7 +1027,9 @@ fn type_resolve_default_type_params() {
     }
 
     // pos3_default: Pos3<Length> — default fills in Unframed
-    let pos3_default = &tir.root().resolved_decl_types[&ScopedName::parse("pos3_default").unwrap()];
+    let pos3_default = &tir.root().resolved_decl_types[&ScopedName::local(
+        crate::syntax::decl_name::DeclName::expect_valid("pos3_default"),
+    )];
     match pos3_default {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..

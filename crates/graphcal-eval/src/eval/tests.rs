@@ -15,7 +15,20 @@ fn fs() -> RealFileSystem {
 }
 
 fn scoped_name(name: &str) -> ScopedName {
-    ScopedName::parse(name).unwrap()
+    ScopedName::local(graphcal_compiler::syntax::decl_name::DeclName::expect_valid(name))
+}
+
+fn member_name(owner: &[&str], leaf: &str) -> ScopedName {
+    let owner = owner
+        .iter()
+        .map(|segment| {
+            graphcal_compiler::syntax::module_name::ModuleAliasName::expect_valid(*segment).into()
+        })
+        .collect();
+    ScopedName::qualified(
+        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(owner).unwrap(),
+        graphcal_compiler::syntax::decl_name::DeclName::expect_valid(leaf),
+    )
 }
 
 /// Find the SI value of a named quantity declaration.
@@ -2321,7 +2334,7 @@ fn checked_tir_records_typed_template_instance_bindings() {
         assert_eq!(concrete.owner(), instance.id.owner());
         assert_eq!(concrete.as_str(), "factor");
 
-        let output_name = ScopedName::qualified(
+        let output_name = ScopedName::in_scope(
             ScopeSegment::from_nested_dag_segment(instance.id.owner().leaf()),
             DeclName::expect_valid("output"),
         );
@@ -5300,16 +5313,20 @@ fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
         name.to_string() == "upper.middle.leaf::positive"
             && matches!(outcome, super::types::AssertResult::Fail { .. })
     }));
-    assert!(result.output_surface.contains(&scoped_name("upper::out")));
     assert!(
-        !result
+        result
             .output_surface
-            .contains(&scoped_name("upper.middle::out"))
+            .contains(&member_name(&["upper"], "out"))
     );
     assert!(
         !result
             .output_surface
-            .contains(&scoped_name("upper.middle.leaf::private_value"))
+            .contains(&member_name(&["upper", "middle"], "out"))
+    );
+    assert!(
+        !result
+            .output_surface
+            .contains(&member_name(&["upper", "middle", "leaf"], "private_value"))
     );
 }
 
@@ -5352,7 +5369,7 @@ fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
     let internal_input_owners = result
         .entries
         .iter()
-        .filter(|(name, _, _)| name.member().as_str() == "input" && name.is_qualified())
+        .filter(|(name, _, _)| name.leaf().as_str() == "input" && name.is_qualified())
         .map(|(name, _, _)| name.qualifier().to_vec())
         .collect::<HashSet<_>>();
     assert_eq!(internal_input_owners.len(), 2);
@@ -5851,7 +5868,7 @@ fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units
     assert!(
         result
             .nodes()
-            .any(|(name, value)| name.member().as_str() == "accepted"
+            .any(|(name, value)| name.leaf().as_str() == "accepted"
                 && matches!(value, Ok(Value::Bool(true))))
     );
 }

@@ -1152,7 +1152,9 @@ mod tests {
     fn has_errors_counts_plot_errors() {
         let mut result = empty_eval_result();
         result.plot_errors.push(PlotError {
-            name: ScopedName::parse("p").unwrap(),
+            name: ScopedName::local(
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("p"),
+            ),
             reason: NodeUnavailable::EvalFailed {
                 message: "bad plot".to_string(),
             },

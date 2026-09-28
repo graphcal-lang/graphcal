@@ -725,10 +725,8 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
         .iter_mut()
         .for_each(|entry| entry.declaration_owner = owner.clone());
     for entry in &mut instance.params {
-        let template_port = ResolvedDeclName::from_def(
-            specialization.template.clone(),
-            entry.name.member().clone(),
-        );
+        let template_port =
+            ResolvedDeclName::from_def(specialization.template.clone(), entry.name.leaf().clone());
         entry.declaration_owner = owner.clone();
         if let Some(binding) = edge.value_bindings.get(&template_port) {
             entry.default = Some(crate::ir::lower::ParamDefault {
@@ -964,7 +962,7 @@ fn install_plot_projections_for_dag(
                 );
                 let exposed = ResolvedDeclName::from_def(
                     parent.clone(),
-                    projection.exposed_name.member().clone(),
+                    projection.exposed_name.leaf().clone(),
                 );
                 (instance_owner, target, exposed)
             })

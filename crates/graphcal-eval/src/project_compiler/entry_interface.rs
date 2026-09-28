@@ -155,7 +155,7 @@ pub(super) fn build_checked_entry_interface(
     for declaration in source_declarations {
         match declaration {
             SourceDeclaration::Parameter { name, span } => {
-                let scoped = ScopedName::from(name);
+                let scoped = ScopedName::local(name.clone());
                 let entry = tir
                     .root()
                     .params()
@@ -184,7 +184,7 @@ pub(super) fn build_checked_entry_interface(
                 });
             }
             SourceDeclaration::Node { name, span } => {
-                let scoped = ScopedName::from(name);
+                let scoped = ScopedName::local(name.clone());
                 if !tir.root().nodes().iter().any(|entry| entry.name == scoped) {
                     return Err(missing_interface_fact(
                         format!("HIR entry node `{name}` is absent from checked TIR"),

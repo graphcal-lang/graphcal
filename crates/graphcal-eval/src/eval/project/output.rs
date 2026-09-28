@@ -9,15 +9,21 @@ pub(super) fn remap_include_debug_name(
     name: &ScopedName,
     aliases: &IncludeDebugNameMap,
 ) -> ScopedName {
-    let Some((ScopeSegment::IncludeInstance(first), rest)) = name.qualifier().split_first() else {
+    let Some(owner) = name.owner() else {
+        return name.clone();
+    };
+    let ScopeSegment::IncludeInstance(first) = owner.first() else {
         return name.clone();
     };
     let Some(display) = aliases.get(first) else {
         return name.clone();
     };
-    ScopedName::qualified_path(
-        std::iter::once(ScopeSegment::Named(display.clone())).chain(rest.iter().cloned()),
-        name.member().clone(),
+    ScopedName::qualified(
+        graphcal_compiler::syntax::non_empty::NonEmpty::new(
+            ScopeSegment::Named(display.clone()),
+            owner.as_slice()[1..].to_vec(),
+        ),
+        name.leaf().clone(),
     )
 }
 

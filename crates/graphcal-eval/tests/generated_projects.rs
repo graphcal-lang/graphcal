@@ -104,7 +104,7 @@ fn generated_node<'a>(
 ) -> Result<&'a Value, TestCaseError> {
     result
         .nodes()
-        .find(|(candidate, _)| !candidate.is_qualified() && candidate.member() == name)
+        .find(|(candidate, _)| !candidate.is_qualified() && candidate.leaf() == name)
         .ok_or_else(|| TestCaseError::fail(format!("missing generated node `{name}`")))?
         .1
         .as_ref()

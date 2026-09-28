@@ -890,8 +890,8 @@ fn semantic_value_bindings(
         })
         .map(|(name, _)| {
             (
-                ResolvedDeclName::from_def(template_id.clone(), name.member().clone()),
-                ResolvedDeclName::from_def(instance_owner.clone(), name.member().clone()),
+                ResolvedDeclName::from_def(template_id.clone(), name.leaf().clone()),
+                ResolvedDeclName::from_def(instance_owner.clone(), name.leaf().clone()),
             )
         })
         .collect();
@@ -1109,10 +1109,10 @@ fn semantic_output_projections(request: &IncludeInstanceRequest) -> Vec<Instance
                 .and_then(|aliases| {
                     aliases
                         .iter()
-                        .find(|alias| &alias.local == exposed_name.member())
+                        .find(|alias| &alias.local == exposed_name.leaf())
                         .map(|alias| alias.original.clone())
                 })
-                .unwrap_or_else(|| exposed_name.member().clone());
+                .unwrap_or_else(|| exposed_name.leaf().clone());
             InstanceValueProjection {
                 target: ResolvedDeclName::from_def(request.template.dag_id.clone(), source_name),
                 exposed_name: exposed_name.clone(),
@@ -1154,7 +1154,7 @@ fn semantic_assertion_projections(
             .into_iter()
             .map(|name| InstanceAssertionProjection {
                 target: ResolvedDeclName::from_def(request.template.dag_id.clone(), name.clone()),
-                exposed_name: ScopedName::qualified(request.instance_scope.clone(), name),
+                exposed_name: ScopedName::in_scope(request.instance_scope.clone(), name),
                 expected_fail: None,
             })
             .collect()),
@@ -1865,7 +1865,7 @@ fn add_selective_aliases_inner(
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
         // built — the qualification stays structural through HIR.
-        let target = ScopedName::qualified(prefix.clone(), orig_name.clone());
+        let target = ScopedName::in_scope(prefix.clone(), orig_name.clone());
 
         let Some(declaration) = declarations.get(orig_name) else {
             continue;
