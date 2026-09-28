@@ -300,7 +300,7 @@ impl UnfrozenIR {
             decl_bindings.insert(name.clone(), canonical);
         }
         for record in &self.semantic_instances {
-            let scope = ScopeSegment::from_nested_dag_segment(record.instance.id.owner().leaf());
+            let scope = record.instance.id.scope();
             for target in record.instance.bindings.value_ports.values() {
                 let name = ScopedName::in_scope(scope.clone(), target.to_unowned_def_name());
                 if decl_bindings.insert(name.clone(), target.clone()).is_some() {

@@ -3,10 +3,11 @@
 //! Every file, inline `dag` block, and concrete include instance gets a unique
 //! package-qualified `DagId`. File-based DAGs derive their segments from the
 //! loader-provided module path (e.g., `helpers/math.gcl` →
-//! `["helpers", "math"]`), while inline `dag` blocks append their name as a
-//! source-module segment (e.g., `["helpers", "math", "double_speed"]`).
-//! Include instances append an instance segment instead, so a source module and
-//! an instance with the same displayed path remain structurally distinct.
+//! `["helpers", "math"]`), while inline `dag` blocks append their declaration
+//! name as an inline-DAG segment (e.g., `["helpers", "math", "double_speed"]`).
+//! Include instances append an instance segment instead. Each segment keeps its
+//! kind, so a file submodule, an inline DAG, and an instance with the same
+//! displayed path remain structurally distinct.
 //!
 //! Package identity is intentionally opaque in the compiler core. Loaders erase
 //! whether a package came from a lockfile, manifest-backed project, virtual
@@ -20,6 +21,8 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use crate::syntax::non_empty::NonEmpty;
 
 /// Opaque package component of a [`DagId`].
@@ -70,106 +73,89 @@ impl fmt::Display for DagPackageId {
     }
 }
 
-/// Opaque owner-local identity of a selective include instance.
-///
-/// A selective include introduces declaration aliases but no source-visible
-/// module alias. Compiler lowering still needs a private namespace for the
-/// included implementation, so its source occurrence is represented directly
-/// instead of fabricating an alias spelling.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IncludeInstanceId {
-    source_offset: usize,
-}
-
-impl IncludeInstanceId {
-    /// Identify the include occurrence whose module path starts at byte offset
-    /// `source_offset` within its owning DAG's source.
-    #[must_use]
-    pub const fn at_source_offset(source_offset: usize) -> Self {
-        Self { source_offset }
-    }
-}
-
-impl fmt::Display for IncludeInstanceId {
-    /// Render the opaque identity for diagnostics and debug output only.
-    ///
-    /// The angle-bracket spelling cannot collide with a source identifier and
-    /// is never parsed back; [`IncludeInstanceId`] is the authoritative form.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<include@{}>", self.source_offset)
-    }
-}
-
-impl fmt::Debug for IncludeInstanceId {
-    /// Debug output uses the rendered form so debug views keep one spelling
-    /// for an anonymous include instance.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
 /// One typed segment of a [`DagId`].
 ///
-/// A segment records both its relationship to the parent (lexical
-/// source-module nesting versus a concrete include instance) and the child's
-/// identity. A source module and a named instance may share a spelling, but
-/// they are different semantic identities; an anonymous include instance has
-/// no spelling at all.
+/// A segment records both its relationship to the parent and the child's
+/// identity:
+///
+/// - [`Self::File`] segments are the loader-provided file-path components of a
+///   file root. They form the non-empty prefix of every [`DagId`] and never
+///   follow another kind of segment.
+/// - [`Self::InlineDag`] is a `dag` declaration nested in its parent module.
+/// - [`Self::Instance`] is a concrete include instance, carrying the scope it
+///   was instantiated under (a module alias, or an anonymous selective
+///   include).
+///
+/// A file submodule, an inline DAG, and a named instance may share a
+/// spelling, but they are different semantic identities.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DagSegment {
-    /// A file-path component or an inline `dag` declaration name.
-    SourceModule(Arc<str>),
-    /// A concrete include instance named by its source-visible module alias.
-    NamedInstance(Arc<str>),
-    /// A concrete selective include instance, which has no module alias.
-    IncludeInstance(IncludeInstanceId),
+    /// A file-path component of a file root.
+    File(Arc<str>),
+    /// An inline `dag` declaration.
+    InlineDag(DeclName),
+    /// A concrete include instance and the scope it was instantiated under.
+    Instance(ScopeSegment),
 }
 
 impl DagSegment {
     /// Whether this segment is a concrete include instance.
     #[must_use]
     pub const fn is_instance(&self) -> bool {
-        matches!(self, Self::NamedInstance(_) | Self::IncludeInstance(_))
+        matches!(self, Self::Instance(_))
     }
 
-    /// The source-visible spelling of a source-module or named-instance
-    /// segment. Anonymous include instances have none.
+    /// The `dag` declaration this segment names, when it is an inline DAG.
     #[must_use]
-    pub fn spelling(&self) -> Option<&str> {
+    pub const fn inline_dag(&self) -> Option<&DeclName> {
         match self {
-            Self::SourceModule(name) | Self::NamedInstance(name) => Some(name),
-            Self::IncludeInstance(_) => None,
+            Self::InlineDag(name) => Some(name),
+            Self::File(_) | Self::Instance(_) => None,
         }
     }
 
-    /// The concrete-instance segment with this segment's identity.
+    /// The qualifier segment that names this child below its parent module.
     ///
-    /// Re-instantiating a template's nested child yields a concrete instance
-    /// named like that child; an anonymous include keeps its opaque identity.
+    /// An inline DAG is qualified by its declaration name and an instance by
+    /// its scope. A file-path component is not a module-scoped child, so it
+    /// has none.
     #[must_use]
-    pub fn to_instance(&self) -> Self {
+    pub fn scope(&self) -> Option<ScopeSegment> {
         match self {
-            Self::SourceModule(name) | Self::NamedInstance(name) => {
-                Self::NamedInstance(Arc::clone(name))
-            }
-            Self::IncludeInstance(id) => Self::IncludeInstance(*id),
+            Self::File(_) => None,
+            Self::InlineDag(name) => Some(ScopeSegment::Named(ModuleAliasName::classify(
+                name.atom().clone(),
+            ))),
+            Self::Instance(scope) => Some(scope.clone()),
+        }
+    }
+
+    /// Source spelling of a file or inline-DAG segment; instances have none
+    /// on a module path.
+    fn module_path_spelling(&self) -> Option<&str> {
+        match self {
+            Self::File(name) => Some(name),
+            Self::InlineDag(name) => Some(name.as_str()),
+            Self::Instance(_) => None,
         }
     }
 
     /// Rendered text, used only to keep [`DagId`]'s established ordering.
     fn rendered(&self) -> std::borrow::Cow<'_, str> {
-        self.spelling().map_or_else(
-            || std::borrow::Cow::Owned(self.to_string()),
-            std::borrow::Cow::Borrowed,
-        )
+        match self {
+            Self::File(name) => std::borrow::Cow::Borrowed(name),
+            Self::InlineDag(name) => std::borrow::Cow::Borrowed(name.as_str()),
+            Self::Instance(scope) => std::borrow::Cow::Owned(scope.to_string()),
+        }
     }
 }
 
 impl fmt::Display for DagSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SourceModule(name) | Self::NamedInstance(name) => f.write_str(name),
-            Self::IncludeInstance(id) => fmt::Display::fmt(id, f),
+            Self::File(name) => f.write_str(name),
+            Self::InlineDag(name) => fmt::Display::fmt(name, f),
+            Self::Instance(scope) => fmt::Display::fmt(scope, f),
         }
     }
 }
@@ -180,14 +166,14 @@ impl fmt::Display for DagSegment {
 /// `helpers/math.gcl` has segments `["helpers", "math"]`, and an inline
 /// `dag double_speed` within it has segments
 /// `["helpers", "math", "double_speed"]`. Each [`DagSegment`] preserves
-/// whether that child is a source module or a concrete instance; display text
-/// alone is not identity. Lexical visibility is maintained separately by the
-/// module resolver.
+/// whether that child is a file-path component, an inline DAG, or a concrete
+/// instance; display text alone is not identity. Lexical visibility is
+/// maintained separately by the module resolver.
 ///
 /// Non-emptiness is encoded structurally with [`NonEmpty`], so [`DagId::leaf`]
 /// is total — there is no value of this type that has zero segments. Every
-/// constructor starts from source-module segments; only the child
-/// constructors append instance segments.
+/// constructor starts from file segments; only the child constructors append
+/// inline-DAG and instance segments, so file segments are always a prefix.
 ///
 /// The compiler never interprets these segments as filesystem paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -200,7 +186,7 @@ pub struct DagId {
 
 impl Ord for DagId {
     /// Order by package, then by rendered segment text, then by segment kind
-    /// (source modules before instances).
+    /// (non-instances before instances).
     ///
     /// This is the order `DagId` had while its segments were spellings with a
     /// parallel edge-kind array, so sorted outputs stay unchanged. The final
@@ -245,21 +231,29 @@ pub enum DescendantRebase {
 
 /// Typed identity of one concrete include or DAG-call instance.
 ///
-/// `owner` is the fresh runtime namespace allocated at the call/include site;
-/// `template` is the canonical reusable DAG definition it instantiates. Keeping
-/// both prevents a concrete instance from being mistaken for its source module
-/// merely because their declaration leaves have the same spelling.
+/// `owner` is the fresh runtime namespace allocated at the call/include site:
+/// the `scope` child of `parent`. `template` is the canonical reusable DAG
+/// definition it instantiates. Keeping both prevents a concrete instance from
+/// being mistaken for its source module merely because their declaration
+/// leaves have the same spelling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InstanceId {
     owner: DagId,
     template: DagId,
+    parent: DagId,
+    scope: ScopeSegment,
 }
 
 impl InstanceId {
-    /// Construct an explicit instance identity from its concrete owner and template.
+    /// Identify the instance of `template` allocated under `parent` in `scope`.
     #[must_use]
-    pub const fn new(owner: DagId, template: DagId) -> Self {
-        Self { owner, template }
+    pub fn new(parent: DagId, scope: ScopeSegment, template: DagId) -> Self {
+        Self {
+            owner: parent.instance_child(scope.clone()),
+            template,
+            parent,
+            scope,
+        }
     }
 
     /// Concrete owner allocated to this instance.
@@ -272,6 +266,18 @@ impl InstanceId {
     #[must_use]
     pub const fn template(&self) -> &DagId {
         &self.template
+    }
+
+    /// Module whose include or call allocated this instance.
+    #[must_use]
+    pub const fn parent(&self) -> &DagId {
+        &self.parent
+    }
+
+    /// Scope this instance occupies in its parent.
+    #[must_use]
+    pub const fn scope(&self) -> &ScopeSegment {
+        &self.scope
     }
 }
 
@@ -315,20 +321,20 @@ impl<'a> From<NonEmpty<&'a str>> for NonEmpty<Arc<str>> {
 }
 
 impl DagId {
-    /// Create a `DagId` from an explicit package and non-empty hierarchical
-    /// source-module segments.
+    /// Create a file-root `DagId` from an explicit package and non-empty
+    /// file-path segments.
     pub fn new(package: impl Into<DagPackageId>, segments: impl Into<NonEmpty<Arc<str>>>) -> Self {
         Self {
             package: package.into(),
-            segments: segments.into().map(DagSegment::SourceModule),
+            segments: segments.into().map(DagSegment::File),
         }
     }
 
-    /// Create a single-segment (root) `DagId` in an explicit package.
+    /// Create a single-segment (root) file `DagId` in an explicit package.
     pub fn root_in_package(package: impl Into<DagPackageId>, name: impl Into<Arc<str>>) -> Self {
         Self {
             package: package.into(),
-            segments: NonEmpty::singleton(DagSegment::SourceModule(name.into())),
+            segments: NonEmpty::singleton(DagSegment::File(name.into())),
         }
     }
 
@@ -357,45 +363,46 @@ impl DagId {
         }
     }
 
-    /// Create a source-module child by appending a segment (e.g., for a nested
-    /// `dag` block).
+    /// Create the child module of the inline `dag` declaration `name`.
     #[must_use]
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
-        self.with_child(DagSegment::SourceModule(name.into()))
+    pub fn inline_dag_child(&self, name: DeclName) -> Self {
+        self.with_child(DagSegment::InlineDag(name))
     }
 
-    /// Create a concrete include-instance child named by a module alias.
+    /// Create the concrete include-instance child allocated in `scope`.
     ///
-    /// This is structurally distinct from [`Self::child`] even when both names
-    /// render identically.
+    /// This is structurally distinct from [`Self::inline_dag_child`] even
+    /// when both names render identically.
     #[must_use]
-    pub fn named_instance_child(&self, alias: impl Into<Arc<str>>) -> Self {
-        self.with_child(DagSegment::NamedInstance(alias.into()))
+    pub fn instance_child(&self, scope: ScopeSegment) -> Self {
+        self.with_child(DagSegment::Instance(scope))
     }
 
-    /// Create the concrete instance child of an anonymous selective include.
-    #[must_use]
-    pub fn include_instance_child(&self, id: IncludeInstanceId) -> Self {
-        self.with_child(DagSegment::IncludeInstance(id))
-    }
-
-    /// Create a concrete instance child with the identity of `segment`
-    /// (see [`DagSegment::to_instance`]).
-    #[must_use]
-    pub fn instance_child_like(&self, segment: &DagSegment) -> Self {
-        self.with_child(segment.to_instance())
-    }
-
-    /// Return the parent `DagId` (all segments except the last), or `None` if
-    /// this is a root (single-segment) identifier.
+    /// Return the module this one is nested in, or `None` for a file root.
+    ///
+    /// File roots have no lexical parent: a file submodule (`lib/x.gcl`) is
+    /// not a child of `lib.gcl`, even though its path extends it.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
+        if matches!(self.leaf(), DagSegment::File(_)) {
+            return None;
+        }
         let (_, parent_segments) = self.segments.as_slice().split_last()?;
         let (root, rest) = parent_segments.split_first()?;
         Some(Self {
             package: self.package.clone(),
             segments: NonEmpty::new(root.clone(), rest.to_vec()),
         })
+    }
+
+    /// The file root this module is declared or instantiated in.
+    #[must_use]
+    pub fn file_root(&self) -> Self {
+        let mut root = self.clone();
+        while let Some(parent) = root.parent() {
+            root = parent;
+        }
+        root
     }
 
     /// The segments of this identifier (head first, then tail).
@@ -410,20 +417,51 @@ impl DagId {
         self.segments.last()
     }
 
+    /// Qualifier segments that name `self` below `ancestor`: `Some(empty)`
+    /// when they are equal, `None` when `self` is not in `ancestor`'s subtree.
+    #[must_use]
+    pub fn scopes_below(&self, ancestor: &Self) -> Option<Vec<ScopeSegment>> {
+        if self != ancestor && !self.is_descendant_of(ancestor) {
+            return None;
+        }
+        self.segments
+            .iter()
+            .skip(ancestor.segments.len())
+            .map(DagSegment::scope)
+            .collect()
+    }
+
     /// True if `self` is a strict descendant of `ancestor` (an inline `dag`
     /// block or instance nested — at any depth — inside `ancestor`).
+    ///
+    /// A file submodule is never a descendant of another file.
     #[must_use]
     pub fn is_descendant_of(&self, ancestor: &Self) -> bool {
-        self.segments.len() > ancestor.segments.len()
-            && self.package == ancestor.package
+        self.package == ancestor.package
             && self
                 .segments
                 .as_slice()
-                .starts_with(ancestor.segments.as_slice())
+                .strip_prefix(ancestor.segments.as_slice())
+                .and_then(<[DagSegment]>::first)
+                .is_some_and(|child| !matches!(child, DagSegment::File(_)))
+    }
+
+    /// The spelling of this module on an import path (file-path components,
+    /// then inline DAG names), or `None` for a concrete instance, which no
+    /// module path can name.
+    ///
+    /// Two distinct source modules of one package with equal spellings would
+    /// make that module path ambiguous.
+    #[must_use]
+    pub fn module_path_spelling(&self) -> Option<Vec<&str>> {
+        self.segments
+            .iter()
+            .map(DagSegment::module_path_spelling)
+            .collect()
     }
 
     /// Rebase this identity from one ancestor onto another while preserving
-    /// every source-module/concrete-instance segment in the descendant suffix.
+    /// every inline-DAG/concrete-instance segment in the descendant suffix.
     ///
     /// Returns [`DescendantRebase::OutsideSubtree`] when `self` is neither
     /// `ancestor` nor its descendant. The typed result forces each caller to
@@ -531,6 +569,19 @@ impl fmt::Display for DagId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::syntax::module_name::IncludeInstanceId;
+
+    fn dag(name: &str) -> DeclName {
+        DeclName::try_new(name).unwrap()
+    }
+
+    fn named(alias: &str) -> ScopeSegment {
+        ScopeSegment::Named(ModuleAliasName::try_new(alias).unwrap())
+    }
+
+    fn anonymous(offset: usize) -> ScopeSegment {
+        ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(offset))
+    }
 
     #[test]
     fn from_relative_path_strips_gcl() {
@@ -595,17 +646,18 @@ mod tests {
     }
 
     #[test]
-    fn child_appends_segment() {
+    fn inline_dag_child_appends_segment() {
         let parent = DagId::new("test", NonEmpty::new("helpers", vec!["math"]));
-        let child = parent.child("double_speed");
+        let child = parent.inline_dag_child(dag("double_speed"));
         assert_eq!(child.to_string(), "helpers.math.double_speed");
+        assert_eq!(child.leaf().inline_dag(), Some(&dag("double_speed")));
     }
 
     #[test]
-    fn concrete_instance_is_distinct_from_same_named_source_module() {
+    fn concrete_instance_is_distinct_from_same_named_inline_dag() {
         let parent = DagId::root_in_package("test", "model");
-        let source = DagId::new("test", NonEmpty::new("model", vec!["defaults"]));
-        let instance = parent.named_instance_child("defaults");
+        let source = parent.inline_dag_child(dag("defaults"));
+        let instance = parent.instance_child(named("defaults"));
 
         assert_eq!(source.to_string(), instance.to_string());
         assert_ne!(source, instance);
@@ -614,16 +666,53 @@ mod tests {
     }
 
     #[test]
+    fn file_submodule_is_distinct_from_same_named_inline_dag() {
+        let parent = DagId::new("test", NonEmpty::new("pkg", vec!["lib"]));
+        let inline = parent.inline_dag_child(dag("x"));
+        let file = DagId::new("test", NonEmpty::new("pkg", vec!["lib", "x"]));
+
+        assert_eq!(inline.to_string(), file.to_string());
+        assert_ne!(inline, file);
+        assert_eq!(inline.module_path_spelling(), file.module_path_spelling());
+        // A file submodule is not nested in the file its path extends.
+        assert_eq!(file.parent(), None);
+        assert!(!file.is_descendant_of(&parent));
+        assert!(inline.is_descendant_of(&parent));
+        assert_eq!(
+            file.rebase_descendant(&parent, &DagId::root_in_package("test", "other")),
+            DescendantRebase::OutsideSubtree
+        );
+    }
+
+    #[test]
+    fn module_path_spelling_excludes_instances() {
+        let root = DagId::root_in_package("test", "main");
+        assert_eq!(root.module_path_spelling(), Some(vec!["main"]));
+        assert_eq!(
+            root.inline_dag_child(dag("inner")).module_path_spelling(),
+            Some(vec!["main", "inner"])
+        );
+        assert_eq!(
+            root.instance_child(named("inner")).module_path_spelling(),
+            None
+        );
+    }
+
+    #[test]
     fn rebase_descendant_preserves_instance_edges() {
         let template = DagId::root_in_package("test", "template");
-        let nested = template.named_instance_child("inner").child("helper");
-        let configured = DagId::root_in_package("test", "main").named_instance_child("configured");
+        let nested = template
+            .instance_child(named("inner"))
+            .inline_dag_child(dag("helper"));
+        let configured = DagId::root_in_package("test", "main").instance_child(named("configured"));
 
         let DescendantRebase::Rebased(rebased) = nested.rebase_descendant(&template, &configured)
         else {
             panic!("nested identity must be inside the template subtree");
         };
-        let expected = configured.named_instance_child("inner").child("helper");
+        let expected = configured
+            .instance_child(named("inner"))
+            .inline_dag_child(dag("helper"));
         assert_eq!(rebased, expected);
         assert_eq!(rebased.to_string(), "main.configured.inner.helper");
     }
@@ -632,7 +721,7 @@ mod tests {
     fn rebase_descendant_classifies_an_external_owner() {
         let template = DagId::root_in_package("test", "template");
         let external = DagId::root_in_package("dependency", "external");
-        let configured = DagId::root_in_package("test", "main").named_instance_child("configured");
+        let configured = DagId::root_in_package("test", "main").instance_child(named("configured"));
 
         assert_eq!(
             external.rebase_descendant(&template, &configured),
@@ -641,19 +730,21 @@ mod tests {
     }
 
     #[test]
-    fn parent_drops_last_segment() {
-        let id = DagId::new(
-            "test",
-            NonEmpty::new("helpers", vec!["math", "double_speed"]),
-        );
+    fn parent_drops_last_nested_segment() {
+        let id = DagId::new("test", NonEmpty::new("helpers", vec!["math"]))
+            .inline_dag_child(dag("double_speed"));
         let parent = id.parent().unwrap();
         assert_eq!(parent.to_string(), "helpers.math");
     }
 
     #[test]
-    fn parent_of_root_is_none() {
-        let id = DagId::root_in_package("test", "main");
-        assert!(id.parent().is_none());
+    fn parent_of_file_root_is_none() {
+        assert!(DagId::root_in_package("test", "main").parent().is_none());
+        assert!(
+            DagId::new("test", NonEmpty::new("helpers", vec!["math"]))
+                .parent()
+                .is_none()
+        );
     }
 
     #[test]
@@ -677,7 +768,7 @@ mod tests {
     #[test]
     fn child_and_parent_preserve_package_identity() {
         let root = DagId::root_in_package("pkg-lib", "lib");
-        let child = root.child("helper");
+        let child = root.inline_dag_child(dag("helper"));
 
         assert_eq!(child.package(), root.package());
         assert_eq!(child.parent(), Some(root));
@@ -686,8 +777,8 @@ mod tests {
     #[test]
     fn is_descendant_of_matches_nested_blocks_only() {
         let file = DagId::new("test", NonEmpty::new("helpers", vec!["math"]));
-        let child = file.child("double_speed");
-        let grandchild = child.child("inner");
+        let child = file.inline_dag_child(dag("double_speed"));
+        let grandchild = child.inline_dag_child(dag("inner"));
         assert!(child.is_descendant_of(&file));
         assert!(grandchild.is_descendant_of(&file));
         assert!(!file.is_descendant_of(&file));
@@ -701,19 +792,38 @@ mod tests {
     }
 
     #[test]
-    fn leaf_returns_last_segment() {
-        let id = DagId::new(
-            "test",
-            NonEmpty::new("helpers", vec!["math", "double_speed"]),
+    fn scopes_below_names_nested_segments() {
+        let root = DagId::root_in_package("test", "main");
+        let nested = root
+            .instance_child(named("inst"))
+            .instance_child(anonymous(4))
+            .inline_dag_child(dag("inner"));
+
+        assert_eq!(root.scopes_below(&root), Some(Vec::new()));
+        assert_eq!(
+            nested.scopes_below(&root),
+            Some(vec![named("inst"), anonymous(4), named("inner")])
         );
-        assert_eq!(id.leaf(), &DagSegment::SourceModule("double_speed".into()));
-        assert_eq!(id.leaf().spelling(), Some("double_speed"));
+        assert_eq!(root.scopes_below(&nested), None);
+        assert_eq!(
+            DagId::new("test", NonEmpty::new("main", vec!["x"])).scopes_below(&root),
+            None
+        );
     }
 
     #[test]
-    fn leaf_of_root_returns_head() {
-        let id = DagId::root_in_package("test", "main");
-        assert_eq!(id.leaf().spelling(), Some("main"));
+    fn segment_scopes_and_inline_dags_are_typed() {
+        assert_eq!(DagSegment::File("lib".into()).scope(), None);
+        assert_eq!(DagSegment::File("lib".into()).inline_dag(), None);
+        assert_eq!(
+            DagSegment::InlineDag(dag("inner")).scope(),
+            Some(named("inner"))
+        );
+        assert_eq!(
+            DagSegment::Instance(anonymous(1)).scope(),
+            Some(anonymous(1))
+        );
+        assert_eq!(DagSegment::Instance(named("inner")).inline_dag(), None);
     }
 
     #[test]
@@ -725,13 +835,13 @@ mod tests {
     #[test]
     fn include_instances_are_opaque_segments() {
         let owner = DagId::root_in_package("test", "main");
-        let first = owner.include_instance_child(IncludeInstanceId::at_source_offset(10));
-        let second = owner.include_instance_child(IncludeInstanceId::at_source_offset(20));
-        let named = owner.named_instance_child("<include@10>");
+        let first = owner.instance_child(anonymous(10));
+        let second = owner.instance_child(anonymous(20));
+        let named = owner.instance_child(named("<include@10>"));
 
         assert_ne!(first, second);
         assert_eq!(first.to_string(), "main.<include@10>");
-        assert_eq!(first.leaf().spelling(), None);
+        assert_eq!(first.leaf().inline_dag(), None);
         assert!(first.leaf().is_instance());
         // A named instance can never be confused with an anonymous one, even
         // if a spelling renders identically.
@@ -742,39 +852,29 @@ mod tests {
     }
 
     #[test]
-    fn to_instance_keeps_identity_and_marks_instance() {
-        let module = DagSegment::SourceModule("helper".into());
-        let named = DagSegment::NamedInstance("helper".into());
-        let anonymous = DagSegment::IncludeInstance(IncludeInstanceId::at_source_offset(3));
+    fn instance_id_records_parent_scope_and_owner() {
+        let parent = DagId::root_in_package("test", "main");
+        let template = DagId::root_in_package("test", "lib");
+        let id = InstanceId::new(parent.clone(), named("inst"), template.clone());
 
-        assert!(!module.is_instance());
-        assert_eq!(module.to_instance(), named);
-        assert_eq!(named.to_instance(), named);
-        assert_eq!(anonymous.to_instance(), anonymous);
-
-        let owner = DagId::root_in_package("test", "main");
-        assert_eq!(
-            owner.instance_child_like(&module),
-            owner.named_instance_child("helper")
-        );
-        assert_eq!(
-            owner.instance_child_like(&anonymous),
-            owner.include_instance_child(IncludeInstanceId::at_source_offset(3))
-        );
+        assert_eq!(id.owner(), &parent.instance_child(named("inst")));
+        assert_eq!(id.parent(), &parent);
+        assert_eq!(id.scope(), &named("inst"));
+        assert_eq!(id.template(), &template);
     }
 
     #[test]
     fn ordering_compares_rendered_text_before_segment_kind() {
         let root = DagId::root_in_package("test", "main");
-        let anonymous_late = root.include_instance_child(IncludeInstanceId::at_source_offset(100));
-        let anonymous_early = root.include_instance_child(IncludeInstanceId::at_source_offset(63));
-        let named = root.named_instance_child("alpha");
-        let module = root.child("alpha");
+        let anonymous_late = root.instance_child(anonymous(100));
+        let anonymous_early = root.instance_child(anonymous(63));
+        let named = root.instance_child(named("alpha"));
+        let module = root.inline_dag_child(dag("alpha"));
 
         // `<include@100>` < `<include@63>` < `alpha` as rendered text.
         assert!(anonymous_late < anonymous_early);
         assert!(anonymous_early < named);
-        // Equal text: source modules sort before instances.
+        // Equal text: inline DAGs sort before instances.
         assert!(module < named);
         assert!(root < module);
         assert!(DagId::root_in_package("a", "z") < DagId::root_in_package("b", "a"));
@@ -783,9 +883,9 @@ mod tests {
     #[test]
     fn instance_segments_participate_in_descendant_checks() {
         let root = DagId::root_in_package("test", "main");
-        let module = root.child("inner");
-        let instance = root.named_instance_child("inner");
-        let nested = instance.child("helper");
+        let module = root.inline_dag_child(dag("inner"));
+        let instance = root.instance_child(named("inner"));
+        let nested = instance.inline_dag_child(dag("helper"));
 
         assert!(nested.is_descendant_of(&instance));
         assert!(nested.is_descendant_of(&root));

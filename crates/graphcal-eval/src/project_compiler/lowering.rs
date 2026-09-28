@@ -145,7 +145,7 @@ fn imported_module_target(
         children
             .iter()
             .fold(binding.target.clone(), |target, child| {
-                target.child(child.as_str())
+                target.inline_dag_child(DeclName::classify(child.clone()))
             }),
     )
 }
@@ -1232,7 +1232,12 @@ fn record_semantic_instance(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     let template_id = &request.template.dag_id;
-    let instance_owner = request.instance_scope.instance_of(importer);
+    let instance_id = graphcal_compiler::dag_id::InstanceId::new(
+        importer.clone(),
+        request.instance_scope.clone(),
+        template_id.clone(),
+    );
+    let instance_owner = instance_id.owner().clone();
     let value_bindings = semantic_value_bindings(request, template, &instance_owner);
     let static_bindings =
         semantic_static_bindings(request, template, importer, module_resolver, src)?;
@@ -1268,7 +1273,7 @@ fn record_semantic_instance(
     unfrozen.record_semantic_instance(
         graphcal_compiler::ir::lower::SemanticInstanceInput {
             instance: InstanceRecord {
-                id: graphcal_compiler::dag_id::InstanceId::new(instance_owner, template_id.clone()),
+                id: instance_id,
                 specialization,
                 parent_owner: importer.clone(),
                 bindings: InstanceBindingEnvironment {
@@ -1646,7 +1651,7 @@ fn elaborate_include_instances(
         // ---- 6. Add selective aliases -------------------------------------
         for projection in &instance.unit_projection_aliases {
             unfrozen.add_dynamic_unit_projection_alias(
-                &instance.instance_scope.instance_of(importer_dag_id),
+                &importer_dag_id.instance_child(instance.instance_scope.clone()),
                 &projection.source,
                 projection.alias.clone(),
             );

@@ -261,7 +261,9 @@ fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagI
         braces
             .into_iter()
             .fold(root.clone(), |owner, scope| match scope {
-                BraceScope::Dag(name) => owner.child(name.as_str()),
+                BraceScope::Dag(name) => owner.inline_dag_child(
+                    graphcal_compiler::syntax::decl_name::DeclName::classify(name),
+                ),
                 BraceScope::Other => owner,
             }),
     )

@@ -1580,7 +1580,7 @@ fn add_include_instance_modules(
         let Some(target_decls) = module_declarations(target.target(), project) else {
             continue;
         };
-        let instance = include.instance_scope().instance_of(owner);
+        let instance = owner.instance_child(include.instance_scope());
         resolver.add_module(instance.clone(), target_decls)?;
         add_nested_include_instance_modules(resolver, target.target(), &instance, project)?;
     }
@@ -1609,7 +1609,7 @@ fn inherit_include_instance_scopes(
         else {
             continue;
         };
-        let instance = include.instance_scope().instance_of(owner);
+        let instance = owner.instance_child(include.instance_scope());
         resolver.inherit_module_scope(source.target(), &instance)?;
         inherit_nested_include_instance_scopes(resolver, source.target(), &instance, project)?;
     }
@@ -1636,7 +1636,7 @@ fn nested_include_instances(
                 let source = resolved_module_target_from(source, &include.path, project)?;
                 Some(NestedIncludeInstance {
                     source,
-                    instance: include.instance_scope().instance_of(instance),
+                    instance: instance.instance_child(include.instance_scope()),
                 })
             })
             .collect()
@@ -1737,7 +1737,7 @@ fn register_module_imports(
                     .map(|target| target.target().clone())
                     .or_else(|| resolver.resolve_module_path(owner, &include.path).ok());
                 if resolved_edge.is_some() {
-                    let target = include.instance_scope().instance_of(owner);
+                    let target = owner.instance_child(include.instance_scope());
                     resolver.register_include(owner, &include.path, &include.kind, &target)?;
                 }
                 resolver.apply_include_static_projection_bindings(
@@ -3395,7 +3395,12 @@ dag calc {
         let loaded_dag = root_file
             .inline_dags
             .iter()
-            .find(|dag| dag.dag_id.leaf().spelling() == Some("calc"))
+            .find(|dag| {
+                dag.dag_id
+                    .leaf()
+                    .inline_dag()
+                    .is_some_and(|name| name.as_str() == "calc")
+            })
             .expect("inline DAG should be lifted");
 
         assert!(

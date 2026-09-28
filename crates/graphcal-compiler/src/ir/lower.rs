@@ -545,7 +545,7 @@ fn single_module_resolver(
             if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
                 add_module_with_dags(
                     target,
-                    &owner.child(dag.name.value.as_str()),
+                    &owner.inline_dag_child(dag.name.value.clone()),
                     &dag.body,
                     src,
                 )?;
@@ -788,7 +788,7 @@ pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
 )]
 #[cfg(test)]
 pub(crate) fn lower_dag_body_to_ir(
-    dag_name: &str,
+    dag_name: &crate::syntax::decl_name::DeclName,
     stripped_body: &[crate::desugar::desugared_ast::Declaration],
     parent_registry: &Registry,
     resolver: &crate::resolve::ModuleResolver,
@@ -800,7 +800,7 @@ pub(crate) fn lower_dag_body_to_ir(
     let virtual_file = File {
         declarations: stripped_body.to_vec(),
     };
-    let dag_dag_id = parent_dag_id.child(dag_name);
+    let dag_dag_id = parent_dag_id.inline_dag_child(dag_name.clone());
     let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_bindings(
         &virtual_file,
         Some(parent_registry),

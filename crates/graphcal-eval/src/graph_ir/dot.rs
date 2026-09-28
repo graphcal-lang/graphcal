@@ -710,7 +710,9 @@ mod tests {
 
     fn sample_ir() -> GraphIr {
         let root_id = DagId::root_in_package("test", "main");
-        let child_id = root_id.child("child");
+        let child_id = root_id.inline_dag_child(
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("child"),
+        );
         let external_id = DagId::root_in_package("test", "external");
         GraphIr {
             nodes: vec![
@@ -821,9 +823,14 @@ mod tests {
     fn opaque_ids_preserve_package_and_hierarchy_identity() {
         let package_a = DagId::root_in_package("package-a", "lib");
         let package_b = DagId::root_in_package("package-b", "lib");
-        let source_child = DagId::root_in_package("package-a", "model").child("defaults");
-        let instance_child =
-            DagId::root_in_package("package-a", "model").named_instance_child("defaults");
+        let source_child = DagId::root_in_package("package-a", "model").inline_dag_child(
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("defaults"),
+        );
+        let instance_child = DagId::root_in_package("package-a", "model").instance_child(
+            graphcal_compiler::syntax::module_name::ScopeSegment::Named(
+                graphcal_compiler::syntax::module_name::ModuleAliasName::expect_valid("defaults"),
+            ),
+        );
         let external = [package_a, package_b, source_child, instance_child]
             .into_iter()
             .map(|owner| GraphNode {

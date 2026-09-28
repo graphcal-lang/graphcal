@@ -112,7 +112,7 @@ fn collect_declarations(
             }
             DeclKind::Dag(dag) => collect_declarations(
                 &dag.body,
-                &owner.child(dag.name.value.as_str()),
+                &owner.inline_dag_child(dag.name.value.clone()),
                 resolver,
                 index,
             ),

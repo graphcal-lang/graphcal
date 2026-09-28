@@ -2407,7 +2407,7 @@ impl<'a> ExprLowerer<'a> {
         let owner = qualifier
             .iter()
             .fold(self.ctx.owner.clone(), |owner, segment| {
-                owner.child(segment.as_str())
+                owner.inline_dag_child(DeclName::classify(segment.clone()))
             });
         self.ctx.resolver.modules().get(&owner).and_then(|module| {
             let decl_name = DeclName::classify(leaf.clone());

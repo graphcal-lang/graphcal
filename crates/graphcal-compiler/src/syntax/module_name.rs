@@ -1,9 +1,48 @@
 //! Module aliases and module-scoped declaration names.
 
-use crate::dag_id::{DagId, DagSegment, IncludeInstanceId};
+use std::fmt;
+
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::names::{NameAtomError, NameDef, NameNamespace, NamePath, Qualified};
+use crate::syntax::names::{NameDef, NameNamespace, NamePath, Qualified};
 use crate::syntax::non_empty::NonEmpty;
+
+/// Opaque owner-local identity of a selective include instance.
+///
+/// A selective include introduces declaration aliases but no source-visible
+/// module alias. Compiler lowering still needs a private namespace for the
+/// included implementation, so its source occurrence is represented directly
+/// instead of fabricating an alias spelling.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IncludeInstanceId {
+    source_offset: usize,
+}
+
+impl IncludeInstanceId {
+    /// Identify the include occurrence whose module path starts at byte offset
+    /// `source_offset` within its owning DAG's source.
+    #[must_use]
+    pub const fn at_source_offset(source_offset: usize) -> Self {
+        Self { source_offset }
+    }
+}
+
+impl fmt::Display for IncludeInstanceId {
+    /// Render the opaque identity for diagnostics and debug output only.
+    ///
+    /// The angle-bracket spelling cannot collide with a source identifier and
+    /// is never parsed back; [`IncludeInstanceId`] is the authoritative form.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<include@{}>", self.source_offset)
+    }
+}
+
+impl fmt::Debug for IncludeInstanceId {
+    /// Debug output uses the rendered form so debug views keep one spelling
+    /// for an anonymous include instance.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 /// Module alias namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -39,43 +78,6 @@ impl ScopeSegment {
         match self {
             Self::Named(alias) => Some(alias),
             Self::IncludeInstance(_) => None,
-        }
-    }
-
-    /// The concrete include instance this namespace denotes under `owner`.
-    #[must_use]
-    pub fn instance_of(&self, owner: &DagId) -> DagId {
-        match self {
-            Self::Named(alias) => owner.named_instance_child(alias.as_str()),
-            Self::IncludeInstance(id) => owner.include_instance_child(*id),
-        }
-    }
-
-    /// Qualifier segment that names a [`DagSegment`] below some owner.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`NameAtomError`] when a spelled segment is not a valid name
-    /// atom (only file-path components can be).
-    pub fn try_from_dag_segment(segment: &DagSegment) -> Result<Self, NameAtomError> {
-        match segment {
-            DagSegment::SourceModule(name) | DagSegment::NamedInstance(name) => {
-                ModuleAliasName::try_new(name.as_ref()).map(Self::Named)
-            }
-            DagSegment::IncludeInstance(id) => Ok(Self::IncludeInstance(*id)),
-        }
-    }
-
-    /// Qualifier segment for a DAG segment below a file root, whose spelled
-    /// segments are inline DAG names or include aliases and therefore valid
-    /// name atoms.
-    #[must_use]
-    pub fn from_nested_dag_segment(segment: &DagSegment) -> Self {
-        match segment {
-            DagSegment::SourceModule(name) | DagSegment::NamedInstance(name) => {
-                Self::Named(ModuleAliasName::expect_valid(name.as_ref()))
-            }
-            DagSegment::IncludeInstance(id) => Self::IncludeInstance(*id),
         }
     }
 
@@ -190,6 +192,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::syntax::names::NameAtomError;
 
     fn module(name: &str) -> ModuleAliasName {
         ModuleAliasName::try_new(name).unwrap()
@@ -258,36 +261,6 @@ mod tests {
         assert_eq!(name.to_string(), "<include@10>::x");
         assert_eq!(name.to_name_path(), None);
         assert_ne!(name, ScopedName::in_scope(spelled, member("x")));
-    }
-
-    #[test]
-    fn scope_segments_map_to_instance_dag_ids() {
-        let owner = DagId::root_in_package("test", "main");
-        let id = IncludeInstanceId::at_source_offset(7);
-
-        assert_eq!(
-            ScopeSegment::Named(module("inst")).instance_of(&owner),
-            owner.named_instance_child("inst")
-        );
-        assert_eq!(
-            ScopeSegment::IncludeInstance(id).instance_of(&owner),
-            owner.include_instance_child(id)
-        );
-        for segment in owner
-            .named_instance_child("inst")
-            .include_instance_child(id)
-            .child("inner")
-            .segments()
-            .iter()
-            .skip(1)
-        {
-            let scope = ScopeSegment::from_nested_dag_segment(segment);
-            assert_eq!(scope.to_string(), segment.to_string());
-            assert_eq!(ScopeSegment::try_from_dag_segment(segment), Ok(scope));
-        }
-        assert!(
-            ScopeSegment::try_from_dag_segment(&DagSegment::SourceModule("a.b".into())).is_err()
-        );
     }
 
     #[test]

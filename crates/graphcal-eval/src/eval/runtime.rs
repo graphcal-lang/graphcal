@@ -50,11 +50,8 @@ fn root_instance_name(
     parent: &graphcal_compiler::dag_id::DagId,
     exposed: &ScopedName,
 ) -> ScopedName {
-    let parent_path = parent
-        .segments()
-        .iter()
-        .skip(root.segments().len())
-        .map(ScopeSegment::from_nested_dag_segment);
+    // A parent outside the root's subtree contributes no qualifier.
+    let parent_path = parent.scopes_below(root).into_iter().flatten();
     ScopedName::from_parts(
         graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
             parent_path
@@ -484,7 +481,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .get(&record.debug_scope)
                 .is_some_and(|count| *count > 1)
             {
-                ScopeSegment::from_nested_dag_segment(record.instance.id.owner().leaf())
+                record.instance.id.scope().clone()
             } else {
                 ScopeSegment::Named(record.debug_scope.clone())
             };

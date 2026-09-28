@@ -18,7 +18,7 @@ use graphcal_compiler::resolved_name::{
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::module_name::{ScopeSegment, ScopedName};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
@@ -66,7 +66,11 @@ pub fn build_for_buffer(
         let _ = resolver.add_module(owner.clone(), declarations);
         for decl in declarations {
             if let DeclKind::Dag(dag) = &decl.kind {
-                add_modules(resolver, &owner.child(dag.name.value.as_str()), &dag.body);
+                add_modules(
+                    resolver,
+                    &owner.inline_dag_child(dag.name.value.clone()),
+                    &dag.body,
+                );
             }
         }
     }
@@ -1297,17 +1301,7 @@ impl SymbolTable {
         if name.owner() == &self.owner {
             return Some(ScopedName::local(member));
         }
-        if !name.owner().is_descendant_of(&self.owner) {
-            return None;
-        }
-        let qualifier = name
-            .owner()
-            .segments()
-            .iter()
-            .skip(self.owner.segments().len())
-            .map(ScopeSegment::try_from_dag_segment)
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?;
+        let qualifier = name.owner().scopes_below(&self.owner)?;
         Some(ScopedName::from_parts(
             graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(qualifier).ok(),
             member,
@@ -1328,10 +1322,7 @@ impl SymbolTable {
                     && owner_segments[owner_segments.len() - qualifier.len()..]
                         .iter()
                         .zip(qualifier)
-                        .all(|(segment, qualifier)| {
-                            ScopeSegment::try_from_dag_segment(segment)
-                                .is_ok_and(|segment| &segment == qualifier)
-                        })
+                        .all(|(segment, qualifier)| segment.scope().as_ref() == Some(qualifier))
             };
             (owner_matches && resolved.as_str() == name.leaf().as_str()).then_some(definition)
         })
@@ -1506,7 +1497,7 @@ fn collect_declarations(
                 collect_declarations(
                     &dag.body,
                     source,
-                    &owner.child(dag.name.value.as_str()),
+                    &owner.inline_dag_child(dag.name.value.clone()),
                     resolver,
                     nominal_types,
                     table,
@@ -2436,9 +2427,8 @@ fn collect_dim_expr_refs_in_scope(
 /// spelled child of another DAG. Root modules and anonymous include instances
 /// have no such declaration.
 fn dag_declaration_name(dag: &DagId) -> Option<ResolvedDeclName> {
-    let parent = dag.parent()?;
-    let name = DeclName::try_new(dag.leaf().spelling()?).ok()?;
-    Some(ResolvedDeclName::from_def(parent, name))
+    let name = dag.leaf().inline_dag()?.clone();
+    Some(ResolvedDeclName::from_def(dag.parent()?, name))
 }
 
 /// Collect references from a syntax-layer unit expression.

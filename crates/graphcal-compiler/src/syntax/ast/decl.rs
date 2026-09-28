@@ -1,6 +1,5 @@
 use graphcal_ast_derive::PhaseLift;
 
-use crate::dag_id::IncludeInstanceId;
 use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportItem, ImportKind, ModulePath, Visibility,
 };
@@ -12,6 +11,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::module_name::IncludeInstanceId;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw};

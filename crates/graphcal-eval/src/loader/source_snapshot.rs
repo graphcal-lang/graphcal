@@ -195,7 +195,7 @@ impl<K> ResolvedFile<K> {
             .inline_path
             .iter()
             .fold(source_file.clone(), |owner, name| {
-                owner.child(name.as_str())
+                owner.inline_dag_child(name.clone())
             });
         ResolvedModuleTarget::in_file(source_file.clone(), target)
     }

@@ -98,6 +98,17 @@ impl ModuleResolver {
         if self.modules.contains_key(&owner) {
             return Err(ModuleResolveError::DuplicateModule { owner });
         }
+        if let Some(spelling) = owner.module_path_spelling()
+            && let Some(first) = self.modules.keys().find(|existing| {
+                existing.package() == owner.package()
+                    && existing.module_path_spelling().as_ref() == Some(&spelling)
+            })
+        {
+            return Err(ModuleResolveError::AmbiguousModulePath {
+                first: first.clone(),
+                second: owner,
+            });
+        }
         let symbols = ModuleSymbols::from_declarations(owner.clone(), declarations)?;
         let scope = self.scopes.entry(owner.clone()).or_default();
         declare_aliases(scope, &symbols, declarations)?;
