@@ -109,7 +109,25 @@ fn validate_direct_dag_calls(
                     visit(tolerance)?;
                 }
             },
-            _ => {}
+            // Direct DAG calls are validated in value and assertion bodies
+            // only; nested DAG bodies are validated as their own modules.
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_) => {}
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(sugar) => graphcal_compiler::syntax::phase::never(*sugar),
         }
     }
     Ok(())
@@ -1778,12 +1796,22 @@ fn effective_index_binding_contract(
         IndexKind::Required(RequiredIndexKind::Coordinate { .. }) => {
             let dimension_expr = dep_declarations
                 .iter()
-                .find_map(|declaration| match &declaration.kind {
-                    DeclKind::Index(index) if index.name.value == *dep_index => match &index.kind {
-                        IndexDeclKind::RequiredCoordinate { dimension } => Some(dimension.clone()),
-                        _ => None,
-                    },
-                    _ => None,
+                .find_map(|declaration| {
+                    let DeclKind::Index(index) = &declaration.kind else {
+                        return None;
+                    };
+                    match &index.kind {
+                        IndexDeclKind::RequiredCoordinate { dimension }
+                            if index.name.value == *dep_index =>
+                        {
+                            Some(dimension.clone())
+                        }
+                        IndexDeclKind::RequiredCoordinate { .. }
+                        | IndexDeclKind::RequiredNamed
+                        | IndexDeclKind::Named { .. }
+                        | IndexDeclKind::Range { .. }
+                        | IndexDeclKind::Linspace { .. } => None,
+                    }
                 })
                 .ok_or_else(|| {
                     CompileError::Eval(GraphcalError::InternalError {

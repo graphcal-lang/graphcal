@@ -722,6 +722,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "ast", "introduced_name"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "ast", "introduced_name", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "ast", "format_equivalent"]
 role = "contracts"
 

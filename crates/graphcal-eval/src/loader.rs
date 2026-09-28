@@ -1686,7 +1686,28 @@ fn register_module_imports(
                     include,
                 )?;
             }
-            _ => {}
+            // Only use-site edges register module scope; declarations bind
+            // names through their own module's symbol tables, and plugin
+            // imports are resolved by the plugin host.
+            DeclKind::Param(_)
+            | DeclKind::Node(_)
+            | DeclKind::ConstNode(_)
+            | DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Dag(_)
+            | DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_) => {}
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(sugar) => graphcal_compiler::syntax::phase::never(*sugar),
         }
     }
     Ok(())

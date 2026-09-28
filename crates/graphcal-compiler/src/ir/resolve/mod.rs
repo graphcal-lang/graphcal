@@ -27,6 +27,7 @@ use crate::registry::resolve_types::{
     CollectedLayerEntry, CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry,
     ExternalDeclSurface,
 };
+use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
@@ -79,134 +80,27 @@ fn register_exclusive_universe_name(
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the namespace policy exhaustively classifies every declaration role"
-)]
+/// Reject every introduced name (declarations and `type` constructors) that
+/// shadows a built-in spelling reserved in its namespace.
 fn check_builtin_name_shadowing(
     file: &File,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for decl in &file.declarations {
-        let introduced = match &decl.kind {
-            DeclKind::BaseDimension(d) => Some((
-                ReservedNameNamespace::Static,
-                "dimension",
-                d.name.value.atom(),
-                d.name.span,
-            )),
-            DeclKind::Dimension(d) => Some((
-                ReservedNameNamespace::Static,
-                "dimension",
-                d.name.value.atom(),
-                d.name.span,
-            )),
-            DeclKind::Type(t) => Some((
-                ReservedNameNamespace::Static,
-                "type",
-                t.name.value.atom(),
-                t.name.span,
-            )),
-            DeclKind::Index(i) => Some((
-                ReservedNameNamespace::Static,
-                "index",
-                i.name.value.atom(),
-                i.name.span,
-            )),
-            DeclKind::Unit(u) => Some((
-                ReservedNameNamespace::Unit,
-                "unit",
-                u.name.value.atom(),
-                u.name.span,
-            )),
-            DeclKind::Param(p) => Some((
-                ReservedNameNamespace::Term,
-                "param",
-                p.name.value.atom(),
-                p.name.span,
-            )),
-            DeclKind::Node(n) => Some((
-                ReservedNameNamespace::Term,
-                "node",
-                n.name.value.atom(),
-                n.name.span,
-            )),
-            DeclKind::ConstNode(c) => Some((
-                ReservedNameNamespace::Term,
-                "const node",
-                c.name.value.atom(),
-                c.name.span,
-            )),
-            DeclKind::Assert(a) => Some((
-                ReservedNameNamespace::Term,
-                "assert",
-                a.name.value.atom(),
-                a.name.span,
-            )),
-            DeclKind::Plot(p) => Some((
-                ReservedNameNamespace::Term,
-                "plot",
-                p.name.value.atom(),
-                p.name.span,
-            )),
-            DeclKind::Figure(f) => Some((
-                ReservedNameNamespace::Term,
-                "figure",
-                f.name.value.atom(),
-                f.name.span,
-            )),
-            DeclKind::Layer(l) => Some((
-                ReservedNameNamespace::Term,
-                "layer",
-                l.name.value.atom(),
-                l.name.span,
-            )),
-            DeclKind::Dag(d) => Some((
-                ReservedNameNamespace::Term,
-                "dag",
-                d.name.value.atom(),
-                d.name.span,
-            )),
-            DeclKind::Import(_) | DeclKind::PluginImport(_) | DeclKind::Include(_) => None,
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
-        };
-
-        if let Some((namespace, kind, name, span)) = introduced
-            && validate_reserved_name(namespace, name).is_err()
-        {
-            return Err(GraphcalError::BuiltinNameShadowed {
-                kind,
-                name: name.to_string(),
+    file.declarations
+        .iter()
+        .flat_map(|decl| decl.kind.introduced_names())
+        .try_for_each(|introduced| {
+            validate_reserved_name(
+                ReservedNameNamespace::of(introduced.namespace()),
+                introduced.atom(),
+            )
+            .map_err(|_| GraphcalError::BuiltinNameShadowed {
+                kind: introduced.kind().describe(),
+                name: introduced.atom().to_string(),
                 src: src.clone(),
-                span: span.into(),
-            });
-        }
-        if let DeclKind::Type(type_decl) = &decl.kind
-            && let TypeDeclBody::Constructors(constructors) = &type_decl.body
-        {
-            for constructor in constructors {
-                if validate_reserved_name(
-                    ReservedNameNamespace::Term,
-                    constructor.name.value.atom(),
-                )
-                .is_err()
-                {
-                    return Err(GraphcalError::BuiltinNameShadowed {
-                        kind: "constructor",
-                        name: constructor.name.value.to_string(),
-                        src: src.clone(),
-                        span: constructor.name.span.into(),
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(())
+                span: introduced.span().into(),
+            })
+        })
 }
 
 fn check_imported_graph_value_names(
@@ -232,131 +126,41 @@ fn check_imported_graph_value_names(
         })
 }
 
+/// Dimensions, types, and indexes share one exclusive Static universe.
 fn check_static_namespace_collisions(
     file: &File,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut occupied = HashMap::new();
-    for (atom, span) in file
+    for introduced in file
         .declarations
         .iter()
-        .filter_map(|decl| static_namespace_decl(&decl.kind))
+        .filter_map(|decl| decl.kind.declared_name())
+        .filter(|introduced| {
+            ReservedNameNamespace::of(introduced.namespace()) == ReservedNameNamespace::Static
+        })
     {
-        register_exclusive_universe_name(&mut occupied, atom, span, src)?;
+        register_exclusive_universe_name(&mut occupied, introduced.atom(), introduced.span(), src)?;
     }
     Ok(())
 }
 
-const fn static_namespace_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
-    match decl {
-        DeclKind::BaseDimension(d) => Some((d.name.value.atom(), d.name.span)),
-        DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
-        DeclKind::Type(t) => Some((t.name.value.atom(), t.name.span)),
-        DeclKind::Index(i) => Some((i.name.value.atom(), i.name.span)),
-        DeclKind::Param(_)
-        | DeclKind::Node(_)
-        | DeclKind::ConstNode(_)
-        | DeclKind::Assert(_)
-        | DeclKind::Plot(_)
-        | DeclKind::Figure(_)
-        | DeclKind::Layer(_)
-        | DeclKind::Dag(_)
-        | DeclKind::Unit(_)
-        | DeclKind::Import(_)
-        | DeclKind::PluginImport(_)
-        | DeclKind::Include(_) => None,
-        #[expect(
-            clippy::uninhabited_references,
-            reason = "Sugar(Infallible) proves this arm unreachable"
-        )]
-        DeclKind::Sugar(s) => never(*s),
-    }
-}
-
+/// Term-namespace names (value declarations, DAGs, and constructors) must be
+/// unique among themselves and against imported value names.
 fn check_value_namespace_collisions(
     file: &File,
     src: &NamedSource<Arc<String>>,
     names: &HashMap<ScopedName, Span>,
 ) -> Result<(), GraphcalError> {
     let mut value_names: HashMap<ScopedName, Span> = names.clone();
-
-    for decl in &file.declarations {
-        match &decl.kind {
-            DeclKind::Param(p) => register_value_namespace_name(
-                &mut value_names,
-                p.name.value.atom(),
-                p.name.span,
-                src,
-            )?,
-            DeclKind::Node(n) => register_value_namespace_name(
-                &mut value_names,
-                n.name.value.atom(),
-                n.name.span,
-                src,
-            )?,
-            DeclKind::ConstNode(c) => register_value_namespace_name(
-                &mut value_names,
-                c.name.value.atom(),
-                c.name.span,
-                src,
-            )?,
-            DeclKind::Assert(a) => register_value_namespace_name(
-                &mut value_names,
-                a.name.value.atom(),
-                a.name.span,
-                src,
-            )?,
-            DeclKind::Plot(p) => register_value_namespace_name(
-                &mut value_names,
-                p.name.value.atom(),
-                p.name.span,
-                src,
-            )?,
-            DeclKind::Figure(f) => register_value_namespace_name(
-                &mut value_names,
-                f.name.value.atom(),
-                f.name.span,
-                src,
-            )?,
-            DeclKind::Layer(l) => register_value_namespace_name(
-                &mut value_names,
-                l.name.value.atom(),
-                l.name.span,
-                src,
-            )?,
-            DeclKind::Dag(d) => register_value_namespace_name(
-                &mut value_names,
-                d.name.value.atom(),
-                d.name.span,
-                src,
-            )?,
-            DeclKind::Type(t) => {
-                if let TypeDeclBody::Constructors(members) = &t.body {
-                    for member in members {
-                        register_value_namespace_name(
-                            &mut value_names,
-                            member.name.value.atom(),
-                            member.name.span,
-                            src,
-                        )?;
-                    }
-                }
-            }
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Index(_)
-            | DeclKind::Import(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Include(_) => {}
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
-        }
+    for introduced in file
+        .declarations
+        .iter()
+        .flat_map(|decl| decl.kind.introduced_names())
+        .filter(|introduced| introduced.namespace() == ImportItemNamespace::Term)
+    {
+        register_value_namespace_name(&mut value_names, introduced.atom(), introduced.span(), src)?;
     }
-
     Ok(())
 }
 
@@ -377,7 +181,7 @@ struct CollectedDeclarations {
 /// Project one desugared declaration onto the small semantic state used by
 /// V002. Declarations that cannot be required or externally supplied are
 /// outside this rule's domain.
-fn required_bindability_interface(decl: &DeclKind) -> Option<(InterfaceDecl, &str, Span)> {
+fn required_bindability_interface(decl: &DeclKind) -> Option<InterfaceDecl> {
     let requirement_from_missing_definition = |missing| {
         if missing {
             Requirement::Required
@@ -387,44 +191,46 @@ fn required_bindability_interface(decl: &DeclKind) -> Option<(InterfaceDecl, &st
     };
 
     match decl {
-        DeclKind::Param(param) => Some((
-            InterfaceDecl::InputPort {
-                requirement: requirement_from_missing_definition(param.value.is_none()),
-            },
-            param.name.value.as_str(),
-            param.name.span,
-        )),
-        DeclKind::Index(index) => Some((
-            InterfaceDecl::Nominal {
-                kind: NominalKind::Index,
-                visibility: index.visibility,
-                requirement: requirement_from_missing_definition(index.kind.is_required()),
-            },
-            index.name.value.as_str(),
-            index.name.span,
-        )),
-        DeclKind::Type(type_decl) => Some((
-            InterfaceDecl::Nominal {
-                kind: NominalKind::Type,
-                visibility: type_decl.visibility,
-                requirement: requirement_from_missing_definition(matches!(
-                    type_decl.body,
-                    TypeDeclBody::Required
-                )),
-            },
-            type_decl.name.value.as_str(),
-            type_decl.name.span,
-        )),
-        DeclKind::Dimension(dimension) => Some((
-            InterfaceDecl::Nominal {
-                kind: NominalKind::Dimension,
-                visibility: dimension.visibility,
-                requirement: requirement_from_missing_definition(dimension.definition.is_none()),
-            },
-            dimension.name.value.as_str(),
-            dimension.name.span,
-        )),
-        _ => None,
+        DeclKind::Param(param) => Some(InterfaceDecl::InputPort {
+            requirement: requirement_from_missing_definition(param.value.is_none()),
+        }),
+        DeclKind::Index(index) => Some(InterfaceDecl::Nominal {
+            kind: NominalKind::Index,
+            visibility: index.visibility,
+            requirement: requirement_from_missing_definition(index.kind.is_required()),
+        }),
+        DeclKind::Type(type_decl) => Some(InterfaceDecl::Nominal {
+            kind: NominalKind::Type,
+            visibility: type_decl.visibility,
+            requirement: requirement_from_missing_definition(matches!(
+                type_decl.body,
+                TypeDeclBody::Required
+            )),
+        }),
+        DeclKind::Dimension(dimension) => Some(InterfaceDecl::Nominal {
+            kind: NominalKind::Dimension,
+            visibility: dimension.visibility,
+            requirement: requirement_from_missing_definition(dimension.definition.is_none()),
+        }),
+        // Base dimensions and units always carry a definition; the remaining
+        // kinds are not externally suppliable interface declarations.
+        DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::BaseDimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Import(_)
+        | DeclKind::PluginImport(_)
+        | DeclKind::Include(_)
+        | DeclKind::Dag(_)
+        | DeclKind::Assert(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_) => None,
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
     }
 }
 
@@ -436,19 +242,45 @@ fn validate_required_bindability(
 ) -> Result<(), GraphcalError> {
     file.declarations
         .iter()
-        .filter_map(|decl| required_bindability_interface(&decl.kind))
-        .try_for_each(|(interface, name, span)| {
+        .filter_map(|decl| {
+            Some((
+                required_bindability_interface(&decl.kind)?,
+                decl.kind.declared_name()?,
+            ))
+        })
+        .try_for_each(|(interface, introduced)| {
             required_bindability::validate(interface).map_err(|violation| match violation {
                 RequiredBindabilityViolation::RequiredMustBeBindable { kind } => {
                     GraphcalError::RequiredItemMustBeBindable {
                         kind: kind.to_string(),
-                        name: name.to_string(),
+                        name: introduced.atom().to_string(),
                         src: src.clone(),
-                        span: span.into(),
+                        span: introduced.span().into(),
                     }
                 }
             })
         })
+}
+
+/// Evaluation source-order category of a declaration's own name, or `None`
+/// for declarations outside the evaluated value/sink order.
+const fn source_order_category(kind: IntroducedKind) -> Option<DeclCategory> {
+    match kind {
+        IntroducedKind::Param => Some(DeclCategory::Value(ValueDeclCategory::Param)),
+        IntroducedKind::ConstNode => Some(DeclCategory::Value(ValueDeclCategory::Const)),
+        IntroducedKind::Node => Some(DeclCategory::Value(ValueDeclCategory::Node)),
+        IntroducedKind::Assert => Some(DeclCategory::Assert),
+        IntroducedKind::Plot => Some(DeclCategory::Plot),
+        IntroducedKind::Figure => Some(DeclCategory::Figure),
+        IntroducedKind::Layer => Some(DeclCategory::Layer),
+        IntroducedKind::Dag
+        | IntroducedKind::Constructor
+        | IntroducedKind::BaseDimension
+        | IntroducedKind::Dimension
+        | IntroducedKind::Unit
+        | IntroducedKind::Type
+        | IntroducedKind::Index => None,
+    }
 }
 
 /// Collect all local declarations and check for duplicates.
@@ -481,137 +313,32 @@ fn collect_local_declarations(
     // input ports as ordinary exports. Explicit `pub`/`pub(bind)` declarations
     // are exports; the `param` kind itself declares a named input port.
     let mut external_surface = ExternalDeclSurface::default();
-    for decl in &file.declarations {
-        let Some((name, _)) = decl.kind.name_and_span() else {
-            continue;
-        };
-        let name = DeclName::expect_valid(name);
-        match &decl.kind {
-            DeclKind::Param(_) => {
-                external_surface.insert_input_port(name);
-            }
-            DeclKind::Node(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::ConstNode(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::BaseDimension(d) if d.visibility.is_public() => {
-                external_surface.insert_static_export(name.into_atom());
-            }
-            DeclKind::Dimension(d) if d.visibility.is_public() => {
-                external_surface.insert_static_export(name.into_atom());
-            }
-            DeclKind::Unit(d) if d.visibility.is_public() => {
-                external_surface.insert_unit_export(name.into_atom());
-            }
-            DeclKind::Type(d) if d.visibility.is_public() => {
-                external_surface.insert_static_export(name.into_atom());
-            }
-            DeclKind::Index(d) if d.visibility.is_public() => {
-                external_surface.insert_static_export(name.into_atom());
-            }
-            DeclKind::Dag(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Assert(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Plot(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Figure(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Layer(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Node(_)
-            | DeclKind::ConstNode(_)
-            | DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Index(_)
-            | DeclKind::Import(_)
-            | DeclKind::Include(_)
-            | DeclKind::Dag(_)
-            | DeclKind::Assert(_)
-            | DeclKind::Plot(_)
-            | DeclKind::Figure(_)
-            | DeclKind::Layer(_)
-            | DeclKind::PluginImport(_) => {}
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
-        }
+    for introduced in file
+        .declarations
+        .iter()
+        .filter_map(|decl| decl.kind.declared_name())
+    {
+        external_surface.record_declared(introduced);
     }
 
     validate_required_bindability(file, src)?;
 
-    // First pass: collect all declarations and check for duplicates
-    for decl in &file.declarations {
-        // Dimension and Unit declarations are handled by the registry, not the resolver
-        let (name, name_span) = match &decl.kind {
-            DeclKind::Param(p) => (p.name.value.clone(), p.name.span),
-            DeclKind::Node(n) => (n.name.value.clone(), n.name.span),
-            DeclKind::ConstNode(c) => (c.name.value.clone(), c.name.span),
-            DeclKind::Assert(a) => (a.name.value.clone(), a.name.span),
-            DeclKind::Plot(p) => (p.name.value.clone(), p.name.span),
-            DeclKind::Figure(f) => (f.name.value.clone(), f.name.span),
-            DeclKind::Layer(l) => (l.name.value.clone(), l.name.span),
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Index(_)
-            | DeclKind::Import(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Include(_)
-            | DeclKind::Dag(_) => {
-                continue;
-            }
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
+    // First pass: record evaluated declarations in source order. Static
+    // declarations, units, and DAGs are handled by the registry and module
+    // resolver, not by this value scope.
+    for introduced in file
+        .declarations
+        .iter()
+        .filter_map(|decl| decl.kind.declared_name())
+    {
+        let Some(category) = source_order_category(introduced.kind()) else {
+            continue;
         };
-
-        names.insert(ScopedName::local(name.clone()), name_span);
-
-        // Track source order and assert names
-        let category = match &decl.kind {
-            DeclKind::Param(_) => DeclCategory::Value(ValueDeclCategory::Param),
-            DeclKind::ConstNode(_) => DeclCategory::Value(ValueDeclCategory::Const),
-            DeclKind::Node(_) => DeclCategory::Value(ValueDeclCategory::Node),
-            DeclKind::Assert(_) => {
-                assert_names.insert(name.clone());
-                DeclCategory::Assert
-            }
-            DeclKind::Plot(_) => DeclCategory::Plot,
-            DeclKind::Figure(_) => DeclCategory::Figure,
-            DeclKind::Layer(_) => DeclCategory::Layer,
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Index(_)
-            | DeclKind::Import(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Include(_)
-            | DeclKind::Dag(_) => {
-                // These declarations are handled earlier (continue'd before reaching here).
-                continue;
-            }
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
-        };
+        let name = DeclName::classify(introduced.atom().clone());
+        names.insert(ScopedName::local(name.clone()), introduced.span());
+        if category == DeclCategory::Assert {
+            assert_names.insert(name.clone());
+        }
         source_order.push((name, category));
     }
 
@@ -718,15 +445,13 @@ fn validate_attributes(
     let mut hidden_plots: HashSet<DeclName> = HashSet::new();
 
     for decl in &file.declarations {
-        let decl_name: Option<DeclName> = match &decl.kind {
-            DeclKind::Param(p) => Some(p.name.value.clone()),
-            DeclKind::Node(n) => Some(n.name.value.clone()),
-            DeclKind::ConstNode(c) => Some(c.name.value.clone()),
-            DeclKind::Assert(a) => Some(a.name.value.clone()),
-            DeclKind::Plot(p) => Some(p.name.value.clone()),
-            DeclKind::Figure(f) => Some(f.name.value.clone()),
-            _ => None,
-        };
+        // Attribute applicability limits name-bearing attributes to
+        // param/node (`assumes`), assert (`expected_fail`), and plot
+        // (`hidden`) targets, all of which declare a Term name.
+        let decl_name: Option<DeclName> = decl
+            .kind
+            .declared_name()
+            .map(|introduced| DeclName::classify(introduced.atom().clone()));
         let declaration_kind = DeclarationKind::from_decl_kind(&decl.kind);
         let target = AttributeTarget::declaration(declaration_kind);
         let attributes = attribute_validation::validate_attributes(&decl.attributes, &target)
@@ -818,31 +543,6 @@ fn validate_attributes(
     })
 }
 
-#[derive(Debug, Clone)]
-enum LocalTypeSystemDeclaration {
-    Dimension(crate::syntax::dimension::DimName),
-    Index(crate::syntax::index_name::IndexName),
-    Type(crate::syntax::type_name::StructTypeName),
-}
-
-impl LocalTypeSystemDeclaration {
-    const fn kind(&self) -> DeclarationKind {
-        match self {
-            Self::Dimension(_) => DeclarationKind::Dimension,
-            Self::Index(_) => DeclarationKind::Index,
-            Self::Type(_) => DeclarationKind::Type,
-        }
-    }
-
-    const fn atom(&self) -> &NameAtom {
-        match self {
-            Self::Dimension(name) => name.atom(),
-            Self::Index(name) => name.atom(),
-            Self::Type(name) => name.atom(),
-        }
-    }
-}
-
 /// Validate that every external signature names only exported type-system
 /// symbols (V003 / A9 case 1).
 ///
@@ -853,10 +553,6 @@ impl LocalTypeSystemDeclaration {
 /// Built-in type-system items (prelude dimensions like `Length`, and
 /// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
 /// always considered visible.
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive declaration-kind validation is clearer in one pass"
-)]
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -864,32 +560,22 @@ fn validate_private_in_public(
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::IndexDeclKind;
 
-    // Preserve the semantic category beside each typed local name so the
-    // visibility diagnostic never has to rescan declarations by string.
-    let mut local_type_names: HashMap<NameAtom, (LocalTypeSystemDeclaration, Span)> =
-        HashMap::new();
-    for decl in &file.declarations {
-        let (name, span) = match &decl.kind {
-            DeclKind::BaseDimension(d) => (
-                LocalTypeSystemDeclaration::Dimension(d.name.value.clone()),
-                d.name.span,
-            ),
-            DeclKind::Dimension(d) => (
-                LocalTypeSystemDeclaration::Dimension(d.name.value.clone()),
-                d.name.span,
-            ),
-            DeclKind::Index(index) => (
-                LocalTypeSystemDeclaration::Index(index.name.value.clone()),
-                index.name.span,
-            ),
-            DeclKind::Type(r#type) => (
-                LocalTypeSystemDeclaration::Type(r#type.name.value.clone()),
-                r#type.name.span,
-            ),
-            _ => continue,
-        };
-        local_type_names.insert(name.atom().clone(), (name, span));
-    }
+    // Preserve the semantic category beside each local type-system name so
+    // the visibility diagnostic never has to rescan declarations.
+    let local_type_names: HashMap<&NameAtom, DeclarationKind> = file
+        .declarations
+        .iter()
+        .filter_map(|decl| {
+            let introduced = decl.kind.declared_name()?;
+            (ReservedNameNamespace::of(introduced.namespace()) == ReservedNameNamespace::Static)
+                .then(|| {
+                    (
+                        introduced.atom(),
+                        DeclarationKind::from_decl_kind(&decl.kind),
+                    )
+                })
+        })
+        .collect();
 
     // If there are no local type-system names, nothing to check.
     if local_type_names.is_empty() {
@@ -907,15 +593,14 @@ fn validate_private_in_public(
             let Some(ref_name) = ref_path.as_bare() else {
                 continue;
             };
-            let ref_decl_name = DeclName::classify(ref_name.clone());
-            if let Some((referenced, _)) = local_type_names.get(ref_name)
-                && !external_surface.is_static_explicit_export(ref_decl_name.atom())
+            if let Some(ref_kind) = local_type_names.get(ref_name)
+                && !external_surface.is_static_explicit_export(ref_name)
             {
                 return Err(GraphcalError::PrivateInPublic {
                     pub_kind,
                     pub_name,
-                    ref_kind: referenced.kind(),
-                    ref_name: referenced.atom().clone(),
+                    ref_kind: *ref_kind,
+                    ref_name: ref_name.clone(),
                     src: src.clone(),
                     ref_span: (*ref_span).into(),
                     pub_span: pub_span.into(),
@@ -927,58 +612,27 @@ fn validate_private_in_public(
 
     for decl in &file.declarations {
         // Every `param` signature is an external input-port signature; other
-        // kinds participate only when explicitly exported with `pub` / `pub(bind)`.
-        let has_external_signature = match &decl.kind {
-            DeclKind::Param(_) => true,
-            DeclKind::Node(d) => d.visibility.is_public(),
-            DeclKind::ConstNode(d) => d.visibility.is_public(),
-            DeclKind::BaseDimension(d) => d.visibility.is_public(),
-            DeclKind::Dimension(d) => d.visibility.is_public(),
-            DeclKind::Unit(d) => d.visibility.is_public(),
-            DeclKind::Type(d) => d.visibility.is_public(),
-            DeclKind::Index(d) => d.visibility.is_public(),
-            DeclKind::Dag(d) => d.visibility.is_public(),
-            DeclKind::Assert(d) => d.visibility.is_public(),
-            DeclKind::Plot(d) => d.visibility.is_public(),
-            DeclKind::Figure(d) => d.visibility.is_public(),
-            DeclKind::Layer(d) => d.visibility.is_public(),
-            // Use-sites carry no blanket visibility; plugin functions are only
-            // callable through their own alias.
-            DeclKind::Import(_) | DeclKind::Include(_) | DeclKind::PluginImport(_) => false,
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
+        // kinds participate only when explicitly exported with `pub` /
+        // `pub(bind)`. Use-sites (`import`, `include`, `import plugin`) bind
+        // no declaration name and carry no blanket visibility.
+        let Some(introduced) = decl.kind.declared_name() else {
+            continue;
         };
-        if !has_external_signature {
+        if introduced.exposure() == DeclExposure::Private {
             continue;
         }
 
         let mut refs: Vec<(crate::syntax::names::NamePath, Span)> = Vec::new();
-        let (kind, name): (DeclarationKind, NameAtom) = match &decl.kind {
-            DeclKind::Param(p) => {
-                collect_type_refs(&p.type_ann, &mut refs);
-                (DeclarationKind::Param, p.name.value.atom().clone())
-            }
-            DeclKind::Node(n) => {
-                collect_type_refs(&n.type_ann, &mut refs);
-                (DeclarationKind::Node, n.name.value.atom().clone())
-            }
-            DeclKind::ConstNode(c) => {
-                collect_type_refs(&c.type_ann, &mut refs);
-                (DeclarationKind::ConstNode, c.name.value.atom().clone())
-            }
+        match &decl.kind {
+            DeclKind::Param(p) => collect_type_refs(&p.type_ann, &mut refs),
+            DeclKind::Node(n) => collect_type_refs(&n.type_ann, &mut refs),
+            DeclKind::ConstNode(c) => collect_type_refs(&c.type_ann, &mut refs),
             DeclKind::Dimension(d) => {
                 if let Some(def) = &d.definition {
                     collect_dim_refs(def, &mut refs);
                 }
-                (DeclarationKind::Dimension, d.name.value.atom().clone())
             }
-            DeclKind::Unit(u) => {
-                collect_dim_refs(&u.dim_type, &mut refs);
-                (DeclarationKind::Unit, u.name.value.atom().clone())
-            }
+            DeclKind::Unit(u) => collect_dim_refs(&u.dim_type, &mut refs),
             DeclKind::Type(t) => {
                 // Each constructor payload field type is part of the
                 // type's signature for A9 dependency tracking.
@@ -991,21 +645,37 @@ fn validate_private_in_public(
                         }
                     }
                 }
-                (DeclarationKind::Type, t.name.value.atom().clone())
             }
             DeclKind::Index(index) => {
                 if let IndexDeclKind::RequiredCoordinate { dimension } = &index.kind {
                     collect_dim_refs(dimension, &mut refs);
                 }
-                (DeclarationKind::Index, index.name.value.atom().clone())
             }
             // Sink kinds have no written signature; bodies are not A9 case 1.
             // BaseDimension has no body. Import/Include are use-sites. Dag is
             // a use-site at the signature level.
-            _ => continue,
-        };
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dag(_)
+            | DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_)
+            | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Include(_) => continue,
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(s) => never(*s),
+        }
 
-        emit(kind, name, decl.span, &refs)?;
+        emit(
+            DeclarationKind::from_decl_kind(&decl.kind),
+            introduced.atom().clone(),
+            decl.span,
+            &refs,
+        )?;
     }
     Ok(())
 }

@@ -6,7 +6,6 @@
     reason = "leakage checks consume project compiler model types"
 )]
 use super::*;
-use graphcal_compiler::desugar::desugared_ast::DeclKind;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::static_dependencies::{
@@ -14,6 +13,7 @@ use graphcal_compiler::ir::static_dependencies::{
 };
 use graphcal_compiler::ir::static_interface::{StaticInputKind, StaticRole, static_interface};
 use graphcal_compiler::registry::types::IndexBindingTarget;
+use graphcal_compiler::syntax::ast::IntroducedKind;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
 use graphcal_compiler::syntax::names::NameAtom;
 
@@ -26,27 +26,9 @@ pub(super) fn collect_local_type_names(
 ) -> HashMap<NameAtom, ImportItemNamespace> {
     file.declarations
         .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::BaseDimension(dimension) => Some((
-                dimension.name.value.atom().clone(),
-                ImportItemNamespace::Dimension,
-            )),
-            DeclKind::Dimension(dimension) => Some((
-                dimension.name.value.atom().clone(),
-                ImportItemNamespace::Dimension,
-            )),
-            DeclKind::Unit(unit) => {
-                Some((unit.name.value.atom().clone(), ImportItemNamespace::Unit))
-            }
-            DeclKind::Index(index) => {
-                Some((index.name.value.atom().clone(), ImportItemNamespace::Index))
-            }
-            DeclKind::Type(type_decl) => Some((
-                type_decl.name.value.atom().clone(),
-                ImportItemNamespace::Type,
-            )),
-            _ => None,
-        })
+        .filter_map(|declaration| declaration.kind.declared_name())
+        .filter(|introduced| introduced.namespace() != ImportItemNamespace::Term)
+        .map(|introduced| (introduced.atom().clone(), introduced.namespace()))
         .collect()
 }
 
@@ -55,24 +37,12 @@ fn collect_required_binding_names(
 ) -> HashMap<NameAtom, ImportItemNamespace> {
     declarations
         .iter()
-        .filter_map(|declaration| {
-            let interface = static_interface(&declaration.kind)?;
-            if interface.role() != StaticRole::RequiredInput {
-                return None;
-            }
-            let name = match &declaration.kind {
-                DeclKind::Dimension(dimension) => dimension.name.value.atom().clone(),
-                DeclKind::Type(type_decl) => type_decl.name.value.atom().clone(),
-                DeclKind::Index(index) => index.name.value.atom().clone(),
-                _ => return None,
-            };
-            let namespace = match interface.kind() {
-                StaticInputKind::Type => ImportItemNamespace::Type,
-                StaticInputKind::Dimension => ImportItemNamespace::Dimension,
-                StaticInputKind::Index => ImportItemNamespace::Index,
-            };
-            Some((name, namespace))
+        .filter(|declaration| {
+            static_interface(&declaration.kind)
+                .is_some_and(|interface| interface.role() == StaticRole::RequiredInput)
         })
+        .filter_map(|declaration| declaration.kind.declared_name())
+        .map(|introduced| (introduced.atom().clone(), introduced.namespace()))
         .collect()
 }
 
@@ -151,19 +121,24 @@ const fn namespace_diagnostic_name(namespace: ImportItemNamespace) -> &'static s
     }
 }
 
-/// The namespace-agnostic surface atom an include brace item (`{ pub name }`)
-/// can select, plus the declaration kind for diagnostics.
-const fn reexported_declaration_identity(kind: &DeclKind) -> Option<(&NameAtom, &'static str)> {
+/// Diagnostic noun for a declaration an include brace item (`{ pub name }`)
+/// can re-export with a checked signature, or `None` for declarations whose
+/// signature is outside the V006 check.
+const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<&'static str> {
     match kind {
-        DeclKind::Param(param) => Some((param.name.value.atom(), "param")),
-        DeclKind::Node(node) => Some((node.name.value.atom(), "node")),
-        DeclKind::ConstNode(constant) => Some((constant.name.value.atom(), "const node")),
-        DeclKind::BaseDimension(dimension) => Some((dimension.name.value.atom(), "dim")),
-        DeclKind::Dimension(dimension) => Some((dimension.name.value.atom(), "dim")),
-        DeclKind::Unit(unit) => Some((unit.name.value.atom(), "unit")),
-        DeclKind::Index(index) => Some((index.name.value.atom(), "index")),
-        DeclKind::Type(type_decl) => Some((type_decl.name.value.atom(), "type")),
-        _ => None,
+        IntroducedKind::Param => Some("param"),
+        IntroducedKind::Node => Some("node"),
+        IntroducedKind::ConstNode => Some("const node"),
+        IntroducedKind::BaseDimension | IntroducedKind::Dimension => Some("dim"),
+        IntroducedKind::Unit => Some("unit"),
+        IntroducedKind::Index => Some("index"),
+        IntroducedKind::Type => Some("type"),
+        IntroducedKind::Assert
+        | IntroducedKind::Plot
+        | IntroducedKind::Figure
+        | IntroducedKind::Layer
+        | IntroducedKind::Dag
+        | IntroducedKind::Constructor => None,
     }
 }
 
@@ -197,9 +172,13 @@ pub(super) fn check_generics_leakage(
 
     for decl in dep_declarations {
         // Is this decl part of the importer's re-exported surface?
-        let Some((decl_name, decl_kind_str)) = reexported_declaration_identity(&decl.kind) else {
+        let Some(introduced) = decl.kind.declared_name() else {
             continue;
         };
+        let Some(decl_kind_str) = reexported_declaration_kind(introduced.kind()) else {
+            continue;
+        };
+        let decl_name = introduced.atom();
         if !pub_reexport_items.contains(decl_name) {
             continue;
         }

@@ -10,6 +10,7 @@ use crate::builtin::{BuiltinConst, BuiltinFn};
 use crate::registry::prelude::{prelude_dimension_names, prelude_unit_names};
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::builtin_type_name::BuiltinTypeName;
+use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
 
 /// Semantic namespace into which a source-visible local name is introduced.
@@ -18,6 +19,21 @@ pub enum ReservedNameNamespace {
     Static,
     Term,
     Unit,
+}
+
+impl ReservedNameNamespace {
+    /// Reserved-name policy governing names introduced into `namespace`:
+    /// the type, dimension, and index namespaces share the Static policy.
+    #[must_use]
+    pub const fn of(namespace: ImportItemNamespace) -> Self {
+        match namespace {
+            ImportItemNamespace::Term => Self::Term,
+            ImportItemNamespace::Unit => Self::Unit,
+            ImportItemNamespace::Type
+            | ImportItemNamespace::Dimension
+            | ImportItemNamespace::Index => Self::Static,
+        }
+    }
 }
 
 impl std::fmt::Display for ReservedNameNamespace {
@@ -122,6 +138,27 @@ pub fn validate_reserved_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_namespaces_select_their_reserved_policy() {
+        let cases = [
+            (ImportItemNamespace::Term, ReservedNameNamespace::Term),
+            (ImportItemNamespace::Unit, ReservedNameNamespace::Unit),
+            (ImportItemNamespace::Type, ReservedNameNamespace::Static),
+            (
+                ImportItemNamespace::Dimension,
+                ReservedNameNamespace::Static,
+            ),
+            (ImportItemNamespace::Index, ReservedNameNamespace::Static),
+        ];
+        for (namespace, policy) in cases {
+            assert_eq!(
+                ReservedNameNamespace::of(namespace),
+                policy,
+                "{namespace:?}"
+            );
+        }
+    }
 
     #[test]
     fn each_namespace_rejects_its_complete_reserved_vocabulary() {

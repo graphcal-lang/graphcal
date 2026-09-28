@@ -13,8 +13,9 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::dimension::Rational;
 use graphcal_compiler::hir;
-use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::module_resolve::ModuleResolver;
+use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::type_name::ResolvedConstructorName;
 
 use crate::symbol_identity::FieldId;
@@ -75,22 +76,20 @@ fn collect_declarations(
     index: &mut NominalTypeIndex,
 ) {
     for declaration in declarations {
-        let declared_value = match &declaration.kind {
-            DeclKind::Param(param) => Some((&param.name, &param.type_ann)),
-            DeclKind::Node(node) => Some((&node.name, &node.type_ann)),
-            DeclKind::ConstNode(constant) => Some((&constant.name, &constant.type_ann)),
-            _ => None,
-        };
-        if let Some((name, type_expr)) = declared_value
-            && let Some(constructor) = nominal_constructor(type_expr, owner, resolver)
-        {
-            index.declaration_types.insert(
-                ResolvedDeclName::from_def(owner.clone(), name.value.clone()),
-                constructor,
-            );
-        }
-
         match &declaration.kind {
+            DeclKind::Param(param) => {
+                collect_declared_value(&param.name.value, &param.type_ann, owner, resolver, index);
+            }
+            DeclKind::Node(node) => {
+                collect_declared_value(&node.name.value, &node.type_ann, owner, resolver, index);
+            }
+            DeclKind::ConstNode(constant) => collect_declared_value(
+                &constant.name.value,
+                &constant.type_ann,
+                owner,
+                resolver,
+                index,
+            ),
             DeclKind::Type(type_decl) => {
                 let members = match &type_decl.body {
                     TypeDeclBody::Required => &[][..],
@@ -117,8 +116,39 @@ fn collect_declarations(
                 resolver,
                 index,
             ),
-            _ => {}
+            // Declarations without a declared value type or record fields.
+            DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Include(_)
+            | DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_) => {}
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            DeclKind::Sugar(sugar) => never(*sugar),
         }
+    }
+}
+
+fn collect_declared_value(
+    name: &DeclName,
+    type_expr: &TypeExpr,
+    owner: &DagId,
+    resolver: &ModuleResolver,
+    index: &mut NominalTypeIndex,
+) {
+    if let Some(constructor) = nominal_constructor(type_expr, owner, resolver) {
+        index.declaration_types.insert(
+            ResolvedDeclName::from_def(owner.clone(), name.clone()),
+            constructor,
+        );
     }
 }
 
