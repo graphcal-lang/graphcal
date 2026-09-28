@@ -56,15 +56,48 @@ pub struct SelectedDeclarations {
     /// Bare items are unresolved between declaration and constructor namespaces.
     terms: HashSet<crate::syntax::names::NameAtom>,
     /// Selected dimensions keyed by their importer-local binding name, mapped
-    /// to the dependency's source declaration name (`dim Rate as R` stores
+    /// to the dependency's source declaration (`dim Rate as R` stores
     /// `R -> Rate`). Local names are what the importer's source can spell.
-    dimensions: HashMap<crate::syntax::dimension::DimName, crate::syntax::dimension::DimName>,
+    dimensions: HashMap<crate::syntax::dimension::DimName, SelectedDimension>,
     /// Selected units keyed by importer-local binding name, mapped to the
     /// dependency's source declaration name (`unit spd as s` stores
     /// `s -> spd`).
     units: HashMap<crate::syntax::dimension::UnitName, crate::syntax::dimension::UnitName>,
     indexes: HashSet<crate::syntax::index_name::IndexName>,
     types: HashSet<crate::syntax::type_name::StructTypeName>,
+}
+
+/// One selectively imported dimension: the dependency's source declaration and
+/// the dimension bindings of the include instance that projects it.
+///
+/// A dimension defined over a bindable dimension (`pub dim QR = Q / Time`)
+/// denotes a different dimension in every configured instance, so the
+/// projected value must be specialized through its own include's bindings.
+/// Plain selective imports have no bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedDimension {
+    source: crate::syntax::dimension::DimName,
+    /// Include bindings from dependency dimension ports to importer-local
+    /// dimension names (`dim Q: Length` stores `Q -> Length`).
+    include_bindings: HashMap<crate::syntax::dimension::DimName, crate::syntax::dimension::DimName>,
+}
+
+impl SelectedDimension {
+    /// The dependency's source declaration name.
+    #[must_use]
+    pub const fn source(&self) -> &crate::syntax::dimension::DimName {
+        &self.source
+    }
+
+    /// The importer-local dimension bound to the dependency's dimension port
+    /// `port` by the projecting include, if any.
+    #[must_use]
+    pub fn include_binding(
+        &self,
+        port: &crate::syntax::dimension::DimName,
+    ) -> Option<&crate::syntax::dimension::DimName> {
+        self.include_bindings.get(port)
+    }
 }
 
 impl SelectedDeclarations {
@@ -93,7 +126,7 @@ impl SelectedDeclarations {
             }
             crate::syntax::ast::ImportItemNamespace::Dimension => {
                 let name = crate::syntax::dimension::DimName::from_atom(name);
-                self.dimensions.insert(name.clone(), name);
+                self.insert_dimension_as(name.clone(), name);
             }
             crate::syntax::ast::ImportItemNamespace::Unit => {
                 let name = crate::syntax::dimension::UnitName::from_atom(name);
@@ -139,20 +172,90 @@ impl SelectedDeclarations {
         source: crate::syntax::dimension::DimName,
         local: crate::syntax::dimension::DimName,
     ) {
-        self.dimensions.insert(local, source);
+        self.insert_dimension_projection(source, local, HashMap::new());
+    }
+
+    /// Record one dimension projected by an include under an importer-local
+    /// name, together with that include's dimension bindings
+    /// (`include lib(dim Q: Length)::{dim Rate as R}`).
+    pub fn insert_dimension_projection(
+        &mut self,
+        source: crate::syntax::dimension::DimName,
+        local: crate::syntax::dimension::DimName,
+        include_bindings: HashMap<
+            crate::syntax::dimension::DimName,
+            crate::syntax::dimension::DimName,
+        >,
+    ) {
+        self.dimensions.insert(
+            local,
+            SelectedDimension {
+                source,
+                include_bindings,
+            },
+        );
     }
 
     /// Dimensions selected with the explicit `dim` marker, as
-    /// `(importer-local name, dependency source name)` pairs.
+    /// `(importer-local name, dependency declaration)` pairs.
     pub fn dimensions(
         &self,
-    ) -> impl Iterator<
-        Item = (
-            &crate::syntax::dimension::DimName,
-            &crate::syntax::dimension::DimName,
-        ),
-    > {
+    ) -> impl Iterator<Item = (&crate::syntax::dimension::DimName, &SelectedDimension)> {
         self.dimensions.iter()
+    }
+
+    /// Extend the selection with every dimension of `file` that a selected
+    /// dimension's definition transitively references.
+    ///
+    /// Resolving a selected derived dimension (`QR = Q / Time`) needs its
+    /// sibling dimensions registered too. The added dependencies are meant
+    /// for a scratch registry only: they are keyed by their source name and
+    /// must not become visible in the importer.
+    #[must_use]
+    pub fn with_dimension_dependencies(&self, file: &File) -> Self {
+        let definitions = file
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Dimension(dimension) => {
+                    Some((dimension.name.value.clone(), dimension.definition.as_ref()))
+                }
+                DeclKind::BaseDimension(dimension) => Some((dimension.name.value.clone(), None)),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut selected = self.clone();
+        let mut pending = self
+            .dimensions
+            .values()
+            .map(|dimension| dimension.source.clone())
+            .collect::<Vec<_>>();
+        let mut visited = HashSet::new();
+        while let Some(name) = pending.pop() {
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            let Some(definition) = definitions.get(&name) else {
+                continue;
+            };
+            if !selected
+                .dimensions
+                .values()
+                .any(|dimension| dimension.source == name)
+            {
+                selected.insert_dimension_as(name.clone(), name.clone());
+            }
+            pending.extend(definition.iter().flat_map(|definition| {
+                definition.terms.iter().filter_map(|item| {
+                    item.term
+                        .name
+                        .value
+                        .as_bare()
+                        .map(|atom| crate::syntax::dimension::DimName::from_atom(atom.clone()))
+                })
+            }));
+        }
+        selected
     }
 
     /// Clone this selection without declarations that are closed semantic values.
@@ -242,7 +345,7 @@ fn register_declarations_impl(
             names
                 .dimensions
                 .values()
-                .any(|source| source.as_str() == name)
+                .any(|dimension| dimension.source.as_str() == name)
         })
     };
     let should_register_unit = |name: &str| {

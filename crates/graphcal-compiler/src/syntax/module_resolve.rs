@@ -1779,6 +1779,10 @@ impl ModuleResolver {
             .param_bindings
             .iter()
             .any(|binding| binding.category != InputBindingCategory::Unmarked);
+        let has_dimension_bindings = include
+            .param_bindings
+            .iter()
+            .any(|binding| binding.category == InputBindingCategory::Dimension);
         for item in items {
             if let Some(target) = source_target {
                 for addition in self.import_item_additions(target, item, Access::CrossModule)? {
@@ -1885,6 +1889,31 @@ impl ModuleResolver {
                         );
                 }
                 ImportItemNamespace::Dimension => {
+                    if binding_path.is_none() && has_dimension_bindings {
+                        // A dimension defined over the instance's dimension
+                        // ports (`QR = Q / Time`) is specialized by this
+                        // include, so the projection is the importer's own
+                        // declaration rather than the template's identity.
+                        let local_name = DimName::from_atom(local);
+                        self.scopes
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .selected_dimensions
+                            .remove(&local_name);
+                        self.modules
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .dimensions
+                            .insert(
+                                local_name.clone(),
+                                ModuleSymbol::new(owner, local_name, visibility, item.local_span()),
+                            );
+                        continue;
+                    }
                     let resolved = match binding_path {
                         Some(path) => self.resolve_dimension_path(owner, &path)?,
                         None => {
