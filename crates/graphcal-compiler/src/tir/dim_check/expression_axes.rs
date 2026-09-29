@@ -8,14 +8,14 @@ use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::registry::index::IndexCardinality;
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::ExpressionFactsError;
 use crate::tir::materialized_shape::MaterializedShapeError;
+use crate::tir::static_index::UnavailableIndex;
 use crate::tir::typed::model::TirRead;
 
 pub(super) fn checked_index_cardinality(
     tir: &dyn TirRead,
     index: &IndexTypeRef<Symbolic>,
-) -> Result<Option<IndexCardinality>, ExpressionFactsError> {
+) -> Result<Option<IndexCardinality>, UnavailableIndex> {
     if index
         .finite_index_form()
         .is_some_and(|form| form.constant_value().is_none())
@@ -24,12 +24,12 @@ pub(super) fn checked_index_cardinality(
     }
     tir.index_def(index)
         .map(|definition| definition.concrete_cardinality())
-        .ok_or_else(|| ExpressionFactsError::MissingIndex(Box::new(index.clone())))
+        .ok_or_else(|| UnavailableIndex(Box::new(index.clone())))
 }
 
 /// Why a checked type cannot be materialized eagerly.
 enum MaterializationError {
-    Facts(ExpressionFactsError),
+    Index(UnavailableIndex),
     Shape(MaterializedShapeError),
 }
 
@@ -48,11 +48,11 @@ pub(super) fn check_materializable(
     span: Span,
 ) -> Result<(), GraphcalError> {
     ty.materialized_shape(|axis| {
-        checked_index_cardinality(tir, axis).map_err(MaterializationError::Facts)
+        checked_index_cardinality(tir, axis).map_err(MaterializationError::Index)
     })
     .map(|_| ())
     .map_err(|error| match error {
-        MaterializationError::Facts(error) => {
+        MaterializationError::Index(error) => {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
         }
         MaterializationError::Shape(MaterializedShapeError::ExceedsLimit { maximum }) => {

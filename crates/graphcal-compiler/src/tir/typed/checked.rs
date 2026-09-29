@@ -19,24 +19,19 @@ use crate::resolved_name::{
 use crate::tir::expression_facts::CheckedExpressionFacts;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
-use crate::tir::texpr::TypedBodies;
+use crate::tir::texpr::CheckedBodies;
 
 use super::model::{
     CheckedDeclType, DagRegistry, DagTIR, ProjectTypeStore, TirCore, TirRead, UncheckedTir,
 };
 
-/// The typed trees a checked body carries.
-#[derive(Debug, Clone)]
-pub enum CheckedTrees {
-    /// A canonical body inferred once: the typed tree of every checked root.
-    Canonical(TypedBodies),
-    /// A semantic instance, whose facts are specialized from its canonical
-    /// template's; it carries no trees of its own.
-    SpecializedInstance,
-}
-
 /// A DAG body together with everything its check published: expression facts,
-/// typed trees, presentation facts, and its runtime schedule as a callable.
+/// the checked tree of every expression root, presentation facts, and its
+/// runtime schedule as a callable.
+///
+/// A canonical body's trees are the ones its inference emitted; a semantic
+/// instance's are its template's, specialized with the instance's Static
+/// substitution (their types differ per instance, so they cannot be shared).
 ///
 /// Created only when an [`InstantiatedTir`](super::model::InstantiatedTir) is
 /// checked, so its facts are always present and always belong to this body
@@ -45,7 +40,7 @@ pub enum CheckedTrees {
 pub struct CheckedDag {
     body: DagTIR,
     expression_facts: CheckedExpressionFacts,
-    trees: CheckedTrees,
+    bodies: CheckedBodies,
     presentation: DagPresentationFacts,
     runtime_schedule: RuntimeSchedule,
 }
@@ -53,7 +48,7 @@ pub struct CheckedDag {
 /// The facts one check published for one local body.
 struct PublishedDag {
     expression_facts: CheckedExpressionFacts,
-    trees: CheckedTrees,
+    bodies: CheckedBodies,
     presentation: DagPresentationFacts,
     runtime_schedule: RuntimeSchedule,
 }
@@ -72,15 +67,6 @@ impl CheckedDag {
                 DiagnosticAnchor::WholeFile,
             )
         };
-        match (&published.trees, body.is_semantic_instance()) {
-            (CheckedTrees::Canonical(_), false) | (CheckedTrees::SpecializedInstance, true) => {}
-            (CheckedTrees::Canonical(_), true) => {
-                return Err(internal("a semantic instance has typed trees".to_owned()));
-            }
-            (CheckedTrees::SpecializedInstance, false) => {
-                return Err(internal("a canonical body has no typed trees".to_owned()));
-            }
-        }
         published
             .expression_facts
             .validate_environment(body.dag_id(), body.body_revision())
@@ -88,26 +74,16 @@ impl CheckedDag {
         Ok(Self {
             body,
             expression_facts: published.expression_facts,
-            trees: published.trees,
+            bodies: published.bodies,
             presentation: published.presentation,
             runtime_schedule: published.runtime_schedule,
         })
     }
 
-    /// The typed trees of this body's checked roots, when it was checked
-    /// canonically.
+    /// The checked tree of every expression root this body owns.
     #[must_use]
-    pub const fn typed_bodies(&self) -> Option<&TypedBodies> {
-        match &self.trees {
-            CheckedTrees::Canonical(bodies) => Some(bodies),
-            CheckedTrees::SpecializedInstance => None,
-        }
-    }
-
-    /// The typed trees this body carries.
-    #[must_use]
-    pub const fn trees(&self) -> &CheckedTrees {
-        &self.trees
+    pub const fn bodies(&self) -> &CheckedBodies {
+        &self.bodies
     }
 
     /// Runtime schedule of this DAG as a callable.
@@ -341,7 +317,7 @@ impl UncheckedTir {
     ) -> Result<CheckedTir, GraphcalError> {
         let CheckedParts {
             mut expression_facts,
-            mut typed_bodies,
+            mut bodies,
             mut presentation,
             schedules,
         } = parts;
@@ -363,9 +339,9 @@ impl UncheckedTir {
                 expression_facts: expression_facts
                     .remove(body.dag_id())
                     .ok_or_else(|| missing("expression facts"))?,
-                trees: typed_bodies
+                bodies: bodies
                     .remove(body.dag_id())
-                    .map_or(CheckedTrees::SpecializedInstance, CheckedTrees::Canonical),
+                    .ok_or_else(|| missing("typed bodies"))?,
                 presentation: presentation
                     .remove(body.dag_id())
                     .ok_or_else(|| missing("presentation facts"))?,
@@ -404,8 +380,8 @@ pub(crate) struct CheckedSchedules {
 /// [`UncheckedTir::into_checked`].
 pub(crate) struct CheckedParts {
     pub(crate) expression_facts: HashMap<DagId, CheckedExpressionFacts>,
-    /// Typed trees of the canonical bodies; semantic instances have none.
-    pub(crate) typed_bodies: HashMap<DagId, TypedBodies>,
+    /// The checked trees of every local body.
+    pub(crate) bodies: HashMap<DagId, CheckedBodies>,
     pub(crate) presentation: HashMap<DagId, DagPresentationFacts>,
     pub(crate) schedules: CheckedSchedules,
 }
@@ -601,5 +577,9 @@ impl TirRead for CheckedTir {
 
     fn expression_facts(&self, dag_id: &DagId) -> Option<&CheckedExpressionFacts> {
         self.dags.get(dag_id).map(CheckedDag::expression_facts)
+    }
+
+    fn checked_bodies(&self, dag_id: &DagId) -> Option<&CheckedBodies> {
+        self.dags.get(dag_id).map(CheckedDag::bodies)
     }
 }

@@ -10,25 +10,31 @@
 //! appear only where a construct accepts them ([`TArg`], [`TBody`]).
 //!
 //! Inference emits these trees through its observation sink while it checks
-//! each body (see `assembly`). Until the evaluator consumes them, the
-//! retained expression facts are the executable record and publication
-//! verifies that both agree (`fact_agreement`).
+//! each body (see `assembly`). Publication classifies each root's tree as
+//! executable or deferred ([`CheckedBodies`]); a semantic instance's trees
+//! are its template's, specialized (see `map`). Until the facts are removed,
+//! publication verifies that trees and retained expression facts agree
+//! (`fact_agreement`).
 
 mod assembly;
+mod checked_bodies;
 pub(crate) mod fact_agreement;
+pub(crate) mod map;
 mod model;
-mod typed_bodies;
 
 #[cfg(test)]
 mod tests;
 
 pub(crate) use assembly::{AssemblyError, NodeFacts, PendingNodes};
+pub(crate) use checked_bodies::claim_roots;
+pub use checked_bodies::{
+    CheckedBodies, CheckedBody, DischargeError, ExecutableBodyError, TypedBodiesError,
+};
 pub use model::{
     ContextualLiteral, StaticPosition, TArg, TBody, TConstRef, TContextual, TExpr, TExprKind,
     TFieldInit, TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TNodeRef, TParamBinding,
     visit_tnodes,
 };
-pub use typed_bodies::{TypedBodies, TypedBodiesError};
 
 #[cfg(doc)]
 use crate::registry::checked_type::CheckedType;

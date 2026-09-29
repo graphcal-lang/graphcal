@@ -32,4 +32,4 @@ pub(in crate::tir::dim_check) use context::InferEnv;
 pub(in crate::tir::dim_check) use generics::{
     concrete_generic_substitutions, resolved_field_type, resolved_type_field_key,
 };
-pub(in crate::tir::dim_check) use observations::BodyObservations;
+pub(in crate::tir::dim_check) use observations::{BodyObservations, FinishedObservations};

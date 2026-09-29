@@ -12,10 +12,12 @@ use crate::tir::expression_facts::{
     CheckedExpressionFacts, CheckedExpressionRecord, ExpressionFact,
 };
 
+use super::checked_bodies::{CheckedBodies, CheckedBody};
+use super::map::ToSymbolic;
 use super::model::{
-    StaticPosition, TConstRef, TExpr, TExprKind, TIndexArg, TMatchPattern, TNodeRef, visit_tnodes,
+    StaticPosition, TBody, TConstRef, TExpr, TExprKind, TIndexArg, TMatchPattern, TNodeRef,
+    visit_tnodes,
 };
-use super::typed_bodies::TypedBodies;
 
 /// A way the typed trees and the expression facts disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -34,6 +36,8 @@ pub enum FactDisagreement {
     MatchTargets(ExprId),
     #[error("typed node {0:?} and its fact disagree on the static positions")]
     StaticPositions(ExprId),
+    #[error("typed root {0:?} and its fact disagree on whether it is executable")]
+    Executability(ExprId),
 }
 
 /// Require every typed node to agree with the fact retained for it, and every
@@ -43,12 +47,38 @@ pub enum FactDisagreement {
 ///
 /// Returns the first disagreement found.
 pub fn check(
-    bodies: &TypedBodies<Symbolic>,
+    bodies: &CheckedBodies,
+    facts: &CheckedExpressionFacts,
+) -> Result<(), FactDisagreement> {
+    check_roots(bodies.roots(), facts)
+}
+
+/// [`check`] for the checked trees of some roots.
+///
+/// # Errors
+///
+/// Returns the first disagreement found.
+pub fn check_roots<'a>(
+    roots: impl IntoIterator<Item = (&'a ExprId, &'a CheckedBody)>,
     facts: &CheckedExpressionFacts,
 ) -> Result<(), FactDisagreement> {
     let mut typed = 0_usize;
     let mut result = Ok(());
-    for (_, body) in bodies.roots() {
+    for (root, body) in roots {
+        let (body, executable) = match body {
+            CheckedBody::Executable(body) => (
+                body.map_types(&mut ToSymbolic)
+                    .unwrap_or_else(|never| match never {}),
+                true,
+            ),
+            CheckedBody::Deferred(body) => (body.clone(), false),
+        };
+        if matches!(body, TBody::Value(_))
+            && facts.get(root).is_ok()
+            && executable != facts.executable_value(root).is_ok()
+        {
+            return Err(FactDisagreement::Executability(root.clone()));
+        }
         visit_tnodes(body.as_node(), &mut |node| {
             if result.is_err() {
                 return;
@@ -97,7 +127,10 @@ fn agrees(
     }
     let application = match expr.kind() {
         TExprKind::Construct { application, .. }
-        | TExprKind::Const(TConstRef::Constructor(application)) => Some(application),
+        | TExprKind::Const(crate::syntax::span::Spanned {
+            value: TConstRef::Constructor(application),
+            ..
+        }) => Some(application),
         _ => None,
     };
     if application != value.constructor.as_deref() {

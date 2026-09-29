@@ -16,6 +16,7 @@ use crate::expression_id::ExprId;
 use crate::hir::expr::{ConstRef, Expr, ExprKind, IndexArg, MatchPattern};
 use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::resolved_name::ResolvedConstructorName;
+use crate::syntax::span::Spanned;
 use crate::tir::expression_facts::{
     ConstructorApplication, ConstructorMatch, ContextualOperand, StaticIndexRequirement,
 };
@@ -106,6 +107,20 @@ impl PendingNodes {
         self.nodes.keys().next()
     }
 
+    /// Every node no parent has claimed: the trees of the roots checked.
+    pub fn into_roots(self) -> HashMap<ExprId, super::model::TBody<Symbolic>> {
+        self.nodes
+            .into_iter()
+            .map(|(id, node)| {
+                let body = match node {
+                    TArg::Value(value) => super::model::TBody::Value(value),
+                    TArg::Contextual(literal) => super::model::TBody::Contextual(literal),
+                };
+                (id, body)
+            })
+            .collect()
+    }
+
     fn insert(&mut self, id: &ExprId, node: TArg<Symbolic>) -> Result<(), AssemblyError> {
         match self.nodes.entry(id.clone()) {
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -166,7 +181,7 @@ impl PendingNodes {
         let applies_constructor = matches!(
             expr.kind(),
             ExprKind::ConstructorCall { .. }
-                | ExprKind::ConstRef(crate::syntax::span::Spanned {
+                | ExprKind::ConstRef(Spanned {
                     value: ConstRef::Constructor(_),
                     ..
                 })
@@ -190,13 +205,16 @@ impl PendingNodes {
                 unit: unit.clone(),
             },
             ExprKind::VariantLiteral(variant) => TExprKind::Variant(variant.clone()),
-            ExprKind::GraphRef(target) => TExprKind::GraphRef(target.value.clone()),
-            ExprKind::ConstRef(target) => TExprKind::Const(match &target.value {
-                ConstRef::Decl(declaration) => TConstRef::Decl(declaration.clone()),
-                ConstRef::Builtin(constant) => TConstRef::Builtin(*constant),
-                ConstRef::Constructor(_) => TConstRef::Constructor(application()?),
-            }),
-            ExprKind::LocalRef(local) => TExprKind::Local(local.value),
+            ExprKind::GraphRef(target) => TExprKind::GraphRef(target.clone()),
+            ExprKind::ConstRef(target) => TExprKind::Const(Spanned::new(
+                match &target.value {
+                    ConstRef::Decl(declaration) => TConstRef::Decl(declaration.clone()),
+                    ConstRef::Builtin(constant) => TConstRef::Builtin(*constant),
+                    ConstRef::Constructor(_) => TConstRef::Constructor(application()?),
+                },
+                target.span,
+            )),
+            ExprKind::LocalRef(local) => TExprKind::Local(local.clone()),
             ExprKind::BinOp { op, lhs, rhs } => TExprKind::Binary {
                 op: *op,
                 lhs: self.take_boxed(expr, lhs)?,
@@ -207,7 +225,7 @@ impl PendingNodes {
                 operand: self.take_boxed(expr, operand)?,
             },
             ExprKind::FnCall { callee, args } => TExprKind::Call {
-                callee: callee.value.clone(),
+                callee: callee.clone(),
                 args: args
                     .iter()
                     .map(|arg| self.take_arg(expr, arg))
@@ -238,7 +256,7 @@ impl PendingNodes {
             },
             ExprKind::FieldAccess { expr: inner, field } => TExprKind::Field {
                 expr: self.take_boxed(expr, inner)?,
-                field: field.value.clone(),
+                field: field.clone(),
             },
             ExprKind::ConstructorCall { fields, .. } => TExprKind::Construct {
                 application: application()?,
@@ -272,7 +290,7 @@ impl PendingNodes {
                 args: args.try_map_ref(|arg| {
                     Ok::<_, AssemblyError>(match arg {
                         IndexArg::Variant(variant) => TIndexArg::Variant(variant.clone()),
-                        IndexArg::Var(local) => TIndexArg::Var(local.value),
+                        IndexArg::Var(local) => TIndexArg::Var(local.clone()),
                         IndexArg::Expr(operand) => TIndexArg::Expr {
                             static_position: positions.take(operand.id()),
                             operand: self.take_boxed(expr, operand)?,
@@ -346,7 +364,7 @@ impl PendingNodes {
                 static_bindings,
                 output,
             } => TExprKind::DagCall {
-                target: target.value.clone(),
+                target: target.clone(),
                 args: args
                     .iter()
                     .map(|binding| {
@@ -357,7 +375,7 @@ impl PendingNodes {
                     })
                     .collect::<Result<_, AssemblyError>>()?,
                 static_bindings: static_bindings.clone(),
-                output: output.value.clone(),
+                output: output.clone(),
             },
         };
         if positions.all_placed() {
@@ -390,6 +408,7 @@ impl<'a> StaticPositions<'a> {
             StaticPosition {
                 axis: requirement.axis.clone(),
                 position: requirement.position,
+                usage: requirement.usage,
             }
         })
     }

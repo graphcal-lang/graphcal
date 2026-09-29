@@ -1322,6 +1322,11 @@ pub(crate) trait TirRead {
         &self,
         dag_id: &crate::dag_id::DagId,
     ) -> Option<&crate::tir::expression_facts::CheckedExpressionFacts>;
+    /// The checked trees already published for one DAG.
+    fn checked_bodies(
+        &self,
+        dag_id: &crate::dag_id::DagId,
+    ) -> Option<&crate::tir::texpr::CheckedBodies>;
 }
 
 impl dyn TirRead + '_ {
@@ -1408,6 +1413,16 @@ impl TirRead for UncheckedTir {
             .shared(dag_id)
             .map(super::checked::CheckedDag::expression_facts)
     }
+
+    /// Before any local body is checked, only imported bodies have trees.
+    fn checked_bodies(
+        &self,
+        dag_id: &crate::dag_id::DagId,
+    ) -> Option<&crate::tir::texpr::CheckedBodies> {
+        self.dags
+            .shared(dag_id)
+            .map(super::checked::CheckedDag::bodies)
+    }
 }
 
 /// A project TIR in the middle of its check: unchecked local bodies with the
@@ -1417,6 +1432,7 @@ pub(crate) struct CheckingTir<'a> {
     pub(crate) tir: &'a UncheckedTir,
     pub(crate) facts:
         &'a HashMap<crate::dag_id::DagId, crate::tir::expression_facts::CheckedExpressionFacts>,
+    pub(crate) bodies: &'a HashMap<crate::dag_id::DagId, crate::tir::texpr::CheckedBodies>,
 }
 
 impl TirRead for CheckingTir<'_> {
@@ -1443,6 +1459,15 @@ impl TirRead for CheckingTir<'_> {
         self.facts
             .get(dag_id)
             .or_else(|| self.tir.expression_facts(dag_id))
+    }
+
+    fn checked_bodies(
+        &self,
+        dag_id: &crate::dag_id::DagId,
+    ) -> Option<&crate::tir::texpr::CheckedBodies> {
+        self.bodies
+            .get(dag_id)
+            .or_else(|| self.tir.checked_bodies(dag_id))
     }
 }
 

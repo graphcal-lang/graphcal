@@ -3,8 +3,9 @@
 //! Publication checks structural coverage, not expression typing. Producers must
 //! supply successful inference results; a scalar row is not a missing shape row.
 
-mod static_index;
-pub use static_index::{Readiness, StaticIndexError, StaticIndexRequirement, StaticIndexUse};
+pub use crate::tir::static_index::{
+    Readiness, StaticIndexError, StaticIndexRequirement, StaticIndexUse,
+};
 
 #[cfg(test)]
 mod tests;
@@ -26,11 +27,7 @@ use crate::registry::checked_type::{
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
-/// The cardinality of an axis, or `None` while it awaits a Static or generic binding.
-pub(crate) type AxisCardinality<'a> = dyn Fn(
-        &IndexTypeRef<Symbolic>,
-    ) -> Result<Option<crate::registry::index::IndexCardinality>, ExpressionFactsError>
-    + 'a;
+pub(crate) use crate::tir::static_index::AxisCardinality;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstructorApplication<V: Concreteness = Concrete> {
@@ -553,8 +550,8 @@ pub enum ExpressionFactsError {
     WrongEnvironment,
     #[error("missing checked expression: {0:?}")]
     Missing(ExprId),
-    #[error("checked expression references an unavailable index: {0}")]
-    MissingIndex(Box<IndexTypeRef<Symbolic>>),
+    #[error(transparent)]
+    UnavailableIndex(#[from] crate::tir::static_index::UnavailableIndex),
     #[error("extra checked expression: {0:?}")]
     Extra(ExprId),
     #[error("incompatible checked expression: {0:?}")]

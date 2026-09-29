@@ -332,8 +332,8 @@ type ExpressionRecords = std::collections::HashMap<
 
 /// Check every source-authored executable body of `template` in the view
 /// where the optional dimension `ports` are rigid, checking the template's
-/// plots with `plots`. Returns `plots`'s result and the facts the rigid
-/// inference recorded.
+/// plots with `plots`. Returns `plots`'s result and what the rigid inference
+/// recorded.
 fn check_in_rigid_view<R>(
     tir: &crate::tir::typed::UncheckedTir,
     template: &crate::tir::typed::DagTIR,
@@ -342,7 +342,7 @@ fn check_in_rigid_view<R>(
     src: &miette::NamedSource<std::sync::Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, GraphcalError>,
-) -> Result<(R, ExpressionRecords), GraphcalError> {
+) -> Result<(R, infer::hir::FinishedObservations), GraphcalError> {
     let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template.dag_id(), ports, src)?;
     let rigid_dag = rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
         GraphcalError::internal_error(
@@ -368,7 +368,7 @@ fn check_in_rigid_view<R>(
     let result = plots(&rigid_ctx)?;
     check_rigid_composition_bodies(&rigid_ctx, failure)?;
     check_rigid_unit_bodies(&rigid_ctx, failure)?;
-    Ok((result, observations.finish().records))
+    Ok((result, observations.finish()))
 }
 
 fn check_rigid_dimension_port(
@@ -394,6 +394,11 @@ fn check_rigid_dimension_port(
 pub(super) struct PortGenericFacts {
     /// Facts of the template's executable bodies.
     pub(super) records: ExpressionRecords,
+    /// Typed trees of the bodies the rigid inference checked, by root.
+    pub(super) bodies: std::collections::HashMap<
+        crate::expression_id::ExprId,
+        crate::tir::texpr::TBody<crate::registry::checked_type::Symbolic>,
+    >,
     /// Channel shapes of the template's own plots.
     pub(super) plot_channels: super::plot::CheckedPlotChannelShapes,
 }
@@ -411,7 +416,7 @@ pub(super) fn port_generic_facts(
     src: &miette::NamedSource<std::sync::Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<PortGenericFacts, GraphcalError> {
-    let (plot_channels, records) = check_in_rigid_view(
+    let (plot_channels, finished) = check_in_rigid_view(
         tir,
         template,
         ports,
@@ -429,7 +434,8 @@ pub(super) fn port_generic_facts(
         },
     )?;
     Ok(PortGenericFacts {
-        records,
+        records: finished.records,
+        bodies: finished.typed.into_roots(),
         plot_channels,
     })
 }

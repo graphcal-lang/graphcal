@@ -12,9 +12,11 @@ use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTy
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
-use crate::tir::expression_facts::{ConstructorApplication, ConstructorMatch, ContextualOperand};
+use crate::tir::expression_facts::{
+    ConstructorApplication, ConstructorMatch, ContextualOperand, StaticIndexUse,
+};
 
 /// One checked value expression.
 #[derive(Debug)]
@@ -180,9 +182,9 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         value: f64,
         unit: ResolvedUnitExpr,
     },
-    GraphRef(crate::hir::expr::LocalDecl),
-    Const(TConstRef<V>),
-    Local(LocalId),
+    GraphRef(Spanned<crate::hir::expr::LocalDecl>),
+    Const(Spanned<TConstRef<V>>),
+    Local(Spanned<LocalId>),
     Binary {
         op: crate::syntax::ast::BinOp,
         lhs: Box<TExpr<V>>,
@@ -193,7 +195,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         operand: Box<TExpr<V>>,
     },
     Call {
-        callee: FunctionRef,
+        callee: Spanned<FunctionRef>,
         args: Vec<TArg<V>>,
     },
     If {
@@ -211,7 +213,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     },
     Field {
         expr: Box<TExpr<V>>,
-        field: FieldName,
+        field: Spanned<FieldName>,
     },
     /// A constructor call with its checked nominal application.
     Construct {
@@ -254,10 +256,10 @@ pub enum TExprKind<V: Concreteness = Concrete> {
     },
     Variant(IndexVariantRef),
     DagCall {
-        target: DagId,
+        target: Spanned<DagId>,
         args: Vec<TParamBinding<V>>,
         static_bindings: crate::ir::static_substitution::StaticSubstitution,
-        output: ResolvedDeclName,
+        output: Spanned<ResolvedDeclName>,
     },
 }
 
@@ -365,7 +367,7 @@ pub struct TMapEntry<V: Concreteness = Concrete> {
 #[derive(Debug, Clone)]
 pub enum TIndexArg<V: Concreteness = Concrete> {
     Variant(IndexVariantRef),
-    Var(LocalId),
+    Var(Spanned<LocalId>),
     /// A computed selector; an `Int` position carries its checked proof.
     Expr {
         operand: Box<TExpr<V>>,
@@ -378,6 +380,8 @@ pub enum TIndexArg<V: Concreteness = Concrete> {
 pub struct StaticPosition<V: Concreteness = Concrete> {
     pub axis: IndexTypeRef<V>,
     pub position: u64,
+    /// Whether the position introduces a key or selects an entry.
+    pub usage: StaticIndexUse,
 }
 
 /// One checked match arm.
