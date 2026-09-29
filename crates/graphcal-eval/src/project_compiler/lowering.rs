@@ -5,9 +5,8 @@ use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
-    InstanceAssertionProjection, InstanceBindingEnvironment, InstanceIndexBindingTarget,
-    InstancePlotProjection, InstanceRecord, InstanceValueProjection, StaticSpecializationId,
-    StaticSubstitution, instance_declaration, template_declaration,
+    InstanceAssertionProjection, InstanceIndexBindingTarget, InstancePlotProjection,
+    InstanceRecord, InstanceValueProjection, StaticSubstitution, template_declaration,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
@@ -895,24 +894,11 @@ fn resolve_projection_expected_fail(
         .transpose()
 }
 
-struct SemanticValueBindings {
-    ports: HashMap<ResolvedDeclName, ResolvedDeclName>,
-    values: HashMap<ResolvedDeclName, Expr>,
-    explicitly_bound: HashSet<ResolvedDeclName>,
-}
-
-struct SemanticStaticBindings {
-    indexes: HashMap<ResolvedIndexName, InstanceIndexBindingTarget>,
-    types: HashMap<ResolvedStructTypeName, ResolvedStructTypeName>,
-    dimensions: HashMap<ResolvedDimName, ResolvedDimName>,
-}
-
-fn semantic_value_bindings(
-    request: &IncludeInstanceRequest,
+/// Leaves of the template's value declarations, each materialized by an instance.
+fn template_value_ports(
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    instance: &graphcal_compiler::dag_id::InstanceId,
-) -> SemanticValueBindings {
-    let ports = template
+) -> impl Iterator<Item = graphcal_compiler::syntax::decl_name::DeclName> + '_ {
+    template
         .source_order
         .iter()
         .filter(|(_, category)| {
@@ -921,24 +907,19 @@ fn semantic_value_bindings(
                 graphcal_compiler::declaration_category::DeclCategory::Value(_)
             )
         })
-        .map(|(name, _)| {
-            (
-                template_declaration(instance, name.leaf().clone()),
-                instance_declaration(instance, name.leaf().clone()),
-            )
-        })
-        .collect();
-    let values = request
+        .map(|(name, _)| name.leaf().clone())
+}
+
+/// Explicit value-port bindings keyed by their template declaration.
+fn semantic_value_bindings(
+    request: &IncludeInstanceRequest,
+    instance: &graphcal_compiler::dag_id::InstanceId,
+) -> HashMap<ResolvedDeclName, Expr> {
+    request
         .bindings
         .iter()
         .map(|(name, expr)| (template_declaration(instance, name.clone()), expr.clone()))
-        .collect::<HashMap<_, _>>();
-    let explicitly_bound = values.keys().cloned().collect();
-    SemanticValueBindings {
-        ports,
-        values,
-        explicitly_bound,
-    }
+        .collect()
 }
 
 fn template_index_port(
@@ -1121,17 +1102,23 @@ fn semantic_dimension_bindings(
         .collect()
 }
 
-fn semantic_static_bindings(
+fn semantic_substitution(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-) -> Result<SemanticStaticBindings, CompileError> {
-    Ok(SemanticStaticBindings {
-        indexes: semantic_index_bindings(request, template, importer, module_resolver, src)?,
-        types: semantic_type_bindings(request, template, importer, module_resolver, src)?,
-        dimensions: semantic_dimension_bindings(request, template, importer, module_resolver, src)?,
+) -> Result<StaticSubstitution, CompileError> {
+    Ok(StaticSubstitution {
+        indexes: semantic_index_bindings(request, template, importer, module_resolver, src)?
+            .into_iter()
+            .collect(),
+        types: semantic_type_bindings(request, template, importer, module_resolver, src)?
+            .into_iter()
+            .collect(),
+        dimensions: semantic_dimension_bindings(request, template, importer, module_resolver, src)?
+            .into_iter()
+            .collect(),
     })
 }
 
@@ -1242,29 +1229,8 @@ fn record_semantic_instance(
         template_id.clone(),
     );
     let instance_owner = instance_id.owner().clone();
-    let value_bindings = semantic_value_bindings(request, template, &instance_id);
-    let static_bindings =
-        semantic_static_bindings(request, template, importer, module_resolver, src)?;
-    let specialization = StaticSpecializationId::new(
-        template_id.clone(),
-        StaticSubstitution {
-            indexes: static_bindings
-                .indexes
-                .iter()
-                .map(|(source, target)| (source.clone(), target.clone()))
-                .collect(),
-            types: static_bindings
-                .types
-                .iter()
-                .map(|(source, target)| (source.clone(), target.clone()))
-                .collect(),
-            dimensions: static_bindings
-                .dimensions
-                .iter()
-                .map(|(source, target)| (source.clone(), target.clone()))
-                .collect(),
-        },
-    );
+    let value_bindings = semantic_value_bindings(request, &instance_id);
+    let substitution = semantic_substitution(request, template, importer, module_resolver, src)?;
     let output_projections = semantic_output_projections(request, &instance_id);
     let assertion_projections = semantic_assertion_projections(
         request,
@@ -1282,20 +1248,13 @@ fn record_semantic_instance(
     );
     unfrozen.record_semantic_instance(
         graphcal_compiler::ir::lower::SemanticInstanceInput {
-            instance: InstanceRecord {
-                id: instance_id,
-                specialization,
-                parent_owner: importer.clone(),
-                bindings: InstanceBindingEnvironment {
-                    value_ports: value_bindings.ports,
-                    explicitly_bound_values: value_bindings.explicitly_bound,
-                    indexes: static_bindings.indexes,
-                    types: static_bindings.types,
-                    dimensions: static_bindings.dimensions,
-                },
-            },
+            instance: InstanceRecord::new(
+                instance_id,
+                substitution,
+                template_value_ports(template),
+            ),
             debug_scope: request.debug_scope.clone(),
-            value_bindings: value_bindings.values,
+            value_bindings,
             runtime_unit_names: request.runtime_unit_names.clone(),
             output_projections,
             assertion_projections,

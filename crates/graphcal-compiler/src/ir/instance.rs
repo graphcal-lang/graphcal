@@ -62,32 +62,83 @@ impl StaticSpecializationId {
     }
 }
 
-/// Typed substitution environment connecting one template to a concrete instance.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InstanceBindingEnvironment {
-    /// Every template value port mapped to its concrete declaration record.
-    pub value_ports: HashMap<ResolvedDeclName, ResolvedDeclName>,
-    /// Template value ports explicitly bound at the include/call site.
-    pub explicitly_bound_values: HashSet<ResolvedDeclName>,
-    /// Canonical index substitutions.
-    pub indexes: HashMap<ResolvedIndexName, InstanceIndexBindingTarget>,
-    /// Canonical nominal-type substitutions.
-    pub types: HashMap<ResolvedStructTypeName, ResolvedStructTypeName>,
-    /// Canonical dimension substitutions.
-    pub dimensions: HashMap<ResolvedDimName, ResolvedDimName>,
-}
-
 /// One edge in the explicit module-template/instance graph.
+///
+/// The fields are private so the record keeps its invariants by construction:
+/// the specialization's template is the instance's template, and every
+/// concrete value port is owned by the current concrete instance owner, so
+/// re-parenting cannot leave a stale port or a stale template behind. The
+/// instance's parent ([`InstanceId::parent`]) is the DAG whose instance list
+/// holds this record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceRecord {
     /// Concrete owner paired with the canonical template instantiated here.
-    pub id: InstanceId,
+    id: InstanceId,
     /// Applicative Static specialization shared independently of runtime values.
-    pub specialization: StaticSpecializationId,
-    /// DAG or enclosing concrete instance that owns this instantiation site.
-    pub parent_owner: DagId,
-    /// Value and type-system substitutions applied at the instance boundary.
-    pub bindings: InstanceBindingEnvironment,
+    specialization: StaticSpecializationId,
+    /// Leaves of the template value declarations materialized by this instance.
+    value_ports: HashSet<DeclName>,
+}
+
+impl InstanceRecord {
+    /// Record the instance `id` of its template, specialized by
+    /// `substitution`, materializing the template value declarations
+    /// `value_ports`.
+    #[must_use]
+    pub fn new(
+        id: InstanceId,
+        substitution: StaticSubstitution,
+        value_ports: impl IntoIterator<Item = DeclName>,
+    ) -> Self {
+        let specialization = StaticSpecializationId::new(id.template().clone(), substitution);
+        Self {
+            id,
+            specialization,
+            value_ports: value_ports.into_iter().collect(),
+        }
+    }
+
+    /// Concrete instance identity.
+    #[must_use]
+    pub const fn id(&self) -> &InstanceId {
+        &self.id
+    }
+
+    /// Applicative Static specialization of the template.
+    #[must_use]
+    pub const fn specialization(&self) -> &StaticSpecializationId {
+        &self.specialization
+    }
+
+    /// Canonical Static substitution applied at the instance boundary.
+    #[must_use]
+    pub const fn substitution(&self) -> &StaticSubstitution {
+        &self.specialization.substitution
+    }
+
+    /// The concrete declaration materializing the template value port
+    /// `template_port`, if it is one of this instance's ports.
+    #[must_use]
+    pub fn value_port(&self, template_port: &ResolvedDeclName) -> Option<ResolvedDeclName> {
+        let leaf = template_port.to_unowned_def_name();
+        (template_port.owner() == self.id.template() && self.value_ports.contains(&leaf))
+            .then(|| instance_declaration(&self.id, leaf))
+    }
+
+    /// Every concrete declaration materializing one of the template's value ports.
+    pub fn concrete_value_ports(&self) -> impl Iterator<Item = ResolvedDeclName> + '_ {
+        self.value_ports
+            .iter()
+            .map(|leaf| instance_declaration(&self.id, leaf.clone()))
+    }
+
+    /// Re-parent this instance under `parent`, the concrete owner of the
+    /// enclosing specialized template, and compose its Static substitution
+    /// with the enclosing one through `compose`.
+    pub(crate) fn rebase(&mut self, parent: DagId, compose: impl FnOnce(&mut StaticSubstitution)) {
+        self.id = InstanceId::new(parent, self.id.scope().clone(), self.id.template().clone());
+        compose(&mut self.specialization.substitution);
+    }
 }
 
 /// One instance value exposed through the including DAG's source interface.
@@ -163,5 +214,93 @@ mod tests {
         assert_eq!(source.owner(), &template);
         assert_eq!(copy.owner(), instance.owner());
         assert_eq!(source.as_str(), copy.as_str());
+    }
+
+    fn named(alias: &str) -> ScopeSegment {
+        ScopeSegment::Named(ModuleAliasName::expect_valid(alias))
+    }
+
+    fn dimension(owner: &DagId, name: &str) -> ResolvedDimName {
+        ResolvedDimName::from_def(
+            owner.clone(),
+            crate::syntax::dimension::DimName::expect_valid(name),
+        )
+    }
+
+    #[test]
+    fn record_keeps_the_instance_template_as_its_specialization_template() {
+        let parent = DagId::root_in_package("test", "main");
+        let template = DagId::root_in_package("test", "lib");
+        let id = InstanceId::new(parent, named("inst"), template.clone());
+        let record = InstanceRecord::new(id.clone(), StaticSubstitution::default(), []);
+
+        assert_eq!(record.id(), &id);
+        assert_eq!(record.specialization().template, template);
+        assert_eq!(record.substitution(), &StaticSubstitution::default());
+    }
+
+    #[test]
+    fn value_ports_map_template_declarations_to_the_current_owner() {
+        let parent = DagId::root_in_package("test", "main");
+        let template = DagId::root_in_package("test", "lib");
+        let other = DagId::root_in_package("test", "other");
+        let id = InstanceId::new(parent, named("inst"), template);
+        let port = DeclName::expect_valid("factor");
+        let record = InstanceRecord::new(id.clone(), StaticSubstitution::default(), [port.clone()]);
+
+        let template_port = template_declaration(&id, port.clone());
+        assert_eq!(
+            record.value_port(&template_port),
+            Some(instance_declaration(&id, port.clone()))
+        );
+        assert_eq!(
+            record.value_port(&template_declaration(
+                &id,
+                DeclName::expect_valid("missing")
+            )),
+            None
+        );
+        assert_eq!(
+            record.value_port(&ResolvedDeclName::from_def(other, port.clone())),
+            None
+        );
+        assert_eq!(
+            record.concrete_value_ports().collect::<Vec<_>>(),
+            vec![instance_declaration(&id, port)]
+        );
+    }
+
+    #[test]
+    fn rebase_moves_identity_and_ports_and_composes_the_substitution() {
+        let template_owner = DagId::root_in_package("test", "outer");
+        let template = DagId::root_in_package("test", "lib");
+        let concrete_parent = DagId::root_in_package("test", "main").instance_child(named("outer"));
+        let port = DeclName::expect_valid("factor");
+        let source = dimension(&template, "Measure");
+        let substitution = StaticSubstitution {
+            dimensions: BTreeMap::from([(source.clone(), dimension(&template_owner, "Local"))]),
+            ..StaticSubstitution::default()
+        };
+        let mut record = InstanceRecord::new(
+            InstanceId::new(template_owner, named("inner"), template.clone()),
+            substitution,
+            [port.clone()],
+        );
+
+        let composed = dimension(&concrete_parent, "Bound");
+        record.rebase(concrete_parent.clone(), |substitution| {
+            for target in substitution.dimensions.values_mut() {
+                *target = composed.clone();
+            }
+        });
+
+        let expected = InstanceId::new(concrete_parent, named("inner"), template.clone());
+        assert_eq!(record.id(), &expected);
+        assert_eq!(record.specialization().template, template);
+        assert_eq!(record.substitution().dimensions[&source], composed);
+        assert_eq!(
+            record.value_port(&template_declaration(&expected, port.clone())),
+            Some(instance_declaration(&expected, port))
+        );
     }
 }

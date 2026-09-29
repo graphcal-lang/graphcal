@@ -69,7 +69,7 @@ pub fn semantic_runtime_dags_from<'a>(
             )
         })?;
         for edge in dag.semantic_instances() {
-            let child = edge.instance.id.owner().clone();
+            let child = edge.instance.id().owner().clone();
             if visited.insert(child.clone()) {
                 owners.push(child);
             }
@@ -482,7 +482,7 @@ fn validate_execution_facts(
         }
         // Also reject dangling include edges in non-root callable DAGs.
         for edge in dag.semantic_instances() {
-            checked_scope(tir, all_facts, edge.instance.id.owner(), facts.source())?;
+            checked_scope(tir, all_facts, edge.instance.id().owner(), facts.source())?;
         }
     }
     Ok(())
@@ -851,7 +851,7 @@ mod tests {
             .first()
             .unwrap()
             .instance
-            .id
+            .id()
             .owner();
         Arc::make_mut(&mut facts.by_dag).remove(instance).unwrap();
         let error =

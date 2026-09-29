@@ -259,7 +259,7 @@ fn check_retained_reconciliations(
                     return Err(GraphcalError::IncludeMustReconcileOverride {
                         overridden,
                         overridden_kind: kind.to_string(),
-                        orphan_decl: reconciliation.orphan_decl.to_string(),
+                        orphan_decl: reconciliation.orphan_decl().to_string(),
                         detail,
                         src: reconciliation.src.clone(),
                         span: reconciliation.include_span.into(),

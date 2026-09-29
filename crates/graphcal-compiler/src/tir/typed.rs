@@ -641,12 +641,10 @@ fn resolve_declared_type_exprs(
         .semantic_instances
         .iter()
         .flat_map(|record| {
-            record.output_projections.iter().map(|projection| {
-                (
-                    &projection.exposed_name,
-                    &record.instance.specialization.substitution,
-                )
-            })
+            record
+                .output_projections
+                .iter()
+                .map(|projection| (&projection.exposed_name, record.instance.substitution()))
         })
         .collect::<HashMap<_, _>>();
     let mut resolved = HashMap::new();
@@ -729,20 +727,22 @@ fn type_resolve_dag(
 
 fn resolve_override_target(
     target: &crate::ir::override_reconciliation::PendingOverrideTarget,
-    src: &NamedSource<Arc<String>>,
-    include_span: Span,
+    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
     ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedOverrideTarget, GraphcalError> {
     use crate::ir::override_reconciliation::PendingOverrideTarget;
     use crate::registry::declared_type::IndexTypeRef;
 
+    let source_owner = pending.source_owner();
+    let replacement_owner = pending.replacement_owner();
+    let src = pending.src();
+    let include_span = pending.include_span();
+
     let resolve_error = |error| module_resolve_error(&error, src, include_span);
     match target {
         PendingOverrideTarget::Index {
             overridden,
-            source_owner,
             replacement,
-            replacement_owner,
         } => {
             let source = ctx
                 .resolver
@@ -773,9 +773,7 @@ fn resolve_override_target(
         }
         PendingOverrideTarget::Type {
             overridden,
-            source_owner,
             replacement,
-            replacement_owner,
         } => {
             let source = ctx
                 .resolver
@@ -837,19 +835,8 @@ fn resolve_override_reconciliations(
                 .override_reconciliations
                 .iter()
                 .map(|pending| {
-                    let targets = pending
-                        .targets
-                        .iter()
-                        .map(|target| {
-                            resolve_override_target(target, &pending.src, pending.include_span, ctx)
-                        })
-                        .collect::<Result<Vec<_>, GraphcalError>>()?;
-                    Ok(OverrideReconciliation {
-                        source_decl: pending.source_decl.clone(),
-                        orphan_decl: pending.orphan_decl.clone(),
-                        targets,
-                        src: pending.src.clone(),
-                        include_span: pending.include_span,
+                    resolve_override_reconciliation(pending, |target| {
+                        resolve_override_target(target, pending, ctx)
                     })
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -862,6 +849,25 @@ fn resolve_override_reconciliations(
             ))
         })
         .collect()
+}
+
+/// Resolve every target of one pending include-site obligation.
+fn resolve_override_reconciliation(
+    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
+    resolve_target: impl FnMut(
+        &crate::ir::override_reconciliation::PendingOverrideTarget,
+    ) -> Result<ResolvedOverrideTarget, GraphcalError>,
+) -> Result<OverrideReconciliation, GraphcalError> {
+    Ok(OverrideReconciliation {
+        source_decl: pending.source_decl().clone(),
+        targets: pending
+            .targets()
+            .iter()
+            .map(resolve_target)
+            .collect::<Result<_, _>>()?,
+        src: pending.src().clone(),
+        include_span: pending.include_span(),
+    })
 }
 
 fn collect_resolved_type_defs(

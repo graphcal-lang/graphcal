@@ -1219,10 +1219,16 @@ pub(crate) enum ResolvedOverrideTarget {
 #[derive(Debug, Clone)]
 pub(crate) struct OverrideReconciliation {
     pub(crate) source_decl: ResolvedDeclName,
-    pub(crate) orphan_decl: DeclName,
     pub(crate) targets: Vec<ResolvedOverrideTarget>,
     pub(crate) src: NamedSource<Arc<String>>,
     pub(crate) include_span: Span,
+}
+
+impl OverrideReconciliation {
+    /// The unrebound param that must be re-bound at the include site.
+    pub(crate) fn orphan_decl(&self) -> DeclName {
+        self.source_decl.to_unowned_def_name()
+    }
 }
 
 /// A module-owned nominal declaration that may be replaced at an include site.

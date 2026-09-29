@@ -527,7 +527,7 @@ fn check_type_override_dependency(
             return Err(GraphcalError::IncludeMustReconcileOverride {
                 overridden: overridden.to_string(),
                 overridden_kind: "type".to_string(),
-                orphan_decl: reconciliation.orphan_decl.to_string(),
+                orphan_decl: reconciliation.orphan_decl().to_string(),
                 detail,
                 src: reconciliation.src.clone(),
                 span: reconciliation.include_span.into(),
@@ -592,7 +592,7 @@ fn check_index_override_dependency(
             return Err(GraphcalError::IncludeMustReconcileOverride {
                 overridden: overridden.to_string(),
                 overridden_kind: "index".to_string(),
-                orphan_decl: reconciliation.orphan_decl.to_string(),
+                orphan_decl: reconciliation.orphan_decl().to_string(),
                 detail,
                 src: reconciliation.src.clone(),
                 span: reconciliation.include_span.into(),
