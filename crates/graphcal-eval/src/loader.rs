@@ -1343,7 +1343,7 @@ impl LoadedProject {
         cancellation.checkpoint()?;
         let loaded_file = LoadedFile::new(path, dag_id, parsed, HashMap::new(), inline_dags);
         Ok(Self::from_parts(
-            DependencyOrdered::new(Vec::new(), loaded_file),
+            DependencyOrdered::root_only(loaded_file),
             plugins,
             PluginCallPolicy::default(),
         ))

@@ -8256,6 +8256,41 @@ include recursive(x: 1.0)::{result};
     );
 }
 
+/// Message and label start of the E001 a recursive inline-DAG source reports.
+fn recursive_dag_error(source: &str) -> (String, usize) {
+    match compile_and_eval(source) {
+        Err(CompileError::Eval(GraphcalError::EvalError { message, span, .. })) => {
+            (message, span.offset())
+        }
+        other => panic!("expected a recursive DAG instantiation error, got {other:?}"),
+    }
+}
+
+#[test]
+fn mutually_recursive_inline_dags_report_the_cycle_from_the_first_template() {
+    let source =
+        "dag first { include second() as next; }\ndag second { include first() as next; }\n";
+    assert_eq!(
+        recursive_dag_error(source),
+        (
+            "recursive DAG instantiation: first -> second -> first".to_string(),
+            0
+        )
+    );
+}
+
+#[test]
+fn nested_recursive_inline_dag_is_named_by_its_path_in_the_file() {
+    let source = "dag outer {\n  dag inner { include inner() as again; }\n}\n";
+    assert_eq!(
+        recursive_dag_error(source),
+        (
+            "recursive DAG instantiation: outer.inner -> outer.inner".to_string(),
+            source.find("dag inner").unwrap()
+        )
+    );
+}
+
 #[test]
 fn inline_dag_from_source() {
     // Test inline DAG from in-memory source.

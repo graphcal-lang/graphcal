@@ -2,10 +2,14 @@
 //! [`SourceSnapshot`].
 //!
 //! The builder performs no IO. It walks the snapshot depth-first from the root
-//! in the loader's load order, reports the first failure in that order (read or
-//! parse failures, unresolved or self-referencing imports, and import cycles),
-//! assigns each file its [`DagId`], and connects every import/include path to
-//! the exact module it names.
+//! in the loader's load order, recording every import/include edge in a
+//! [`DependencyGraph`], and reports the first failure in that order (read or
+//! parse failures, unresolved or self-referencing imports). An import of a
+//! file that is still being built stops the walk; the graph then names the
+//! import cycle. Otherwise the graph's depth-first order (the walk's own
+//! post-order) orders the loaded files. The builder assigns each file its
+//! [`DagId`] and connects every import/include path to the exact module it
+//! names.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,6 +26,7 @@ use super::{LoadedFile, ModulePathKey, io_not_found};
 use crate::dependency_ordered::DependencyOrdered;
 use crate::eval::CompileError;
 use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::dependency_graph::DependencyGraph;
 use graphcal_compiler::desugar::desugared_ast::Declaration;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::import_cycle::ImportCycle;
@@ -42,15 +47,46 @@ use graphcal_compiler::syntax::ast::ModulePath;
 pub(super) fn build_loaded_files<K: SourceKey>(
     snapshot: SourceSnapshot<K>,
 ) -> Result<DependencyOrdered<LoadedFile>, CompileError> {
-    let SourceSnapshot { root, files } = snapshot;
+    let SourceSnapshot { root, mut files } = snapshot;
+    let root_parsed = files
+        .remove(&root)
+        .ok_or_else(|| io_not_found(root.path()))??;
+    let root_source = root_parsed.named_source().clone();
+    let mut graph = DependencyGraph::new();
+    graph.add_node(root.clone());
     let mut builder = Builder {
         unbuilt: files,
         loading: Vec::new(),
+        graph,
         built: HashMap::new(),
-        dependencies: Vec::new(),
     };
-    let root = builder.build_file(&root)?;
-    Ok(DependencyOrdered::new(builder.dependencies, root))
+    match builder.build_parsed(&root, root_parsed) {
+        Ok(_) | Err(Stop::ReEntered) => {}
+        Err(Stop::Failed(error)) => return Err(error),
+    }
+    let Builder {
+        loading,
+        graph,
+        mut built,
+        ..
+    } = builder;
+    let order = graph.into_depth_first_order().map_err(|cycle| {
+        let lead_in = loading
+            .iter()
+            .take_while(|file| *file != cycle.entry())
+            .map(SourceKey::chain_file)
+            .collect();
+        CompileError::Eval(GraphcalError::CircularImport {
+            cycle: ImportCycle::new(lead_in, cycle.map(|file| file.chain_file())),
+        })
+    })?;
+    DependencyOrdered::from_topo_order(order, &root, |file| built.remove(&file)).ok_or_else(|| {
+        CompileError::Eval(GraphcalError::internal_error(
+            "the loaded files do not match the acyclic import graph",
+            &root_source,
+            DiagnosticAnchor::WholeFile,
+        ))
+    })
 }
 
 struct Builder<K> {
@@ -58,10 +94,26 @@ struct Builder<K> {
     unbuilt: HashMap<K, FetchedFile<K>>,
     /// Files being built, from the root to the current file.
     loading: Vec<K>,
-    /// Completed files and their identities.
-    built: HashMap<K, DagId>,
-    /// Completed files other than the root, in post-order.
-    dependencies: Vec<LoadedFile>,
+    /// Every file reached so far and the files it imports/includes, in load
+    /// order.
+    graph: DependencyGraph<K>,
+    /// Completed files.
+    built: HashMap<K, LoadedFile>,
+}
+
+/// Why the walk stopped before building every reachable file.
+enum Stop {
+    /// A failure to report as is.
+    Failed(CompileError),
+    /// A file imported a file that is still being built: the dependency graph
+    /// now has a cycle.
+    ReEntered,
+}
+
+impl From<CompileError> for Stop {
+    fn from(error: CompileError) -> Self {
+        Self::Failed(error)
+    }
 }
 
 /// Owning file of an import/include path, known before this file's own
@@ -72,30 +124,26 @@ enum ImportOwner {
 }
 
 impl<K: SourceKey> Builder<K> {
-    /// Identity of `file`, building it (and its dependencies) first when needed.
-    fn dependency(&mut self, file: &K) -> Result<DagId, CompileError> {
-        if let Some(dag_id) = self.built.get(file) {
-            return Ok(dag_id.clone());
+    /// Identity of `file`, which `dependent` imports/includes, building it
+    /// (and its dependencies) first when needed.
+    fn dependency(&mut self, dependent: &K, file: &K) -> Result<DagId, Stop> {
+        let reached = self.graph.contains(file);
+        self.graph.add_dependency(dependent.clone(), file.clone());
+        match self.built.get(file) {
+            Some(loaded) => Ok(loaded.dag_id.clone()),
+            // Reached but not built: `file` is still being built.
+            None if reached => Err(Stop::ReEntered),
+            None => {
+                let parsed = self
+                    .unbuilt
+                    .remove(file)
+                    .ok_or_else(|| io_not_found(file.path()))??;
+                self.build_parsed(file, parsed)
+            }
         }
-        let loaded = self.build_file(file)?;
-        let dag_id = loaded.dag_id.clone();
-        self.dependencies.push(loaded);
-        Ok(dag_id)
     }
 
-    fn build_file(&mut self, file: &K) -> Result<LoadedFile, CompileError> {
-        if self.loading.contains(file) {
-            return Err(CompileError::Eval(GraphcalError::CircularImport {
-                cycle: ImportCycle::new(
-                    self.loading.iter().map(SourceKey::chain_file).collect(),
-                    file.chain_file(),
-                ),
-            }));
-        }
-        let parsed = self
-            .unbuilt
-            .remove(file)
-            .ok_or_else(|| io_not_found(file.path()))??;
+    fn build_parsed(&mut self, file: &K, parsed: ParsedSource<K>) -> Result<DagId, Stop> {
         self.loading.push(file.clone());
 
         let stem = file_stem(file.path());
@@ -133,20 +181,25 @@ impl<K: SourceKey> Builder<K> {
             let source_file = if resolved.file == *file {
                 Some(dag_id.clone())
             } else {
-                self.built.get(&resolved.file).cloned()
+                self.built
+                    .get(&resolved.file)
+                    .map(|loaded| loaded.dag_id.clone())
             }?;
             Some(resolved.target_from(&source_file))
         });
 
         self.loading.pop();
-        self.built.insert(file.clone(), dag_id.clone());
-        Ok(LoadedFile::new(
-            file.path().to_path_buf(),
-            dag_id,
-            parsed.into_file(),
-            resolved_imports,
-            inline_dags,
-        ))
+        self.built.insert(
+            file.clone(),
+            LoadedFile::new(
+                file.path().to_path_buf(),
+                dag_id.clone(),
+                parsed.into_file(),
+                resolved_imports,
+                inline_dags,
+            ),
+        );
+        Ok(dag_id)
     }
 
     /// Load the files named by file-root imports/includes and record each
@@ -155,7 +208,7 @@ impl<K: SourceKey> Builder<K> {
         &mut self,
         file: &K,
         parsed: &'p ParsedSource<K>,
-    ) -> Result<HashMap<ModulePathKey, (ImportOwner, &'p ResolvedFile<K>)>, CompileError> {
+    ) -> Result<HashMap<ModulePathKey, (ImportOwner, &'p ResolvedFile<K>)>, Stop> {
         let src = parsed.named_source();
         let mut imports = HashMap::new();
         for dependency in loading_dependency_paths(parsed.ast(), file_stem(file.path())) {
@@ -167,18 +220,20 @@ impl<K: SourceKey> Builder<K> {
             let resolved = match parsed.resolution(path) {
                 Some(ModuleResolution::Resolved(resolved)) => resolved,
                 Some(ModuleResolution::OutsideRoot) => {
-                    return Err(CompileError::Eval(outside_root(path, src.clone())));
+                    return Err(CompileError::Eval(outside_root(path, src.clone())).into());
                 }
-                Some(ModuleResolution::Failed(failure)) => return Err(failure.to_error(path, src)),
-                None => return Err(ResolveFailure::FileNotFound.to_error(path, src)),
+                Some(ModuleResolution::Failed(failure)) => {
+                    return Err(failure.to_error(path, src).into());
+                }
+                None => return Err(ResolveFailure::FileNotFound.to_error(path, src).into()),
             };
             let owner = if resolved.file == *file {
                 if kind == FileRootDependencyKind::Import && resolved.inline_path.is_empty() {
-                    return Err(file_root_self_import_error(path, src));
+                    return Err(file_root_self_import_error(path, src).into());
                 }
                 ImportOwner::ThisFile
             } else {
-                ImportOwner::Dependency(self.dependency(&resolved.file)?)
+                ImportOwner::Dependency(self.dependency(file, &resolved.file)?)
             };
             imports.insert(ModulePathKey::from_path(path), (owner, resolved));
         }
@@ -192,21 +247,22 @@ impl<K: SourceKey> Builder<K> {
         &mut self,
         file: &K,
         parsed: &ParsedSource<K>,
-    ) -> Result<(), CompileError> {
+    ) -> Result<(), Stop> {
         for dependency in loading_dependency_paths(parsed.ast(), file_stem(file.path())) {
             if dependency.site != DependencySite::DagBody {
                 continue;
             }
             match parsed.resolution(dependency.path) {
                 Some(ModuleResolution::Resolved(resolved)) if resolved.file != *file => {
-                    self.dependency(&resolved.file)?;
+                    self.dependency(file, &resolved.file)?;
                 }
                 Some(ModuleResolution::Resolved(_) | ModuleResolution::Failed(_)) | None => {}
                 Some(ModuleResolution::OutsideRoot) => {
                     return Err(CompileError::Eval(outside_root(
                         dependency.path,
                         parsed.named_source().clone(),
-                    )));
+                    ))
+                    .into());
                 }
             }
         }
@@ -456,15 +512,14 @@ mod tests {
         let GraphcalError::CircularImport { cycle } = &error else {
             panic!("expected a circular import, got {error:?}");
         };
+        assert_eq!(cycle.lead_in(), [ImportChainFile::Path(key("a"))]);
         assert_eq!(
-            cycle.loading(),
+            cycle.cycle().path().cloned().collect::<Vec<_>>(),
             [
-                ImportChainFile::Path(key("a")),
                 ImportChainFile::Path(key("b")),
                 ImportChainFile::Path(key("c")),
             ]
         );
-        assert_eq!(cycle.repeated(), &ImportChainFile::Path(key("b")));
         assert_eq!(
             error.to_string(),
             "circular import detected: /p/src/a.gcl -> /p/src/b.gcl -> /p/src/c.gcl -> /p/src/b.gcl"
