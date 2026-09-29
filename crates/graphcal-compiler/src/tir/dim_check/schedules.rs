@@ -19,14 +19,14 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
 use crate::tir::typed::UncheckedTir;
 
-/// Schedules computed for one checking revision, installed only after the
-/// whole TIR has been accepted.
-pub(super) struct CheckedSchedules {
+/// Schedules computed for one checking revision, paired with the bodies only
+/// after the whole TIR has been accepted.
+pub(super) struct ScheduleBuilder {
     constants: ConstSchedule,
     callables: Vec<(DagId, RuntimeSchedule)>,
 }
 
-impl CheckedSchedules {
+impl ScheduleBuilder {
     /// Schedule the constants of every local DAG, then each local DAG as a
     /// callable in [`DagId`] order.
     ///
@@ -71,24 +71,12 @@ impl CheckedSchedules {
         })
     }
 
-    /// Retain the schedules on the accepted TIR.
-    pub(super) fn install(
-        self,
-        tir: &mut UncheckedTir,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
-        for (dag_id, schedule) in self.callables {
-            let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("checked DAG `{dag_id}` disappeared while installing its schedule"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            dag.semantic.runtime_schedule = Some(schedule);
+    /// Release the schedules for pairing with the accepted TIR.
+    pub(super) fn into_parts(self) -> crate::tir::typed::CheckedSchedules {
+        crate::tir::typed::CheckedSchedules {
+            constants: self.constants,
+            callables: self.callables.into_iter().collect(),
         }
-        tir.const_schedule = Some(self.constants);
-        Ok(())
     }
 }
 
@@ -116,7 +104,7 @@ fn cyclic_dependency(
         .or_else(|| cycle.path().last())
         .unwrap_or_else(|| cycle.entry());
     let site = tir
-        .dag_registry()
+        .dags
         .get(closing.owner())
         .and_then(|dag| dag.decls().get(closing))
         .and_then(|decl| match decl {

@@ -250,7 +250,7 @@ node control: Dimensionless = probe::tick() + 1.0;
         .unwrap();
     let values = crate::execution_facts::RuntimeValueMap::new();
     let locals = crate::eval_expr::HirLocalValueMap::root();
-    let context = |dag: &graphcal_compiler::tir::typed::model::DagTIR| {
+    let context = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
         crate::eval_expr::EvalContext::checked(
             tir,
             &plan,

@@ -78,6 +78,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
     )
     .unwrap();
     let mixed = tir
+        .core
         .dimension(&crate::resolved_name::ResolvedDimName::for_test(
             tir.root_dag_id().clone(),
             crate::syntax::dimension::DimName::expect_valid("Mixed"),

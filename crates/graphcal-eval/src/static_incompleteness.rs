@@ -13,7 +13,7 @@ use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
-use graphcal_compiler::tir::typed::model::CheckedTir;
+use graphcal_compiler::tir::typed::checked::CheckedTir;
 use miette::NamedSource;
 
 use crate::execution_plan::ExecPlan;

@@ -20,7 +20,7 @@ use super::override_deps::TypeNominalUse;
 
 pub(super) fn infer_hir_quantity_literal(
     unit: &ResolvedUnitExpr,
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     src: &NamedSource<Arc<String>>,
 ) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;

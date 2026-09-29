@@ -26,7 +26,7 @@ impl Infer<'_> {
 
         use crate::tir::dim_check::builtins::SignatureDimWalk;
 
-        let Some(function) = self.env.tir.extern_functions.get(&ext.key()) else {
+        let Some(function) = self.env.tir.extern_functions().get(&ext.key()) else {
             return Err(GraphcalError::UnknownExternFunction {
                 alias: ext.alias.clone(),
                 name: ext.name.clone(),

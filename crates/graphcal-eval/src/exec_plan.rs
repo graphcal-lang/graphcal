@@ -8,7 +8,7 @@ use miette::NamedSource;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{CheckedTir, DagTIR};
+use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir};
 
 use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::declaration_locations::DeclarationLocations;
@@ -95,7 +95,7 @@ pub fn compile_checked_with_cancellation(
 fn prepare_callable_plan(
     tir: &CheckedTir,
     facts: &CheckedExecutionFacts,
-    body: &DagTIR,
+    body: &CheckedDag,
     declaration_locations: &DeclarationLocations,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -107,12 +107,7 @@ fn prepare_callable_plan(
     let src = root_facts.source();
     let invalid =
         |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
-    let schedule = body.runtime_schedule().ok_or_else(|| {
-        invalid(format!(
-            "callable `{}` has no checked runtime schedule",
-            body.dag_id()
-        ))
-    })?;
+    let schedule = body.runtime_schedule();
     let semantic_dags = schedule
         .execution_dags()
         .iter()
@@ -203,7 +198,7 @@ fn merge_assumes_maps<'a>(
 fn prepare_imports(
     tir: &CheckedTir,
     facts: &CheckedExecutionFacts,
-    dags: &[&DagTIR],
+    dags: &[&CheckedDag],
     locations: &DeclarationLocations,
     source: &NamedSource<Arc<String>>,
 ) -> Result<PreparedImports, GraphcalError> {
@@ -670,7 +665,7 @@ mod tests {
         let tir = checked.tir();
         let src = make_src(source);
         let plan = compile(tir, &src).unwrap();
-        let schedule = tir.root().runtime_schedule().unwrap();
+        let schedule = tir.root().runtime_schedule();
         assert_eq!(plan.root.schedule, *schedule);
         assert_eq!(plan.root.execution_dags, schedule.execution_dags());
         assert_eq!(schedule.execution_dags().len(), 2);
@@ -734,7 +729,6 @@ mod tests {
         let applications = tir
             .root()
             .expression_facts()
-            .unwrap()
             .records()
             .filter_map(|(_, record)| {
                 record

@@ -366,7 +366,7 @@ fn inferred_index_from_type_arg(
 
 fn infer_hir_dim_expr_arg(
     dim_expr: &DimExpr,
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
     dim_expr

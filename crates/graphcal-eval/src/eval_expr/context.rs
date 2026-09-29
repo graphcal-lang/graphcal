@@ -11,7 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{CheckedTir, DagTIR, StructFieldConstraintKey};
+use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, StructFieldConstraintKey};
 use miette::NamedSource;
 
 use crate::domain_constraint::ResolvedDomainConstraint;
@@ -45,7 +45,7 @@ pub struct EvalEnvironment<'a> {
     pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     pub tir: &'a CheckedTir,
-    pub current_dag: &'a DagTIR,
+    pub current_dag: &'a CheckedDag,
     pub current_decl: Option<ResolvedDeclName>,
     pub root_values: Option<&'a RuntimeValueMap>,
     pub unavailable: Option<
@@ -78,7 +78,7 @@ impl<'a> Deref for EvalContext<'a> {
 impl<'a> EvalContext<'a> {
     fn environment(
         tir: &'a CheckedTir,
-        dag: &'a DagTIR,
+        dag: &'a CheckedDag,
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
     ) -> EvalEnvironment<'a> {
@@ -160,24 +160,16 @@ impl<'a> EvalContext<'a> {
         expr: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionRecord, GraphcalError>
     {
-        self.expression_facts(expr.span)?
+        self.expression_facts()
             .executable_value(expr.id())
             .map_err(|error| self.internal_error(error.to_string(), expr.span))
     }
 
     fn expression_facts(
         &self,
-        span: graphcal_compiler::syntax::span::Span,
-    ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionFacts, GraphcalError>
-    {
-        self.independent_expressions.map_or_else(
-            || {
-                self.current_dag
-                    .expression_facts()
-                    .map_err(|error| self.internal_error(error.to_string(), span))
-            },
-            Ok,
-        )
+    ) -> &graphcal_compiler::tir::expression_facts::CheckedExpressionFacts {
+        self.independent_expressions
+            .unwrap_or_else(|| self.current_dag.expression_facts())
     }
 
     /// Contextual literals are checked operands, never executable runtime values.
@@ -187,7 +179,7 @@ impl<'a> EvalContext<'a> {
         expected: graphcal_compiler::tir::expression_facts::ContextualOperand,
     ) -> Result<(), GraphcalError> {
         let record = self
-            .expression_facts(expr.span)?
+            .expression_facts()
             .get(expr.id())
             .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
         match record.fact {
@@ -338,7 +330,7 @@ impl<'a> EvalContext<'a> {
     /// Re-select a canonical body, preserving capabilities and enclosing work.
     pub fn for_dag<'b>(
         &'b self,
-        dag: &DagTIR,
+        dag: &CheckedDag,
         src: &'b NamedSource<Arc<String>>,
     ) -> Result<EvalContext<'b>, GraphcalError>
     where
@@ -374,7 +366,7 @@ impl<'a> EvalContext<'a> {
 
     pub fn for_checked_decl<'b>(
         &'b self,
-        dag: &DagTIR,
+        dag: &CheckedDag,
         src: &'b NamedSource<Arc<String>>,
         declaration: &ResolvedDeclName,
     ) -> Result<EvalContext<'b>, GraphcalError>

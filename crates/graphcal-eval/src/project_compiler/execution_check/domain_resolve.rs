@@ -11,7 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
-    CheckedTir, DagTIR, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey,
+    CheckedDag, CheckedTir, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey,
 };
 
 use crate::domain_constraint::{
@@ -32,7 +32,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 /// Const constraints are also checked against their already-evaluated values.
 pub(super) fn resolve_domain_constraints_for_dag(
     tir: &CheckedTir,
-    dag: &DagTIR,
+    dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
@@ -555,9 +555,7 @@ fn collect_field_constraint_applications(
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
     }
     for dag in tir.dag_registry().values() {
-        let facts = dag.expression_facts().map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
+        let facts = dag.expression_facts();
         for (_, record) in facts.records() {
             if let Some(graphcal_compiler::tir::expression_facts::ValueFact {
                 constructor: Some(application),
@@ -643,7 +641,7 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
 }
 
 pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
-    dag: &DagTIR,
+    dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,

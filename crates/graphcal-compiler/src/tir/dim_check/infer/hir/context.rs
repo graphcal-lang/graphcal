@@ -19,7 +19,7 @@ use super::observations::BodyObservations;
 #[derive(Clone, Copy)]
 pub(in crate::tir::dim_check) struct InferEnv<'a> {
     pub(in crate::tir::dim_check) dag: &'a crate::tir::typed::DagTIR,
-    pub(in crate::tir::dim_check) tir: &'a crate::tir::typed::UncheckedTir,
+    pub(in crate::tir::dim_check) tir: &'a dyn crate::tir::typed::TirRead,
     pub(in crate::tir::dim_check) registry: &'a FormattingRegistry,
     pub(in crate::tir::dim_check) src: &'a NamedSource<Arc<String>>,
 }

@@ -65,14 +65,14 @@ fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, Gr
 }
 
 /// The checked type of a root declaration written as `name`, if any.
-fn root_decl_type_opt<'a>(tir: &'a UncheckedTir, name: &str) -> Option<&'a ResolvedDeclType> {
+fn root_decl_type_opt<'a>(tir: &'a CheckedTir, name: &str) -> Option<&'a ResolvedDeclType> {
     let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
     let identity = tir.root().bound_decl_identity(&written)?;
     tir.decl_type(identity).map(CheckedDeclType::resolved)
 }
 
 /// The checked type of a root declaration written as `name`.
-fn root_decl_type<'a>(tir: &'a UncheckedTir, name: &str) -> &'a ResolvedDeclType {
+fn root_decl_type<'a>(tir: &'a CheckedTir, name: &str) -> &'a ResolvedDeclType {
     root_decl_type_opt(tir, name).unwrap_or_else(|| panic!("`{name}` has no checked type"))
 }
 
@@ -121,7 +121,8 @@ fn value_declaration_records_carry_their_checked_types() {
         assert_eq!(checked.declared(), &declared, "{name}");
         assert_eq!(tir.root().value_decl_type(identity), Some(checked));
         assert_eq!(
-            tir.dag_containing_declaration(identity).map(DagTIR::dag_id),
+            tir.dag_containing_declaration(identity)
+                .map(|dag| dag.dag_id()),
             Some(tir.root_dag_id())
         );
     }
@@ -506,7 +507,7 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
 
 #[test]
 fn dag_store_clones_share_canonical_body_handles() {
-    let tir = parse_and_type_resolve("node x: Dimensionless = 1;").unwrap();
+    let tir = parse_and_type_resolve("node x: Dimensionless = 1.0;").unwrap();
     let owner = tir.root_dag_id().clone();
     let store = tir.freeze_local_dag_store().unwrap();
     let first = store.handle(&owner).unwrap();
@@ -516,29 +517,57 @@ fn dag_store_clones_share_canonical_body_handles() {
     assert!(Arc::ptr_eq(first, second));
 }
 
-fn importer_tir(path: &str, stores: &[&DagStore]) -> UncheckedTir {
-    let mut builder =
-        parse_and_type_resolve_builder_named("node x: Dimensionless = 1;", path).unwrap();
+/// Instantiate and check a draft without external override summaries.
+fn check_draft(
+    draft: TirDraft,
+    src: &NamedSource<Arc<String>>,
+) -> Result<CheckedTir, GraphcalError> {
+    draft
+        .instantiate(&CheckedOverrideDependencies::default(), src)?
+        .check(src, &crate::cancellation::CancellationToken::unbounded())
+}
+
+fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
+    let source = "node x: Dimensionless = 1.0;";
+    let mut builder = parse_and_type_resolve_builder_named(source, path).unwrap();
     stores
         .iter()
         .try_for_each(|store| builder.insert_shared_dag_store(store))
         .unwrap();
-    builder.finish()
-}
-
-fn unit_overlay_tir(path: &str) -> (UncheckedTir, ResolvedUnitName) {
-    let mut tir = parse_and_type_resolve_builder_named(
-        "const unit local_step: Length = 2.0 m; node distance: Length = 1.0 local_step;",
-        path,
+    check_draft(
+        builder,
+        &NamedSource::new(path, Arc::new(source.to_string())),
     )
     .unwrap()
-    .finish();
+}
+
+fn unit_overlay_tir(path: &str) -> (CheckedTir, ResolvedUnitName) {
+    unit_overlay_tir_with(path, |_, _| {})
+}
+
+/// A checked body whose own dynamic unit is also installed as a runtime unit,
+/// after `extra` edits the runtime-unit overlay.
+fn unit_overlay_tir_with(
+    path: &str,
+    extra: impl FnOnce(&mut UncheckedTir, &ResolvedUnitName),
+) -> (CheckedTir, ResolvedUnitName) {
+    let source = "const unit local_step: Length = 2.0 m; node distance: Length = 1.0 local_step;";
+    let mut tir = parse_and_type_resolve_builder_named(source, path)
+        .unwrap()
+        .finish();
     let unit = ResolvedUnitName::for_test(
         tir.root_dag_id().clone(),
         UnitName::expect_valid("local_step"),
     );
     let info = tir.unit_info(&unit).unwrap().clone();
     tir.insert_runtime_unit(unit.clone(), info).unwrap();
+    extra(&mut tir, &unit);
+    let tir = InstantiatedTir { tir }
+        .check(
+            &NamedSource::new(path, Arc::new(source.to_string())),
+            &crate::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap();
     (tir, unit)
 }
 
@@ -586,32 +615,37 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
     let (owner, body) = leaf.iter().next().unwrap();
     for shared_first in [false, true] {
         let mut root =
-            parse_and_type_resolve_builder_named("node x: Dimensionless = 1;", "root.gcl").unwrap();
+            parse_and_type_resolve_builder_named("node x: Dimensionless = 1.0;", "root.gcl")
+                .unwrap();
         if shared_first {
             root.insert_shared_dag_store(&leaf).unwrap();
             assert!(
-                matches!(root.insert_dag(body.clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
+                matches!(root.insert_dag((**body).clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
             );
         } else {
-            root.insert_dag(body.clone()).unwrap();
+            root.insert_dag((**body).clone()).unwrap();
             assert!(
                 matches!(root.insert_shared_dag_store(&leaf), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
             );
         }
-        assert_eq!(root.finish().dag_registry().len(), 2);
+        assert_eq!(root.finish().dags.len(), 2);
     }
 }
 
 #[test]
 fn publication_rejects_runtime_units_without_a_defining_body() {
-    let (mut tir, unit) = unit_overlay_tir("root.gcl");
-    let missing = ResolvedUnitName::for_test(
-        tir.root_dag_id()
-            .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("missing")),
-        unit.to_unowned_def_name(),
-    );
-    let info = tir.unit_info(&unit).unwrap().clone();
-    tir.insert_runtime_unit(missing.clone(), info).unwrap();
+    let mut missing = None;
+    let (tir, _) = unit_overlay_tir_with("root.gcl", |tir, unit| {
+        let identity = ResolvedUnitName::for_test(
+            tir.root_dag_id()
+                .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("missing")),
+            unit.to_unowned_def_name(),
+        );
+        let info = tir.unit_info(unit).unwrap().clone();
+        tir.insert_runtime_unit(identity.clone(), info).unwrap();
+        missing = Some(identity);
+    });
+    let missing = missing.unwrap();
     assert!(
         matches!(tir.freeze_local_dag_store(), Err(DagStoreFreezeError::MissingUnitOwner { identity }) if identity == missing)
     );
@@ -741,8 +775,12 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
 /// directly (no self-import preprocessing — fixtures exercised here
 /// either don't use self-imports or are expected to surface errors that
 /// fall out of the unprocessed body).
-fn parse_and_type_resolve(source: &str) -> Result<UncheckedTir, GraphcalError> {
-    parse_and_type_resolve_builder(source).map(TirDraft::finish)
+fn parse_and_type_resolve(source: &str) -> Result<CheckedTir, GraphcalError> {
+    let draft = parse_and_type_resolve_builder(source)?;
+    check_draft(
+        draft,
+        &NamedSource::new("test.gcl", Arc::new(source.to_string())),
+    )
 }
 
 fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, GraphcalError> {
@@ -822,7 +860,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
         Err(DagRegistryError::DuplicateDag { dag_id }) if dag_id == root_id
     ));
 
-    let tir = builder.finish();
+    let tir = check_draft(builder, &src).unwrap();
     assert_eq!(tir.root_dag_id(), &root_id);
     assert_eq!(tir.root().dag_id(), &root_id);
     assert_eq!(tir.dag_registry().len(), 1);
@@ -1594,4 +1632,93 @@ fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimension
     );
     // The canonical store is untouched.
     assert_eq!(store.get_dimension(&qp), Some(&(&length * &mass).unwrap()));
+}
+
+fn instantiate_for_test(draft: TirDraft, src: &NamedSource<Arc<String>>) -> InstantiatedTir {
+    draft
+        .instantiate(&CheckedOverrideDependencies::default(), src)
+        .unwrap()
+}
+
+#[test]
+fn each_instantiation_checks_a_fresh_revision_of_the_same_bodies() {
+    let source = "node x: Dimensionless = 1.0;";
+    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let draft = parse_and_type_resolve_builder(source).unwrap();
+    let first = check_draft(draft.clone(), &src).unwrap();
+    let second = check_draft(draft, &src).unwrap();
+    let formula = |tir: &CheckedTir| {
+        tir.root()
+            .nodes()
+            .next()
+            .unwrap()
+            .definition
+            .formula()
+            .unwrap()
+            .id()
+            .clone()
+    };
+    assert_eq!(formula(&first), formula(&second));
+    assert_ne!(first.root().body_revision(), second.root().body_revision());
+    assert!(
+        first
+            .root()
+            .expression_facts()
+            .validate_environment(first.root_dag_id(), first.root().body_revision())
+            .is_ok()
+    );
+}
+
+/// Everything `tir` published for its root, to pair with another check's body.
+fn root_parts(tir: &CheckedTir) -> CheckedParts {
+    let owner = tir.root_dag_id().clone();
+    let root = tir.root();
+    CheckedParts {
+        expression_facts: HashMap::from([(owner.clone(), root.expression_facts().clone())]),
+        typed_bodies: HashMap::from([(owner.clone(), root.typed_bodies().unwrap().clone())]),
+        presentation: HashMap::from([(owner.clone(), root.presentation().clone())]),
+        schedules: CheckedSchedules {
+            constants: tir.const_schedule().clone(),
+            callables: HashMap::from([(owner, root.runtime_schedule().clone())]),
+        },
+    }
+}
+
+#[test]
+fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
+    let source = "node x: Dimensionless = 1.0;";
+    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let draft = parse_and_type_resolve_builder(source).unwrap();
+    let other = check_draft(draft.clone(), &src).unwrap();
+    let pair = |edit: &dyn Fn(&mut CheckedParts)| {
+        let mut parts = root_parts(&other);
+        edit(&mut parts);
+        instantiate_for_test(draft.clone(), &src)
+            .tir
+            .into_checked(parts, &src)
+    };
+    let fails_with = |result: Result<CheckedTir, GraphcalError>, expected: &str| {
+        assert!(
+            matches!(&result, Err(GraphcalError::InternalError { message, .. }) if message.contains(expected)),
+            "expected `{expected}`: {result:?}"
+        );
+    };
+    fails_with(
+        pair(&|parts| parts.expression_facts.clear()),
+        "no checked expression facts",
+    );
+    fails_with(
+        pair(&|parts| parts.presentation.clear()),
+        "no checked presentation facts",
+    );
+    fails_with(
+        pair(&|parts| parts.schedules.callables.clear()),
+        "no checked runtime schedule",
+    );
+    fails_with(
+        pair(&|parts| parts.typed_bodies.clear()),
+        "a canonical body has no typed trees",
+    );
+    // Every part belongs to the other check's revision of the same body.
+    fails_with(pair(&|_| {}), "another semantic environment");
 }

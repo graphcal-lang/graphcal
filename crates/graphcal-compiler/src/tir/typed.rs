@@ -27,6 +27,8 @@ use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
 
+pub mod checked;
+pub use checked::*;
 pub mod model;
 pub use model::*;
 pub mod override_dependencies;
@@ -227,7 +229,7 @@ impl TirDraft {
         // A nested DAG's `import plugin` signatures join the file's extern
         // map, exactly like the root body's, so calls inside it resolve.
         self.merge_declared_extern_functions(signed.hir(), src)?;
-        let project_types = Arc::clone(&self.project_types);
+        let project_types = self.project_types();
         let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
             signed,
             imported_bindings,
@@ -259,6 +261,11 @@ impl TirDraft {
         let mut tir = self.finish();
         specialization::instantiate_semantic_edges(&mut tir, src)?;
         overrides.reconcile(&mut tir);
+        // Each instantiation is one semantic revision of its local bodies:
+        // the facts its check publishes belong to exactly these bodies.
+        tir.dags
+            .values_mut()
+            .for_each(|dag| dag.body_revision = crate::body_revision::BodyRevision::fresh());
         Ok(InstantiatedTir { tir })
     }
 }
@@ -707,10 +714,6 @@ fn type_resolve_dag(
         bindable_nominals,
         type_defs,
         decl_bindings: HashMap::new(),
-        expression_facts: None,
-        typed_bodies: None,
-        presentation: crate::tir::presentation::DagPresentationFacts::default(),
-        runtime_schedule: None,
     };
 
     Ok(DagTIRSeed {
@@ -1684,7 +1687,7 @@ pub(crate) fn rigid_dimension_view(
     src: &NamedSource<Arc<String>>,
 ) -> Result<UncheckedTir, GraphcalError> {
     let rigid_types = tir
-        .project_types
+        .project_type_store()
         .with_rigid_dimensions(ports)
         .map_err(|_| GraphcalError::DimensionOverflow {
             src: src.clone(),
@@ -1692,7 +1695,10 @@ pub(crate) fn rigid_dimension_view(
         })?;
     let mut rigid = tir.clone();
     for port in ports {
-        rigid.registry.dimensions.register_rigid_dimension(port);
+        rigid
+            .registry_mut()
+            .dimensions
+            .register_rigid_dimension(port);
     }
     let rigid_dag = rigid.dags.localized_mut(dag_id).ok_or_else(|| {
         GraphcalError::internal_error(
@@ -1711,7 +1717,7 @@ pub(crate) fn rigid_dimension_view(
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     rigid_dag.replace_value_decl_types(resolved);
-    rigid.project_types = Arc::new(rigid_types);
+    rigid.replace_project_types(rigid_types);
     Ok(rigid)
 }
 
@@ -1721,9 +1727,6 @@ pub(crate) fn rigid_dimension_view(
 pub(crate) mod specialization;
 mod substitution;
 mod type_expr;
-pub(crate) use specialization::{
-    install_semantic_plot_projection_facts, install_semantic_presentation_facts,
-};
 pub use substitution::{Substitution, SubstitutionError};
 pub use type_expr::resolve_hir_decl_type;
 use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};

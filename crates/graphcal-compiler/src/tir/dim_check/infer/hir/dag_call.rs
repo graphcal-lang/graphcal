@@ -24,16 +24,15 @@ impl Infer<'_> {
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let display_path = target.value.to_string();
-        let dag_tir =
-            self.env
-                .tir
-                .dags
-                .get(&target.value)
-                .ok_or_else(|| GraphcalError::UnknownDag {
-                    name: display_path.clone(),
-                    src: self.env.src.clone(),
-                    span: target.span.into(),
-                })?;
+        let dag_tir = self
+            .env
+            .tir
+            .dag(&target.value)
+            .ok_or_else(|| GraphcalError::UnknownDag {
+                name: display_path.clone(),
+                src: self.env.src.clone(),
+                span: target.span.into(),
+            })?;
 
         let mut required_param_keys = std::collections::HashSet::new();
         let param_decl_types_by_key: HashMap<

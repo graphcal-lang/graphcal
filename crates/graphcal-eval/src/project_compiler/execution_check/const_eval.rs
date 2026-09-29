@@ -30,9 +30,7 @@ pub(super) fn eval_const_pools_for_dags(
     cancellation.checkpoint()?;
     let invalid =
         |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
-    let schedule = tir
-        .const_schedule()
-        .ok_or_else(|| invalid("checked TIR has no constant schedule".to_owned()))?;
+    let schedule = tir.const_schedule();
     if schedule.dags().len() != dag_ids.len()
         || !schedule
             .dags()

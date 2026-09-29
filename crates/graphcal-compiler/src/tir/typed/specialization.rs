@@ -245,7 +245,7 @@ fn specialize_struct_ref(
 pub fn specialize_expression_type<V: Concreteness>(
     ty: &crate::registry::checked_type::CheckedType<V>,
     substitution: &StaticSubstitution,
-    tir: &UncheckedTir,
+    tir: &dyn super::TirRead,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::registry::checked_type::CheckedType<V>, GraphcalError> {
     use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
@@ -477,7 +477,6 @@ fn initialize_instance_identity(
     let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
     instance.dag_id = owner.clone();
-    instance.begin_checking_revision();
     instance.semantic_specialization = Some(specialization.clone());
     instance.static_ports.clear();
     instance
@@ -643,12 +642,6 @@ fn specialize_instance_semantics(
             .runtime_deps
             .insert(instance_port, dependencies);
     }
-    instance.semantic.presentation.plot_channels.clear();
-    // Concrete Static index bindings can change cardinality. Instance checking
-    // specializes the canonical template's retained facts before publication;
-    // interpretation must not reconstruct axes from the source defaults.
-    instance.semantic.expression_facts = None;
-    instance.semantic.typed_bodies = None;
     instance.semantic.domain_bounds = instance
         .semantic
         .domain_bounds
@@ -707,8 +700,25 @@ fn clone_checked_instance(
     Ok(instance)
 }
 
+/// Checked channel shapes of a DAG's plots.
+pub type PlotChannels =
+    HashMap<ResolvedDeclName, HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>>;
+
+/// The checked presentation facts of `dag_id`: a local body's from
+/// `presentation`, an imported body's from its checked handle.
+fn checked_presentation<'a>(
+    tir: &'a UncheckedTir,
+    presentation: &'a HashMap<crate::dag_id::DagId, DagPresentationFacts>,
+    dag_id: &crate::dag_id::DagId,
+) -> Option<&'a DagPresentationFacts> {
+    presentation
+        .get(dag_id)
+        .or_else(|| tir.dags.shared(dag_id).map(super::CheckedDag::presentation))
+}
+
 fn specialize_instance_presentation_facts(
     tir: &UncheckedTir,
+    presentation: &HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
@@ -720,19 +730,20 @@ fn specialize_instance_presentation_facts(
                 .map(|specialization| (owner, specialization, &dag.runtime_owner_rebases))
         })
         .map(|(owner, specialization, runtime_owner_rebases)| {
-            let template = tir.dags.get(&specialization.template).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "semantic instance `{owner}` has no presentation template `{}`",
-                        specialization.template
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+            let template = checked_presentation(tir, presentation, &specialization.template)
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!(
+                            "semantic instance `{owner}` has no presentation template `{}`",
+                            specialization.template
+                        ),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
             let plot_channels = port_generic_plot_channels
                 .get(owner)
-                .unwrap_or(&template.semantic.presentation.plot_channels)
+                .unwrap_or(&template.plot_channels)
                 .iter()
                 .map(|(plot, channels)| {
                     channels
@@ -752,8 +763,11 @@ fn specialize_instance_presentation_facts(
         .collect()
 }
 
-fn install_plot_projections_for_dag(
-    tir: &mut UncheckedTir,
+/// Copy the plots `parent` requests from its instances into its presentation,
+/// instances first.
+fn add_plot_projections_for_dag(
+    tir: &UncheckedTir,
+    presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     parent: &crate::dag_id::DagId,
     visiting: &mut HashSet<crate::dag_id::DagId>,
     complete: &mut HashSet<crate::dag_id::DagId>,
@@ -794,11 +808,19 @@ fn install_plot_projections_for_dag(
         })
         .collect::<Vec<_>>();
     for (instance_owner, target, exposed) in projections {
-        install_plot_projections_for_dag(tir, &instance_owner, visiting, complete, src)?;
-        let channels = tir
-            .dags
-            .get(&instance_owner)
-            .and_then(|instance| instance.plot_channel_presentations(&target))
+        // Imported instances already carry their complete checked projections.
+        if presentation.contains_key(&instance_owner) {
+            add_plot_projections_for_dag(
+                tir,
+                presentation,
+                &instance_owner,
+                visiting,
+                complete,
+                src,
+            )?;
+        }
+        let channels = checked_presentation(tir, presentation, &instance_owner)
+            .and_then(|instance| instance.plot_channels.get(&target))
             .cloned()
             .ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -809,92 +831,45 @@ fn install_plot_projections_for_dag(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-        let dag = tir.dags.get_mut(parent).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("semantic plot projection parent `{parent}` is unavailable"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        dag.semantic
-            .presentation
-            .plot_channels
-            .insert(target, channels.clone());
-        dag.semantic
-            .presentation
-            .plot_channels
-            .insert(exposed, channels);
+        let plot_channels = &mut presentation
+            .entry(parent.clone())
+            .or_default()
+            .plot_channels;
+        plot_channels.insert(target, channels.clone());
+        plot_channels.insert(exposed, channels);
     }
     visiting.remove(parent);
     complete.insert(parent.clone());
     Ok(())
 }
 
-fn dag_identity_snapshot(tir: &UncheckedTir) -> Vec<crate::dag_id::DagId> {
-    // Imported bodies are immutable handles. Only local assembly bodies can
-    // receive instance/projection facts.
-    tir.dags.local_keys().cloned().collect()
-}
-
-/// Copy requested instance plots into their semantic parents from leaves upward.
-pub fn install_semantic_plot_projection_facts(
-    tir: &mut UncheckedTir,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    // Projection installation mutates the registry, so traversal owns a stable
-    // identity snapshot rather than holding an iterator borrow across mutation.
-    let dag_ids = dag_identity_snapshot(tir);
-    let mut visiting = HashSet::new();
-    let mut complete = HashSet::new();
-    dag_ids.into_iter().try_for_each(|dag_id| {
-        install_plot_projections_for_dag(tir, &dag_id, &mut visiting, &mut complete, src)
-    })
-}
-
-/// Checked channel shapes of a DAG's plots.
-pub type PlotChannels =
-    HashMap<ResolvedDeclName, HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>>;
-
-/// Bootstrap semantic instances with specialized checked presentation facts.
+/// Add semantic instances' specialized presentation facts, and the plots each
+/// body projects from its instances, to the canonical local `presentation`.
 ///
 /// An instance specializes its template's plot shapes, or, when it rebinds a
 /// defaulted dimension port, the template's shapes in the view where that
-/// port is rigid (`port_generic_plot_channels`, keyed by instance). The
-/// dimension checker subsequently recomputes concrete provenance from each
-/// instance body while retaining these already-checked plot shapes.
-pub fn install_semantic_presentation_facts(
-    tir: &mut UncheckedTir,
+/// port is rigid (`port_generic_plot_channels`, keyed by instance). Requested
+/// instance plots are then copied into their semantic parents from leaves
+/// upward.
+pub fn add_semantic_presentation_facts(
+    tir: &UncheckedTir,
+    presentation: &mut HashMap<crate::dag_id::DagId, DagPresentationFacts>,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for (owner, facts) in
-        specialize_instance_presentation_facts(tir, port_generic_plot_channels, src)?
-    {
-        let instance = tir.dags.get_mut(&owner).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("semantic presentation instance `{owner}` is unavailable"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        instance.semantic.presentation = facts;
-    }
-    install_semantic_plot_projection_facts(tir, src)
+    let instances =
+        specialize_instance_presentation_facts(tir, presentation, port_generic_plot_channels, src)?;
+    presentation.extend(instances);
+    let mut visiting = HashSet::new();
+    let mut complete = HashSet::new();
+    tir.dags.local_iter().try_for_each(|(parent, _)| {
+        add_plot_projections_for_dag(tir, presentation, parent, &mut visiting, &mut complete, src)
+    })
 }
 
-fn install_semantic_projection_bindings(
-    tir: &mut UncheckedTir,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let dag_ids = tir.dags.local_keys().cloned().collect::<Vec<_>>();
-    for dag_id in dag_ids {
-        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared during instantiation"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
+/// Bind the names each body exposes from its instances' projections.
+fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
+    for dag in tir.dags.values_mut() {
         for edge in dag.semantic_instances.clone() {
             for projection in edge.output_projections {
                 let has_local_body = dag
@@ -922,7 +897,6 @@ fn install_semantic_projection_bindings(
             }
         }
     }
-    Ok(())
 }
 
 fn instantiate_semantic_edge(
@@ -1005,7 +979,8 @@ pub fn instantiate_semantic_edges(
             .filter(|edge| tir.dags.get(edge.instance.id().owner()).is_none())
             .collect::<Vec<_>>();
         if edges.is_empty() {
-            return install_semantic_projection_bindings(tir, src);
+            install_semantic_projection_bindings(tir);
+            return Ok(());
         }
         for edge in edges {
             instantiate_semantic_edge(tir, &edge, src)?;
