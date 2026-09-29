@@ -8,7 +8,6 @@ use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
 use crate::syntax::ast::{InputBindingCategory, UnresolvedRef};
 use crate::syntax::local_name::LocalName;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
@@ -78,10 +77,10 @@ pub fn lower_expr(
 
 /// Resolve a declaration reference without constructing an expression.
 pub fn lower_graph_reference(
-    reference: &Spanned<ScopedName>,
+    reference: &Spanned<crate::syntax::ast::IdentPath>,
     ctx: ExprLoweringContext<'_>,
 ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
-    ExprLowerer::new(ctx).resolve_graph_ref(reference)
+    ExprLowerer::new(ctx).resolve_source_graph_ref(reference)
 }
 
 /// Lower a syntax assertion body into tolerant HIR.

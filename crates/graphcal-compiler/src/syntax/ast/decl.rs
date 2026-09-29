@@ -5,7 +5,7 @@ use crate::syntax::ast::common::{
 };
 use crate::syntax::ast::multi_decl::MultiDecl;
 use crate::syntax::ast::value::{
-    DimExpr, Expr, GenericArg, NatExpr, ParamBinding, TypeExpr, UnitExpr,
+    DimExpr, Expr, GenericArg, IdentPath, NatExpr, ParamBinding, TypeExpr, UnitExpr,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -597,8 +597,7 @@ pub struct NodeDecl<P: Phase = Raw> {
     pub name: Spanned<DeclName>,
     pub type_ann: TypeExpr<P>,
     #[phase_lift(map = map_formula)]
-    pub definition:
-        crate::node_definition::NodeDefinition<Expr<P>, crate::syntax::module_name::ScopedName>,
+    pub definition: crate::node_definition::NodeDefinition<Expr<P>, IdentPath>,
 }
 
 /// Const node declaration: `const node name: Type = expr;`

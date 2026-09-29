@@ -184,11 +184,7 @@ fn format_node_decl(fmt: &mut Formatter<'_>, d: &NodeDecl) -> RcDoc<'static> {
 fn format_todo(
     fmt: &mut Formatter<'_>,
     dependencies: &graphcal_compiler::syntax::span::Spanned<
-        Vec<
-            graphcal_compiler::syntax::span::Spanned<
-                graphcal_compiler::syntax::module_name::ScopedName,
-            >,
-        >,
+        Vec<graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::ast::IdentPath>>,
     >,
 ) -> RcDoc<'static> {
     let end = dependencies.span.offset() + dependencies.span.len();

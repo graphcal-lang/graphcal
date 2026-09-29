@@ -4,13 +4,12 @@ use crate::hir::expr_lower::context::ExprLoweringContext;
 use crate::hir::expr_lower::error::ExprLowerError;
 use crate::hir::expr_lower::lower::{lower_expr, lower_graph_reference};
 use crate::hir::node_definition::NodeDefinition;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
 
 pub(super) fn lower(
     definition: &crate::node_definition::NodeDefinition<
         crate::desugar::desugared_ast::Expr,
-        ScopedName,
+        crate::syntax::ast::IdentPath,
     >,
     context: ExprLoweringContext<'_>,
 ) -> Result<NodeDefinition, ExprLowerError> {

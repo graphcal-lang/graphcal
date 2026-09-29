@@ -10,10 +10,10 @@ use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
 use crate::resolve::scope::ModuleAliasRole;
 use crate::syntax::ast::{Ident, IdentPath};
-use crate::syntax::decl_name::DeclName;
+use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::local_name::LocalName;
-use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
+use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
 
@@ -44,6 +44,68 @@ pub(super) fn unknown_decl(resolved: &ResolvedDeclName, span: Span) -> ExprLower
             name: resolved.atom().clone(),
         },
         span,
+    }
+}
+
+type DeclSymbol<'r> = crate::resolve::symbols::SymbolRef<'r, DeclNameNamespace, DeclSymbolKind>;
+
+/// A declaration reached by a source path, before its kind is checked.
+struct SourceDeclTarget<'r> {
+    resolved: ResolvedDeclName,
+    /// The resolver's symbol for the written path, when the resolver reached
+    /// it. For an include-instance member this is the template declaration.
+    symbol: Option<DeclSymbol<'r>>,
+    /// Whether the path was bound by the owner's lexical binding table.
+    bound: bool,
+}
+
+/// The scope boundary a graph reference crosses. It decides which
+/// declaration kinds the reference may read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GraphRefBoundary {
+    /// `@name`: a declaration or lexical binding of the owner itself.
+    Local,
+    /// `@alias::name` through an `import` alias. The alias names a reusable
+    /// blueprint, not an instance, so only instance-independent constants
+    /// are readable.
+    ImportedDag,
+    /// `@alias::name` through a module-form `include` alias, or an output of
+    /// an anonymous selective include instance.
+    IncludedInstance,
+}
+
+impl GraphRefBoundary {
+    /// The boundary of a reference qualified by a module alias of `role`.
+    pub(super) const fn through_alias(role: ModuleAliasRole) -> Self {
+        match role {
+            ModuleAliasRole::ImportedDag => Self::ImportedDag,
+            ModuleAliasRole::IncludedInstance => Self::IncludedInstance,
+        }
+    }
+
+    /// Check that a declaration of kind `actual` may be read across this
+    /// boundary, returning the expected kind otherwise.
+    pub(super) const fn check(self, actual: DeclSymbolKind) -> Result<(), ExpectedDeclKind> {
+        match self {
+            Self::ImportedDag => match actual {
+                DeclSymbolKind::Const => Ok(()),
+                DeclSymbolKind::Param
+                | DeclSymbolKind::Node
+                | DeclSymbolKind::Assert
+                | DeclSymbolKind::Plot
+                | DeclSymbolKind::Figure
+                | DeclSymbolKind::Layer
+                | DeclSymbolKind::Dag => Err(ExpectedDeclKind::InstanceIndependentConst),
+            },
+            Self::Local | Self::IncludedInstance => match actual {
+                DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node => Ok(()),
+                DeclSymbolKind::Assert
+                | DeclSymbolKind::Plot
+                | DeclSymbolKind::Figure
+                | DeclSymbolKind::Layer
+                | DeclSymbolKind::Dag => Err(ExpectedDeclKind::GraphValue),
+            },
+        }
     }
 }
 
@@ -177,9 +239,8 @@ impl<'a> ExprLowerer<'a> {
             });
         }
 
-        let scoped_name = ScopedName::local(DeclName::classify(ident.name.atom().clone()));
-        match self.resolve_decl_scoped_name(&scoped_name, span) {
-            Ok(resolved) => {
+        match self.resolve_source_decl(&path, span) {
+            Ok(SourceDeclTarget { resolved, .. }) => {
                 let kind = *self
                     .ctx
                     .scope
@@ -188,7 +249,7 @@ impl<'a> ExprLowerer<'a> {
                     .ok_or_else(|| unknown_decl(&resolved, span))?
                     .kind();
                 Err(ExprLowerError::BareGraphDeclarationRef {
-                    name: scoped_name,
+                    name: ScopedName::local(DeclName::classify(ident.name.atom().clone())),
                     kind,
                     span,
                 })
@@ -220,20 +281,23 @@ impl<'a> ExprLowerer<'a> {
         path: &IdentPath,
     ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
         let span = path.span();
-        let scoped = ScopedName::classify_path(&path.to_name_path());
-        self.lower_const_ref(&scoped, span)
+        self.lower_const_ref(&path.to_name_path(), span)
             .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
     }
 
     pub(super) fn lower_const_ref(
         &self,
-        name: &ScopedName,
+        path: &NamePath,
         span: Span,
     ) -> Result<ConstRef, ExprLowerError> {
-        let mut first_error = None;
-
-        if let Some(resolved) = self.ctx.overlay.decl_binding(name).cloned() {
-            self.ensure_bound_decl_access(name, &resolved, span)?;
+        let name = ScopedName::classify_path(path);
+        if let Some(resolved) = self.bound_decl(&name) {
+            let lookup = self
+                .ctx
+                .scope
+                .resolver
+                .resolve_decl_path(self.ctx.scope.owner, path);
+            self.check_bound_source_access(path, lookup, &resolved, span)?;
             let actual = *self
                 .ctx
                 .scope
@@ -255,243 +319,222 @@ impl<'a> ExprLowerer<'a> {
             };
         }
 
-        // An anonymous include qualifier has no source path; such a name is
-        // only reachable through the binding overlay above.
-        if let Some(path) = name.to_name_path() {
-            match self
-                .ctx
-                .scope
-                .resolver
-                .resolve_const_decl_path(self.ctx.scope.owner, &path)
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-            {
-                Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
-                Err(err) => first_error.get_or_insert(err),
-            };
-            if let Some(resolved) = self.resolve_synthetic_child_decl_path(&path)
-                && self
-                    .ctx
-                    .scope
-                    .resolver
-                    .symbol(&resolved)
-                    .is_some_and(|symbol| symbol.kind().is_const())
-            {
-                return Ok(ConstRef::Decl(resolved));
-            }
-            match self
-                .ctx
-                .scope
-                .resolver
-                .resolve_constructor_path(self.ctx.scope.owner, &path)
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-            {
-                Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
-                Err(err) => first_error.get_or_insert(err),
-            };
-        }
-
-        first_error.map_or_else(
-            // Only a name qualified by an anonymous include instance has no
-            // source path to resolve; without a binding it is unknown.
-            || {
-                Err(ExprLowerError::UnknownGraphRef {
-                    name: name.clone(),
-                    span,
-                })
-            },
-            |source| Err(ExprLowerError::ModuleResolve { source, span }),
-        )
+        let first_error = match self
+            .ctx
+            .scope
+            .resolver
+            .resolve_const_decl_path(self.ctx.scope.owner, path)
+        {
+            Ok(symbol) => return Ok(ConstRef::Decl(symbol.into_resolved())),
+            Err(source) => source,
+        };
+        self.ctx
+            .scope
+            .resolver
+            .resolve_constructor_path(self.ctx.scope.owner, path)
+            .map(|constructor| ConstRef::Constructor(constructor.into_resolved()))
+            .map_err(|_| ExprLowerError::ModuleResolve {
+                source: first_error,
+                span,
+            })
     }
 
     pub(super) fn lower_graph_ref(
         &self,
-        name: &Spanned<ScopedName>,
+        reference: &ast::GraphRef,
     ) -> Result<ExprKind<Tolerant>, ExprLowerError> {
-        self.resolve_graph_ref(name).map(ExprKind::GraphRef)
+        self.resolve_graph_ref(reference).map(ExprKind::GraphRef)
     }
 
+    /// Resolve a `@` reference and check that its target may be read across
+    /// the boundary the reference crosses.
     pub(super) fn resolve_graph_ref(
         &self,
-        name: &Spanned<ScopedName>,
+        reference: &ast::GraphRef,
     ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
-        let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
-        let path_symbol = match name.value.to_name_path().map(|path| {
-            self.ctx
-                .scope
-                .resolver
-                .resolve_decl_path(self.ctx.scope.owner, &path)
-        }) {
-            Some(Ok(symbol)) => Some(symbol),
-            Some(Err(source @ ModuleResolveError::PrivateName { .. })) => {
-                return Err(ExprLowerError::ModuleResolve {
-                    source,
-                    span: name.span,
-                });
-            }
-            Some(Err(_)) | None => None,
-        };
-        let kind = match path_symbol.or_else(|| self.ctx.scope.resolver.symbol(&resolved)) {
-            Some(symbol) => *symbol.kind(),
-            None if self.ctx.overlay.decl_binding(&name.value).is_some() => {
-                return Ok(Spanned::new(resolved, name.span));
-            }
-            None => return Err(unknown_decl(&resolved, name.span)),
-        };
-        let role = name
-            .value
-            .qualifier()
-            .first()
-            .and_then(ScopeSegment::alias)
-            .and_then(|alias| {
-                self.ctx
-                    .scope
-                    .resolver
-                    .module_alias_role(self.ctx.scope.owner, alias)
-            });
-        let permitted = match role {
-            Some(ModuleAliasRole::ImportedDag) => kind == DeclSymbolKind::Const,
-            Some(ModuleAliasRole::IncludedInstance) | None => {
-                matches!(
-                    kind,
-                    DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node
-                )
-            }
-        };
-        if !permitted {
-            return Err(ExprLowerError::ModuleResolve {
-                source: ModuleResolveError::UnexpectedDeclKind {
-                    name: resolved,
-                    expected: match role {
-                        Some(ModuleAliasRole::ImportedDag) => {
-                            ExpectedDeclKind::InstanceIndependentConst
-                        }
-                        Some(ModuleAliasRole::IncludedInstance) | None => {
-                            ExpectedDeclKind::GraphValue
-                        }
-                    },
-                    actual: kind,
-                },
-                span: name.span,
-            });
-        }
-        Ok(Spanned::new(resolved, name.span))
-    }
-
-    pub(super) fn resolve_decl_scoped_name(
-        &self,
-        name: &ScopedName,
-        span: Span,
-    ) -> Result<ResolvedDeclName, ExprLowerError> {
-        if let Some(resolved) = self.ctx.overlay.decl_binding(name).cloned() {
-            self.ensure_bound_decl_access(name, &resolved, span)?;
-            return Ok(resolved);
-        }
-        // An anonymous include qualifier has no source path; such a name is
-        // only reachable through the binding overlay above.
-        let Some(path) = name.to_name_path() else {
-            return Err(ExprLowerError::UnknownGraphRef {
-                name: name.clone(),
-                span,
-            });
-        };
-        let resolved = match self
-            .ctx
-            .scope
-            .resolver
-            .resolve_decl_path(self.ctx.scope.owner, &path)
-            .map(crate::resolve::symbols::SymbolRef::into_resolved)
-        {
-            Ok(resolved) => Ok(resolved),
-            // Synthetic include-instance children intentionally are not module
-            // aliases. Retry only when the qualifier itself is absent; once
-            // the resolver reaches a real alias, its rejection is authoritative.
-            Err(source @ ModuleResolveError::UnknownModuleAlias { .. }) => {
-                self.resolve_synthetic_child_decl_path(&path).ok_or(source)
-            }
-            Err(source) => Err(source),
-        };
-        resolved.map_err(|source| match source {
-            ModuleResolveError::UnknownName { .. } => ExprLowerError::UnknownGraphRef {
-                name: name.clone(),
-                span,
-            },
-            source => ExprLowerError::ModuleResolve { source, span },
-        })
-    }
-
-    pub(super) fn ensure_bound_decl_access(
-        &self,
-        name: &ScopedName,
-        resolved: &ResolvedDeclName,
-        span: Span,
-    ) -> Result<(), ExprLowerError> {
-        if !name.is_qualified() {
-            return Ok(());
-        }
-
-        match name.to_name_path().map(|path| {
-            self.ctx
-                .scope
-                .resolver
-                .resolve_decl_path(self.ctx.scope.owner, &path)
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-        }) {
-            Some(Ok(_)) => Ok(()),
-            // An anonymous include qualifier is never a module alias.
-            None
-            | Some(Err(
-                ModuleResolveError::UnknownModuleAlias { .. }
-                | ModuleResolveError::UnknownName { .. },
-            )) => {
-                let Some(template) = self.ctx.overlay.instance_template(resolved.owner()) else {
-                    return Ok(());
+        match reference {
+            ast::GraphRef::Source(path) => self.resolve_source_graph_ref(path),
+            ast::GraphRef::IncludeOutput { span, .. } => {
+                let name = reference.to_scoped_name();
+                let Some(resolved) = self.bound_decl(&name) else {
+                    return Err(ExprLowerError::UnknownGraphRef { name, span: *span });
                 };
-                if template == self.ctx.scope.owner {
-                    return Ok(());
-                }
+                self.ensure_instance_accessible(&resolved, *span)?;
+                let target = SourceDeclTarget {
+                    resolved,
+                    symbol: None,
+                    bound: true,
+                };
+                self.check_graph_ref_boundary(target, GraphRefBoundary::IncludedInstance, *span)
+            }
+        }
+    }
 
-                let template_path = NamePath::local(resolved.atom().clone());
-                if self
+    /// Resolve a `@` reference written in source (`@name` or
+    /// `@module.child::name`).
+    pub(super) fn resolve_source_graph_ref(
+        &self,
+        reference: &Spanned<IdentPath>,
+    ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
+        let span = reference.span;
+        let path = reference.value.to_name_path();
+        let target = self.resolve_source_decl(&path, span)?;
+        let boundary = match path.qualifier().first() {
+            None => GraphRefBoundary::Local,
+            Some(head) => {
+                let alias = ModuleAliasName::classify(head.clone());
+                match self
                     .ctx
                     .scope
                     .resolver
-                    .resolve_decl_path(template, &template_path)
-                    .map_err(|source| ExprLowerError::ModuleResolve { source, span })?
-                    .is_instance_accessible()
+                    .module_alias_role(self.ctx.scope.owner, &alias)
                 {
-                    Ok(())
-                } else {
-                    Err(ExprLowerError::ModuleResolve {
-                        source: ModuleResolveError::PrivateName {
-                            owner: resolved.owner().clone(),
-                            category: NameCategory::Table(SymbolTable::Decl),
-                            name: resolved.atom().clone(),
-                        },
-                        span,
-                    })
+                    Some(role) => GraphRefBoundary::through_alias(role),
+                    None => {
+                        return Err(ExprLowerError::ModuleResolve {
+                            source: ModuleResolveError::UnknownModuleAlias {
+                                owner: self.ctx.scope.owner.clone(),
+                                alias,
+                            },
+                            span,
+                        });
+                    }
                 }
             }
-            Some(Err(source)) => Err(ExprLowerError::ModuleResolve { source, span }),
+        };
+        self.check_graph_ref_boundary(target, boundary, span)
+    }
+
+    fn check_graph_ref_boundary(
+        &self,
+        target: SourceDeclTarget<'a>,
+        boundary: GraphRefBoundary,
+        span: Span,
+    ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
+        let actual = match target
+            .symbol
+            .or_else(|| self.ctx.scope.resolver.symbol(&target.resolved))
+        {
+            Some(symbol) => *symbol.kind(),
+            // A lexical binding the resolver does not declare (an elaborated
+            // instance member) carries no kind to check.
+            None if target.bound => return Ok(Spanned::new(target.resolved, span)),
+            None => return Err(unknown_decl(&target.resolved, span)),
+        };
+        boundary
+            .check(actual)
+            .map_err(|expected| ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::UnexpectedDeclKind {
+                    name: target.resolved.clone(),
+                    expected,
+                    actual,
+                },
+                span,
+            })?;
+        Ok(Spanned::new(target.resolved, span))
+    }
+
+    /// Resolve a source declaration path: a lexical binding of the owner
+    /// first, otherwise the module resolver. An unknown name is reported as
+    /// [`ExprLowerError::UnknownGraphRef`].
+    fn resolve_source_decl(
+        &self,
+        path: &NamePath,
+        span: Span,
+    ) -> Result<SourceDeclTarget<'a>, ExprLowerError> {
+        let name = ScopedName::classify_path(path);
+        let lookup = self
+            .ctx
+            .scope
+            .resolver
+            .resolve_decl_path(self.ctx.scope.owner, path);
+        if let Some(resolved) = self.bound_decl(&name) {
+            let symbol = self.check_bound_source_access(path, lookup, &resolved, span)?;
+            return Ok(SourceDeclTarget {
+                resolved,
+                symbol,
+                bound: true,
+            });
+        }
+        match lookup {
+            Ok(symbol) => Ok(SourceDeclTarget {
+                resolved: symbol.into_resolved(),
+                symbol: Some(symbol),
+                bound: false,
+            }),
+            Err(ModuleResolveError::UnknownName { .. }) => {
+                Err(ExprLowerError::UnknownGraphRef { name, span })
+            }
+            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
         }
     }
 
-    pub(super) fn resolve_synthetic_child_decl_path(
+    /// The canonical identity a written name is lexically bound to, if any.
+    fn bound_decl(&self, name: &ScopedName) -> Option<ResolvedDeclName> {
+        self.ctx.overlay.decl_binding(name).cloned()
+    }
+
+    /// Check the access rule of a source path that is lexically bound to
+    /// `resolved`, given the resolver's own `lookup` of the path.
+    ///
+    /// A local name needs no check. A qualified name the resolver reaches is
+    /// checked by the resolver; one it cannot reach names an elaborated
+    /// include-instance member, which is checked against its template.
+    /// Returns the resolver's symbol when it reached the path.
+    fn check_bound_source_access(
         &self,
         path: &NamePath,
-    ) -> Option<ResolvedDeclName> {
-        let (qualifier, leaf) = path.qualifier_and_leaf()?;
-        let owner = qualifier
-            .iter()
-            .fold(self.ctx.scope.owner.clone(), |owner, segment| {
-                owner.inline_dag_child(DeclName::classify(segment.clone()))
-            });
-        self.ctx.scope.resolver.symbols(&owner).and_then(|module| {
-            let decl_name = DeclName::classify(leaf.clone());
-            module
-                .decls()
-                .contains_key(&decl_name)
-                .then(|| ResolvedDeclName::from_def(owner, decl_name))
-        })
+        lookup: Result<DeclSymbol<'a>, ModuleResolveError>,
+        resolved: &ResolvedDeclName,
+        span: Span,
+    ) -> Result<Option<DeclSymbol<'a>>, ExprLowerError> {
+        match lookup {
+            Ok(symbol) => Ok(Some(symbol)),
+            Err(_) if !path.is_qualified() => Ok(None),
+            Err(
+                ModuleResolveError::UnknownModuleAlias { .. }
+                | ModuleResolveError::UnknownName { .. },
+            ) => self
+                .ensure_instance_accessible(resolved, span)
+                .map(|()| None),
+            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
+        }
+    }
+
+    /// Require that an elaborated include-instance member is readable by the
+    /// instance's consumer, judged by its declaration in the template.
+    fn ensure_instance_accessible(
+        &self,
+        resolved: &ResolvedDeclName,
+        span: Span,
+    ) -> Result<(), ExprLowerError> {
+        let Some(template) = self.ctx.overlay.instance_template(resolved.owner()) else {
+            return Ok(());
+        };
+        if template == self.ctx.scope.owner {
+            return Ok(());
+        }
+
+        let template_path = NamePath::local(resolved.atom().clone());
+        if self
+            .ctx
+            .scope
+            .resolver
+            .resolve_decl_path(template, &template_path)
+            .map_err(|source| ExprLowerError::ModuleResolve { source, span })?
+            .is_instance_accessible()
+        {
+            Ok(())
+        } else {
+            Err(ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::PrivateName {
+                    owner: resolved.owner().clone(),
+                    category: NameCategory::Table(SymbolTable::Decl),
+                    name: resolved.atom().clone(),
+                },
+                span,
+            })
+        }
     }
 
     /// Resolve one Term callee before argument-shape validation. The backing

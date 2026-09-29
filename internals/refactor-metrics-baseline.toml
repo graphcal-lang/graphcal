@@ -1,5 +1,5 @@
 internal_error_calls = 282
-resolved_name_from_def_outside_resolver = 54
+resolved_name_from_def_outside_resolver = 53
 expect_valid_format = 0
 too_many_arguments_expects = 39
 build_declared_types_calls = 10

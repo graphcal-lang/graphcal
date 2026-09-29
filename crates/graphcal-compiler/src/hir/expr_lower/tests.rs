@@ -709,3 +709,167 @@ fn bare_graph_declaration_refs_require_at_sigil() {
         ));
     }
 }
+
+#[test]
+fn graph_ref_boundary_admits_only_readable_declaration_kinds() {
+    use super::resolve::GraphRefBoundary;
+    use crate::resolve::error::ExpectedDeclKind;
+
+    let graph_values = [
+        DeclSymbolKind::Const,
+        DeclSymbolKind::Param,
+        DeclSymbolKind::Node,
+    ];
+    let non_values = [
+        DeclSymbolKind::Assert,
+        DeclSymbolKind::Plot,
+        DeclSymbolKind::Figure,
+        DeclSymbolKind::Layer,
+        DeclSymbolKind::Dag,
+    ];
+    for boundary in [GraphRefBoundary::Local, GraphRefBoundary::IncludedInstance] {
+        for kind in graph_values {
+            assert_eq!(boundary.check(kind), Ok(()), "{boundary:?} {kind}");
+        }
+        for kind in non_values {
+            assert_eq!(
+                boundary.check(kind),
+                Err(ExpectedDeclKind::GraphValue),
+                "{boundary:?} {kind}"
+            );
+        }
+    }
+    assert_eq!(
+        GraphRefBoundary::ImportedDag.check(DeclSymbolKind::Const),
+        Ok(())
+    );
+    for kind in graph_values.into_iter().skip(1).chain(non_values) {
+        assert_eq!(
+            GraphRefBoundary::ImportedDag.check(kind),
+            Err(ExpectedDeclKind::InstanceIndependentConst),
+            "{kind}"
+        );
+    }
+}
+
+#[test]
+fn graph_ref_boundary_follows_the_alias_role() {
+    use super::resolve::GraphRefBoundary;
+    use crate::resolve::scope::ModuleAliasRole;
+
+    assert_eq!(
+        GraphRefBoundary::through_alias(ModuleAliasRole::ImportedDag),
+        GraphRefBoundary::ImportedDag
+    );
+    assert_eq!(
+        GraphRefBoundary::through_alias(ModuleAliasRole::IncludedInstance),
+        GraphRefBoundary::IncludedInstance
+    );
+}
+
+fn include_output_ref(member: &str) -> (ScopedName, ast::Expr) {
+    use crate::syntax::module_name::{IncludeInstanceId, ScopeSegment};
+
+    let scope = ScopeSegment::IncludeInstance(IncludeInstanceId::at_source_offset(7));
+    let member = DeclName::expect_valid(member);
+    let expr = ast::Expr::new(
+        ast::ExprKind::GraphRef(ast::GraphRef::IncludeOutput {
+            scope: scope.clone(),
+            member: member.clone(),
+            span: Span::new(3, 4),
+        }),
+        Span::new(3, 4),
+    );
+    (ScopedName::in_scope(scope, member), expr)
+}
+
+#[test]
+fn include_output_ref_resolves_only_through_instance_bindings() {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source("param p: Dimensionless; assert checked = @p > 0.0;");
+    let resolver =
+        ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
+    let scope = GenericScope::new();
+    let time_zones = TimeZoneRegistry::bundled();
+    let registry = RegistryBuilder::new().build();
+    let no_units = HashMap::new();
+    let no_templates = HashMap::new();
+    let module = ModuleScope::new(&owner, &resolver, &scope);
+    let context = || ExprLoweringContext::new(module, &time_zones);
+    let bound = |bindings| {
+        ExprLoweringContext::with_overlay(
+            module,
+            &time_zones,
+            BindingOverlay::Frozen(FrozenBindings {
+                unit_registry: &registry.units,
+                unit_bindings: &no_units,
+                decl_bindings: bindings,
+                instance_templates: &no_templates,
+            }),
+        )
+    };
+
+    // Unbound: an include output has no source path to fall back on.
+    let (name, expr) = include_output_ref("p");
+    let err = lower_expr(&expr, context()).unwrap_err();
+    assert_eq!(
+        err,
+        ExprLowerError::UnknownGraphRef {
+            name: name.clone(),
+            span: Span::new(3, 4),
+        }
+    );
+
+    // Bound: the binding's target is the reference, kind-checked as an
+    // included instance's output.
+    let target = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p"));
+    let bindings = HashMap::from([(name, target.clone())]);
+    let lowered = lower_expr(&expr, bound(&bindings)).unwrap();
+    let ExprKind::GraphRef(reference) = lowered.kind() else {
+        panic!("expected a graph reference, got {:?}", lowered.kind());
+    };
+    assert_eq!(reference.value, target);
+
+    // A bound output that is not a graph value is rejected.
+    let (name, expr) = include_output_ref("checked");
+    let assertion = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("checked"));
+    let bindings = HashMap::from([(name, assertion)]);
+    let err = lower_expr(&expr, bound(&bindings)).unwrap_err();
+    assert!(matches!(
+        err,
+        ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::UnexpectedDeclKind {
+                expected: crate::resolve::error::ExpectedDeclKind::GraphValue,
+                actual: DeclSymbolKind::Assert,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn qualified_source_graph_ref_requires_a_module_alias() {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source("param p: Dimensionless; node out: Dimensionless = @nope::p;");
+    let resolver =
+        ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
+    let scope = GenericScope::new();
+
+    let err = lower_expr(
+        node_value(&file, "out"),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::UnknownModuleAlias { alias, .. },
+            ..
+        } if alias.as_str() == "nope"
+    ));
+}

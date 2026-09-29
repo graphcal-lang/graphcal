@@ -205,7 +205,8 @@ pub struct CollectedParamEntry {
 #[derive(Debug)]
 pub struct CollectedNodeEntry {
     pub(crate) name: DeclName,
-    pub(crate) definition: crate::node_definition::NodeDefinition<Expr, ScopedName>,
+    pub(crate) definition:
+        crate::node_definition::NodeDefinition<Expr, crate::syntax::ast::IdentPath>,
     pub(crate) span: Span,
 }
 

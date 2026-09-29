@@ -218,7 +218,8 @@ pub struct UnfrozenNodeEntry {
     pub(super) type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
     pub(super) type_resolution_owner: crate::dag_id::DagId,
-    pub(super) definition: crate::node_definition::NodeDefinition<Expr, ScopedName>,
+    pub(super) definition:
+        crate::node_definition::NodeDefinition<Expr, crate::syntax::ast::IdentPath>,
     /// Module scope for the declaration body expression.
     pub(super) body_resolution_owner: crate::dag_id::DagId,
     pub(super) span: Span,

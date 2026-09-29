@@ -270,14 +270,6 @@ impl ModuleSymbols {
         &self.owner
     }
 
-    /// Value/declaration namespace symbols.
-    #[must_use]
-    pub(crate) const fn decls(
-        &self,
-    ) -> &HashMap<DeclName, Symbol<DeclNameNamespace, DeclSymbolKind>> {
-        &self.decls
-    }
-
     /// Dimension namespace symbols.
     #[must_use]
     pub(crate) const fn dimensions(&self) -> &HashMap<DimName, Symbol<DimNameNamespace>> {
