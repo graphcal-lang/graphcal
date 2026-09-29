@@ -1,11 +1,10 @@
 //! Shared frame mechanics. Expression interpretation and result reporting are adapters.
 
-use crate::checked_program::SealedDag;
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
-use crate::execution_plan::{CallablePlan, DeclarationBody, ExecPlan};
+use crate::execution_plan::{CallablePlan, ExecPlan, PlannedBody};
 use crate::presentation_evidence::PresentationInstanceMap;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
@@ -14,6 +13,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
+use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use miette::NamedSource;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,14 +50,12 @@ pub struct FrameOutcome {
 
 /// One scheduled declaration handed to a frame's expression adapter.
 ///
-/// Its scope is the step's own and is not exposed: the adapter evaluates the
-/// body in the context
-/// [`EvalContext::for_declaration`](crate::eval_expr::EvalContext::for_declaration)
-/// selects from the step.
+/// Its checked tree comes with the scope of the DAG that owns the
+/// declaration, so the adapter evaluates it in that scope.
 pub struct ScheduledDeclaration<'a> {
     key: &'a ResolvedDeclName,
-    scope: SealedDag<'a>,
-    body: &'a TExpr,
+    source: &'a NamedSource<Arc<String>>,
+    body: ScopedTree<'a, &'a TExpr>,
 }
 
 impl<'a> ScheduledDeclaration<'a> {
@@ -67,15 +65,16 @@ impl<'a> ScheduledDeclaration<'a> {
         self.key
     }
 
-    /// The declaration's checked tree.
+    /// The declaration's checked tree, in its owner's scope.
     #[must_use]
-    pub const fn body(&self) -> &'a TExpr {
-        self.body
+    pub const fn body(&self) -> &ScopedTree<'a, &'a TExpr> {
+        &self.body
     }
 
-    /// The sealed DAG declaring it, for selecting its evaluation context.
-    pub(crate) const fn scope(&self) -> SealedDag<'a> {
-        self.scope
+    /// The source the declaration's diagnostics point into.
+    #[must_use]
+    pub const fn source(&self) -> &'a NamedSource<Arc<String>> {
+        self.source
     }
 }
 
@@ -277,7 +276,7 @@ impl<'a> ExecutionFrame<'a> {
             }
             let scope = declaration.scope();
             let (root, tree) = match declaration.body() {
-                DeclarationBody::Todo => {
+                PlannedBody::Todo => {
                     self.errors.insert(
                         key.clone(),
                         NodeUnavailable::Todo {
@@ -286,8 +285,8 @@ impl<'a> ExecutionFrame<'a> {
                     );
                     continue;
                 }
-                DeclarationBody::Expression { root, tree } => (*root, tree),
-                DeclarationBody::Supplied => {
+                PlannedBody::Expression { root, tree } => (root.get(), tree),
+                PlannedBody::Supplied => {
                     return Err(GraphcalError::internal_error(
                         format!("TIR runtime declaration missing for `{key}`"),
                         scope.source(),
@@ -306,10 +305,17 @@ impl<'a> ExecutionFrame<'a> {
                 self.errors.insert(key.clone(), reason);
                 continue;
             }
-            let body = tree.as_ref().map_err(|error| {
+            let body = *tree.as_ref().map_err(|error| {
                 GraphcalError::internal_error(error.to_string(), scope.source(), root.span.into())
             })?;
-            let result = evaluate(ScheduledDeclaration { key, scope, body }, self);
+            let result = evaluate(
+                ScheduledDeclaration {
+                    key,
+                    source: scope.source(),
+                    body,
+                },
+                self,
+            );
             match result {
                 Ok(evaluated) => {
                     self.bind(

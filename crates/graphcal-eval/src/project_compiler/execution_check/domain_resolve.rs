@@ -11,7 +11,8 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
-    CheckedDag, CheckedTir, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey,
+    CheckedDag, CheckedTir, DeclarationBody, ResolvedDeclType, ResolvedStructFieldSemantics,
+    ResolvedValueType, Scoped, StructFieldConstraintKey,
 };
 
 use crate::constant_pools::RuntimeValueMap;
@@ -19,7 +20,7 @@ use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
-use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_texpr};
+use crate::eval_expr::{EvalSession, RuntimeValue, eval_root};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
@@ -41,7 +42,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     cancellation.checkpoint()?;
     let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
-    let ctx = EvalContext::provisional_constants(tir, dag.dag_id(), src, cancellation.clone())?
+    let ctx = EvalSession::provisional_constants(tir, src, cancellation.clone())
         .with_roots(&visible_const_values, None);
     let mut constraints = HashMap::new();
     let decl_iter = dag
@@ -76,10 +77,13 @@ pub(super) fn resolve_domain_constraints_for_dag(
 
     for (name, resolved_key, annotation, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
-        let Some(domain_bounds) = dag.semantic().domain_bounds.get(&resolved_key) else {
+        let Some(domain_bounds) = tir
+            .declaration_body(&resolved_key)
+            .and_then(DeclarationBody::domain_bounds)
+        else {
             continue;
         };
-        let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
+        let constraint_src = domain_bounds.get().first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
             Some(annotation.checked().resolved().element()),
@@ -125,14 +129,14 @@ enum ConstraintTarget {
 /// Checking-only substitution services never enter the interpreter context.
 #[derive(Clone, Copy)]
 struct BoundCheckingContext<'a, 'b> {
-    evaluation: &'a EvalContext<'b>,
+    evaluation: &'a EvalSession<'b>,
     bindings: &'a HashMap<graphcal_compiler::hir::types::GenericParamId, u64>,
 }
 
 /// Evaluate a declaration's or field's stored HIR domain bounds into the
 /// representation selected by its constrained value family.
 fn resolve_constraint_from_bounds(
-    bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
+    bounds: Scoped<'_, [graphcal_compiler::tir::typed::ResolvedDomainBound]>,
     display_name: &str,
     target: ConstraintTarget,
     values: &RuntimeValueMap,
@@ -201,7 +205,7 @@ fn resolve_constraint_from_bounds(
                 |_expr, epoch| epoch.to_string(),
             )?;
             ResolvedDomainConstraint::datetime(scale, evaluated).map_err(|error| {
-                let anchor = bounds.first().map_or(DiagnosticAnchor::WholeFile, |bound| {
+                let anchor = bounds.get().first().map_or(DiagnosticAnchor::WholeFile, |bound| {
                     DiagnosticAnchor::Source(bound.span)
                 });
                 GraphcalError::internal_error(
@@ -217,7 +221,7 @@ fn resolve_constraint_from_bounds(
 }
 
 fn evaluate_domain_bounds<T: PartialOrd>(
-    bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
+    scoped_bounds: Scoped<'_, [graphcal_compiler::tir::typed::ResolvedDomainBound]>,
     display_name: &str,
     values: &RuntimeValueMap,
     ctx: BoundCheckingContext<'_, '_>,
@@ -228,6 +232,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     ) -> Result<T, GraphcalError>,
     format_display: impl Fn(&graphcal_compiler::hir::Expr, &T) -> String,
 ) -> Result<EvaluatedDomainBounds<T>, GraphcalError> {
+    let bounds = scoped_bounds.get();
     let Some(first) = bounds.first() else {
         return Err(GraphcalError::internal_error(
             format!("domain constraint on `{display_name}` has no bounds"),
@@ -235,14 +240,14 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             DiagnosticAnchor::WholeFile,
         ));
     };
-    let empty_locals = HirLocalValueMap::root();
-    let evaluated = bounds
+    let evaluated = scoped_bounds
         .iter()
-        .map(|bound| {
+        .map(|scoped_bound| {
+            let bound = scoped_bound.get();
             let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
-                ctx.evaluation.tir, ctx.evaluation.dag(), &bound.value, ctx.bindings, &bound.src,
+                ctx.evaluation.tir, scoped_bound, ctx.bindings,
             )?;
-            let runtime_value = eval_texpr(&tree, values, &empty_locals, ctx.evaluation)?;
+            let runtime_value = eval_root(&tree, values, ctx.evaluation)?;
             let value = convert(&runtime_value, bound)?;
             let display = format_display(&bound.value, &value);
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
@@ -448,18 +453,9 @@ fn resolve_application_field_constraints(
 ) -> Result<ApplicationFieldConstraints, GraphcalError> {
     ctx.cancellation.checkpoint()?;
     let dag_id = application.identity.resolved().owner();
-    let dag = ctx.tir.dag_registry().get(dag_id).ok_or_else(|| {
-        GraphcalError::internal_error(
-            format!("type owner `{dag_id}` has no checked DAG"),
-            ctx.fallback_src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    let type_def = dag
-        .semantic()
-        .type_defs
-        .struct_types
-        .get(application.identity.resolved())
+    let nominal = ctx
+        .tir
+        .nominal_type_body(application.identity.resolved())
         .ok_or_else(|| {
             GraphcalError::internal_error(
                 format!(
@@ -470,6 +466,7 @@ fn resolve_application_field_constraints(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
+    let type_def = nominal.definition();
     let constants = ctx.const_scopes.get(dag_id).ok_or_else(|| {
         GraphcalError::internal_error(
             format!("type owner `{dag_id}` has no evaluated constant scope"),
@@ -485,23 +482,15 @@ fn resolve_application_field_constraints(
         type_def.source(),
         type_def.span(),
     )?;
-    let application_ctx = EvalContext::provisional_constants(
-        ctx.tir,
-        dag.dag_id(),
-        owner_src,
-        ctx.cancellation.clone(),
-    )?
-    .with_roots(&visible_const_values, None);
+    let application_ctx =
+        EvalSession::provisional_constants(ctx.tir, owner_src, ctx.cancellation.clone())
+            .with_roots(&visible_const_values, None);
     let mut constraints = Vec::new();
-    for (key, field_semantics) in dag
-        .semantic()
-        .type_defs
-        .constrained_fields()
-        .filter(|(key, _)| key.owning_type == *application.identity.resolved())
-    {
+    for (key, scoped_field) in nominal.constrained_fields() {
+        let field_semantics = scoped_field.get();
         let display_name = format!("{}.{}", key.constructor, key.field);
-        let bounds = field_semantics.domain_bounds();
-        let Some(first_bound) = bounds.first() else {
+        let bounds = scoped_field.map(ResolvedStructFieldSemantics::domain_bounds);
+        let Some(first_bound) = bounds.get().first() else {
             return Err(GraphcalError::internal_error(
                 format!("constrained field `{display_name}` has no domain bounds"),
                 type_def.source(),

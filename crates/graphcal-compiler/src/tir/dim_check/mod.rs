@@ -826,7 +826,8 @@ fn is_bindable_nominal(
 }
 
 /// Check one already-lowered external value expression against a concrete
-/// declared type in this TIR's root module.
+/// declared type in this TIR's root module, returning its tree in the root's
+/// scope.
 ///
 /// This is the compiler-facing half of runtime parameter binding: callers may
 /// lower a closed value expression independently of declaration compilation,
@@ -838,12 +839,12 @@ fn is_bindable_nominal(
 /// Returns a [`GraphcalError`] when the expression is not well typed in the
 /// root module or does not exactly match `expected`, or when its tree is not
 /// executable.
-pub fn check_external_value_expr_type(
-    tir: &crate::tir::typed::CheckedTir,
+pub fn check_external_value_expr_type<'t>(
+    tir: &'t crate::tir::typed::CheckedTir,
     expr: &crate::hir::Expr,
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
+) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     let observations = infer::hir::BodyObservations::default();
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
@@ -878,6 +879,7 @@ pub fn check_external_value_expr_type(
                     .cloned()
                     .map_err(|error| error.to_string())
             })
+            .map(|tree| tir.external_value_tree(tree))
             .map_err(|message| {
                 GraphcalError::internal_error(message, src, DiagnosticAnchor::Source(expr.span))
             })

@@ -10,7 +10,7 @@ use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
 use crate::constant_pools::ConstPoolBuildError;
-use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_texpr_with_presentation};
+use crate::eval_expr::{EvalSession, eval_root_with_presentation};
 use crate::presentation_evidence::PresentationInstanceMap;
 
 /// Evaluate the constants of `tir` with the interpreter, together with the
@@ -26,24 +26,17 @@ pub(super) fn eval_const_pool(
         .const_presentations()
         .map(|(key, evidence)| (key.clone(), evidence.clone()))
         .collect::<PresentationInstanceMap>();
-    let empty_hir_locals = HirLocalValueMap::root();
     let evaluated = EvaluatedTir::evaluate(tir, inherited, |step| {
         cancellation.checkpoint()?;
-        let ctx = EvalContext::provisional_constants(
-            step.tir,
-            step.dag.dag_id(),
-            src,
-            cancellation.clone(),
-        )?
-        .with_roots(step.visible, None)
-        .for_decl(step.key);
-        reject_constant_call(step.expression, src)?;
-        let (value, presentation) = eval_texpr_with_presentation(
-            ctx.executable(step.expression)?,
+        let session = EvalSession::provisional_constants(step.tir, src, cancellation.clone())
+            .with_roots(step.visible, None)
+            .for_decl(step.key);
+        reject_constant_call(step.expression.get(), src)?;
+        let (value, presentation) = eval_root_with_presentation(
+            &session.executable(step.expression)?,
             step.visible,
             &presentations,
-            &empty_hir_locals,
-            &ctx,
+            &session,
         )?
         .into_parts();
         if !presentation.is_none() {

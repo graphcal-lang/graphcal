@@ -194,7 +194,7 @@ fn consuming_rules_record_contextual_literals() {
         &src,
     )
     .unwrap();
-    assert_eq!(count_contextual_nodes(&independent), 1);
+    assert_eq!(count_contextual_nodes(independent.tree()), 1);
 
     let (tir, src) = module_aware_tir(
         "node zoned: Datetime<UTC> = datetime(\"2026-01-01T09:00:00\", \"Asia/Tokyo\");\n\

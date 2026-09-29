@@ -1,0 +1,534 @@
+//! Evaluation units: the source of one declaration, unit scale, or nominal
+//! type, bound to the scope of the DAG that owns it.
+//!
+//! A checked body names declarations and units by DAG-relative handles, and
+//! the instances of one template share their bodies. Which declaration a
+//! handle denotes therefore depends on the DAG that runs the body. Outside the
+//! compiler, the DAG is never chosen by the code evaluating a body: it is
+//! selected here, from the owner of the typed identity whose unit is looked
+//! up, and every tree of the unit is handed out together with that DAG's
+//! scope ([`Scoped`], [`ScopedTree`]). A [`BodyScope`] exists only inside such
+//! a value.
+
+use std::borrow::Borrow;
+
+use crate::hir::expr::{AssertBody, Expr, LocalDecl, LocalUnit};
+use crate::ir::entry::Decl;
+use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName, ResolvedUnitName};
+use crate::tir::texpr::{CheckedBody, ContextualLiteral, ExecutableBodyError, TBody, TExpr};
+
+use super::checked::{CheckedDag, CheckedTir};
+use super::model::{
+    ResolvedDomainBound, ResolvedStructFieldSemantics, ResolvedStructFieldTypeKey, Typed,
+    TypedAssertEntry, TypedFigureEntry, TypedLayerEntry, TypedPlotEntry,
+};
+
+/// The scope a body runs in: the frame of the checked DAG that owns it.
+///
+/// Created only by this module, from the owner of a typed identity (or, for
+/// an external value, the root module), and handed out only inside a
+/// [`Scoped`] part or a [`ScopedTree`] of that DAG.
+#[derive(Debug, Clone, Copy)]
+pub struct BodyScope<'t> {
+    dag: &'t CheckedDag,
+}
+
+impl<'t> BodyScope<'t> {
+    /// The scope of `dag`, for the compiler's own selections.
+    pub(crate) const fn of(dag: &'t CheckedDag) -> Self {
+        Self { dag }
+    }
+
+    /// The DAG whose frame this is, for the compiler's own specialization.
+    pub(crate) const fn dag(self) -> &'t CheckedDag {
+        self.dag
+    }
+
+    /// Identity of the DAG that runs bodies in this scope.
+    #[must_use]
+    pub fn dag_id(self) -> &'t crate::dag_id::DagId {
+        self.dag.dag_id()
+    }
+
+    /// The declaration `handle` denotes when this scope's DAG runs the body
+    /// holding it.
+    #[must_use]
+    pub fn resolve(self, handle: &LocalDecl) -> ResolvedDeclName {
+        self.dag.frame().resolve(handle)
+    }
+
+    /// The unit whose scale `unit` has when this scope's DAG runs the body
+    /// holding it.
+    #[must_use]
+    pub fn resolve_unit(self, unit: &LocalUnit) -> ResolvedUnitName {
+        self.dag.frame().resolve_unit(unit)
+    }
+
+    /// The nominal type `source` stands for when this scope's DAG runs a
+    /// body naming it, after the instance's Static type substitution.
+    #[must_use]
+    pub fn runtime_struct_type(self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
+        self.dag.frame().struct_type(source)
+    }
+}
+
+/// A part of one evaluation unit's source, together with the scope the unit
+/// runs in.
+///
+/// Parts are narrowed only by projections whose result is borrowed from the
+/// part itself, so every part of a unit keeps the scope of the DAG that owns
+/// the unit.
+#[derive(Debug)]
+pub struct Scoped<'t, T: ?Sized> {
+    scope: BodyScope<'t>,
+    part: &'t T,
+}
+
+impl<T: ?Sized> Clone for Scoped<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> Copy for Scoped<'_, T> {}
+
+impl<'t, T: ?Sized> Scoped<'t, T> {
+    const fn new(scope: BodyScope<'t>, part: &'t T) -> Self {
+        Self { scope, part }
+    }
+
+    /// The part itself, for reading its source structure.
+    #[must_use]
+    pub const fn get(self) -> &'t T {
+        self.part
+    }
+
+    /// The scope the part runs in, for the compiler's own specialization.
+    /// Evaluation reaches it only through a [`ScopedTree`] of the part.
+    #[must_use]
+    pub(crate) const fn scope(self) -> BodyScope<'t> {
+        self.scope
+    }
+
+    /// A sub-part of this part, in the same scope.
+    ///
+    /// `project` must return a reference derived from its argument, so a
+    /// part of another unit cannot be attached to this unit's scope.
+    #[must_use]
+    pub fn map<U: ?Sized>(self, project: impl for<'p> FnOnce(&'p T) -> &'p U) -> Scoped<'t, U> {
+        Scoped::new(self.scope, project(self.part))
+    }
+
+    /// A sub-part of this part that may be absent, in the same scope.
+    #[must_use]
+    pub fn filter_map<U: ?Sized>(
+        self,
+        project: impl for<'p> FnOnce(&'p T) -> Option<&'p U>,
+    ) -> Option<Scoped<'t, U>> {
+        project(self.part).map(|part| Scoped::new(self.scope, part))
+    }
+}
+
+impl<'t, T> Scoped<'t, [T]> {
+    /// Every element of this part, each in the same scope.
+    pub fn iter(self) -> impl Iterator<Item = Scoped<'t, T>> + use<'t, T> {
+        let scope = self.scope;
+        self.part.iter().map(move |part| Scoped::new(scope, part))
+    }
+}
+
+/// Why a root checked as a contextual literal is not a string.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CheckedStringError {
+    #[error("expected checked contextual operand String")]
+    NotString,
+    #[error("missing checked expression: {0:?}")]
+    Missing(crate::expression_id::ExprId),
+}
+
+impl<'t> Scoped<'t, Expr> {
+    /// The executable tree of this expression root, with its scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutableBodyError`] when the root is unknown to its
+    /// DAG's checked bodies or is not an executable value.
+    pub fn executable(self) -> Result<ScopedTree<'t, &'t TExpr>, ExecutableBodyError> {
+        self.scope
+            .dag
+            .bodies()
+            .executable_value(self.part.id())
+            .map(|tree| ScopedTree::new(self.scope, tree))
+    }
+
+    /// The text of this root, checked as a contextual string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CheckedStringError`] when the root was not checked as a
+    /// contextual string.
+    pub fn checked_string(self) -> Result<&'t str, CheckedStringError> {
+        match self.scope.dag.bodies().get(self.part.id()) {
+            Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
+                ContextualLiteral::String(text) => Ok(text),
+                ContextualLiteral::OffsetDateTime(_)
+                | ContextualLiteral::CivilDateTime(_)
+                | ContextualLiteral::ZonedDateTime(_)
+                | ContextualLiteral::TimeZone(_) => Err(CheckedStringError::NotString),
+            },
+            Some(_) => Err(CheckedStringError::NotString),
+            None => Err(CheckedStringError::Missing(self.part.id().clone())),
+        }
+    }
+
+    /// Every declaration this root references through `@name`, including
+    /// unselected branches, resolved in its own scope, in handle order.
+    #[must_use]
+    pub fn graph_refs(self) -> Vec<ResolvedDeclName> {
+        crate::hir::expr::collect_expr_dependencies(self.part)
+            .graph_refs
+            .iter()
+            .map(|handle| self.scope.resolve(handle))
+            .collect()
+    }
+}
+
+/// The operands of an assertion body, each in the assertion's scope.
+#[derive(Debug, Clone, Copy)]
+pub enum AssertionOperands<'t> {
+    /// A Boolean (or indexed Boolean) condition.
+    Condition(Scoped<'t, Expr>),
+    /// `actual ≈ expected ± tolerance`.
+    Tolerance {
+        actual: Scoped<'t, Expr>,
+        expected: Scoped<'t, Expr>,
+        tolerance: Scoped<'t, Expr>,
+    },
+}
+
+impl<'t> Scoped<'t, AssertBody> {
+    /// The operands of this assertion body, in its scope.
+    #[must_use]
+    pub fn operands(self) -> AssertionOperands<'t> {
+        match self.part {
+            AssertBody::Expr(condition) => {
+                AssertionOperands::Condition(Scoped::new(self.scope, condition))
+            }
+            AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+            } => AssertionOperands::Tolerance {
+                actual: Scoped::new(self.scope, actual),
+                expected: Scoped::new(self.scope, expected),
+                tolerance: Scoped::new(self.scope, tolerance),
+            },
+        }
+    }
+}
+
+/// An executable tree together with the scope that resolves its handles.
+#[derive(Debug, Clone, Copy)]
+pub struct ScopedTree<'t, T> {
+    scope: BodyScope<'t>,
+    tree: T,
+}
+
+impl<'t, T: Borrow<TExpr>> ScopedTree<'t, T> {
+    /// Pair a tree with the scope of the DAG it was checked or specialized
+    /// in, for the compiler's own selections.
+    pub(crate) const fn new(scope: BodyScope<'t>, tree: T) -> Self {
+        Self { scope, tree }
+    }
+
+    /// The scope the tree runs in.
+    #[must_use]
+    pub const fn scope(&self) -> BodyScope<'t> {
+        self.scope
+    }
+
+    /// The tree.
+    #[must_use]
+    pub fn tree(&self) -> &TExpr {
+        self.tree.borrow()
+    }
+}
+
+/// The source of one declaration in the scope of the DAG that owns it.
+///
+/// Obtained only through [`CheckedTir::declaration_body`], keyed by the
+/// declaration's identity.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclarationBody<'t> {
+    scope: BodyScope<'t>,
+    identity: &'t ResolvedDeclName,
+    declaration: &'t Decl<Typed>,
+}
+
+impl<'t> DeclarationBody<'t> {
+    /// The declaration's identity.
+    #[must_use]
+    pub const fn identity(self) -> &'t ResolvedDeclName {
+        self.identity
+    }
+
+    /// The expression of a constant.
+    #[must_use]
+    pub fn const_expression(self) -> Option<Scoped<'t, Expr>> {
+        match self.declaration {
+            Decl::Const(entry) => Some(Scoped::new(self.scope, &*entry.expr)),
+            _ => None,
+        }
+    }
+
+    /// The runtime expression of a param (its default) or a node (its
+    /// formula).
+    #[must_use]
+    pub fn runtime_expression(self) -> Option<Scoped<'t, Expr>> {
+        match self.declaration {
+            Decl::Param(entry) => entry
+                .default
+                .as_deref()
+                .map(|expr| Scoped::new(self.scope, expr)),
+            Decl::Node(entry) => entry
+                .definition
+                .formula()
+                .map(|expr| Scoped::new(self.scope, &**expr)),
+            _ => None,
+        }
+    }
+
+    /// Whether the declaration is an unfinished node.
+    #[must_use]
+    pub const fn is_todo(self) -> bool {
+        matches!(self.declaration, Decl::Node(entry) if entry.definition.todo().is_some())
+    }
+
+    /// The domain bounds of the declaration's type annotation.
+    #[must_use]
+    pub fn domain_bounds(self) -> Option<Scoped<'t, [ResolvedDomainBound]>> {
+        self.scope
+            .dag
+            .semantic()
+            .domain_bounds
+            .get(self.identity)
+            .map(|bounds| Scoped::new(self.scope, bounds.as_slice()))
+    }
+
+    /// The assertion this declaration is.
+    #[must_use]
+    pub const fn assertion(self) -> Option<Scoped<'t, TypedAssertEntry>> {
+        match self.declaration {
+            Decl::Assert(entry) => Some(Scoped::new(self.scope, entry)),
+            _ => None,
+        }
+    }
+
+    /// The assertion's resolved `#[expected_fail]` configuration.
+    #[must_use]
+    pub fn expected_fail(self) -> Option<&'t crate::assertion_expectation::ExpectedFail> {
+        self.scope.dag.expected_fail(self.identity)
+    }
+
+    /// The plot this declaration is.
+    #[must_use]
+    pub const fn plot(self) -> Option<Scoped<'t, TypedPlotEntry>> {
+        match self.declaration {
+            Decl::Plot(entry) => Some(Scoped::new(self.scope, entry)),
+            _ => None,
+        }
+    }
+
+    /// The checked presentation of each channel of the plot.
+    #[must_use]
+    pub fn plot_channel_presentations(
+        self,
+    ) -> Option<
+        &'t std::collections::HashMap<
+            crate::syntax::ast::EncodingChannel,
+            crate::plot_shape::PlotChannelShape,
+        >,
+    > {
+        self.scope.dag.plot_channel_presentations(self.identity)
+    }
+
+    /// The figure this declaration is.
+    #[must_use]
+    pub const fn figure(self) -> Option<Scoped<'t, TypedFigureEntry>> {
+        match self.declaration {
+            Decl::Figure(entry) => Some(Scoped::new(self.scope, entry)),
+            _ => None,
+        }
+    }
+
+    /// The layer this declaration is.
+    #[must_use]
+    pub const fn layer(self) -> Option<Scoped<'t, TypedLayerEntry>> {
+        match self.declaration {
+            Decl::Layer(entry) => Some(Scoped::new(self.scope, entry)),
+            _ => None,
+        }
+    }
+}
+
+/// The field contracts of one nominal type in the scope of the DAG that
+/// defines it.
+///
+/// Obtained only through [`CheckedTir::nominal_type_body`], keyed by the
+/// type's identity.
+#[derive(Debug, Clone, Copy)]
+pub struct NominalTypeBody<'t> {
+    scope: BodyScope<'t>,
+    identity: &'t ResolvedStructTypeName,
+    definition: &'t crate::hir::nominal::NominalTypeDef,
+}
+
+impl<'t> NominalTypeBody<'t> {
+    /// The type's definition.
+    #[must_use]
+    pub const fn definition(self) -> &'t crate::hir::nominal::NominalTypeDef {
+        self.definition
+    }
+
+    /// Every field of the type that carries domain bounds.
+    pub fn constrained_fields(
+        self,
+    ) -> impl Iterator<
+        Item = (
+            &'t ResolvedStructFieldTypeKey,
+            Scoped<'t, ResolvedStructFieldSemantics>,
+        ),
+    > + use<'t> {
+        let (scope, identity) = (self.scope, self.identity);
+        scope
+            .dag
+            .semantic()
+            .type_defs
+            .constrained_fields()
+            .filter(move |(key, _)| key.owning_type == *identity)
+            .map(move |(key, field)| (key, Scoped::new(scope, field)))
+    }
+}
+
+/// The dynamic scale definition of one unit in the scope of the DAG that
+/// defines the unit.
+///
+/// Obtained only through [`CheckedTir::unit_scale_body`], keyed by the
+/// unit's identity.
+#[derive(Debug, Clone, Copy)]
+pub struct UnitScaleBody<'t> {
+    scope: BodyScope<'t>,
+    spelling: &'t crate::syntax::dimension::UnitRef,
+    expression: &'t Expr,
+    declared_dimension: &'t crate::dimension::Dimension,
+    base_unit_dimension: &'t crate::dimension::Dimension,
+    span: crate::syntax::span::Span,
+    source: &'t miette::NamedSource<std::sync::Arc<String>>,
+}
+
+impl<'t> UnitScaleBody<'t> {
+    /// The spelling under which the unit is registered in its module.
+    #[must_use]
+    pub const fn spelling(self) -> &'t crate::syntax::dimension::UnitRef {
+        self.spelling
+    }
+
+    /// The scalar scale expression.
+    #[must_use]
+    pub const fn expression(self) -> Scoped<'t, Expr> {
+        Scoped::new(self.scope, self.expression)
+    }
+
+    /// The dimension declared on the unit definition.
+    #[must_use]
+    pub const fn declared_dimension(self) -> &'t crate::dimension::Dimension {
+        self.declared_dimension
+    }
+
+    /// The dimension proved from the base-unit expression.
+    #[must_use]
+    pub const fn base_unit_dimension(self) -> &'t crate::dimension::Dimension {
+        self.base_unit_dimension
+    }
+
+    /// The span of the scale expression.
+    #[must_use]
+    pub const fn span(self) -> crate::syntax::span::Span {
+        self.span
+    }
+
+    /// The source of the defining module, which the spans index.
+    #[must_use]
+    pub const fn source(self) -> &'t miette::NamedSource<std::sync::Arc<String>> {
+        self.source
+    }
+}
+
+impl CheckedTir {
+    /// The source of `declaration` in the scope of its owner.
+    #[must_use]
+    pub fn declaration_body<'t>(
+        &'t self,
+        declaration: &ResolvedDeclName,
+    ) -> Option<DeclarationBody<'t>> {
+        let dag = self.dag_registry().get(declaration.owner())?;
+        let entry = dag.decls().get(declaration)?;
+        let identity = match entry {
+            Decl::Const(entry) => &entry.identity,
+            Decl::Param(entry) => &entry.identity,
+            Decl::Node(entry) => &entry.identity,
+            Decl::Assert(entry) => &entry.identity,
+            Decl::Plot(entry) => &entry.identity,
+            Decl::Figure(entry) => &entry.identity,
+            Decl::Layer(entry) => &entry.identity,
+        };
+        Some(DeclarationBody {
+            scope: BodyScope::of(dag),
+            identity,
+            declaration: entry,
+        })
+    }
+
+    /// The dynamic scale definition of `unit` in the scope of its owner.
+    #[must_use]
+    pub fn unit_scale_body(&self, unit: &ResolvedUnitName) -> Option<UnitScaleBody<'_>> {
+        let dag = self.dag_registry().get(unit.owner())?;
+        dag.semantic()
+            .dynamic_unit_scales
+            .get(unit)
+            .map(|scale| UnitScaleBody {
+                scope: BodyScope::of(dag),
+                spelling: &scale.spelling,
+                expression: &scale.expr,
+                declared_dimension: &scale.declared_dimension,
+                base_unit_dimension: &scale.base_unit_dimension,
+                span: scale.span,
+                source: &scale.src,
+            })
+    }
+
+    /// The field contracts of `nominal` in the scope of the DAG defining it.
+    #[must_use]
+    pub fn nominal_type_body<'t>(
+        &'t self,
+        nominal: &ResolvedStructTypeName,
+    ) -> Option<NominalTypeBody<'t>> {
+        let dag = self.dag_registry().get(nominal.owner())?;
+        let (identity, definition) = dag
+            .semantic()
+            .type_defs
+            .struct_types
+            .get_key_value(nominal)?;
+        Some(NominalTypeBody {
+            scope: BodyScope::of(dag),
+            identity,
+            definition,
+        })
+    }
+
+    /// A closed external value tree checked in the root module, in the
+    /// root's scope.
+    pub(crate) const fn external_value_tree(&self, tree: TExpr) -> ScopedTree<'_, TExpr> {
+        ScopedTree::new(BodyScope::of(self.root()), tree)
+    }
+}

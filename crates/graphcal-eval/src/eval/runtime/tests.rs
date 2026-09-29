@@ -1,133 +1,104 @@
 use super::*;
 
-#[test]
-fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
-    let source = "plot measurement = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 }, width: 100.0 };";
-    let tir = crate::eval::compile_to_tir(source, "plot_property.gcl").unwrap();
-    let other = crate::eval::compile_to_tir(source, "other_property.gcl").unwrap();
-    let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
-    let original = tir.root().plots().next().unwrap();
+/// The unit of the only declaration of `tir`'s root named `name`.
+fn root_unit<'t>(
+    tir: &'t graphcal_compiler::tir::typed::CheckedTir,
+    name: &graphcal_compiler::syntax::decl_name::DeclName,
+    src: &NamedSource<Arc<String>>,
+) -> DeclarationBody<'t> {
     let owner = tir
         .root()
         .require_bound_decl_identity(
-            &ScopedName::local(original.name().clone()),
-            &src,
+            &ScopedName::local(name.clone()),
+            src,
             DiagnosticAnchor::WholeFile,
         )
         .unwrap();
-    let ctx = EvalContext::provisional_constants(
+    tir.declaration_body(&owner).unwrap()
+}
+
+#[test]
+fn plot_properties_preserve_cancellation_classification() {
+    let source = "plot measurement = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 }, width: 100.0 };";
+    let tir = crate::eval::compile_to_tir(source, "plot_property.gcl").unwrap();
+    let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
+    let unit = root_unit(&tir, tir.root().plots().next().unwrap().name(), &src);
+    let plot = unit.plot().unwrap();
+    let ctx = EvalSession::provisional_constants(
         &tir,
-        tir.root_dag_id(),
         &src,
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap()
-    .for_decl(&owner);
+    );
     let values = RuntimeValueMap::new();
     let presentations = PresentationInstanceMap::new();
     let errors = HashMap::new();
-    assert!(evaluate_plot(original, &values, &presentations, &errors, &ctx).is_ok());
-    let mut mark = original.clone();
-    mark.body.mark_properties[0].value = other.root().plots().next().unwrap().body.mark_properties
-        [0]
-    .value
-    .clone();
-    let mut property = original.clone();
-    property.body.properties[0].value = other.root().plots().next().unwrap().body.properties[0]
-        .value
-        .clone();
-    for entry in [mark, property] {
-        let result = evaluate_plot(&entry, &values, &presentations, &errors, &ctx);
-        assert!(
-            matches!(
-                result,
-                Err(PlotEvaluationError::Fatal(
-                    GraphcalError::InternalError { .. }
-                ))
-            ),
-            "foreign property fact must stay fatal: {result:?}"
-        );
-    }
+    assert!(evaluate_plot(unit, plot, &values, &presentations, &errors, &ctx).is_ok());
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx =
-        EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, cancellation.token())
-            .unwrap()
-            .for_decl(&owner);
+    let ctx = EvalSession::provisional_constants(&tir, &src, cancellation.token());
     cancellation.cancel();
     assert!(matches!(
-        eval_plot_property(&original.body.mark_properties[0].value, &values, &ctx),
+        eval_plot_property(
+            plot.map(|plot| &*plot.body.mark_properties[0].value),
+            &values,
+            &ctx
+        ),
         Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
     ));
 }
 
+/// A plot's property trees are read only from its own unit, so a property
+/// from another program cannot reach its evaluation; the internal error a
+/// missing tree would raise stays fatal rather than being reported on the
+/// plot.
 #[test]
-fn composition_properties_preserve_fatal_fact_classification() {
+fn internal_errors_abort_plot_evaluation() {
+    let src = NamedSource::new("plot_property.gcl", Arc::new(String::new()));
+    assert!(matches!(
+        PlotEvaluationError::from(GraphcalError::internal_error(
+            "missing checked expression",
+            &src,
+            DiagnosticAnchor::WholeFile,
+        )),
+        PlotEvaluationError::Fatal(GraphcalError::InternalError { .. })
+    ));
+}
+
+#[test]
+fn composition_properties_preserve_cancellation_classification() {
     let source = "plot curve = { mark: line { stroke_width: 2.0 }, encode: { x: 1.0, y: 2.0 } }; figure comparison = { plots: [curve], title: \"Comparison\" }; layer overlay = { plots: [curve], title: \"Overlay\", width: 400.0 };";
     let tir = crate::eval::compile_to_tir(source, "composition.gcl").unwrap();
-    let other = crate::eval::compile_to_tir(source, "other.gcl").unwrap();
     let src = NamedSource::new("composition.gcl", Arc::new(source.to_owned()));
     let values = RuntimeValueMap::new();
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-    let ctx =
-        EvalContext::provisional_constants(&tir, tir.root_dag_id(), &src, cancellation.token())
-            .unwrap();
-    for (original, foreign, names) in [
+    let ctx = EvalSession::provisional_constants(&tir, &src, cancellation.token());
+    let figure = tir.root().figures().next().unwrap();
+    let layer = tir.root().layers().next().unwrap();
+    let compositions = [
         (
-            &tir.root().figures().next().unwrap().fields,
-            &other.root().figures().next().unwrap().fields,
-            &tir.root().figures().next().unwrap().plot_names,
+            root_unit(&tir, figure.name(), &src)
+                .figure()
+                .unwrap()
+                .map(|figure| figure.fields.as_slice()),
+            &figure.plot_names,
         ),
         (
-            &tir.root().layers().next().unwrap().fields,
-            &other.root().layers().next().unwrap().fields,
-            &tir.root().layers().next().unwrap().plot_names,
+            root_unit(&tir, layer.name(), &src)
+                .layer()
+                .unwrap()
+                .map(|layer| layer.fields.as_slice()),
+            &layer.plot_names,
         ),
-    ] {
-        assert!(eval_composition_fields(original, names, &values, &ctx).is_ok());
-        for position in 0..original.len() {
-            let mut fields = original.clone();
-            fields[position].value = foreign[position].value.clone();
-            let result = eval_composition_fields(&fields, names, &values, &ctx);
-            assert!(
-                matches!(
-                    result,
-                    Err(PlotEvaluationError::Fatal(
-                        GraphcalError::InternalError { .. }
-                    ))
-                ),
-                "foreign composition property must stay fatal: {result:?}"
-            );
-        }
-        let mut fields = original.clone();
-        fields[0].property = tir.root().plots().next().unwrap().body.mark_properties[0]
-            .property
-            .clone();
-        assert!(matches!(
-            eval_composition_fields(&fields, names, &values, &ctx),
-            Err(PlotEvaluationError::Fatal(
-                GraphcalError::InternalError { .. }
-            ))
-        ));
+    ];
+    for (fields, names) in compositions {
+        assert!(eval_composition_fields(fields, names, &values, &ctx).is_ok());
     }
     cancellation.cancel();
-    assert!(matches!(
-        eval_composition_fields(
-            &tir.root().figures().next().unwrap().fields,
-            &tir.root().figures().next().unwrap().plot_names,
-            &values,
-            &ctx
-        ),
-        Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
-    ));
-    assert!(matches!(
-        eval_composition_fields(
-            &tir.root().layers().next().unwrap().fields,
-            &tir.root().layers().next().unwrap().plot_names,
-            &values,
-            &ctx
-        ),
-        Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
-    ));
+    for (fields, names) in compositions {
+        assert!(matches!(
+            eval_composition_fields(fields, names, &values, &ctx),
+            Err(PlotEvaluationError::Fatal(GraphcalError::Cancelled(_)))
+        ));
+    }
 }
 
 #[test]

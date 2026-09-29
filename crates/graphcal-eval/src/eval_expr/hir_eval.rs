@@ -18,7 +18,7 @@ use graphcal_compiler::tir::texpr::{
     ContextualLiteral, TArg, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMatchArm,
     TMatchPattern, TParamBinding,
 };
-use graphcal_compiler::tir::typed::checked::CheckedDag;
+use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree};
 use indexmap::IndexMap;
 use miette::NamedSource;
 
@@ -28,7 +28,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::arithmetic::{Comparison, OrderingOp};
 use super::{
-    EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
+    EvalContext, EvalSession, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
 };
 
@@ -57,6 +57,51 @@ fn take_presentation_instance(
     }
 }
 
+/// Evaluate the root tree of an evaluation unit in the scope it was handed
+/// out with.
+pub fn eval_root<T: std::borrow::Borrow<TExpr>>(
+    root: &ScopedTree<'_, T>,
+    values: &RuntimeValueMap,
+    session: &EvalSession<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    eval_texpr(
+        root.tree(),
+        values,
+        &HirLocalValueMap::root(),
+        &session.enter(root),
+    )
+}
+
+/// Evaluate the root tree of an evaluation unit in the scope it was handed
+/// out with, preserving concrete presentation-call identities.
+pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
+    root: &ScopedTree<'_, T>,
+    values: &RuntimeValueMap,
+    presentation_values: &PresentationInstanceMap,
+    session: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    eval_texpr_with_presentation(
+        root.tree(),
+        values,
+        presentation_values,
+        &HirLocalValueMap::root(),
+        &session.enter(root),
+    )
+}
+
+/// Evaluate `subtree`, a subtree of `root`, in `root`'s scope with `locals`
+/// bound, for tests that forge a local binding.
+#[cfg(test)]
+pub fn eval_subtree_for_test<T: std::borrow::Borrow<TExpr>>(
+    root: &ScopedTree<'_, T>,
+    subtree: &TExpr,
+    values: &RuntimeValueMap,
+    locals: &HirLocalValueMap<'_>,
+    session: &EvalSession<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    eval_texpr(subtree, values, locals, &session.enter(root))
+}
+
 /// Evaluate a checked, executable expression tree.
 ///
 /// Checking published the tree only once every type in it was concrete and
@@ -67,7 +112,7 @@ fn take_presentation_instance(
 /// `expr` is the root of a declaration's (or another evaluated root's) tree:
 /// the availability of every dependency of the whole tree, including
 /// unselected branches, is determined once before any of it is evaluated.
-pub fn eval_texpr(
+fn eval_texpr(
     expr: &TExpr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -92,7 +137,7 @@ fn eval_value(
 /// Evaluate one checked root tree while preserving concrete presentation-call
 /// identities through value-preserving expression forms. Like [`eval_texpr`],
 /// it determines the availability of the whole tree's dependencies once.
-pub fn eval_texpr_with_presentation(
+fn eval_texpr_with_presentation(
     expr: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
@@ -2551,15 +2596,13 @@ fn eval_dag_call(
         imported_runtime_value(key, caller_values, caller_presentations, ctx)
     });
 
-    let empty_hir_locals = HirLocalValueMap::root();
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
-        let context = ctx.for_declaration(&entry).with_unavailable(frame.errors());
-        eval_texpr_with_presentation(
+        let session = ctx.for_declaration(&entry).with_unavailable(frame.errors());
+        eval_root_with_presentation(
             entry.body(),
             frame.values(),
             frame.presentations(),
-            &empty_hir_locals,
-            &context,
+            &session,
         )
     });
     if let Some(calls) = ctx.unfinished_calls {
@@ -2579,7 +2622,7 @@ fn eval_dag_call(
         &dag_values,
         target,
         output.span,
-        &ctx.clone().with_unavailable(&errors),
+        &(**ctx).clone().with_unavailable(&errors),
     )?;
 
     let output_key = &output.value;
@@ -2636,7 +2679,7 @@ fn imported_runtime_value(
     ctx: &EvalContext<'_>,
 ) -> Option<EvaluatedRuntimeValue> {
     let value = imported_binding_value(key, caller_values, ctx)?;
-    let presentation = if key.owner() == ctx.dag().dag_id() {
+    let presentation = if key.owner() == ctx.dag_id() {
         caller_presentations.and_then(|instances| instances.get(key))
     } else if key.owner() == ctx.tir.root_dag_id() {
         ctx.root_presentation_instances
@@ -2656,11 +2699,17 @@ fn check_inline_plan_asserts(
     values: &RuntimeValueMap,
     target: &Spanned<graphcal_compiler::dag_id::DagId>,
     span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
     callable.execution_dags().iter().try_for_each(|scope| {
-        let context = ctx.for_execution_dag(*scope);
-        check_inline_dag_asserts(scope.dag(), values, &context, target, span, ctx)
+        check_inline_dag_asserts(
+            scope.dag(),
+            values,
+            &ctx.with_src(scope.source()),
+            target,
+            span,
+            ctx,
+        )
     })
 }
 
@@ -2673,37 +2722,33 @@ fn check_inline_plan_asserts(
 /// the calling expression (fault-isolated to the calling declaration).
 /// `#[expected_fail]` inversion applies as usual.
 fn check_inline_dag_asserts(
-    dag_tir: &CheckedDag,
+    dag_tir: &graphcal_compiler::tir::typed::checked::CheckedDag,
     dag_values: &RuntimeValueMap,
-    dag_ctx: &EvalContext<'_>,
+    dag_ctx: &EvalSession<'_>,
     target: &Spanned<graphcal_compiler::dag_id::DagId>,
     call_span: Span,
-    ctx: &EvalContext<'_>,
+    ctx: &EvalSession<'_>,
 ) -> Result<(), GraphcalError> {
-    let empty_hir_locals = HirLocalValueMap::root();
     for entry in dag_tir.decls().iter() {
         if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
         }
         let name = &entry.name();
-        let key = entry.identity().clone();
-        let body = dag_tir.assert_body(&key).ok_or_else(|| {
-            ctx.internal_error(
+        let key = entry.identity();
+        let unit = ctx.tir.declaration_body(&key);
+        let Some(body) = unit.and_then(DeclarationBody::assertion) else {
+            return Err(ctx.internal_error(
                 format!("TIR assertion entry missing for DAG assertion `{name}`"),
                 call_span,
-            )
-        })?;
-        let ef = dag_tir.expected_fail(&key);
-        let result =
-            crate::assertion_eval::evaluate_assert_with_expected_fail(body, ef, &mut |expr| {
-                let context = dag_ctx.for_decl(&key);
-                eval_texpr(
-                    context.executable(expr)?,
-                    dag_values,
-                    &empty_hir_locals,
-                    &context,
-                )
-            });
+            ));
+        };
+        let ef = unit.and_then(DeclarationBody::expected_fail);
+        let context = dag_ctx.for_decl(&key);
+        let result = crate::assertion_eval::evaluate_assert_with_expected_fail(
+            body.map(|entry| &*entry.body),
+            ef,
+            &mut |expr| eval_root(&context.executable(expr)?, dag_values, &context),
+        );
         match result {
             crate::eval::types::AssertResult::Pass => {}
             crate::eval::types::AssertResult::Fail { message } => {

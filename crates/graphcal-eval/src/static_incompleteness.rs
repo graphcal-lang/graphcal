@@ -16,44 +16,43 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::texpr::{TExpr, TExprKind, TNodeRef, visit_tnodes};
 use miette::NamedSource;
 
-use crate::execution_plan::{DeclarationBody, ExecPlan};
+use crate::execution_plan::{ExecPlan, PlannedBody};
 
 type BoundParameters = BTreeSet<ResolvedDeclName>;
 /// A call output and the parameters its call binds explicitly.
 pub type Query = (ResolvedDeclName, BoundParameters);
 type Origins = BTreeSet<ResolvedDeclName>;
 
-/// The runtime dependencies an expression's availability depends on.
+/// The inline calls an expression's availability depends on.
+///
+/// References through `@name` are body handles, resolved only in the scope
+/// the expression runs in; see [`graph_refs`].
 pub trait ExpressionDependencies {
-    /// Declarations referenced through `@name`, including unselected branches.
-    fn graph_refs(&self) -> BTreeSet<LocalDecl>;
     /// Every inline DAG call's output and explicitly bound parameters.
     fn dag_calls(&self) -> Vec<Query>;
 }
 
 impl ExpressionDependencies for Expr {
-    fn graph_refs(&self) -> BTreeSet<LocalDecl> {
-        graphcal_compiler::hir::expr::collect_expr_dependencies(self).graph_refs
-    }
-
     fn dag_calls(&self) -> Vec<Query> {
         calls(self, &BoundParameters::new())
     }
 }
 
-impl ExpressionDependencies for TExpr {
-    fn graph_refs(&self) -> BTreeSet<LocalDecl> {
-        let mut refs = BTreeSet::new();
-        visit_tnodes(TNodeRef::Value(self), &mut |node| {
-            if let TNodeRef::Value(expr) = node
-                && let TExprKind::GraphRef(target) = expr.kind()
-            {
-                refs.insert(target.value.clone());
-            }
-        });
-        refs
-    }
+/// Declarations a checked tree references through `@name`, including
+/// unselected branches, as handles of the scope the tree runs in.
+pub fn graph_refs(tree: &TExpr) -> BTreeSet<LocalDecl> {
+    let mut refs = BTreeSet::new();
+    visit_tnodes(TNodeRef::Value(tree), &mut |node| {
+        if let TNodeRef::Value(expr) = node
+            && let TExprKind::GraphRef(target) = expr.kind()
+        {
+            refs.insert(target.value.clone());
+        }
+    });
+    refs
+}
 
+impl ExpressionDependencies for TExpr {
     fn dag_calls(&self) -> Vec<Query> {
         let mut calls = Vec::new();
         visit_tnodes(TNodeRef::Value(self), &mut |node| {
@@ -164,19 +163,19 @@ impl Analysis<'_> {
         })?;
         let mut origins = Origins::new();
         match declaration.body() {
-            DeclarationBody::Todo => {
+            PlannedBody::Todo => {
                 origins.insert(name.clone());
             }
-            DeclarationBody::Expression { root, .. } => {
+            PlannedBody::Expression { root, .. } => {
                 for dependency in declaration.reads() {
                     origins.extend(self.declaration(dependency, bound)?);
                 }
-                for (output, parameters) in calls(root, bound) {
+                for (output, parameters) in calls(root.get(), bound) {
                     origins.extend(self.declaration(&output, &parameters)?);
                 }
             }
             // Required ports have no default; constants cannot contain TODOs.
-            DeclarationBody::Supplied => {}
+            PlannedBody::Supplied => {}
         }
         self.active.remove(&query);
         self.memo.insert(query, origins.clone());
