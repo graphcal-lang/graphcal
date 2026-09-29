@@ -415,7 +415,9 @@ pub(super) fn install_instance_expression_facts(
             observations: &observations,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;
-        let mut records = observations.finish();
+        // Instance bodies are specialized from the template; only the facts of
+        // independently checked defaults are kept.
+        let mut records = observations.finish().records;
         let environment =
             CheckingEnvironment::new(dag.dag_id().clone(), dag.body_revision().clone());
         let mut inventory = Vec::new();

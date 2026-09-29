@@ -648,6 +648,7 @@ fn specialize_instance_semantics(
     // specializes the canonical template's retained facts before publication;
     // interpretation must not reconstruct axes from the source defaults.
     instance.semantic.expression_facts = None;
+    instance.semantic.typed_bodies = None;
     instance.semantic.domain_bounds = instance
         .semantic
         .domain_bounds

@@ -1061,6 +1061,9 @@ pub struct DagSemanticBody {
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
     /// Absent only during assembly; publication requires complete coverage.
     pub(crate) expression_facts: Option<crate::tir::expression_facts::CheckedExpressionFacts>,
+    /// The typed tree of every checked root, published with the expression
+    /// facts for canonical bodies. Instance bodies have none yet.
+    pub(crate) typed_bodies: Option<crate::tir::texpr::TypedBodies>,
     /// Checked structured display and plot-channel presentation facts.
     pub presentation: crate::tir::presentation::DagPresentationFacts,
     /// Runtime schedule of this DAG as a callable, installed by the checker.
@@ -1502,6 +1505,7 @@ impl DagTIR {
     pub(crate) fn begin_checking_revision(&mut self) {
         self.body_revision = crate::body_revision::BodyRevision::fresh();
         self.semantic.expression_facts = None;
+        self.semantic.typed_bodies = None;
         self.semantic.presentation = crate::tir::presentation::DagPresentationFacts::default();
         self.semantic.runtime_schedule = None;
     }
@@ -1587,6 +1591,13 @@ impl DagTIR {
     #[must_use]
     pub const fn runtime_schedule(&self) -> Option<&crate::tir::schedule::RuntimeSchedule> {
         self.semantic.runtime_schedule.as_ref()
+    }
+
+    /// The typed trees of this DAG's checked roots, when its bodies were
+    /// checked canonically.
+    #[must_use]
+    pub const fn typed_bodies(&self) -> Option<&crate::tir::texpr::TypedBodies> {
+        self.semantic.typed_bodies.as_ref()
     }
 
     /// Semantic include edges authored directly by this DAG.

@@ -7,4 +7,5 @@ pub mod materialized_shape;
 pub mod presentation;
 pub mod schedule;
 pub(crate) mod template_closure;
+pub mod texpr;
 pub mod typed;

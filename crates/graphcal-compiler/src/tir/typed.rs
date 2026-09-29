@@ -771,6 +771,7 @@ fn type_resolve_dag(
         type_defs,
         decl_bindings: HashMap::new(),
         expression_facts: None,
+        typed_bodies: None,
         presentation: crate::tir::presentation::DagPresentationFacts::default(),
         runtime_schedule: None,
     };

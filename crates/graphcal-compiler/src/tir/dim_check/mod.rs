@@ -715,21 +715,23 @@ pub fn check_dimensions_tir_with_cancellation(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        let published = crate::tir::expression_facts::CheckedExpressionFacts::publish(
-            dag.dag_id().clone(),
-            dag.body_revision().clone(),
-            &dag.owned_expression_roots().collect::<Vec<_>>(),
-            observations.finish(),
-            &|index| expression_axes::checked_index_cardinality(tir, index),
-        )
-        .map_err(|error| {
-            GraphcalError::internal_error(
-                format!("DAG `{dag_id}`: {error}"),
-                src,
-                DiagnosticAnchor::WholeFile,
+        let (facts, typed_bodies) = observations
+            .finish()
+            .publish(
+                dag.dag_id().clone(),
+                dag.body_revision().clone(),
+                &dag.owned_expression_roots().collect::<Vec<_>>(),
+                &|index| expression_axes::checked_index_cardinality(tir, index),
             )
-        })?;
-        tir.dags
+            .map_err(|error| {
+                GraphcalError::internal_error(
+                    format!("DAG `{dag_id}`: {error}"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        let semantic = &mut tir
+            .dags
             .get_mut(&dag_id)
             .ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -738,8 +740,9 @@ pub fn check_dimensions_tir_with_cancellation(
                     DiagnosticAnchor::WholeFile,
                 )
             })?
-            .semantic
-            .expression_facts = Some(published);
+            .semantic;
+        semantic.expression_facts = Some(facts);
+        semantic.typed_bodies = Some(typed_bodies);
         checked_plot_shapes.insert(dag_id, plot_shapes);
     }
 
@@ -946,20 +949,24 @@ pub fn check_external_value_expr_type(
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if expected.to_symbolic() == inferred {
-        crate::tir::expression_facts::CheckedExpressionFacts::publish(
-            tir.root_dag_id().clone(),
-            tir.root().body_revision().clone(),
-            &[expr],
-            observations.finish(),
-            &|index| expression_axes::checked_index_cardinality(tir, index),
-        )
-        .map_err(|error| {
-            GraphcalError::internal_error(
-                error.to_string(),
-                src,
-                DiagnosticAnchor::Source(expr.span),
+        // The independent binding's typed tree is checked against its facts;
+        // only the facts are retained until the evaluator reads typed trees.
+        observations
+            .finish()
+            .publish(
+                tir.root_dag_id().clone(),
+                tir.root().body_revision().clone(),
+                &[expr],
+                &|index| expression_axes::checked_index_cardinality(tir, index),
             )
-        })
+            .map(|(facts, _)| facts)
+            .map_err(|error| {
+                GraphcalError::internal_error(
+                    error.to_string(),
+                    src,
+                    DiagnosticAnchor::Source(expr.span),
+                )
+            })
     } else {
         Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_checked_type(expected, &tir.registry),
