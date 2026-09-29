@@ -294,7 +294,7 @@ fn check_instance_defaults(
             .map(crate::hir::expr::Expr::id)
             == Some(id);
         if !inherited {
-            check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
+            check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
             ctx.expression_facts
                 .record_contextual(default, ctx.env.src)?;
             continue;
@@ -317,13 +317,7 @@ fn check_instance_defaults(
         };
         let specialized =
             specialize_expression_type(checked_type, substitution, ctx.env.tir, ctx.env.src)?;
-        let expected = ctx.env.declared_types.get(&entry.name).ok_or_else(|| {
-            GraphcalError::internal_error(
-                "instance parameter has no declared type",
-                ctx.env.src,
-                DiagnosticAnchor::Source(entry.span),
-            )
-        })?;
+        let expected = entry.type_ann.checked().declared();
         if &specialized != expected {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: expected.format(&ctx.env.registry.dimensions),
@@ -492,11 +486,9 @@ pub(super) fn install_instance_expression_facts(
         let facts = template.expression_facts().map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
-        let declared_types = dag.build_declared_types(src)?;
         let collector = infer::hir::ExpressionFactCollector::new(dag);
         let ctx = DimCheckContext {
             env: infer::hir::InferEnv {
-                declared_types: &declared_types,
                 dag,
                 tir,
                 registry: &tir.registry,

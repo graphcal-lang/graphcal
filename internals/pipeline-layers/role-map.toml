@@ -503,7 +503,7 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "entry"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"

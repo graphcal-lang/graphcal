@@ -142,8 +142,8 @@ pub(super) fn build_runtime_dag(
     // Stable graph insertion is an implementation detail, not an invocation-
     // order contract for independent plugin calls.
     enum DeclRef<'a> {
-        Param(&'a graphcal_compiler::ir::lower::ParamEntry),
-        Node(&'a graphcal_compiler::ir::lower::NodeEntry),
+        Param(&'a graphcal_compiler::tir::typed::TypedParamEntry),
+        Node(&'a graphcal_compiler::tir::typed::TypedNodeEntry),
     }
 
     impl DeclRef<'_> {

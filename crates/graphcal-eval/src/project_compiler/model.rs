@@ -66,8 +66,8 @@ pub(super) struct HirFile {
 
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
-    pub(super) declared_types_by_dag:
-        HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
+    /// Canonical owners of the DAGs this module's file defines.
+    pub(super) local_owners: Vec<graphcal_compiler::dag_id::DagId>,
     pub(super) override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
     /// The module's own bodies, frozen once and shared by every importer.
     pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
@@ -94,8 +94,8 @@ impl ModuleArtifactStore {
         artifact: ModuleArtifact,
     ) -> Result<(), ModuleArtifactOwnerConflict> {
         if let Some(owner) = artifact
-            .declared_types_by_dag
-            .keys()
+            .local_owners
+            .iter()
             .find(|owner| self.owner_to_file.contains_key(*owner))
         {
             return Err(ModuleArtifactOwnerConflict {
@@ -104,8 +104,8 @@ impl ModuleArtifactStore {
         }
         self.owner_to_file.extend(
             artifact
-                .declared_types_by_dag
-                .keys()
+                .local_owners
+                .iter()
                 .cloned()
                 .map(|owner| (owner, file.clone())),
         );
@@ -138,7 +138,6 @@ pub struct CompiledFile {
     pub(crate) tir: graphcal_compiler::tir::typed::TIR,
     pub(crate) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
     pub(crate) entry_interface: super::CheckedEntryInterface,
-    pub(crate) declared_types: HashMap<ScopedName, DeclaredType>,
     pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     pub(crate) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(crate) output_surface: HashSet<ScopedName>,

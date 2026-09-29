@@ -46,19 +46,35 @@ pub(super) fn resolve_domain_constraints_for_dag(
     let decl_iter = dag
         .consts()
         .iter()
-        .map(|entry| (&entry.name, entry.identity(), entry.span, true))
-        .chain(
-            dag.params()
-                .iter()
-                .map(|entry| (&entry.name, entry.identity(), entry.span, false)),
-        )
-        .chain(
-            dag.nodes()
-                .iter()
-                .map(|entry| (&entry.name, entry.identity(), entry.span, false)),
-        );
+        .map(|entry| {
+            (
+                &entry.name,
+                entry.identity(),
+                &entry.type_ann,
+                entry.span,
+                true,
+            )
+        })
+        .chain(dag.params().iter().map(|entry| {
+            (
+                &entry.name,
+                entry.identity(),
+                &entry.type_ann,
+                entry.span,
+                false,
+            )
+        }))
+        .chain(dag.nodes().iter().map(|entry| {
+            (
+                &entry.name,
+                entry.identity(),
+                &entry.type_ann,
+                entry.span,
+                false,
+            )
+        }));
 
-    for (name, resolved_key, decl_span, is_const) in decl_iter {
+    for (name, resolved_key, annotation, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
         let Some(domain_bounds) = dag.semantic().domain_bounds.get(&resolved_key) else {
             continue;
@@ -66,7 +82,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
-            dag.resolved_decl_types().get(name).map(strip_indexed),
+            Some(strip_indexed(annotation.checked().resolved())),
             decl_span,
             constraint_src,
         )?;
@@ -537,7 +553,17 @@ fn collect_field_constraint_applications(
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<ConcreteNominalApplication>, GraphcalError> {
     let mut applications = HashSet::new();
-    for declared in tir.build_declared_types(src)?.values() {
+    // The entry DAG's own declarations and the imported values visible in it.
+    let root = tir.root();
+    for declared in root
+        .value_decl_types()
+        .map(|(_, annotation)| annotation.checked().declared())
+        .chain(
+            root.imported_bindings()
+                .values()
+                .map(graphcal_compiler::ir::imported_binding::ImportedBinding::declared_type),
+        )
+    {
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
     }
     for dag in tir.dag_registry().values() {
@@ -643,10 +669,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
                 DiagnosticAnchor::Source(entry.span),
             )
         })?;
-        let owning_type = dag
-            .resolved_decl_types()
-            .get(&entry.name)
-            .and_then(struct_type_ref_from_resolved_type);
+        let owning_type = struct_type_ref_from_resolved_type(entry.type_ann.checked().resolved());
         check_const_struct_field_constraints(
             value,
             entry.name.leaf().as_str(),

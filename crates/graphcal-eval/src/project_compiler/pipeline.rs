@@ -123,15 +123,11 @@ fn store_module_artifact(
         })?;
         validate_dag_constant_values(dag, &scope.facts().const_values, file_src)
     })?;
-    let declared_types_by_dag = compiled
+    let local_owners = compiled
         .tir
         .local_dags()
-        .map(|(dag_id, dag)| {
-            cancellation.checkpoint()?;
-            dag.build_declared_types(file_src)
-                .map(|types| (dag_id.clone(), types))
-        })
-        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        .map(|(dag_id, _)| dag_id.clone())
+        .collect();
     let override_dependencies =
         graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
             &compiled.tir,
@@ -154,7 +150,7 @@ fn store_module_artifact(
         .insert(
             file_dag_id.clone(),
             ModuleArtifact {
-                declared_types_by_dag,
+                local_owners,
                 override_dependencies,
                 dag_store: Arc::new(dag_store),
                 extern_functions,

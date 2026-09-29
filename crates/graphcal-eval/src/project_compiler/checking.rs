@@ -12,27 +12,29 @@ use graphcal_compiler::resolve::category::DeclSymbolKind;
 )]
 use super::*;
 
+/// Checked value-declaration types of the DAGs in the file being checked.
+type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, DeclaredType>;
+
 fn declared_type_for_target(
     target: &graphcal_compiler::resolved_name::ResolvedDeclName,
-    local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
+    local_interfaces: &LocalInterfaces,
     module_artifacts: &ModuleArtifactStore,
 ) -> Option<DeclaredType> {
-    let name = ScopedName::local(target.to_unowned_def_name());
     local_interfaces
-        .get(target.owner())
-        .and_then(|types| types.get(&name))
+        .get(target)
         .or_else(|| {
             module_artifacts
                 .for_owner(target.owner())
-                .and_then(|artifact| artifact.declared_types_by_dag.get(target.owner()))
-                .and_then(|types| types.get(&name))
+                .and_then(|artifact| artifact.dag_store.get(target.owner()))
+                .and_then(|dag| dag.value_decl_type(target))
+                .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
         })
         .cloned()
 }
 
 fn resolve_imported_bindings(
     hir: &graphcal_compiler::ir::lower::HirDag,
-    local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
+    local_interfaces: &LocalInterfaces,
     module_artifacts: &ModuleArtifactStore,
     module_resolver: &ModuleResolver,
     src: &NamedSource<Arc<String>>,
@@ -101,7 +103,7 @@ fn checked_imported_values(
 struct ResolvedFileSignatures {
     root: graphcal_compiler::tir::typed::SignatureResolvedHirDag,
     inline: Vec<graphcal_compiler::tir::typed::SignatureResolvedHirDag>,
-    interfaces: HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
+    interfaces: LocalInterfaces,
 }
 
 /// Resolve every local declaration signature before any body is consumed.
@@ -135,7 +137,8 @@ fn resolve_file_signatures(
         .collect::<Result<Vec<_>, _>>()?;
     let interfaces = std::iter::once(&root)
         .chain(&inline)
-        .map(|signed| (signed.dag_id().clone(), signed.declared_types().clone()))
+        .flat_map(graphcal_compiler::tir::typed::SignatureResolvedHirDag::decl_types)
+        .map(|(identity, checked)| (identity.clone(), checked.declared().clone()))
         .collect();
     Ok(ResolvedFileSignatures {
         root,
@@ -155,7 +158,7 @@ fn reconcile_checked_dependency_overrides(
         .collect();
     let checked_owners: HashSet<graphcal_compiler::dag_id::DagId> = module_artifacts
         .values()
-        .flat_map(|artifact| artifact.declared_types_by_dag.keys().cloned())
+        .flat_map(|artifact| artifact.local_owners.iter().cloned())
         .collect();
     graphcal_compiler::tir::dim_check::reconcile_external_override_dependencies(
         tir,
@@ -256,11 +259,9 @@ pub(super) fn check_hir_file(
         file_src,
         cancellation,
     )?;
-    let declared_types = tir.build_declared_types(file_src)?;
     let entry_interface = entry_interface::build_checked_entry_interface(
         &source_declarations,
         &tir,
-        &declared_types,
         &entry_external_surface,
         file_src,
     )?;
@@ -272,7 +273,6 @@ pub(super) fn check_hir_file(
         tir,
         checked_execution_facts,
         entry_interface,
-        declared_types,
         imported_values,
         imported_source_order: hir.imported_source_order,
         output_surface: hir.output_surface,

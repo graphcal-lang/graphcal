@@ -1,5 +1,5 @@
 use super::*;
-use crate::dimension::{BaseDimId, Rational};
+use crate::dimension::{BaseDimId, Dimension, Rational};
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::FormattingRegistry;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
@@ -34,9 +34,7 @@ fn resolve_source_type(
         .collect::<Vec<_>>();
     if params.is_empty() {
         let tir = parse_and_type_resolve(&format!("param x: {source_type};"))?;
-        return Ok(tir.root().resolved_decl_types
-            [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("x"))]
-            .clone());
+        return Ok(root_decl_type(&tir, "x").clone());
     }
 
     let source = format!(
@@ -61,9 +59,101 @@ fn resolve_source_type(
 
 fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedTypeExpr, GraphcalError> {
     let tir = parse_and_type_resolve(program)?;
-    Ok(tir.root().resolved_decl_types
-        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name))]
-        .clone())
+    Ok(root_decl_type(&tir, name).clone())
+}
+
+/// The checked type of a root declaration written as `name`, if any.
+fn root_decl_type_opt<'a>(tir: &'a TIR, name: &str) -> Option<&'a ResolvedTypeExpr> {
+    let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
+    let identity = tir.root().bound_decl_identity(&written)?;
+    tir.decl_type(identity).map(CheckedDeclType::resolved)
+}
+
+/// The checked type of a root declaration written as `name`.
+fn root_decl_type<'a>(tir: &'a TIR, name: &str) -> &'a ResolvedTypeExpr {
+    root_decl_type_opt(tir, name).unwrap_or_else(|| panic!("`{name}` has no checked type"))
+}
+
+#[test]
+fn value_declaration_records_carry_their_checked_types() {
+    let tir = parse_and_type_resolve(
+        "const node k: Int = 2;\nparam p: Length = 1.0 m;\nnode n: Bool = true;\n\
+         assert a = @n;",
+    )
+    .unwrap();
+    let length = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
+    for (name, resolved, declared) in [
+        ("k", ResolvedTypeExpr::Int, DeclaredType::Int),
+        (
+            "p",
+            ResolvedTypeExpr::Quantity(length.clone()),
+            DeclaredType::Quantity(length),
+        ),
+        ("n", ResolvedTypeExpr::Bool, DeclaredType::Bool),
+    ] {
+        let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
+        let identity = tir.root().bound_decl_identity(&written).unwrap();
+        let checked = tir.decl_type(identity).unwrap();
+        assert_eq!(checked.resolved(), &resolved, "{name}");
+        assert_eq!(checked.declared(), &declared, "{name}");
+        assert_eq!(tir.root().value_decl_type(identity), Some(checked));
+        assert_eq!(
+            tir.dag_containing_declaration(identity).map(DagTIR::dag_id),
+            Some(tir.root_dag_id())
+        );
+    }
+    assert_eq!(tir.root().value_decl_types().count(), 3);
+
+    // Assertions are declarations without a value type.
+    let assertion = tir
+        .root()
+        .bound_decl_identity(&ScopedName::local(
+            crate::syntax::decl_name::DeclName::expect_valid("a"),
+        ))
+        .unwrap();
+    assert!(tir.decl_type(assertion).is_none());
+    assert!(tir.dag_containing_declaration(assertion).is_none());
+}
+
+#[test]
+fn decl_type_rejects_identities_owned_by_unknown_dags() {
+    let tir = parse_and_type_resolve("node n: Bool = true;").unwrap();
+    let foreign = crate::resolved_name::ResolvedDeclName::from_def(
+        crate::dag_id::DagId::root_in_package("elsewhere", "elsewhere"),
+        crate::syntax::decl_name::DeclName::expect_valid("n"),
+    );
+    assert!(tir.decl_type(&foreign).is_none());
+    assert!(tir.dag_containing_declaration(&foreign).is_none());
+}
+
+#[test]
+fn declaration_records_must_be_owned_by_their_dag() {
+    let tir = parse_and_type_resolve("node n: Bool = true;").unwrap();
+    let mut dag = tir.root().clone();
+    dag.nodes[0].declaration_owner = crate::dag_id::DagId::root_in_package("other", "other");
+    assert!(matches!(
+        dag.index_declaration_records(),
+        Err(DeclarationRecordError::ForeignOwner { .. })
+    ));
+    let mut dag = tir.root().clone();
+    let duplicate = dag.nodes[0].clone();
+    dag.nodes.push(duplicate);
+    assert!(matches!(
+        dag.index_declaration_records(),
+        Err(DeclarationRecordError::Duplicate { .. })
+    ));
+}
+
+#[test]
+fn checked_decl_type_requires_a_concrete_type() {
+    let src = NamedSource::new("test.gcl", Arc::new(String::new()));
+    let generic =
+        ResolvedTypeExpr::GenericTypeParam(GenericParamName::expect_valid("T"), Span::new(0, 0));
+    assert!(CheckedDeclType::new(generic, &src).is_err());
+    let checked = CheckedDeclType::new(ResolvedTypeExpr::Int, &src).unwrap();
+    assert_eq!(checked.declared(), &DeclaredType::Int);
 }
 
 #[test]
@@ -786,27 +876,9 @@ fn type_resolve_rocket() {
     let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // All declarations should have resolved types
-    assert!(
-        tir.root()
-            .resolved_decl_types
-            .contains_key(&ScopedName::local(
-                crate::syntax::decl_name::DeclName::expect_valid("dry_mass")
-            ))
-    );
-    assert!(
-        tir.root()
-            .resolved_decl_types
-            .contains_key(&ScopedName::local(
-                crate::syntax::decl_name::DeclName::expect_valid("delta_v")
-            ))
-    );
-    assert!(
-        tir.root()
-            .resolved_decl_types
-            .contains_key(&ScopedName::local(
-                crate::syntax::decl_name::DeclName::expect_valid("g0")
-            ))
-    );
+    assert!(root_decl_type_opt(&tir, "dry_mass").is_some());
+    assert!(root_decl_type_opt(&tir, "delta_v").is_some());
+    assert!(root_decl_type_opt(&tir, "g0").is_some());
 }
 
 #[test]
@@ -814,8 +886,7 @@ fn type_resolve_indexed() {
     let source = include_str!("../../../../../tests/fixtures/valid/indexed.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // delta_v should be Velocity[Maneuver]
-    let dv_type = &tir.root().resolved_decl_types
-        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("delta_v"))];
+    let dv_type = root_decl_type(&tir, "delta_v");
     assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
 }
 
@@ -825,14 +896,14 @@ fn type_resolve_complex() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("a"))],
+        root_decl_type(&tir, "a"),
         ResolvedTypeExpr::Complex {
             dimension: ResolvedDimArg::Concrete(dimension),
             ..
         } if *dimension == Dimension::base(BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length))
     ));
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("series"))],
+        root_decl_type(&tir, "series"),
         ResolvedTypeExpr::Indexed { base, .. }
             if matches!(base.as_ref(), ResolvedTypeExpr::Complex { .. })
     ));
@@ -878,8 +949,7 @@ fn type_resolve_generics() {
     let source = include_str!("../../../../../tests/fixtures/valid/generics.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // pos_eci should be a GenericStruct with type args
-    let pos_type = &tir.root().resolved_decl_types
-        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("pos_eci"))];
+    let pos_type = root_decl_type(&tir, "pos_eci");
     match pos_type {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -900,8 +970,7 @@ fn type_resolve_generics() {
     }
     // x_pos should be quantity Length
     assert_eq!(
-        tir.root().resolved_decl_types
-            [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("x_pos"))],
+        *root_decl_type(&tir, "x_pos"),
         ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length
         )))
@@ -914,8 +983,7 @@ fn type_resolve_default_type_params() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
-    let pos3_eci = &tir.root().resolved_decl_types
-        [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("pos3_eci"))];
+    let pos3_eci = root_decl_type(&tir, "pos3_eci");
     match pos3_eci {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -936,9 +1004,7 @@ fn type_resolve_default_type_params() {
     }
 
     // pos3_default: Pos3<Length> — default fills in Unframed
-    let pos3_default = &tir.root().resolved_decl_types[&ScopedName::local(
-        crate::syntax::decl_name::DeclName::expect_valid("pos3_default"),
-    )];
+    let pos3_default = root_decl_type(&tir, "pos3_default");
     match pos3_default {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..

@@ -14,8 +14,8 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
 
+use crate::tir::dim_check::InferredType;
 use crate::tir::dim_check::infer::rules;
-use crate::tir::dim_check::{DeclaredType, InferredType};
 
 use super::context::{Infer, InferEnv};
 use super::override_deps::TypeNominalUse;
@@ -39,70 +39,26 @@ impl InferEnv<'_> {
         // instance is the authoritative boundary that maps those references to the
         // corresponding runtime declaration before any type lookup.
         let runtime_target = self.dag.runtime_decl_identity(target);
-        let local_name = ScopedName::local(runtime_target.to_unowned_def_name());
-
-        if runtime_target.owner() == &self.dag.dag_id
-            && let Some(inferred) =
-                infer_bound_decl_type(&local_name, self.declared_types, self.dag, self.src)?
-        {
-            return Ok(inferred);
-        }
-
-        for name in self
-            .dag
-            .semantic
-            .decl_bindings
-            .iter()
-            .filter_map(|(name, resolved)| (resolved == &runtime_target).then_some(name))
-        {
-            if let Some(inferred) =
-                infer_bound_decl_type(name, self.declared_types, self.dag, self.src)?
-            {
-                return Ok(inferred);
-            }
-        }
-
-        if let Some(target_dag) = self.tir.dag_containing_declaration(&runtime_target)
-            && let Some(inferred) = infer_bound_decl_type(
-                &local_name,
-                &target_dag.build_declared_types(self.src)?,
-                target_dag,
-                self.src,
-            )?
-        {
-            return Ok(inferred);
-        }
-
-        Err(GraphcalError::UnknownGraphRef {
-            name: local_name,
-            src: self.src.clone(),
-            span: span.into(),
-        })
-    }
-}
-
-fn infer_bound_decl_type(
-    name: &ScopedName,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Option<InferredType>, GraphcalError> {
-    if let Some(resolved_type) = dag.resolved_decl_types.get(name) {
+        let checked =
+            self.tir
+                .decl_type(&runtime_target)
+                .ok_or_else(|| GraphcalError::UnknownGraphRef {
+                    name: ScopedName::local(runtime_target.to_unowned_def_name()),
+                    src: self.src.clone(),
+                    span: span.into(),
+                })?;
         let dim_sub = HashMap::new();
         let index_sub =
             HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
         let nat_sub = HashMap::new();
-        return crate::tir::typed::substitute_resolved_type(
-            resolved_type,
+        crate::tir::typed::substitute_resolved_type(
+            checked.resolved(),
             &dim_sub,
             &index_sub,
             &nat_sub,
-            src,
+            self.src,
         )
-        .map(Some);
     }
-
-    Ok(declared_types.get(name).map(InferredType::from))
 }
 
 impl Infer<'_> {

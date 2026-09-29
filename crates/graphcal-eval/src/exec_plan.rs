@@ -746,7 +746,7 @@ mod tests {
             let target = resolved_key(name);
             ImportedBinding::new(
                 target.clone(),
-                tir.runtime_declared_type(&target, &src).unwrap(),
+                tir.decl_type(&target).unwrap().declared().clone(),
                 kind,
             )
         };

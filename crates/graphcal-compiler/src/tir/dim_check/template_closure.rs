@@ -146,7 +146,7 @@ fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
-    for (kind, name, declaration, annotation_span, body_span) in ctx
+    for (kind, name, declaration, annotation, body_span) in ctx
         .env
         .dag
         .consts
@@ -156,7 +156,7 @@ fn check_rigid_value_bodies(
                 DeclarationKind::ConstNode,
                 &entry.name,
                 entry.identity(),
-                entry.type_ann.span,
+                &entry.type_ann,
                 entry.expr.span,
             )
         })
@@ -166,7 +166,7 @@ fn check_rigid_value_bodies(
                     DeclarationKind::Node,
                     &entry.name,
                     entry.identity(),
-                    entry.type_ann.span,
+                    &entry.type_ann,
                     expression.span,
                 )
             })
@@ -184,7 +184,7 @@ fn check_rigid_value_bodies(
             &body,
             port,
             body_span,
-            check_decl_expr_type(ctx, name, &declaration, &annotation_span),
+            check_decl_expr_type(ctx, name, &declaration, annotation),
         )?;
     }
     Ok(())
@@ -331,11 +331,9 @@ fn check_rigid_dimension_port(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let declared_types = rigid_dag.build_declared_types(ctx.env.src)?;
     let expression_facts = infer::hir::ExpressionFactCollector::new(rigid_dag);
     let rigid_ctx = DimCheckContext {
         env: infer::hir::InferEnv {
-            declared_types: &declared_types,
             dag: rigid_dag,
             tir: &rigid_tir,
             registry: &rigid_tir.registry,

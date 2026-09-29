@@ -70,7 +70,33 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     }
     let mut tir = builder.finish();
     check_dimensions_tir(&mut tir, &src)?;
-    tir.build_declared_types(&src)
+    Ok(root_declared_types(&tir))
+}
+
+/// The checked declared type of every root value declaration and imported
+/// value, keyed by its written name.
+fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, DeclaredType> {
+    let root = tir.root();
+    root.consts()
+        .iter()
+        .map(|entry| (&entry.name, &entry.type_ann))
+        .chain(
+            root.params()
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann)),
+        )
+        .chain(
+            root.nodes()
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann)),
+        )
+        .map(|(name, annotation)| (name.clone(), annotation.checked().declared().clone()))
+        .chain(
+            root.imported_bindings()
+                .iter()
+                .map(|(name, binding)| (name.clone(), binding.declared_type().clone())),
+        )
+        .collect()
 }
 
 fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
@@ -134,14 +160,12 @@ fn contextual_completion_visits_each_owned_or_independent_root_once() {
     };
     assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
     assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
-    let types = tir.build_declared_types(&src).unwrap();
     let node = &tir.root().nodes[0];
     infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
     let independent = check_external_value_expr_type(
         &tir,
-        &types,
         node.definition.formula().unwrap(),
-        &types[&node.name],
+        node.type_ann.checked().declared(),
         &src,
     )
     .unwrap();
@@ -158,7 +182,7 @@ fn model_port_application(
     Vec<DeclaredGenericArg>,
 ) {
     let (tir, src) = module_aware_tir(source);
-    let declared_types = tir.build_declared_types(&src).unwrap();
+    let declared_types = root_declared_types(&tir);
     let DeclaredType::Struct(identity, generic_args) = &declared_types
         [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("port"))]
     else {

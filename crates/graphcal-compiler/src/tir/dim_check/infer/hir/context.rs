@@ -2,7 +2,6 @@
 
 use crate::hir::expr::{ConstRef, Expr, ExprKind, LocalEnv, MatchPattern, visit_expr};
 use crate::resolved_name::ResolvedDeclName;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -11,9 +10,8 @@ use crate::expression_id::ExprId;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
-use crate::syntax::module_name::ScopedName;
 
-use crate::tir::dim_check::{DeclaredType, InferredType};
+use crate::tir::dim_check::InferredType;
 
 use super::facts::{
     ExpressionFactCollector, TypeDefinitionDependency, TypeDefinitionDependencyCollector,
@@ -23,7 +21,6 @@ use super::facts::{
 /// Read-only inputs every inference rule consults while checking one DAG body.
 #[derive(Clone, Copy)]
 pub(in crate::tir::dim_check) struct InferEnv<'a> {
-    pub(in crate::tir::dim_check) declared_types: &'a HashMap<ScopedName, DeclaredType>,
     pub(in crate::tir::dim_check) dag: &'a crate::tir::typed::DagTIR,
     pub(in crate::tir::dim_check) tir: &'a crate::tir::typed::TIR,
     pub(in crate::tir::dim_check) registry: &'a FormattingRegistry,

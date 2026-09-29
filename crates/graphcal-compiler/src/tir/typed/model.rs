@@ -1078,6 +1078,99 @@ pub struct ResolvedDomainBound {
     pub src: NamedSource<Arc<String>>,
 }
 
+/// The checked type of one value declaration.
+///
+/// The TIR type is resolved once from the declaration's canonical HIR
+/// annotation; its concrete declared form is derived at construction, so the
+/// two can never disagree and consumers never convert on demand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckedDeclType {
+    resolved: ResolvedTypeExpr,
+    declared: DeclaredType,
+}
+
+impl CheckedDeclType {
+    /// Check that a resolved declaration type is concrete.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] when the type contains unresolved generic
+    /// parameters.
+    pub(crate) fn new(
+        resolved: ResolvedTypeExpr,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<Self, GraphcalError> {
+        let declared = super::ops::resolved_to_declared_type(&resolved, src)?;
+        Ok(Self { resolved, declared })
+    }
+
+    /// The resolved TIR type, including declaration-level index axes.
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedTypeExpr {
+        &self.resolved
+    }
+
+    /// The concrete declared type.
+    #[must_use]
+    pub const fn declared(&self) -> &DeclaredType {
+        &self.declared
+    }
+}
+
+/// A value declaration's type annotation after TIR type resolution.
+///
+/// Domain bounds leave the annotation at this boundary and live in
+/// [`DagSemanticBody::domain_bounds`].
+#[derive(Debug, Clone)]
+pub struct CheckedTypeAnnotation {
+    /// The canonical HIR annotation, retained so a rigid template view can
+    /// resolve it again against an opaque dimension.
+    pub decl_type: hir::DeclType,
+    /// Span of the whole annotation.
+    pub span: Span,
+    pub(crate) checked: CheckedDeclType,
+}
+
+impl CheckedTypeAnnotation {
+    /// The declaration's checked type.
+    #[must_use]
+    pub const fn checked(&self) -> &CheckedDeclType {
+        &self.checked
+    }
+}
+
+/// Checked phase: HIR bodies whose value declarations carry their checked
+/// types.
+#[derive(Debug, Clone, Copy)]
+pub enum Typed {}
+
+impl crate::ir::entry::BodyPhase for Typed {
+    type Expr = hir::CheckedExpr;
+    type TypeAnnotation = CheckedTypeAnnotation;
+    type NodeDefinition = hir::node_definition::NodeDefinition;
+    type AssertBody = hir::CheckedAssertBody;
+    type PlotBody = crate::ir::lower::LoweredPlotBody;
+    type CompositionFields = Vec<crate::ir::lower::LoweredPlotField>;
+    type UnitIdentity = ResolvedUnitName;
+}
+
+/// A checked value, assertion, or visualization declaration.
+pub type TypedDecl = crate::ir::entry::Decl<Typed>;
+/// A checked const declaration.
+pub type TypedConstEntry = crate::ir::entry::ConstEntry<Typed>;
+/// A checked param declaration.
+pub type TypedParamEntry = crate::ir::entry::ParamEntry<Typed>;
+/// A checked node declaration.
+pub type TypedNodeEntry = crate::ir::entry::NodeEntry<Typed>;
+/// A checked assert declaration.
+pub type TypedAssertEntry = crate::ir::entry::AssertEntry<Typed>;
+/// A checked plot declaration.
+pub type TypedPlotEntry = crate::ir::entry::PlotEntry<Typed>;
+/// A checked figure declaration.
+pub type TypedFigureEntry = crate::ir::entry::FigureEntry<Typed>;
+/// A checked layer declaration.
+pub type TypedLayerEntry = crate::ir::entry::LayerEntry<Typed>;
+
 pub(crate) use crate::ir::override_reconciliation::{OverrideReconciliation, OverrideTarget};
 
 /// A module-owned nominal declaration that may be replaced at an include site.
@@ -1425,83 +1518,23 @@ impl TIR {
             .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
     }
 
-    /// Find the checked DAG environment that physically contains a declaration.
+    /// Find the checked DAG that owns a declaration record.
     ///
-    /// Included declarations retain instance-qualified semantic owners even
-    /// though their instantiated bodies execute inside the importing DAG.
+    /// Every record is stored in the DAG named by its canonical owner, so
+    /// this is a keyed lookup rather than a search.
     #[must_use]
     pub fn dag_containing_declaration(&self, declaration: &ResolvedDeclName) -> Option<&DagTIR> {
-        self.dags.iter().find_map(|(_, dag)| {
-            dag.consts()
-                .iter()
-                .map(crate::ir::lower::ConstEntry::identity)
-                .chain(
-                    dag.params()
-                        .iter()
-                        .map(crate::ir::lower::ParamEntry::identity),
-                )
-                .chain(
-                    dag.nodes()
-                        .iter()
-                        .map(crate::ir::lower::NodeEntry::identity),
-                )
-                .any(|identity| &identity == declaration)
-                .then_some(dag)
-        })
+        self.dags
+            .get(declaration.owner())
+            .filter(|dag| dag.declaration_index.values.contains_key(declaration))
     }
 
-    /// Resolve the checked declared type of one runtime declaration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an internal diagnostic if the declaration is absent or its
-    /// already-checked HIR annotation cannot be projected into a declared type.
-    pub fn runtime_declared_type(
-        &self,
-        declaration: &ResolvedDeclName,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<DeclaredType, GraphcalError> {
-        let dag = self
-            .dag_containing_declaration(declaration)
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("runtime declaration `{declaration}` is absent from checked TIR"),
-                    src,
-                    crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        let (name, annotation) = dag
-            .consts()
-            .iter()
-            .map(|entry| (&entry.name, entry.identity(), &entry.type_ann))
-            .chain(
-                dag.params()
-                    .iter()
-                    .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
-            )
-            .chain(
-                dag.nodes()
-                    .iter()
-                    .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
-            )
-            .find_map(|(name, identity, annotation)| {
-                (&identity == declaration).then_some((name, annotation))
-            })
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("runtime declaration `{declaration}` has no checked annotation"),
-                    src,
-                    crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        let resolved = dag.resolved_decl_types.get(name).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("runtime declaration `{declaration}` has no retained checked type"),
-                src,
-                crate::diagnostic_anchor::DiagnosticAnchor::Source(annotation.span),
-            )
-        })?;
-        super::ops::resolved_to_declared_type(resolved, src)
+    /// The checked type of any value declaration in the project.
+    #[must_use]
+    pub fn decl_type(&self, declaration: &ResolvedDeclName) -> Option<&CheckedDeclType> {
+        self.dags
+            .get(declaration.owner())?
+            .value_decl_type(declaration)
     }
 
     /// Borrow resolved extern function signatures.
@@ -1613,20 +1646,6 @@ impl TIR {
                 .root_declared_indexes()
                 .any(crate::registry::types::IndexDef::is_required)
     }
-
-    /// Build a concrete `DeclaredType` map from the root DAG.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`GraphcalError`] if any resolved type contains unresolved
-    /// generic parameters.
-    pub fn build_declared_types(
-        &self,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
-    {
-        self.root().build_declared_types(src)
-    }
 }
 
 /// Index into an authoritative value-declaration record.
@@ -1645,11 +1664,27 @@ pub(super) struct DagDeclarationIndex {
     assertions: HashMap<ResolvedDeclName, usize>,
 }
 
-/// Two checked declaration records share one canonical identity.
-#[derive(Debug)]
-pub(super) struct DuplicateDeclarationRecord {
-    pub(super) name: ScopedName,
-    pub(super) span: Span,
+/// Checked declaration records could not be indexed.
+#[derive(Debug, Error)]
+pub(super) enum DeclarationRecordError {
+    /// Two records share one canonical identity.
+    #[error("duplicate checked declaration record `{name}`")]
+    Duplicate { name: ScopedName, span: Span },
+    /// A record is owned by a different DAG than the one storing it.
+    #[error("checked declaration record `{identity}` is stored in DAG `{dag_id}`")]
+    ForeignOwner {
+        identity: ResolvedDeclName,
+        dag_id: crate::dag_id::DagId,
+        span: Span,
+    },
+}
+
+impl DeclarationRecordError {
+    pub(super) const fn span(&self) -> Span {
+        match self {
+            Self::Duplicate { span, .. } | Self::ForeignOwner { span, .. } => *span,
+        }
+    }
 }
 
 pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
@@ -1681,13 +1716,13 @@ enum ExpressionRootScope {
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,
     pub(crate) body_revision: crate::body_revision::BodyRevision,
-    pub(crate) consts: Vec<crate::ir::lower::ConstEntry>,
-    pub(crate) params: Vec<crate::ir::lower::ParamEntry>,
-    pub(crate) nodes: Vec<crate::ir::lower::NodeEntry>,
-    pub(crate) asserts: Vec<crate::ir::lower::AssertEntry>,
-    pub(crate) plots: Vec<crate::ir::lower::PlotEntry>,
-    pub(crate) figures: Vec<crate::ir::lower::FigureEntry>,
-    pub(crate) layers: Vec<crate::ir::lower::LayerEntry>,
+    pub(crate) consts: Vec<TypedConstEntry>,
+    pub(crate) params: Vec<TypedParamEntry>,
+    pub(crate) nodes: Vec<TypedNodeEntry>,
+    pub(crate) asserts: Vec<TypedAssertEntry>,
+    pub(crate) plots: Vec<TypedPlotEntry>,
+    pub(crate) figures: Vec<TypedFigureEntry>,
+    pub(crate) layers: Vec<TypedLayerEntry>,
     pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
@@ -1695,7 +1730,6 @@ pub struct DagTIR {
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
-    pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
     pub(crate) semantic_specialization:
@@ -1722,37 +1756,37 @@ impl DagTIR {
     }
 
     #[must_use]
-    pub fn consts(&self) -> &[crate::ir::lower::ConstEntry] {
+    pub fn consts(&self) -> &[TypedConstEntry] {
         &self.consts
     }
 
     #[must_use]
-    pub fn params(&self) -> &[crate::ir::lower::ParamEntry] {
+    pub fn params(&self) -> &[TypedParamEntry] {
         &self.params
     }
 
     #[must_use]
-    pub fn nodes(&self) -> &[crate::ir::lower::NodeEntry] {
+    pub fn nodes(&self) -> &[TypedNodeEntry] {
         &self.nodes
     }
 
     #[must_use]
-    pub fn asserts(&self) -> &[crate::ir::lower::AssertEntry] {
+    pub fn asserts(&self) -> &[TypedAssertEntry] {
         &self.asserts
     }
 
     #[must_use]
-    pub fn plots(&self) -> &[crate::ir::lower::PlotEntry] {
+    pub fn plots(&self) -> &[TypedPlotEntry] {
         &self.plots
     }
 
     #[must_use]
-    pub fn figures(&self) -> &[crate::ir::lower::FigureEntry] {
+    pub fn figures(&self) -> &[TypedFigureEntry] {
         &self.figures
     }
 
     #[must_use]
-    pub fn layers(&self) -> &[crate::ir::lower::LayerEntry] {
+    pub fn layers(&self) -> &[TypedLayerEntry] {
         &self.layers
     }
 
@@ -1883,8 +1917,22 @@ impl DagTIR {
     }
 
     /// Build identity-to-record indexes after all declaration vectors are installed.
-    pub(super) fn index_declaration_records(&mut self) -> Result<(), DuplicateDeclarationRecord> {
+    ///
+    /// Every record must be owned by this DAG, so a declaration's owner alone
+    /// locates its record project-wide.
+    pub(super) fn index_declaration_records(&mut self) -> Result<(), DeclarationRecordError> {
         let mut index = DagDeclarationIndex::default();
+        let own = |identity: &ResolvedDeclName, span: Span| {
+            if identity.owner() == &self.dag_id {
+                Ok(())
+            } else {
+                Err(DeclarationRecordError::ForeignOwner {
+                    identity: identity.clone(),
+                    dag_id: self.dag_id.clone(),
+                    span,
+                })
+            }
+        };
         for (slot, name, key, span) in self
             .consts
             .iter()
@@ -1914,16 +1962,19 @@ impl DagTIR {
                 )
             }))
         {
+            own(&key, span)?;
             if index.values.insert(key, slot).is_some() {
-                return Err(DuplicateDeclarationRecord {
+                return Err(DeclarationRecordError::Duplicate {
                     name: name.clone(),
                     span,
                 });
             }
         }
         for (slot, entry) in self.asserts.iter().enumerate() {
-            if index.assertions.insert(entry.identity(), slot).is_some() {
-                return Err(DuplicateDeclarationRecord {
+            let key = entry.identity();
+            own(&key, entry.span)?;
+            if index.assertions.insert(key, slot).is_some() {
+                return Err(DeclarationRecordError::Duplicate {
                     name: entry.name.clone(),
                     span: entry.span,
                 });
@@ -1931,6 +1982,63 @@ impl DagTIR {
         }
         self.declaration_index = index;
         Ok(())
+    }
+
+    /// The checked type of one of this DAG's value declarations.
+    #[must_use]
+    pub fn value_decl_type(&self, key: &ResolvedDeclName) -> Option<&CheckedDeclType> {
+        let annotation = match self.declaration_index.values.get(key)? {
+            ValueDeclarationSlot::Const(slot) => &self.consts[*slot].type_ann,
+            ValueDeclarationSlot::Param(slot) => &self.params[*slot].type_ann,
+            ValueDeclarationSlot::Node(slot) => &self.nodes[*slot].type_ann,
+        };
+        Some(&annotation.checked)
+    }
+
+    /// Replace the checked types of the value declarations named in `types`.
+    pub(crate) fn replace_value_decl_types(
+        &mut self,
+        mut types: HashMap<ResolvedDeclName, CheckedDeclType>,
+    ) {
+        let annotations = self
+            .consts
+            .iter_mut()
+            .map(|entry| (entry.identity(), &mut entry.type_ann))
+            .chain(
+                self.params
+                    .iter_mut()
+                    .map(|entry| (entry.identity(), &mut entry.type_ann)),
+            )
+            .chain(
+                self.nodes
+                    .iter_mut()
+                    .map(|entry| (entry.identity(), &mut entry.type_ann)),
+            );
+        for (identity, annotation) in annotations {
+            if let Some(checked) = types.remove(&identity) {
+                annotation.checked = checked;
+            }
+        }
+    }
+
+    /// Every value declaration's identity and checked type annotation, in
+    /// const, param, node order.
+    pub fn value_decl_types(
+        &self,
+    ) -> impl Iterator<Item = (ResolvedDeclName, &CheckedTypeAnnotation)> {
+        self.consts
+            .iter()
+            .map(|entry| (entry.identity(), &entry.type_ann))
+            .chain(
+                self.params
+                    .iter()
+                    .map(|entry| (entry.identity(), &entry.type_ann)),
+            )
+            .chain(
+                self.nodes
+                    .iter()
+                    .map(|entry| (entry.identity(), &entry.type_ann)),
+            )
     }
 
     /// Iterate identities from the authoritative value-record index, including
@@ -2119,11 +2227,6 @@ impl DagTIR {
         self.expected_fail
             .iter()
             .map(|(name, metadata)| (name, &metadata.expected))
-    }
-
-    #[must_use]
-    pub const fn resolved_decl_types(&self) -> &HashMap<ScopedName, ResolvedTypeExpr> {
-        &self.resolved_decl_types
     }
 
     #[must_use]

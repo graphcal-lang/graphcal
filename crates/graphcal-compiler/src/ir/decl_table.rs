@@ -39,6 +39,18 @@ pub struct DeclTable<P: BodyPhase> {
     spelling: HashMap<ScopedName, ResolvedDeclName>,
 }
 
+/// The empty table of a DAG without value, assertion, or visualization
+/// declarations.
+impl<P: BodyPhase> Default for DeclTable<P> {
+    fn default() -> Self {
+        Self {
+            order: Vec::new(),
+            decls: HashMap::new(),
+            spelling: HashMap::new(),
+        }
+    }
+}
+
 impl<P: BodyPhase> DeclTable<P> {
     /// Build the table for DAG `owner` from declarations in source order.
     ///
