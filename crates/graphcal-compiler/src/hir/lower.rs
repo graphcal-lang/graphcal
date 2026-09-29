@@ -986,7 +986,10 @@ fn lower_dim_expr_item(
     })
 }
 
-fn lower_dim_term(term: &ast::DimTerm, ctx: ModuleScope<'_>) -> Result<DimTermRef, HirLowerError> {
+pub(crate) fn lower_dim_term(
+    term: &ast::DimTerm,
+    ctx: ModuleScope<'_>,
+) -> Result<DimTermRef, HirLowerError> {
     if let Some(atom) = term.name.value.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
     {
@@ -1035,7 +1038,7 @@ fn lower_dim_term(term: &ast::DimTerm, ctx: ModuleScope<'_>) -> Result<DimTermRe
     })
 }
 
-fn lower_index_expr(
+pub(crate) fn lower_index_expr(
     index: &ast::IndexExpr,
     ctx: ModuleScope<'_>,
 ) -> Result<IndexRef, HirLowerError> {

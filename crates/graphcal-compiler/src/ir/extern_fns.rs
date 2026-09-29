@@ -10,6 +10,9 @@ use crate::registry::error::GraphcalError;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
+#[cfg(test)]
+mod tests;
+
 // ---------------------------------------------------------------------------
 // Extern plugin functions
 // ---------------------------------------------------------------------------
@@ -124,18 +127,128 @@ impl ExternSignatureScope<'_, '_> {
             .transpose()
     }
 
-    /// The dimension a bare name denotes in the declaring module, if any.
-    fn dimension(
+    /// What one dimension term of a signature denotes: a binder of the
+    /// signature or a dimension defined in (or imported into) the declaring
+    /// module. `None` when it denotes neither.
+    fn dimension_term(
         &mut self,
-        name: &crate::syntax::names::NameAtom,
-    ) -> Result<Option<crate::dimension::Dimension>, GraphcalError> {
-        let reference = crate::syntax::dimension::DimRef::local(
-            crate::syntax::dimension::DimName::classify(name.clone()),
-        );
-        self.definitions
-            .resolve_dimension(self.owner, &reference)
-            .map(|identity| self.definitions.dimension(&identity))
-            .transpose()
+        term: &crate::desugar::desugared_ast::DimTerm,
+        generics: &ExternGenerics,
+    ) -> Result<Option<ExternDimTerm>, GraphcalError> {
+        use crate::hir::types::DimTermTarget;
+
+        let lowered = crate::hir::lower::lower_dim_term(term, self.type_context(generics));
+        match lowered.map(|term| term.target) {
+            Ok(DimTermTarget::GenericParam(id)) => Ok(generics
+                .dims
+                .get(&id.value)
+                .cloned()
+                .map(ExternDimTerm::Var)),
+            Ok(DimTermTarget::Dimension(identity))
+                if self.definitions.defines_dimension(&identity.value) =>
+            {
+                self.definitions
+                    .dimension(&identity.value)
+                    .map(|dimension| Some(ExternDimTerm::Fixed(dimension)))
+            }
+            Ok(DimTermTarget::Dimension(_)) | Err(_) => Ok(None),
+        }
+    }
+
+    /// The index binder an array axis names, if it names one.
+    fn index_var(
+        &self,
+        index: &crate::syntax::ast::IndexExpr,
+        generics: &ExternGenerics,
+    ) -> Option<crate::syntax::index_name::IndexVarName> {
+        match crate::hir::lower::lower_index_expr(index, self.type_context(generics)) {
+            Ok(crate::hir::types::IndexRef::GenericParam(id)) => {
+                generics.indexes.get(&id.value).cloned()
+            }
+            Ok(
+                crate::hir::types::IndexRef::Concrete(_) | crate::hir::types::IndexRef::Finite(_),
+            )
+            | Err(_) => None,
+        }
+    }
+
+    const fn type_context<'c>(
+        &'c self,
+        generics: &'c ExternGenerics,
+    ) -> crate::hir::lower::ModuleScope<'c> {
+        crate::hir::lower::ModuleScope::new(self.owner, self.resolver(), &generics.scope)
+    }
+}
+
+/// What one dimension term of an extern signature denotes.
+enum ExternDimTerm {
+    Var(crate::syntax::dimension::DimVarName),
+    Fixed(crate::dimension::Dimension),
+}
+
+/// The `<...>` binders of one extern function as a lexical HIR generic
+/// scope owned by the function.
+struct ExternGenerics {
+    scope: crate::hir::lower::GenericScope,
+    dims: HashMap<crate::hir::types::GenericParamId, crate::syntax::dimension::DimVarName>,
+    indexes: HashMap<crate::hir::types::GenericParamId, crate::syntax::index_name::IndexVarName>,
+    /// Dimension binders in declaration order.
+    dim_vars: Vec<crate::syntax::dimension::DimVarName>,
+    /// Index binders in declaration order.
+    index_vars: Vec<crate::syntax::index_name::IndexVarName>,
+}
+
+impl ExternGenerics {
+    /// Bind `function`'s binders; binder names share one lexical namespace
+    /// regardless of constraint (`<D: Dim, D: Index>` is a duplicate).
+    fn new(
+        key: &crate::plugin_identity::ExternFnKey,
+        function: &crate::desugar::desugared_ast::ExternFnDecl,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<Self, GraphcalError> {
+        use crate::hir::lower::GenericParamBinding;
+        use crate::hir::types::{GenericParamId, GenericParamOwner};
+        use crate::syntax::ast::{ExternGenericBinder, GenericConstraint};
+        use crate::syntax::type_name::GenericParamName;
+
+        let owner = GenericParamOwner::ExternFn(key.clone());
+        let mut generics = Self {
+            scope: crate::hir::lower::GenericScope::new(),
+            dims: HashMap::new(),
+            indexes: HashMap::new(),
+            dim_vars: Vec::new(),
+            index_vars: Vec::new(),
+        };
+        for binder in &function.generics {
+            let (atom, constraint, span) = match binder {
+                ExternGenericBinder::Dim(var) => {
+                    (var.value.atom(), GenericConstraint::Dim, var.span)
+                }
+                ExternGenericBinder::Index(var) => {
+                    (var.value.atom(), GenericConstraint::Index, var.span)
+                }
+            };
+            let id = GenericParamId::new(owner.clone(), GenericParamName::classify(atom.clone()));
+            generics
+                .scope
+                .insert_binding(GenericParamBinding::new(id.clone(), constraint, span))
+                .map_err(|_| GraphcalError::InvalidExternSignature {
+                    message: format!("generic binder `{atom}` is declared more than once"),
+                    src: src.clone(),
+                    span: binder.span().into(),
+                })?;
+            match binder {
+                ExternGenericBinder::Dim(var) => {
+                    generics.dims.insert(id, var.value.clone());
+                    generics.dim_vars.push(var.value.clone());
+                }
+                ExternGenericBinder::Index(var) => {
+                    generics.indexes.insert(id, var.value.clone());
+                    generics.index_vars.push(var.value.clone());
+                }
+            }
+        }
+        Ok(generics)
     }
 }
 
@@ -225,8 +338,7 @@ pub fn merge_extern_function(
 /// Resolve one extern-signature type annotation to a [`crate::function_signature::ParamKind`].
 fn resolve_extern_value_kind(
     type_ann: &TypeExpr,
-    dim_vars: &[crate::syntax::dimension::DimVarName],
-    index_vars: &[crate::syntax::index_name::IndexVarName],
+    generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
@@ -245,18 +357,11 @@ fn resolve_extern_value_kind(
         TypeExprKind::Int => Ok(ParamKind::int()),
         TypeExprKind::Dimensionless => Ok(ParamKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
-            resolve_extern_dim_monomial(dim_expr, dim_vars, scope, src)
+            resolve_extern_dim_monomial(dim_expr, generics, scope, src)
                 .map(ParamKind::quantity_monomial)
         }
         TypeExprKind::Indexed { base, indexes } => {
-            resolve_extern_array_kind(
-                base,
-                indexes.as_slice(),
-                dim_vars,
-                index_vars,
-                scope,
-                src,
-            )
+            resolve_extern_array_kind(base, indexes.as_slice(), generics, scope, src)
         }
         TypeExprKind::IndexLabel { .. }
         | TypeExprKind::Datetime
@@ -281,52 +386,31 @@ fn resolve_extern_function(
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ExternFunctionEntry, GraphcalError> {
-    // Binder idents share one lexical namespace regardless of
-    // constraint: `<D: Dim, D: Index>` is a duplicate declaration.
-    let mut seen_binders: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for binder in &function.generics {
-        if !seen_binders.insert(binder.name_str()) {
-            return Err(GraphcalError::InvalidExternSignature {
-                message: format!(
-                    "generic binder `{}` is declared more than once",
-                    binder.name_str()
-                ),
-                src: src.clone(),
-                span: binder.span().into(),
-            });
-        }
-    }
-    let dim_vars: Vec<crate::syntax::dimension::DimVarName> = function
-        .generics
-        .iter()
-        .filter_map(|binder| match binder {
-            crate::syntax::ast::ExternGenericBinder::Dim(var) => Some(var.value.clone()),
-            crate::syntax::ast::ExternGenericBinder::Index(_) => None,
-        })
-        .collect();
-    let index_vars: Vec<crate::syntax::index_name::IndexVarName> = function
-        .generics
-        .iter()
-        .filter_map(|binder| match binder {
-            crate::syntax::ast::ExternGenericBinder::Index(var) => Some(var.value.clone()),
-            crate::syntax::ast::ExternGenericBinder::Dim(_) => None,
-        })
-        .collect();
+    let key = crate::plugin_identity::ExternFnKey {
+        plugin: crate::plugin_identity::PluginIdentity::resolve(
+            &decl.path.value,
+            scope.owner.package(),
+        ),
+        name: function.name.value.clone(),
+    };
+    let generics = ExternGenerics::new(&key, function, src)?;
     let params = function
         .params
         .iter()
         .map(|param| {
-            let kind =
-                resolve_extern_value_kind(&param.type_ann, &dim_vars, &index_vars, scope, src)?;
+            let kind = resolve_extern_value_kind(&param.type_ann, &generics, scope, src)?;
             Ok(crate::function_signature::FunctionParam {
                 name: param.name.value.clone(),
                 kind,
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let result = resolve_extern_result_kind(&function.result, &dim_vars, &index_vars, scope, src)?;
+    let result = resolve_extern_result_kind(&function.result, &generics, scope, src)?;
     let signature = crate::function_signature::FunctionSignature::try_from_parts(
-        dim_vars, index_vars, params, result,
+        generics.dim_vars,
+        generics.index_vars,
+        params,
+        result,
     )
     .map_err(|err| {
         if let crate::function_signature::SignatureError::DuplicateParamName {
@@ -351,12 +435,9 @@ fn resolve_extern_function(
         }
     })?;
     Ok(ExternFunctionEntry {
-        plugin: crate::plugin_identity::PluginIdentity::resolve(
-            &decl.path.value,
-            scope.owner.package(),
-        ),
+        plugin: key.plugin,
         alias: decl.alias.value.clone(),
-        name: function.name.value.clone(),
+        name: key.name,
         signature,
         name_span: function.name.span,
         decl_span: function.span,
@@ -367,14 +448,13 @@ fn resolve_extern_function(
 /// Resolve an extern RESULT type annotation: any parameter kind, or a
 /// record struct type in scope.
 ///
-/// A bare name in result position that is neither a declared dimension
-/// variable nor a dimension is tried as a record type; the struct branch
+/// A single name in result position that is neither a dimension binder of
+/// the signature nor a dimension is tried as a record type; the struct branch
 /// returns the flattened field shape plus the nominal identity the
 /// declaration binds it to.
 fn resolve_extern_result_kind(
     type_ann: &TypeExpr,
-    dim_vars: &[crate::syntax::dimension::DimVarName],
-    index_vars: &[crate::syntax::index_name::IndexVarName],
+    generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
@@ -384,9 +464,7 @@ fn resolve_extern_result_kind(
         && let TypeExprKind::DimExpr(dim_expr) = &type_ann.kind
         && let [item] = dim_expr.terms.as_slice()
         && item.term.power.is_none()
-        && let Some(atom) = item.term.name.value.as_bare()
-        && !dim_vars.iter().any(|var| var.as_str() == atom.as_str())
-        && scope.dimension(atom)?.is_none()
+        && scope.dimension_term(&item.term, generics)?.is_none()
     {
         // Not a dimension: the only remaining reading is a record type.
         return resolve_extern_struct_return(
@@ -405,7 +483,7 @@ fn resolve_extern_result_kind(
             span: type_ann.span.into(),
         });
     }
-    resolve_extern_value_kind(type_ann, dim_vars, index_vars, scope, src).map(Into::into)
+    resolve_extern_value_kind(type_ann, generics, scope, src).map(Into::into)
 }
 
 /// Resolve a record-type extern result: nominal identity through the
@@ -550,33 +628,24 @@ fn resolve_extern_struct_field(
 fn resolve_extern_array_kind(
     base: &TypeExpr,
     indexes: &[crate::syntax::ast::IndexExpr],
-    dim_vars: &[crate::syntax::dimension::DimVarName],
-    index_vars: &[crate::syntax::index_name::IndexVarName],
+    generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::{DimMonomial, ParamKind, ScalarValueKind};
-    use crate::syntax::ast::IndexExpr;
 
     let resolved_indexes = indexes
         .iter()
         .map(|index_expr| {
-            let index_var = match index_expr {
-                IndexExpr::Name(name) => name.value.as_bare().and_then(|atom| {
-                    index_vars
-                        .iter()
-                        .find(|var| var.as_str() == atom.as_str())
-                        .cloned()
-                }),
-                IndexExpr::Finite { .. } | IndexExpr::BareNat(_) => None,
-            };
-            index_var.ok_or_else(|| GraphcalError::InvalidExternSignature {
-                message: "extern array axes must name the signature's `Index` binders \
+            scope.index_var(index_expr, generics).ok_or_else(|| {
+                GraphcalError::InvalidExternSignature {
+                    message: "extern array axes must name the signature's `Index` binders \
                           (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
-                    .to_string(),
-                src: src.clone(),
-                span: index_expr.span().into(),
+                        .to_string(),
+                    src: src.clone(),
+                    span: index_expr.span().into(),
+                }
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -601,7 +670,7 @@ fn resolve_extern_array_kind(
         TypeExprKind::Int => ScalarValueKind::Int,
         TypeExprKind::Dimensionless => ScalarValueKind::Quantity(DimMonomial::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
-            ScalarValueKind::Quantity(resolve_extern_dim_monomial(dim_expr, dim_vars, scope, src)?)
+            ScalarValueKind::Quantity(resolve_extern_dim_monomial(dim_expr, generics, scope, src)?)
         }
         _ => {
             return Err(GraphcalError::InvalidExternSignature {
@@ -626,11 +695,12 @@ fn type_ann_indexes_span(
     }
 }
 
-/// Resolve a dimension expression over declared dim variables and in-scope
-/// dimensions into a [`crate::function_signature::DimMonomial`].
+/// Resolve a dimension expression over the signature's dimension binders and
+/// the dimensions of the declaring module into a
+/// [`crate::function_signature::DimMonomial`].
 fn resolve_extern_dim_monomial(
     dim_expr: &crate::desugar::desugared_ast::DimExpr,
-    dim_vars: &[crate::syntax::dimension::DimVarName],
+    generics: &ExternGenerics,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
@@ -646,40 +716,30 @@ fn resolve_extern_dim_monomial(
     for item in &dim_expr.terms {
         let term = &item.term;
         let power = term.effective_power();
-        let path = &term.name.value;
-        if let Some(atom) = path.as_bare()
-            && let Some(var) = dim_vars.iter().find(|v| v.as_str() == atom.as_str())
-        {
-            let power = match item.op {
-                MulDivOp::Mul => power,
-                MulDivOp::Div => -power,
-            };
-            vars.push((var.clone(), power));
-            continue;
+        match scope.dimension_term(term, generics)? {
+            Some(ExternDimTerm::Var(var)) => {
+                let power = match item.op {
+                    MulDivOp::Mul => power,
+                    MulDivOp::Div => -power,
+                };
+                vars.push((var, power));
+            }
+            Some(ExternDimTerm::Fixed(dim)) => {
+                let powered = dim.pow(power).map_err(|_| overflow(term.span))?;
+                fixed = match item.op {
+                    MulDivOp::Mul => fixed.checked_mul(&powered),
+                    MulDivOp::Div => fixed.checked_div(&powered),
+                }
+                .map_err(|_| overflow(term.span))?;
+            }
+            None => {
+                return Err(GraphcalError::UnknownDimension {
+                    name: term.name.value.clone(),
+                    src: src.clone(),
+                    span: term.name.span.into(),
+                });
+            }
         }
-        let Some(leaf) = path.as_bare() else {
-            return Err(GraphcalError::InvalidExternSignature {
-                message: format!(
-                    "module-qualified dimension `{}` is not supported in extern function signatures",
-                    path.display_path()
-                ),
-                src: src.clone(),
-                span: term.span.into(),
-            });
-        };
-        let Some(dim) = scope.dimension(leaf)? else {
-            return Err(GraphcalError::UnknownDimension {
-                name: NamePath::from(leaf.clone()),
-                src: src.clone(),
-                span: term.name.span.into(),
-            });
-        };
-        let powered = dim.pow(power).map_err(|_| overflow(term.span))?;
-        fixed = match item.op {
-            MulDivOp::Mul => fixed.checked_mul(&powered),
-            MulDivOp::Div => fixed.checked_div(&powered),
-        }
-        .map_err(|_| overflow(term.span))?;
     }
     crate::function_signature::DimMonomial::try_new(vars, fixed).map_err(|error| {
         GraphcalError::InvalidExternSignature {
