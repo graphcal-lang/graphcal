@@ -17,4 +17,5 @@ pub mod static_definitions;
 pub mod static_dependencies;
 #[cfg(test)]
 mod static_external_surface_formal_conformance;
+pub mod static_substitution;
 pub use crate::static_interface;

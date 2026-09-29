@@ -1102,36 +1102,7 @@ pub struct ResolvedDomainBound {
     pub src: NamedSource<Arc<String>>,
 }
 
-/// A canonical nominal override that an unrebound param default must not use.
-#[derive(Debug, Clone)]
-pub(crate) enum ResolvedOverrideTarget {
-    Index {
-        overridden: IndexName,
-        source: ResolvedIndexName,
-        replacement: IndexTypeRef,
-    },
-    Type {
-        overridden: crate::syntax::type_name::StructTypeName,
-        source: ResolvedStructTypeName,
-        replacement: ResolvedStructTypeName,
-    },
-}
-
-/// One include-site reconciliation obligation for an unrebound param default.
-#[derive(Debug, Clone)]
-pub(crate) struct OverrideReconciliation {
-    pub(crate) source_decl: ResolvedDeclName,
-    pub(crate) targets: Vec<ResolvedOverrideTarget>,
-    pub(crate) src: NamedSource<Arc<String>>,
-    pub(crate) include_span: Span,
-}
-
-impl OverrideReconciliation {
-    /// The unrebound param that must be re-bound at the include site.
-    pub(crate) fn orphan_decl(&self) -> DeclName {
-        self.source_decl.to_unowned_def_name()
-    }
-}
+pub(crate) use crate::ir::override_reconciliation::{OverrideReconciliation, OverrideTarget};
 
 /// A module-owned nominal declaration that may be replaced at an include site.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1760,7 +1731,8 @@ pub struct DagTIR {
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
-    pub(crate) semantic_specialization: Option<crate::ir::instance::StaticSpecializationId>,
+    pub(crate) semantic_specialization:
+        Option<crate::ir::static_substitution::StaticSpecializationId>,
     pub(crate) runtime_owner_rebases: HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }
@@ -1913,10 +1885,10 @@ impl DagTIR {
             .as_ref()
             .and_then(|specialization| specialization.substitution.indexes.get(source));
         match target {
-            Some(crate::ir::instance::InstanceIndexBindingTarget::Declared(target)) => {
+            Some(crate::ir::static_substitution::InstanceIndexBindingTarget::Declared(target)) => {
                 IndexTypeRef::from_resolved(target.clone())
             }
-            Some(crate::ir::instance::InstanceIndexBindingTarget::Finite(target)) => {
+            Some(crate::ir::static_substitution::InstanceIndexBindingTarget::Finite(target)) => {
                 IndexTypeRef::from_finite_index(*target)
             }
             None => IndexTypeRef::from_resolved(source.clone()),

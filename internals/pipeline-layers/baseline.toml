@@ -443,14 +443,6 @@ reason = "Observed eval::project_compiler::imports -> eval::loader (production) 
 [[exception]]
 from_package = "eval"
 from_path = ["project_compiler", "lowering"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed eval::project_compiler::lowering -> compiler::hir (production) at ./crates/graphcal-eval/src/project_compiler/lowering.rs:975 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "lowering"]
 to_package = "eval"
 to_path = ["loader"]
 test_only = false

@@ -307,6 +307,14 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             )
     }
 
+    /// Whether `identity` has a definition this evaluator can produce: a
+    /// declaration of a source module or a prelude dimension. An
+    /// instance-owned identity has none.
+    #[must_use]
+    pub fn defines_dimension(&self, identity: &ResolvedDimName) -> bool {
+        self.dimensions.contains_key(identity) || self.has_source(identity.owner())
+    }
+
     fn has_source(&self, owner: &DagId) -> bool {
         self.modules.contains_key(owner)
     }

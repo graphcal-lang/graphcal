@@ -15,6 +15,7 @@ use crate::desugar::desugared_ast::{DeclKind, Expr, File, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::ir::instance::InstanceRecord;
+use crate::ir::module_interface::ModuleInterface;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
@@ -365,7 +366,14 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
         })?;
     // Declaration collection reports duplicate names before the resolver's
     // own tables are built.
-    resolve_with_imported_values(ast, src, &ImportedValueNames::default(), &dag_id)?;
+    let interface = ModuleInterface::new(&ast.declarations);
+    resolve_with_imported_values(
+        ast,
+        interface.declared_surface(),
+        src,
+        &ImportedValueNames::default(),
+        &dag_id,
+    )?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
     let mut definitions = definition_evaluator(
         &resolver,
@@ -438,7 +446,14 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    resolve_with_imported_values(ast, src, &ImportedValueNames::default(), &dag_id)?;
+    let interface = ModuleInterface::new(&ast.declarations);
+    resolve_with_imported_values(
+        ast,
+        interface.declared_surface(),
+        src,
+        &ImportedValueNames::default(),
+        &dag_id,
+    )?;
     let dag_bodies = ast
         .declarations
         .iter()
@@ -630,7 +645,10 @@ pub fn lower_module_with_imported_bindings(
     definitions: &mut StaticDefinitionEvaluator<'_>,
 ) -> Result<UnfrozenIR, GraphcalError> {
     lower_module_with_imported_bindings_and_cancellation(
-        ast,
+        ModuleBody {
+            ast,
+            interface: &ModuleInterface::new(&ast.declarations),
+        },
         src,
         imported_names,
         imported_bindings,
@@ -650,7 +668,7 @@ pub fn lower_module_with_imported_bindings(
     reason = "internal API always uses default hasher"
 )]
 pub fn lower_module_with_imported_bindings_and_cancellation(
-    ast: &File,
+    module: ModuleBody<'_>,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
@@ -659,7 +677,14 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let resolved = resolve_with_imported_values(ast, src, imported_names, dag_id)?;
+    let ModuleBody { ast, interface } = module;
+    let resolved = resolve_with_imported_values(
+        ast,
+        interface.declared_surface(),
+        src,
+        imported_names,
+        dag_id,
+    )?;
     let mut unfrozen = build_ir_from_resolved(
         ast,
         resolved,
@@ -703,7 +728,10 @@ pub fn lower_dag_module_with_imported_bindings(
     definitions: &mut StaticDefinitionEvaluator<'_>,
 ) -> Result<UnfrozenIR, GraphcalError> {
     lower_dag_module_with_imported_bindings_and_cancellation(
-        dag_body,
+        ModuleBody {
+            ast: dag_body,
+            interface: &ModuleInterface::new(&dag_body.declarations),
+        },
         imported_names,
         imported_bindings,
         src,
@@ -723,7 +751,7 @@ pub fn lower_dag_module_with_imported_bindings(
     reason = "internal API always uses default hasher"
 )]
 pub fn lower_dag_module_with_imported_bindings_and_cancellation(
-    dag_body: &File,
+    module: ModuleBody<'_>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
@@ -732,7 +760,17 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let resolved = resolve_with_imported_values(dag_body, src, imported_names, dag_id)?;
+    let ModuleBody {
+        ast: dag_body,
+        interface,
+    } = module;
+    let resolved = resolve_with_imported_values(
+        dag_body,
+        interface.declared_surface(),
+        src,
+        imported_names,
+        dag_id,
+    )?;
 
     build_ir_from_resolved(
         dag_body,
@@ -742,6 +780,20 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
         definitions,
         cancellation,
     )
+}
+
+/// One module body to lower together with the declared interface of the
+/// module it belongs to.
+///
+/// The interface's declared surface (explicit exports and `param` input ports
+/// of the module's own declarations) is the single classification of the
+/// module's external boundary; lowering does not re-derive it. An inline DAG's
+/// `ast` may have its self-imports stripped, which never changes the declared
+/// surface.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleBody<'a> {
+    pub ast: &'a File,
+    pub interface: &'a ModuleInterface,
 }
 
 /// Result of `preprocess_dag_body_self_imports`: imported names, canonical
@@ -872,10 +924,8 @@ pub struct UnfrozenSemanticInstance {
     pub(crate) output_projections: Vec<crate::ir::instance::InstanceValueProjection>,
     pub(crate) assertion_projections: Vec<crate::ir::instance::InstanceAssertionProjection>,
     pub(crate) plot_projections: Vec<crate::ir::instance::InstancePlotProjection>,
-    pub(crate) override_reconciliations: HashMap<
-        ResolvedDeclName,
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
-    >,
+    pub(crate) override_reconciliations:
+        HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,
 }
 
 #[cfg(test)]

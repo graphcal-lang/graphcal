@@ -1,18 +1,18 @@
-//! Include-override reconciliation facts awaiting canonical name resolution.
+//! Include-override reconciliation obligations of unrebound param defaults.
 //!
-//! Include assembly knows which bindable type/index declarations were replaced,
-//! but canonical expression ownership is only available after HIR/type
-//! resolution. These records preserve the typed parts across that phase
-//! boundary without inspecting source spelling or dispatching on field names.
+//! Include assembly knows which bindable type/index declarations an include
+//! replaced, with both sides already canonical. Canonical expression ownership
+//! is only available after HIR/type resolution, so these records carry the
+//! canonical overrides across that phase boundary.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::dag_id::DagId;
-use crate::registry::types::IndexBindingTarget;
-use crate::resolved_name::ResolvedDeclName;
+use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
+use crate::registry::declared_type::IndexTypeRef;
+use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
@@ -20,159 +20,133 @@ use crate::syntax::type_name::StructTypeName;
 
 /// One include whose unrebound param default must remain independent of the
 /// bindable nominal declarations replaced by that include.
-///
-/// Every overridden name is declared by the owner of [`Self::source_decl`]
-/// (the included module), and every declared replacement by
-/// [`Self::replacement_owner`] (the including module); the targets carry
-/// only the names.
 #[derive(Debug, Clone)]
-pub struct PendingOverrideReconciliation {
-    source_decl: ResolvedDeclName,
-    replacement_owner: DagId,
-    targets: Vec<PendingOverrideTarget>,
-    src: NamedSource<Arc<String>>,
-    include_span: Span,
+pub struct OverrideReconciliation {
+    pub(crate) source_decl: ResolvedDeclName,
+    pub(crate) targets: Vec<OverrideTarget>,
+    pub(crate) src: NamedSource<Arc<String>>,
+    pub(crate) include_span: Span,
 }
 
-impl PendingOverrideReconciliation {
-    /// Build a pending check for the nominal overrides on one include.
+impl OverrideReconciliation {
+    /// The obligation of `orphan_decl` (declared in `source_owner`) under the
+    /// index and type overrides of one include's canonical `substitution`.
     #[must_use]
     pub(crate) fn new(
         orphan_decl: DeclName,
         source_owner: &DagId,
-        replacement_owner: &DagId,
-        index_bindings: &HashMap<IndexName, IndexBindingTarget>,
-        type_bindings: &HashMap<StructTypeName, StructTypeName>,
+        substitution: &StaticSubstitution,
         src: NamedSource<Arc<String>>,
         include_span: Span,
     ) -> Self {
-        let targets = index_bindings
-            .iter()
-            .map(|(overridden, replacement)| PendingOverrideTarget::Index {
-                overridden: overridden.clone(),
-                replacement: replacement.clone(),
-            })
-            .chain(type_bindings.iter().map(|(overridden, replacement)| {
-                PendingOverrideTarget::Type {
-                    overridden: overridden.clone(),
-                    replacement: replacement.clone(),
-                }
-            }))
-            .collect();
+        let targets =
+            substitution
+                .indexes
+                .iter()
+                .map(|(source, replacement)| OverrideTarget::Index {
+                    overridden: source.to_unowned_def_name(),
+                    source: source.clone(),
+                    replacement: match replacement {
+                        InstanceIndexBindingTarget::Declared(target) => {
+                            IndexTypeRef::from_resolved(target.clone())
+                        }
+                        InstanceIndexBindingTarget::Finite(index) => {
+                            IndexTypeRef::from_finite_index(*index)
+                        }
+                    },
+                })
+                .chain(substitution.types.iter().map(|(source, replacement)| {
+                    OverrideTarget::Type {
+                        overridden: source.to_unowned_def_name(),
+                        source: source.clone(),
+                        replacement: replacement.clone(),
+                    }
+                }))
+                .collect();
         Self {
             source_decl: ResolvedDeclName::from_def(source_owner.clone(), orphan_decl),
-            replacement_owner: replacement_owner.clone(),
             targets,
             src,
             include_span,
         }
     }
 
-    /// The unrebound param whose default must not mention an overridden name.
+    /// The unrebound param that must be re-bound at the include site.
     #[must_use]
-    pub(crate) const fn source_decl(&self) -> &ResolvedDeclName {
-        &self.source_decl
-    }
-
-    /// The included module that declares every overridden name.
-    #[must_use]
-    pub(crate) const fn source_owner(&self) -> &DagId {
-        self.source_decl.owner()
-    }
-
-    /// The including module that declares every declared replacement.
-    #[must_use]
-    pub(crate) const fn replacement_owner(&self) -> &DagId {
-        &self.replacement_owner
-    }
-
-    /// The nominal overrides of this include.
-    #[must_use]
-    pub(crate) fn targets(&self) -> &[PendingOverrideTarget] {
-        &self.targets
-    }
-
-    /// Source of the including module.
-    #[must_use]
-    pub(crate) const fn src(&self) -> &NamedSource<Arc<String>> {
-        &self.src
-    }
-
-    /// Span of the include site.
-    #[must_use]
-    pub(crate) const fn include_span(&self) -> Span {
-        self.include_span
+    pub(crate) fn orphan_decl(&self) -> DeclName {
+        self.source_decl.to_unowned_def_name()
     }
 }
 
-/// A nominal include override before its source and replacement names cross
-/// the module-resolution boundary.
+/// A canonical nominal override that an unrebound param default must not use.
 #[derive(Debug, Clone)]
-pub enum PendingOverrideTarget {
+pub enum OverrideTarget {
     Index {
         overridden: IndexName,
-        replacement: IndexBindingTarget,
+        source: ResolvedIndexName,
+        replacement: IndexTypeRef,
     },
     Type {
         overridden: StructTypeName,
-        replacement: StructTypeName,
+        source: ResolvedStructTypeName,
+        replacement: ResolvedStructTypeName,
     },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::index::FiniteIndex;
+    use crate::resolved_name::ResolvedDimName;
+    use crate::syntax::dimension::DimName;
 
     #[test]
-    fn pending_reconciliation_owns_names_once() {
-        let source_owner = DagId::root_in_package("test", "lib");
-        let replacement_owner = DagId::root_in_package("test", "main");
-        let index = IndexName::expect_valid("Phase");
-        let replacement_index = IndexName::expect_valid("Stage");
-        let ty = StructTypeName::expect_valid("Point");
-        let replacement_ty = StructTypeName::expect_valid("Vec");
-        let span = Span::new(3, 9);
+    fn obligations_cover_index_and_type_overrides_only() {
+        let template = DagId::root_in_package("test", "lib");
+        let importer = DagId::root_in_package("test", "main");
+        let axis = ResolvedIndexName::from_def(template.clone(), IndexName::expect_valid("Axis"));
+        let slot = ResolvedStructTypeName::from_def(
+            template.clone(),
+            StructTypeName::expect_valid("Slot"),
+        );
+        let cell = ResolvedStructTypeName::from_def(
+            importer.clone(),
+            StructTypeName::expect_valid("Cell"),
+        );
+        let mut substitution = StaticSubstitution::default();
+        substitution.indexes.insert(
+            axis.clone(),
+            InstanceIndexBindingTarget::Finite(FiniteIndex::try_from_u64(3).unwrap()),
+        );
+        substitution.types.insert(slot.clone(), cell.clone());
+        substitution.dimensions.insert(
+            ResolvedDimName::from_def(template.clone(), DimName::expect_valid("Q")),
+            ResolvedDimName::from_def(importer, DimName::expect_valid("Length")),
+        );
 
-        let pending = PendingOverrideReconciliation::new(
-            DeclName::expect_valid("orphan"),
-            &source_owner,
-            &replacement_owner,
-            &HashMap::from([(
-                index.clone(),
-                IndexBindingTarget::Declared(replacement_index.clone()),
-            )]),
-            &HashMap::from([(ty.clone(), replacement_ty.clone())]),
+        let reconciliation = OverrideReconciliation::new(
+            DeclName::expect_valid("fallback"),
+            &template,
+            &substitution,
             NamedSource::new("main.gcl", Arc::new(String::new())),
-            span,
+            Span::new(0, 0),
         );
 
+        assert_eq!(reconciliation.targets.len(), 2);
+        assert!(reconciliation.targets.iter().any(|target| matches!(
+            target,
+            OverrideTarget::Index { overridden, source, .. }
+                if source == &axis && overridden.as_str() == "Axis"
+        )));
+        assert!(reconciliation.targets.iter().any(|target| matches!(
+            target,
+            OverrideTarget::Type { source, replacement, .. }
+                if source == &slot && replacement == &cell
+        )));
         assert_eq!(
-            pending.source_decl(),
-            &ResolvedDeclName::from_def(source_owner.clone(), DeclName::expect_valid("orphan"))
+            reconciliation.source_decl,
+            ResolvedDeclName::from_def(template, DeclName::expect_valid("fallback"))
         );
-        assert_eq!(pending.source_owner(), &source_owner);
-        assert_eq!(pending.replacement_owner(), &replacement_owner);
-        assert_eq!(pending.include_span(), span);
-        assert_eq!(pending.src().name(), "main.gcl");
-        let [
-            PendingOverrideTarget::Index {
-                overridden: overridden_index,
-                replacement: IndexBindingTarget::Declared(bound_index),
-            },
-            PendingOverrideTarget::Type {
-                overridden: overridden_ty,
-                replacement: bound_ty,
-            },
-        ] = pending.targets()
-        else {
-            panic!(
-                "expected one index and one type target: {:?}",
-                pending.targets()
-            );
-        };
-        assert_eq!(overridden_index, &index);
-        assert_eq!(bound_index, &replacement_index);
-        assert_eq!(overridden_ty, &ty);
-        assert_eq!(bound_ty, &replacement_ty);
+        assert_eq!(reconciliation.orphan_decl().as_str(), "fallback");
     }
 }

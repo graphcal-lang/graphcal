@@ -27,7 +27,6 @@ use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::NamePath;
 
 pub mod model;
 pub use model::*;
@@ -702,7 +701,7 @@ fn type_resolve_dag(
         collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
     cancellation.checkpoint()?;
     let constructor_refs = ResolvedConstructorRefs::default();
-    let override_reconciliations = resolve_override_reconciliations(&params, module_ctx)?;
+    let override_reconciliations = override_reconciliations(&params);
     cancellation.checkpoint()?;
     let type_defs =
         collect_resolved_type_defs(&resolved_decl_types, imported_bindings, module_ctx)?;
@@ -731,78 +730,6 @@ fn type_resolve_dag(
     })
 }
 
-fn resolve_override_target(
-    target: &crate::ir::override_reconciliation::PendingOverrideTarget,
-    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
-    ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedOverrideTarget, GraphcalError> {
-    use crate::ir::override_reconciliation::PendingOverrideTarget;
-    use crate::registry::declared_type::IndexTypeRef;
-
-    let source_owner = pending.source_owner();
-    let replacement_owner = pending.replacement_owner();
-    let src = pending.src();
-    let include_span = pending.include_span();
-
-    let resolve_error = |error| module_resolve_error(&error, src, include_span);
-    match target {
-        PendingOverrideTarget::Index {
-            overridden,
-            replacement,
-        } => {
-            let source = ctx
-                .resolver
-                .resolve_index_path(source_owner, &NamePath::local(overridden.atom().clone()))
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                .map_err(resolve_error)?;
-            let replacement = match replacement {
-                crate::registry::types::IndexBindingTarget::Declared(name) => {
-                    let resolved = ctx
-                        .resolver
-                        .resolve_index_path(
-                            replacement_owner,
-                            &NamePath::local(name.atom().clone()),
-                        )
-                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                        .map_err(resolve_error)?;
-                    IndexTypeRef::from_resolved(resolved)
-                }
-                crate::registry::types::IndexBindingTarget::Finite(index) => {
-                    IndexTypeRef::from_finite_index(*index)
-                }
-            };
-            Ok(ResolvedOverrideTarget::Index {
-                overridden: overridden.clone(),
-                source,
-                replacement,
-            })
-        }
-        PendingOverrideTarget::Type {
-            overridden,
-            replacement,
-        } => {
-            let source = ctx
-                .resolver
-                .resolve_struct_type_path(source_owner, &NamePath::local(overridden.atom().clone()))
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                .map_err(resolve_error)?;
-            let replacement = ctx
-                .resolver
-                .resolve_struct_type_path(
-                    replacement_owner,
-                    &NamePath::local(replacement.atom().clone()),
-                )
-                .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                .map_err(resolve_error)?;
-            Ok(ResolvedOverrideTarget::Type {
-                overridden: overridden.clone(),
-                source,
-                replacement,
-            })
-        }
-    }
-}
-
 fn collect_bindable_nominals(
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -829,51 +756,22 @@ fn collect_bindable_nominals(
         .collect())
 }
 
-fn resolve_override_reconciliations(
+fn override_reconciliations(
     params: &[crate::ir::lower::ParamEntry],
-    ctx: ModuleTypeContext<'_>,
-) -> Result<HashMap<ResolvedDeclName, Vec<OverrideReconciliation>>, GraphcalError> {
+) -> HashMap<ResolvedDeclName, Vec<OverrideReconciliation>> {
     params
         .iter()
         .filter(|entry| !entry.override_reconciliations.is_empty())
         .map(|entry| {
-            let reconciliations = entry
-                .override_reconciliations
-                .iter()
-                .map(|pending| {
-                    resolve_override_reconciliation(pending, |target| {
-                        resolve_override_target(target, pending, ctx)
-                    })
-                })
-                .collect::<Result<Vec<_>, GraphcalError>>()?;
-            Ok((
+            (
                 ResolvedDeclName::from_def(
                     entry.declaration_owner.clone(),
                     entry.name.leaf().clone(),
                 ),
-                reconciliations,
-            ))
+                entry.override_reconciliations.clone(),
+            )
         })
         .collect()
-}
-
-/// Resolve every target of one pending include-site obligation.
-fn resolve_override_reconciliation(
-    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
-    resolve_target: impl FnMut(
-        &crate::ir::override_reconciliation::PendingOverrideTarget,
-    ) -> Result<ResolvedOverrideTarget, GraphcalError>,
-) -> Result<OverrideReconciliation, GraphcalError> {
-    Ok(OverrideReconciliation {
-        source_decl: pending.source_decl().clone(),
-        targets: pending
-            .targets()
-            .iter()
-            .map(resolve_target)
-            .collect::<Result<_, _>>()?,
-        src: pending.src().clone(),
-        include_span: pending.include_span(),
-    })
 }
 
 fn collect_resolved_type_defs(

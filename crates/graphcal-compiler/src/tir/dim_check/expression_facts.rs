@@ -189,7 +189,7 @@ fn check_retained_reconciliations(
     observations: &[crate::tir::expression_facts::NominalObservation],
 ) -> Result<(), GraphcalError> {
     use crate::tir::expression_facts::NominalObservation;
-    use crate::tir::typed::model::ResolvedOverrideTarget;
+    use crate::tir::typed::model::OverrideTarget;
     for reconciliation in dag
         .semantic
         .override_reconciliations
@@ -201,7 +201,7 @@ fn check_retained_reconciliations(
             for observation in observations {
                 let matched = match (target, observation) {
                     (
-                        ResolvedOverrideTarget::Type {
+                        OverrideTarget::Type {
                             overridden,
                             source,
                             replacement,
@@ -232,7 +232,7 @@ fn check_retained_reconciliations(
                             .then(|| (overridden.to_string(), "type", detail))
                     }
                     (
-                        ResolvedOverrideTarget::Index {
+                        OverrideTarget::Index {
                             overridden,
                             source,
                             replacement,
@@ -275,7 +275,7 @@ fn check_instance_defaults(
     ctx: &DimCheckContext<'_>,
     template: &crate::tir::typed::model::DagTIR,
     facts: &CheckedExpressionFacts,
-    substitution: &crate::ir::instance::StaticSubstitution,
+    substitution: &crate::ir::static_substitution::StaticSubstitution,
 ) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.params {
         ctx.checkpoint()?;
@@ -335,7 +335,7 @@ fn check_instance_defaults(
 }
 
 enum FactSubstitution<'a> {
-    Static(&'a crate::ir::instance::StaticSubstitution),
+    Static(&'a crate::ir::static_substitution::StaticSubstitution),
     Nat {
         scope: &'a HashMap<
             crate::syntax::type_name::GenericParamName,

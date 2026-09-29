@@ -8,23 +8,37 @@ use miette::NamedSource;
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
+use graphcal_compiler::ir::static_substitution::StaticSubstitution;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::resolved_name::ResolvedIndexName;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::{DimName, UnitName};
-use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceId;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::StructTypeName;
 
-/// Dependency-side name to importer-side name.
-pub(super) type DepToImporter<T> = HashMap<T, T>;
+/// One include's Static bindings, resolved once at the include site.
+///
+/// Every bound template port is its canonical identity and every target is
+/// the canonical importer-side definition it names; no consumer resolves an
+/// authored name again.
+#[derive(Debug, Default)]
+pub(super) struct IncludeStaticBindings {
+    pub(super) substitution: StaticSubstitution,
+    /// Authored spelling and source site of each bound index port, for
+    /// diagnostics of its binding contract.
+    pub(super) index_sites: HashMap<ResolvedIndexName, IndexBindingSite>,
+}
 
-/// Dependency index port to a declared or structural importer-side axis.
-pub(super) type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
+/// Diagnostic provenance of one index port binding.
+#[derive(Debug)]
+pub(super) struct IndexBindingSite {
+    pub(super) authored: IndexBindingTarget,
+    pub(super) span: Span,
+}
 
 /// Presentation aliases for private selective-include scopes.
 pub type IncludeDebugNameMap = HashMap<IncludeInstanceId, ModuleAliasName>;
@@ -34,43 +48,6 @@ pub type IncludeDebugNameMap = HashMap<IncludeInstanceId, ModuleAliasName>;
 pub(super) struct ImportAlias {
     pub(super) original: DeclName,
     pub(super) local: DeclName,
-}
-
-/// Frontend interface available only while lowering downstream modules.
-///
-/// The derived dynamic-unit set is constructed atomically from the module's
-/// canonical unit definitions and export surface, so consumers cannot disagree
-/// about which exported units are runtime-dependent. It contains no checked
-/// type, value, or runtime fact.
-pub(super) struct LoweringModuleInterface {
-    exported_runtime_units: HashSet<UnitName>,
-}
-
-impl LoweringModuleInterface {
-    pub(super) fn new(hir: &graphcal_compiler::ir::lower::HirDag) -> Self {
-        let external_surface = &hir.external_surface;
-        let exported_runtime_units = hir
-            .definitions()
-            .statics()
-            .units()
-            .filter(|(unit, info)| {
-                !info.scale.constness().is_const()
-                    && external_surface.is_unit_explicit_export(unit.atom())
-            })
-            .map(|(unit, _)| unit.to_unowned_def_name())
-            .collect();
-        Self {
-            exported_runtime_units,
-        }
-    }
-
-    pub(super) fn is_exported_runtime_unit(&self, name: &UnitName) -> bool {
-        self.exported_runtime_units.contains(name)
-    }
-
-    pub(super) const fn exported_runtime_units(&self) -> &HashSet<UnitName> {
-        &self.exported_runtime_units
-    }
 }
 
 /// One fully resolved physical file before static checking.
@@ -181,10 +158,7 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) instance_scope: ScopeSegment,
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,
-    pub(super) index_bindings: IndexBindings,
-    pub(super) index_binding_spans: HashMap<IndexName, Span>,
-    pub(super) type_bindings: DepToImporter<StructTypeName>,
-    pub(super) dim_bindings: DepToImporter<DimName>,
+    pub(super) static_bindings: IncludeStaticBindings,
     pub(super) selective_names: Option<Vec<ImportAlias>>,
     pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
     pub(super) runtime_unit_names: HashSet<UnitName>,
