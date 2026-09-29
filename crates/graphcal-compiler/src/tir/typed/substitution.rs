@@ -22,7 +22,7 @@ use crate::dimension::{Dimension, Rational};
 use crate::generic_param::GenericParamId;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef};
+use crate::registry::checked_type::{CheckedType, IndexTypeRef, InstantiationError, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
@@ -217,51 +217,37 @@ impl Substitution {
         })
     }
 
-    /// Close a declared type, whose only symbolic parts are Nat forms
-    /// (`Fin(N)` axes and Nat arguments), under this substitution's Nat
-    /// bindings.
+    /// Instantiate a symbolic checked type, whose only symbolic parts are
+    /// Nat forms (`Fin(N)` axes and Nat arguments), under this
+    /// substitution's Nat bindings.
     ///
     /// # Errors
     ///
     /// Returns a [`SubstitutionError`] on overflow, when a Nat parameter is
     /// unbound, or when a substituted `Fin(...)` cardinality is not a valid
     /// finite index.
-    pub fn apply_declared(
+    pub fn instantiate(
         &self,
-        declared: &CheckedType,
+        ty: &CheckedType<Symbolic>,
         span: Span,
     ) -> Result<CheckedType, SubstitutionError> {
-        Ok(match declared {
-            CheckedType::Key(index) => CheckedType::Key(self.apply_index_ref(index, span)?),
-            CheckedType::Indexed { element, index } => CheckedType::Indexed {
-                element: Box::new(self.apply_declared(element, span)?),
-                index: self.apply_index_ref(index, span)?,
-            },
-            CheckedType::Struct(identity, args) => CheckedType::Struct(
-                identity.clone(),
-                args.iter()
-                    .map(|arg| {
-                        Ok(match arg {
-                            CheckedGenericArg::Nat(form) => {
-                                CheckedGenericArg::Nat(self.close_nat(form, span)?)
-                            }
-                            CheckedGenericArg::Type(ty) => {
-                                CheckedGenericArg::Type(self.apply_declared(ty, span)?)
-                            }
-                            CheckedGenericArg::Index(index) => {
-                                CheckedGenericArg::Index(self.apply_index_ref(index, span)?)
-                            }
-                            CheckedGenericArg::Dim(_) => arg.clone(),
-                        })
-                    })
-                    .collect::<Result<_, SubstitutionError>>()?,
-            ),
-            CheckedType::Quantity(_)
-            | CheckedType::Complex(_)
-            | CheckedType::Bool
-            | CheckedType::Int
-            | CheckedType::Datetime(_) => declared.clone(),
-        })
+        ty.instantiate(|form| self.close_nat(form, span))
+            .map_err(|error| instantiation_error(error, span))
+    }
+
+    /// Instantiate a symbolic index under this substitution's Nat bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SubstitutionError`] as [`Self::instantiate`] does.
+    pub fn instantiate_index(
+        &self,
+        index: &IndexTypeRef<Symbolic>,
+        span: Span,
+    ) -> Result<IndexTypeRef, SubstitutionError> {
+        index
+            .instantiate(|form| self.close_nat(form, span))
+            .map_err(|error| instantiation_error(error, span))
     }
 
     fn apply_nat(&self, form: &NatPolyForm, span: Span) -> Result<NatPolyForm, SubstitutionError> {
@@ -270,15 +256,12 @@ impl Substitution {
     }
 
     /// Substitute a Nat form that must become a constant.
-    fn close_nat(&self, form: &NatPolyForm, span: Span) -> Result<NatPolyForm, SubstitutionError> {
+    fn close_nat(&self, form: &NatPolyForm, span: Span) -> Result<u64, SubstitutionError> {
         let closed = self.apply_nat(form, span)?;
-        closed
-            .variables()
-            .into_iter()
-            .next()
-            .map_or(Ok(closed), |param| {
-                Err(SubstitutionError::UnboundNat { param, span })
-            })
+        closed.variables().into_iter().next().map_or_else(
+            || Ok(closed.constant()),
+            |param| Err(SubstitutionError::UnboundNat { param, span }),
+        )
     }
 
     fn apply_index(&self, index: &ResolvedIndex) -> Result<ResolvedIndex, SubstitutionError> {
@@ -293,25 +276,6 @@ impl Substitution {
             }
             ResolvedIndex::Concrete(_, _) => index.clone(),
         })
-    }
-
-    /// Close a declared index under this substitution's Nat bindings.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`SubstitutionError`] as [`Self::apply_declared`] does.
-    pub fn apply_index_ref(
-        &self,
-        index: &IndexTypeRef,
-        span: Span,
-    ) -> Result<IndexTypeRef, SubstitutionError> {
-        match index.finite_index_form() {
-            Some(form) if !form.is_constant() => {
-                IndexTypeRef::from_finite_index_form(self.close_nat(&form, span)?)
-                    .map_err(|error| SubstitutionError::InvalidFiniteIndex { error, span })
-            }
-            Some(_) | None => Ok(index.clone()),
-        }
     }
 
     fn apply_dim_arg(&self, arg: &ResolvedDim) -> Result<ResolvedDim, SubstitutionError> {
@@ -349,6 +313,19 @@ impl Substitution {
             }
         }
         collapse_dim_terms(substituted, span).map_err(overflow)
+    }
+}
+
+/// Report a failed instantiation at `span`.
+fn instantiation_error(
+    error: InstantiationError<SubstitutionError>,
+    span: Span,
+) -> SubstitutionError {
+    match error {
+        InstantiationError::Binding(error) => error,
+        InstantiationError::Cardinality(error) => {
+            SubstitutionError::InvalidFiniteIndex { error, span }
+        }
     }
 }
 

@@ -204,7 +204,7 @@ fn for_params_binds_owner_qualified_parameters_pairwise() {
 }
 
 #[test]
-fn declared_types_close_only_under_complete_nat_bindings() {
+fn symbolic_types_instantiate_only_under_complete_nat_bindings() {
     let n = type_param("N");
     let other = type_param("M");
     let symbolic_axis = |param: &GenericParamId| {
@@ -213,31 +213,31 @@ fn declared_types_close_only_under_complete_nat_bindings() {
         )
         .unwrap()
     };
-    let declared = CheckedType::Indexed {
+    let declared = CheckedType::<Symbolic>::Indexed {
         element: Box::new(CheckedType::Bool),
         index: symbolic_axis(&n),
     };
     let substitution = Substitution::for_nats([(&n, &2)]);
     assert_eq!(
-        substitution.apply_declared(&declared, span()).unwrap(),
+        substitution.instantiate(&declared, span()).unwrap(),
         CheckedType::Indexed {
             element: Box::new(CheckedType::Bool),
             index: IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(3).unwrap()),
         }
     );
-    let unbound = CheckedType::Key(symbolic_axis(&other));
+    let unbound = CheckedType::<Symbolic>::Key(symbolic_axis(&other));
     assert_eq!(
-        substitution.apply_declared(&unbound, span()),
+        substitution.instantiate(&unbound, span()),
         Err(SubstitutionError::UnboundNat {
             param: other,
             span: span(),
         })
     );
-    let overflowing = CheckedType::Key(
+    let overflowing = CheckedType::<Symbolic>::Key(
         IndexTypeRef::from_finite_index_form(nat(&n).mul(&nat(&n)).unwrap()).unwrap(),
     );
     assert_eq!(
-        Substitution::for_nats([(&n, &u64::MAX)]).apply_declared(&overflowing, span()),
+        Substitution::for_nats([(&n, &u64::MAX)]).instantiate(&overflowing, span()),
         Err(SubstitutionError::NatOverflow { span: span() })
     );
 }

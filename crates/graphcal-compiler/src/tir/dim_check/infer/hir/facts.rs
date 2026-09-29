@@ -15,10 +15,10 @@ use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::{
     CheckedExpressionRecord, ConstructorApplication, ContextualOperand, ExpressionFact,
-    NominalObservation,
+    NominalObservation, ValueFact,
 };
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 
 /// One executable use that observes a nominal type's concrete definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,13 +189,13 @@ impl ExpressionFactCollector {
     pub(in crate::tir::dim_check) fn record(
         &self,
         expr: &Expr,
-        inferred: &CheckedType,
+        inferred: &CheckedType<Symbolic>,
         dag: &crate::tir::typed::DagTIR,
         tir: &crate::tir::typed::TIR,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         let checked_type = inferred.clone();
-        let shape = crate::tir::dim_check::expression_axes::checked_expression_shape(
+        crate::tir::dim_check::expression_axes::check_materializable(
             &checked_type,
             tir,
             src,
@@ -259,11 +259,10 @@ impl ExpressionFactCollector {
         };
         self.insert(
             expr,
-            ExpressionFact::Value {
+            ExpressionFact::Symbolic(ValueFact {
                 checked_type,
-                shape,
                 constructor: constructor.map(Box::new),
-            },
+            }),
             constructor_matches,
             src,
         )

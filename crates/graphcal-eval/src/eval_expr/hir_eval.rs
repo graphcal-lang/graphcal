@@ -401,12 +401,10 @@ fn checked_value_type<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Result<&'a CheckedType, GraphcalError> {
     match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
-            checked_type, ..
-        } => Ok(checked_type),
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Contextual(_) => {
-            Err(ctx.internal_error("expression has no retained value type", expr.span))
-        }
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
+            graphcal_compiler::tir::expression_facts::ValueFact { checked_type, .. },
+        ) => Ok(checked_type),
+        _ => Err(ctx.internal_error("expression has no retained value type", expr.span)),
     }
 }
 
@@ -425,10 +423,12 @@ fn checked_constructor<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Result<&'a graphcal_compiler::tir::expression_facts::ConstructorApplication, GraphcalError> {
     match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
-            constructor: Some(application),
-            ..
-        } => {
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
+            graphcal_compiler::tir::expression_facts::ValueFact {
+                constructor: Some(application),
+                ..
+            },
+        ) => {
             crate::pipeline_metrics::record(
                 crate::pipeline_metrics::Event::ConstructorFactConsumption,
             );
@@ -2008,10 +2008,12 @@ fn eval_hir_for_comp(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
-            shape: graphcal_compiler::tir::expression_facts::ExpressionShape::Concrete(_),
-            ..
-        } => {}
+        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
+            graphcal_compiler::tir::expression_facts::ValueFact {
+                checked_type: CheckedType::Indexed { .. },
+                ..
+            },
+        ) => {}
         _ => {
             return Err(ctx.internal_error(
                 "materialized expression has no concrete checked shape",

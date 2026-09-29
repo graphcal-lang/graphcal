@@ -7,7 +7,7 @@
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{Concreteness, IndexTypeRef, Symbolic};
 use crate::registry::time_scale::TimeScale;
 
 /// A leaf value that can be represented by a plot encoding channel.
@@ -17,7 +17,7 @@ pub enum PlotLeafKind {
     Int,
     Bool,
     Datetime(TimeScale),
-    Key(IndexTypeRef),
+    Key(IndexTypeRef<Symbolic>),
     /// A contextual string literal accepted directly by plot syntax.
     ContextualString,
 }
@@ -26,18 +26,18 @@ pub enum PlotLeafKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PlotChannelShape {
     /// Axes from the outermost to the innermost indexed collection.
-    axes: Vec<IndexTypeRef>,
+    axes: Vec<IndexTypeRef<Symbolic>>,
     leaf: PlotLeafKind,
 }
 
 impl PlotChannelShape {
     #[must_use]
-    pub const fn new(axes: Vec<IndexTypeRef>, leaf: PlotLeafKind) -> Self {
+    pub const fn new(axes: Vec<IndexTypeRef<Symbolic>>, leaf: PlotLeafKind) -> Self {
         Self { axes, leaf }
     }
 
     #[must_use]
-    pub fn axes(&self) -> &[IndexTypeRef] {
+    pub fn axes(&self) -> &[IndexTypeRef<Symbolic>] {
         &self.axes
     }
 
@@ -100,8 +100,8 @@ impl PlotAxisAlignmentError {
 ///
 /// Returns [`PlotAxisAlignmentError`] when any channel is not a subset of the
 /// selected row channel's axes.
-pub fn align_plot_channel_axes(
-    channels: &[&[IndexTypeRef]],
+pub fn align_plot_channel_axes<V: Concreteness>(
+    channels: &[&[IndexTypeRef<V>]],
 ) -> Result<PlotAxisAlignment, PlotAxisAlignmentError> {
     let Some((row_channel, row_axes)) = channels.iter().enumerate().reduce(|widest, candidate| {
         if candidate.1.len() > widest.1.len() {
@@ -133,9 +133,9 @@ pub fn align_plot_channel_axes(
     })
 }
 
-fn map_channel_axes(
-    channel_axes: &[IndexTypeRef],
-    row_axes: &[IndexTypeRef],
+fn map_channel_axes<V: Concreteness>(
+    channel_axes: &[IndexTypeRef<V>],
+    row_axes: &[IndexTypeRef<V>],
 ) -> Option<Vec<usize>> {
     let mut used = vec![false; row_axes.len()];
     channel_axes
@@ -158,7 +158,7 @@ mod tests {
     use crate::resolved_name::ResolvedIndexName;
     use crate::syntax::index_name::IndexName;
 
-    fn axis(owner: &str, name: &str) -> IndexTypeRef {
+    fn axis(owner: &str, name: &str) -> IndexTypeRef<Symbolic> {
         IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
             DagId::root_in_package("test", owner),
             IndexName::expect_valid(name),

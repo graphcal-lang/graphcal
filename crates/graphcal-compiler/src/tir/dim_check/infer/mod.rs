@@ -11,10 +11,10 @@ pub(super) mod hir;
 mod linear_algebra;
 mod rules;
 
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 /// Look up an inferred index through the project-wide semantic authority.
 fn index_def_for_inferred<'a>(
-    index: &IndexTypeRef,
+    index: &IndexTypeRef<Symbolic>,
     tir: &'a crate::tir::typed::TIR,
 ) -> Option<std::borrow::Cow<'a, crate::registry::types::IndexDef>> {
     tir.index_def(index)
@@ -22,7 +22,7 @@ fn index_def_for_inferred<'a>(
 
 /// Return an inferred axis's cardinality only after it has become concrete.
 fn concrete_cardinality_for_inferred(
-    index: &IndexTypeRef,
+    index: &IndexTypeRef<Symbolic>,
     tir: &crate::tir::typed::TIR,
 ) -> Option<usize> {
     index_def_for_inferred(index, tir)

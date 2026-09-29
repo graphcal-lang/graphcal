@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
@@ -45,7 +45,7 @@ impl MapLiteralVariantKey {
 
 #[derive(Debug, Clone)]
 struct MapLiteralAxis {
-    index: IndexTypeRef,
+    index: IndexTypeRef<Symbolic>,
     entry_keys: Vec<IndexEntryKey>,
 }
 
@@ -140,7 +140,7 @@ impl MapLiteralAxis {
 fn inferred_index_for_hir_map_key(
     key: &MapEntryKey,
     src: &NamedSource<Arc<String>>,
-) -> Result<IndexTypeRef, GraphcalError> {
+) -> Result<IndexTypeRef<Symbolic>, GraphcalError> {
     match key {
         MapEntryKey::IndexVariant(variant) => {
             Ok(IndexTypeRef::from_resolved(variant.variant.index().clone()))
@@ -170,7 +170,7 @@ impl Infer<'_> {
         &self,
         expr: &Expr,
         entries: &[MapEntry],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         for entry in entries {
             for key in &entry.keys {
                 if let MapEntryKey::IndexVariant(variant) = key {

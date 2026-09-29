@@ -332,20 +332,28 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         }
     });
     check_dimensions_tir(&mut tir, &src).unwrap();
-    let totals = |body: &crate::tir::typed::DagTIR| {
+    let totals = |tir: &crate::tir::typed::TIR| {
         ids.iter()
             .map(
-                |id| match &body.expression_facts().unwrap().get(id).unwrap().fact {
-                    crate::tir::expression_facts::ExpressionFact::Value {
-                        shape: crate::tir::expression_facts::ExpressionShape::Concrete(shape),
-                        ..
-                    } => shape.total().get(),
-                    fact => panic!("expected concrete checked shape: {fact:?}"),
+                |id| match &tir.root().expression_facts().unwrap().get(id).unwrap().fact {
+                    crate::tir::expression_facts::ExpressionFact::Executable(value) => value
+                        .checked_type
+                        .materialized_shape(|axis| {
+                            Ok::<_, crate::tir::materialized_shape::MaterializedShapeError>(
+                                tir.index_def(axis)
+                                    .and_then(|index| index.concrete_cardinality()),
+                            )
+                        })
+                        .unwrap()
+                        .expect("an indexed value has a materialized shape")
+                        .total()
+                        .get(),
+                    fact => panic!("expected executable checked value: {fact:?}"),
                 },
             )
             .collect::<Vec<_>>()
     };
-    assert_eq!(totals(tir.root()), vec![2, 3]);
+    assert_eq!(totals(&tir), vec![2, 3]);
     edit_root_decls(&mut tir, |decl| {
         if let crate::ir::entry::Decl::Node(entry) = decl {
             entry
@@ -356,7 +364,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         }
     });
     check_dimensions_tir(&mut tir, &src).unwrap();
-    assert_eq!(totals(tir.root()), vec![2, 3]);
+    assert_eq!(totals(&tir), vec![2, 3]);
     let (mut rebuilt, rebuilt_src) = module_aware_tir(source);
     check_dimensions_tir(&mut rebuilt, &rebuilt_src).unwrap();
     assert!(

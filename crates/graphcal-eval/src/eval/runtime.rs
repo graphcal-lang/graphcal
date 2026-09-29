@@ -23,7 +23,7 @@ use crate::presentation_evidence::{
 };
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::plot_shape::PlotLeafKind;
-use graphcal_compiler::registry::checked_type::CheckedType;
+use graphcal_compiler::registry::checked_type::{CheckedType, Symbolic};
 use graphcal_compiler::registry::error::GraphcalError;
 
 use super::display::attach_presentation;
@@ -1252,27 +1252,33 @@ fn plot_declared_type(
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<CheckedType, GraphcalError> {
-    let leaf = match shape.leaf() {
-        PlotLeafKind::Quantity(dimension) => CheckedType::Quantity(dimension.clone()),
-        PlotLeafKind::Int => CheckedType::Int,
-        PlotLeafKind::Bool => CheckedType::Bool,
-        PlotLeafKind::Datetime(scale) => CheckedType::Datetime(*scale),
-        PlotLeafKind::Key(index) => CheckedType::Key(index.clone()),
-        PlotLeafKind::ContextualString => {
-            return Err(ctx.internal_error(
-                "contextual string plot channel reached runtime projection",
-                span,
-            ));
-        }
+    // A contextual string channel has no runtime value type, and a symbolic
+    // `Fin(N)` axis belongs to a template body, never to an executed plot.
+    let leaf: Option<CheckedType<Symbolic>> = match shape.leaf() {
+        PlotLeafKind::Quantity(dimension) => Some(CheckedType::Quantity(dimension.clone())),
+        PlotLeafKind::Int => Some(CheckedType::Int),
+        PlotLeafKind::Bool => Some(CheckedType::Bool),
+        PlotLeafKind::Datetime(scale) => Some(CheckedType::Datetime(*scale)),
+        PlotLeafKind::Key(index) => Some(CheckedType::Key(index.clone())),
+        PlotLeafKind::ContextualString => None,
     };
-    Ok(shape
-        .axes()
-        .iter()
-        .rev()
-        .fold(leaf, |element, index| CheckedType::Indexed {
-            element: Box::new(element),
-            index: index.clone(),
-        }))
+    leaf.and_then(|leaf| {
+        shape
+            .axes()
+            .iter()
+            .rev()
+            .fold(leaf, |element, index| CheckedType::Indexed {
+                element: Box::new(element),
+                index: index.clone(),
+            })
+            .to_concrete()
+    })
+    .ok_or_else(|| {
+        ctx.internal_error(
+            "plot channel shape has no concrete runtime value type",
+            span,
+        )
+    })
 }
 
 #[cfg(test)]

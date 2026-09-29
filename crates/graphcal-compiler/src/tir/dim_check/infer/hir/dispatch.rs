@@ -2,7 +2,7 @@
 
 use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 
 use crate::registry::checked_type::CheckedType;
@@ -12,14 +12,17 @@ use super::override_deps::IndexNominalUse;
 use super::refs::infer_hir_quantity_literal;
 
 impl Infer<'_> {
-    pub(super) fn infer_hir_type(&self, expr: &Expr) -> Result<CheckedType, GraphcalError> {
+    pub(super) fn infer_hir_type(
+        &self,
+        expr: &Expr,
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| self.infer_hir_type_inner(expr))
     }
 
-    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType, GraphcalError> {
+    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let inferred = match expr.kind() {
             ExprKind::Error(no_error) => no_error.absurd(),
             ExprKind::Number(_) => CheckedType::Quantity(Dimension::dimensionless()),

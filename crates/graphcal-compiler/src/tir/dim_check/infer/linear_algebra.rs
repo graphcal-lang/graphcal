@@ -8,8 +8,8 @@
 use crate::builtin::LinearAlgebraFn;
 use crate::dimension::{Dimension, Rational};
 
-use crate::registry::checked_type::CheckedType;
 use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 
 /// A linear-algebra call cannot be typed from the supplied argument shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,8 +20,8 @@ pub(super) enum LinearAlgebraTypeError {
     /// same typed identity.
     AxisMismatch {
         argument: usize,
-        expected: IndexTypeRef,
-        found: IndexTypeRef,
+        expected: IndexTypeRef<Symbolic>,
+        found: IndexTypeRef<Symbolic>,
     },
     /// An operation requires a fixed axis cardinality.
     CardinalityMismatch {
@@ -39,18 +39,18 @@ pub(super) enum LinearAlgebraTypeError {
 #[derive(Debug)]
 struct IndexedQuantity<'a> {
     dimension: &'a Dimension,
-    axes: Vec<&'a IndexTypeRef>,
+    axes: Vec<&'a IndexTypeRef<Symbolic>>,
 }
 
 impl IndexedQuantity<'_> {
-    fn axis(&self, position: usize) -> &IndexTypeRef {
+    fn axis(&self, position: usize) -> &IndexTypeRef<Symbolic> {
         self.axes[position]
     }
 }
 
 fn indexed_quantity(
     argument: usize,
-    ty: &CheckedType,
+    ty: &CheckedType<Symbolic>,
     rank: usize,
 ) -> Result<IndexedQuantity<'_>, LinearAlgebraTypeError> {
     let mut current = ty;
@@ -69,9 +69,9 @@ fn indexed_quantity(
 }
 
 fn require_same_axis(
-    expected: &IndexTypeRef,
+    expected: &IndexTypeRef<Symbolic>,
     argument: usize,
-    found: &IndexTypeRef,
+    found: &IndexTypeRef<Symbolic>,
 ) -> Result<(), LinearAlgebraTypeError> {
     if expected == found {
         Ok(())
@@ -84,7 +84,7 @@ fn require_same_axis(
     }
 }
 
-fn quantity_over(dimension: Dimension, axes: &[&IndexTypeRef]) -> CheckedType {
+fn quantity_over(dimension: Dimension, axes: &[&IndexTypeRef<Symbolic>]) -> CheckedType<Symbolic> {
     axes.iter()
         .rev()
         .fold(CheckedType::Quantity(dimension), |element, index| {
@@ -128,9 +128,9 @@ fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebr
 /// types; this rule does not re-check the count.
 pub(super) fn infer_linear_algebra_type(
     function: LinearAlgebraFn,
-    arguments: &[CheckedType],
-    mut cardinality: impl FnMut(&IndexTypeRef) -> Option<usize>,
-) -> Result<CheckedType, LinearAlgebraTypeError> {
+    arguments: &[CheckedType<Symbolic>],
+    mut cardinality: impl FnMut(&IndexTypeRef<Symbolic>) -> Option<usize>,
+) -> Result<CheckedType<Symbolic>, LinearAlgebraTypeError> {
     match function {
         LinearAlgebraFn::Dot => {
             let lhs = indexed_quantity(0, &arguments[0], 1)?;

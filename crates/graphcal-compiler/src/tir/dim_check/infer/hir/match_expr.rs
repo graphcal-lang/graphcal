@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 use crate::syntax::type_name::FieldName;
@@ -27,8 +27,8 @@ impl InferEnv<'_> {
         variant: &NominalConstructor,
         owning_type: &ResolvedStructTypeName,
         type_def: &NominalTypeDef,
-        scrutinee_type_args: &[CheckedGenericArg],
-    ) -> Result<CheckedType, GraphcalError> {
+        scrutinee_type_args: &[CheckedGenericArg<Symbolic>],
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         if !variant
             .fields()
             .iter()
@@ -49,6 +49,7 @@ impl InferEnv<'_> {
             self.src,
             field.span,
         )
+        .map(|ty| ty.to_symbolic())
     }
 }
 
@@ -59,7 +60,7 @@ impl Infer<'_> {
         expr: &Expr,
         scrutinee: &Expr,
         arms: &[MatchArm],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let scrutinee_type = self.infer_hir_type(scrutinee)?;
         match &scrutinee_type {
             CheckedType::Key(index_identity) => {
@@ -289,11 +290,11 @@ impl Infer<'_> {
 }
 
 fn hir_arm_types_match(
-    arm_types: &[CheckedType],
+    arm_types: &[CheckedType<Symbolic>],
     arms: &[MatchArm],
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     expr: &Expr,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }

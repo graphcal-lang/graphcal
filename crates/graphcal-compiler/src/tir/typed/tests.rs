@@ -450,12 +450,13 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
     let tir =
         parse_and_type_resolve("index Axis = { A, B };\nparam values: Dimensionless[Fin(3)];\n")
             .unwrap();
-    let declared =
-        crate::registry::checked_type::IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
+    let declared = crate::registry::checked_type::IndexTypeRef::<Concrete>::from_resolved(
+        ResolvedIndexName::from_def(
             tir.root_dag_id().clone(),
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
-        ));
-    let finite = crate::registry::checked_type::IndexTypeRef::from_finite_index(
+        ),
+    );
+    let finite = crate::registry::checked_type::IndexTypeRef::<Concrete>::from_finite_index(
         crate::registry::types::FiniteIndex::try_from_u64(3).unwrap(),
     );
 
@@ -1051,7 +1052,7 @@ fn type_resolve_default_type_params() {
 
 // --- to_checked_type() tests ---
 
-use crate::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{CheckedType, Concrete, IndexTypeRef, StructTypeRef};
 
 #[test]
 fn generic_index_substitution_preserves_resolved_owner() {

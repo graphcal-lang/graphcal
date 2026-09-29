@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use crate::registry::error::GraphcalError;
 use crate::tir::typed::specialization::specialize_type;
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
@@ -22,7 +22,7 @@ impl Infer<'_> {
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let display_path = target.value.to_string();
         let dag_tir =
             self.env
@@ -81,7 +81,7 @@ impl Infer<'_> {
             // checked type and therefore matches no argument.
             if !expected
                 .to_checked_type(self.env.src)
-                .is_ok_and(|expected| expected == found)
+                .is_ok_and(|expected| expected.to_symbolic() == found)
             {
                 return Err(GraphcalError::DagArgTypeMismatch {
                     param_name: target_key.as_str().to_string(),
@@ -136,6 +136,8 @@ impl Infer<'_> {
             self.env.tir.project_type_store(),
             self.env.src,
         )?;
-        output_decl.to_checked_type(self.env.src)
+        output_decl
+            .to_checked_type(self.env.src)
+            .map(|ty| ty.to_symbolic())
     }
 }

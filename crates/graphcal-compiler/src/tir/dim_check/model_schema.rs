@@ -34,11 +34,6 @@ pub enum ConcreteModelTypeError {
         expected: GenericConstraint,
         actual: GenericConstraint,
     },
-    #[error("generic argument for `{parameter}` on `{identity}` is not concrete")]
-    NonConcreteGenericArgument {
-        identity: StructTypeRef,
-        parameter: GenericParamName,
-    },
     #[error(
         "generic Type parameter `{parameter}` on `{identity}` cannot accept an indexed declaration type"
     )]
@@ -155,7 +150,11 @@ impl<'tir> ValidatedModelType<'tir> {
                                 field.name(),
                             ),
                             self.definition.type_def,
-                            &self.generic_args,
+                            &self
+                                .generic_args
+                                .iter()
+                                .map(CheckedGenericArg::to_symbolic)
+                                .collect::<Vec<_>>(),
                             metadata_dag,
                             self.definition.type_def.source(),
                             field.type_annotation().span,
@@ -238,7 +237,7 @@ fn validate_application_obligations(
         .dag_with_type_metadata(identity.resolved())
         .unwrap_or_else(|| tir.root());
     super::concrete_obligations::validate_concrete_type_obligations(
-        &application,
+        &application.to_symbolic(),
         metadata_dag,
         tir,
         definition.type_def.source(),
@@ -313,13 +312,8 @@ fn validate_generic_argument_shape(
     argument: &CheckedGenericArg,
 ) -> Result<(), ConcreteModelTypeError> {
     match argument {
-        CheckedGenericArg::Dim(_) => Ok(()),
+        CheckedGenericArg::Dim(_) | CheckedGenericArg::Nat(_) => Ok(()),
         CheckedGenericArg::Index(index) => validate_index_reference(tir, index),
-        CheckedGenericArg::Nat(form) if form.constant_value().is_some() => Ok(()),
-        CheckedGenericArg::Nat(_) => Err(ConcreteModelTypeError::NonConcreteGenericArgument {
-            identity: identity.clone(),
-            parameter: parameter.clone(),
-        }),
         CheckedGenericArg::Type(declared_type) => {
             validate_type_argument_shape(tir, identity, parameter, declared_type)
         }

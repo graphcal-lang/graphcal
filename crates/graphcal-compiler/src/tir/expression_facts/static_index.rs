@@ -1,7 +1,7 @@
 //! Retained static membership checks, independent of expression result shape.
 
 use crate::expression_id::ExprId;
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::index::{FiniteIndex, IndexCardinality};
 use thiserror::Error;
 
@@ -23,7 +23,7 @@ impl std::fmt::Display for StaticIndexUse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticIndexRequirement {
     pub operand: ExprId,
-    pub axis: IndexTypeRef,
+    pub axis: IndexTypeRef<Symbolic>,
     pub position: u64,
     pub usage: StaticIndexUse,
 }

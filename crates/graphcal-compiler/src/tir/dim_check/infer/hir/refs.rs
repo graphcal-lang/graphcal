@@ -7,7 +7,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::registry::checked_type::StructTypeRef;
+use crate::registry::checked_type::{StructTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -22,7 +22,7 @@ pub(super) fn infer_hir_quantity_literal(
     unit: &ResolvedUnitExpr,
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;
     Ok(CheckedType::Quantity(dim))
 }
@@ -32,7 +32,7 @@ impl InferEnv<'_> {
         &self,
         target: &ResolvedDeclName,
         span: Span,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         // HIR references preserve their definition-time owner. A concrete semantic
         // instance is the authoritative boundary that maps those references to the
         // corresponding runtime declaration before any type lookup.
@@ -45,7 +45,7 @@ impl InferEnv<'_> {
                     src: self.src.clone(),
                     span: span.into(),
                 })?;
-        Ok(checked.declared().clone())
+        Ok(checked.declared().to_symbolic())
     }
 }
 
@@ -53,7 +53,7 @@ impl Infer<'_> {
     pub(super) fn infer_hir_const_ref(
         &self,
         target: &crate::syntax::span::Spanned<ConstRef>,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         match &target.value {
             ConstRef::Decl(resolved) => {
                 self.env.infer_resolved_decl_ref_type(resolved, target.span)

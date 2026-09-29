@@ -92,7 +92,7 @@ fn write_pipeline_project(
 
 #[test]
 fn generated_checked_expression_coverage_includes_every_owned_root_family() {
-    use graphcal_compiler::tir::expression_facts::{ExpressionFact, ExpressionShape};
+    use graphcal_compiler::tir::expression_facts::ExpressionFact;
     let template = r#"
 const node factor: Dimensionless = 2.0;
 param scale: Dimensionless(min: 1.0) = @factor;
@@ -134,7 +134,18 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
                 ids.len()
             );
             assert!(old_ids.iter().all(|id| facts.get(id).is_err()));
-            assert!(facts.records().any(|(_, record)| matches!(&record.fact, ExpressionFact::Value { shape: ExpressionShape::Concrete(shape), .. } if shape.total().get() == size)));
+            let tir = checked.tir();
+            assert!(facts.records().any(|(_, record)| {
+                matches!(&record.fact, ExpressionFact::Executable(value) if value
+                    .checked_type
+                    .materialized_shape(|axis| {
+                        Ok::<_, graphcal_compiler::tir::materialized_shape::MaterializedShapeError>(
+                            tir.index_def(axis).and_then(|index| index.concrete_cardinality()),
+                        )
+                    })
+                    .unwrap()
+                    .is_some_and(|shape| shape.total().get() == size))
+            }));
             assert_eq!(dag.semantic().dynamic_unit_scales.len(), 1);
             assert!(
                 facts
@@ -172,13 +183,10 @@ node packet: Packet = Packet(value: @first);
             .values()
             .flat_map(|dag| dag.expression_facts().unwrap().records())
             .filter(|(_, record)| {
-                matches!(
-                    record.fact,
-                    graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
-                        constructor: Some(_),
-                        ..
-                    }
-                )
+                record
+                    .fact
+                    .symbolic_value()
+                    .is_some_and(|value| value.constructor.is_some())
             })
             .count();
         (

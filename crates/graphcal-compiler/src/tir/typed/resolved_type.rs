@@ -368,19 +368,7 @@ impl ResolvedDeclType {
                 let index = match index {
                     ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
                     ResolvedIndex::Finite(form, span) => {
-                        if !form.is_constant() {
-                            return Err(eval_error(
-                                format!(
-                                    "cannot use generic nat expression `{}` as a concrete type",
-                                    form.format()
-                                ),
-                                src,
-                                *span,
-                            ));
-                        }
-                        FiniteIndex::try_from_u64(form.constant())
-                            .map(IndexTypeRef::from_finite_index)
-                            .map_err(|err| eval_error(err.describe_finite_index(), src, *span))?
+                        IndexTypeRef::Finite(finite_index(form, src, *span)?)
                     }
                     ResolvedIndex::GenericParam(name, span) => {
                         return Err(eval_error(
@@ -433,11 +421,40 @@ pub fn resolved_generic_arg_to_declared(
         ResolvedGenericArg::Index(index) => {
             index_type_ref(index, src).map(CheckedGenericArg::Index)
         }
-        ResolvedGenericArg::Nat(form, _) => Ok(CheckedGenericArg::Nat(form.clone())),
+        ResolvedGenericArg::Nat(form, span) => form
+            .constant_value()
+            .map(CheckedGenericArg::Nat)
+            .ok_or_else(|| {
+                eval_error(
+                    format!("generic Nat argument `{}` is not concrete", form.format()),
+                    src,
+                    *span,
+                )
+            }),
         ResolvedGenericArg::Type(value_type) => {
             value_type.to_checked_type(src).map(CheckedGenericArg::Type)
         }
     }
+}
+
+/// The validated structural axis of a constant `Fin(N)` cardinality.
+fn finite_index(
+    form: &NatPolyForm,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<FiniteIndex, GraphcalError> {
+    let size = form.constant_value().ok_or_else(|| {
+        eval_error(
+            format!(
+                "cannot use generic nat expression `{}` as a concrete type",
+                form.format()
+            ),
+            src,
+            span,
+        )
+    })?;
+    FiniteIndex::try_from_u64(size)
+        .map_err(|err| eval_error(err.describe_finite_index(), src, span))
 }
 
 fn index_type_ref(
@@ -446,8 +463,9 @@ fn index_type_ref(
 ) -> Result<IndexTypeRef, GraphcalError> {
     match index {
         ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
-        ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
-            .map_err(|err| eval_error(err.describe_finite_index(), src, *span)),
+        ResolvedIndex::Finite(form, span) => {
+            finite_index(form, src, *span).map(IndexTypeRef::Finite)
+        }
         ResolvedIndex::GenericParam(name, span) => Err(eval_error(
             format!("generic index parameter `{name}` is not bound"),
             src,
@@ -471,7 +489,9 @@ pub fn declared_to_resolved_generic_arg(
         CheckedGenericArg::Index(index) => {
             ResolvedGenericArg::Index(index_ref_to_resolved(index, span))
         }
-        CheckedGenericArg::Nat(form) => ResolvedGenericArg::Nat(form.clone(), span),
+        CheckedGenericArg::Nat(value) => {
+            ResolvedGenericArg::Nat(NatPolyForm::from_constant(*value), span)
+        }
         CheckedGenericArg::Type(ty) => {
             ResolvedGenericArg::Type(declared_to_resolved_type(ty, span)?)
         }
@@ -513,7 +533,9 @@ fn index_ref_to_resolved(index: &IndexTypeRef, span: Span) -> ResolvedIndex {
         IndexTypeRef::Declared(reference) => {
             ResolvedIndex::Concrete(reference.resolved().clone(), span)
         }
-        IndexTypeRef::Finite(finite) => ResolvedIndex::Finite(finite.form(), span),
+        IndexTypeRef::Finite(finite) => {
+            ResolvedIndex::Finite(NatPolyForm::from_constant(finite.size_u64()), span)
+        }
     }
 }
 

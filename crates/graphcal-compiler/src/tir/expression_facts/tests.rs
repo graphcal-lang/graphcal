@@ -46,11 +46,10 @@ fn rows(root: &Expr, revision: &BodyRevision) -> HashMap<ExprId, Box<CheckedExpr
             expr.id().clone(),
             CheckedExpressionRecord::new(
                 expr,
-                ExpressionFact::Value {
+                ExpressionFact::Symbolic(ValueFact {
                     checked_type: CheckedType::Int,
-                    shape: ExpressionShape::Scalar,
                     constructor: None,
-                },
+                }),
                 std::sync::Arc::clone(&environment),
             ),
         );
@@ -183,7 +182,7 @@ fn publication_rejects_old_semantic_revision_and_rebuilt_source_at_equal_coordin
 }
 
 #[test]
-fn structural_shape_and_contextual_corruption_is_rejected_without_inference() {
+fn structural_and_contextual_corruption_is_rejected_without_inference() {
     let body = body();
     let revision = BodyRevision::fresh();
     let id = body.id();
@@ -192,21 +191,6 @@ fn structural_shape_and_contextual_corruption_is_rejected_without_inference() {
     wrong_children.get_mut(id).unwrap().children = None;
     assert!(matches!(
         publish(owner(), revision.clone(), [&*body], wrong_children),
-        Err(ExpressionFactsError::Incompatible(_))
-    ));
-    let mut wrong_shape = original.clone();
-    let ExpressionFact::Value { shape, .. } = &mut wrong_shape.get_mut(id).unwrap().fact else {
-        panic!()
-    };
-    *shape = ExpressionShape::Concrete(
-        MaterializedShape::try_new(crate::syntax::non_empty::NonEmpty::new(
-            crate::registry::index::IndexCardinality::try_from_u64(2).unwrap(),
-            vec![],
-        ))
-        .unwrap(),
-    );
-    assert!(matches!(
-        publish(owner(), revision.clone(), [&*body], wrong_shape),
         Err(ExpressionFactsError::Incompatible(_))
     ));
     let mut unchecked_scalar = original;
@@ -218,41 +202,94 @@ fn structural_shape_and_contextual_corruption_is_rejected_without_inference() {
     ));
 }
 
-#[test]
-fn publication_rejects_wrong_named_cardinality_and_unnecessary_symbolic_shape() {
+/// Publish `body` with its root typed `ty` under a fixed axis cardinality.
+fn classify_root(
+    ty: CheckedType<Symbolic>,
+    cardinality: Option<IndexCardinality>,
+) -> (ExpressionFact, CheckedExpressionFacts, ClosedExpr) {
     let body = body();
-    let root = body.id();
     let revision = BodyRevision::fresh();
-    let index = IndexTypeRef::with_owner(
+    let mut records = rows(&body, &revision);
+    records.get_mut(body.id()).unwrap().fact = ExpressionFact::Symbolic(ValueFact {
+        checked_type: ty,
+        constructor: None,
+    });
+    let facts = CheckedExpressionFacts::publish(owner(), revision, &[&*body], records, &|_| {
+        Ok(cardinality)
+    })
+    .unwrap();
+    (facts.get(body.id()).unwrap().fact.clone(), facts, body)
+}
+
+#[test]
+fn publication_classifies_values_by_what_evaluation_may_rely_on() {
+    let index = IndexTypeRef::<Symbolic>::with_owner(
         owner(),
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     );
-    let ty = CheckedType::Indexed {
+    let indexed = CheckedType::Indexed {
         element: Box::new(CheckedType::Int),
-        index: index.clone(),
+        index,
     };
-    for expected_size in 1..=8 {
-        let cardinality = IndexCardinality::try_from_u64(expected_size).unwrap();
-        let mut records = rows(&body, &revision);
-        let wrong_shape = MaterializedShape::try_new(crate::syntax::non_empty::NonEmpty::new(
-            IndexCardinality::try_from_u64(expected_size + 1).unwrap(),
-            vec![],
+    let three = IndexCardinality::try_from_u64(3).unwrap();
+
+    let (fact, facts, body) = classify_root(indexed.clone(), Some(three));
+    assert!(matches!(&fact, ExpressionFact::Executable(value)
+        if value.checked_type.to_symbolic() == indexed));
+    facts.executable_value(body.id()).unwrap();
+
+    // A rigid axis without a known cardinality keeps its concrete type but
+    // waits for a binding.
+    let (fact, facts, body) = classify_root(indexed, None);
+    assert!(matches!(&fact, ExpressionFact::Pending(_)));
+    assert!(matches!(
+        facts.executable_value(body.id()),
+        Err(ExpressionFactsError::Deferred(_))
+    ));
+
+    // A symbolic `Fin(N)` axis has no concrete type at all.
+    let symbolic = CheckedType::Key(
+        IndexTypeRef::from_finite_index_form(crate::nat::NatPolyForm::from_var(
+            crate::generic_param::test_support::type_param("N"),
         ))
-        .unwrap();
-        for shape in [
-            ExpressionShape::Concrete(wrong_shape),
-            ExpressionShape::Symbolic(vec![index.clone()]),
-        ] {
-            records.get_mut(root).unwrap().fact = ExpressionFact::Value {
-                checked_type: ty.clone(),
-                shape,
-                constructor: None,
-            };
-            assert!(
-                matches!(CheckedExpressionFacts::publish(owner(), revision.clone(), &[&*body], records.clone(), &|_| Ok(Some(cardinality))), Err(ExpressionFactsError::Incompatible(id)) if id == *root)
-            );
-        }
-    }
+        .unwrap(),
+    );
+    let (fact, facts, body) = classify_root(symbolic, Some(three));
+    assert!(matches!(&fact, ExpressionFact::Symbolic(_)));
+    assert!(matches!(
+        facts.executable_value(body.id()),
+        Err(ExpressionFactsError::Deferred(_))
+    ));
+}
+
+#[test]
+fn a_waiting_operand_keeps_its_parent_waiting() {
+    let body = body();
+    let revision = BodyRevision::fresh();
+    let mut records = rows(&body, &revision);
+    let operand = records[body.id()].children()[0].clone();
+    records.get_mut(&operand).unwrap().fact = ExpressionFact::Symbolic(ValueFact {
+        checked_type: CheckedType::Key(IndexTypeRef::with_owner(
+            owner(),
+            crate::syntax::index_name::IndexName::expect_valid("Axis"),
+        )),
+        constructor: None,
+    });
+    let facts =
+        CheckedExpressionFacts::publish(owner(), revision, &[&*body], records, &|_| Ok(None))
+            .unwrap();
+    assert!(matches!(
+        facts.get(&operand).unwrap().fact,
+        ExpressionFact::Pending(_)
+    ));
+    assert!(matches!(
+        facts.get(body.id()).unwrap().fact,
+        ExpressionFact::Pending(_)
+    ));
+    assert!(matches!(
+        facts.executable_value(body.id()),
+        Err(ExpressionFactsError::Deferred(_))
+    ));
 }
 
 #[test]
@@ -311,17 +348,16 @@ fn static_membership_proof_cannot_be_deleted_misowned_or_invalid() {
     ))
     .unwrap();
     let revision = BodyRevision::fresh();
-    let axis = IndexTypeRef::from_finite_index(
+    let axis = IndexTypeRef::<Symbolic>::from_finite_index(
         crate::registry::index::FiniteIndex::try_from_u64(2).unwrap(),
     );
     let mut records = rows(&root, &revision);
     let id = root.id();
     let record = records.get_mut(id).unwrap();
-    record.fact = ExpressionFact::Value {
+    record.fact = ExpressionFact::Symbolic(ValueFact {
         checked_type: CheckedType::Key(axis.clone()),
-        shape: ExpressionShape::Scalar,
         constructor: None,
-    };
+    });
     record.static_indexes.push(StaticIndexRequirement {
         operand: record.children()[0].clone(),
         axis,

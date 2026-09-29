@@ -3,7 +3,7 @@
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
@@ -118,7 +118,7 @@ pub(super) enum IndexNominalUse<'a> {
 impl Infer<'_> {
     pub(super) fn check_index_override_dependency(
         &self,
-        actual: &IndexTypeRef,
+        actual: &IndexTypeRef<Symbolic>,
         nominal_use: IndexNominalUse<'_>,
     ) -> Result<(), GraphcalError> {
         if let Some((collector, root)) = &self.control.expression_facts {
@@ -154,7 +154,7 @@ impl Infer<'_> {
                     continue;
                 };
                 let source_matches = actual.declared_resolved() == Some(source);
-                if !source_matches && !replacement.matches_ref(actual) {
+                if !source_matches && !replacement.to_symbolic().matches_ref(actual) {
                     continue;
                 }
                 let detail = match nominal_use {

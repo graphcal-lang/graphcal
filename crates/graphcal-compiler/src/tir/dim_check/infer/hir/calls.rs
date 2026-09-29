@@ -12,7 +12,7 @@ use crate::dimension::{Dimension, Rational};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::builtins::infer_fn_dim;
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::linear_algebra::{
@@ -22,7 +22,7 @@ use crate::tir::dim_check::infer::linear_algebra::{
 use super::context::Infer;
 
 impl Infer<'_> {
-    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType, GraphcalError> {
+    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
         self.without_owner().infer_hir_type(arg)
     }
 }
@@ -62,7 +62,7 @@ impl Infer<'_> {
         function: crate::builtin::LinearAlgebraFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let argument_types = args
             .iter()
             .map(|arg| self.infer_arg(arg))
@@ -137,7 +137,7 @@ impl Infer<'_> {
         &self,
         callee: &crate::syntax::span::Spanned<FunctionRef>,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let (builtin, epoch_scale) = match &callee.value {
             FunctionRef::Builtin(builtin) => (builtin.function(), None),
             FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
@@ -278,7 +278,7 @@ impl Infer<'_> {
         &self,
         function: crate::builtin::ComplexFn,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         use crate::tir::dim_check::infer::complex::ComplexTypeError;
 
         let inferred = args
@@ -356,7 +356,7 @@ impl Infer<'_> {
         name: ScalarFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let func = crate::registry::builtins::scalar_function(name);
         let dimension_args = args
             .iter()

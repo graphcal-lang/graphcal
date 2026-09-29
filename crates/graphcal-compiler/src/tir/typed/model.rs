@@ -1386,7 +1386,10 @@ impl TIR {
     /// Resolve a declared axis or derive a structural axis from its cardinality.
     /// Structural `Fin(N)` definitions never depend on a source-registration scan.
     #[must_use]
-    pub fn index_def(&self, index: &IndexTypeRef) -> Option<std::borrow::Cow<'_, IndexDef>> {
+    pub fn index_def<V: crate::registry::checked_type::Concreteness>(
+        &self,
+        index: &IndexTypeRef<V>,
+    ) -> Option<std::borrow::Cow<'_, IndexDef>> {
         match index.finite_index() {
             Some(finite) => Some(std::borrow::Cow::Owned(IndexDef::finite(finite))),
             None => self

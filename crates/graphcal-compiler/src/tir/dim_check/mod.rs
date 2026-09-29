@@ -7,7 +7,7 @@ use miette::NamedSource;
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
@@ -89,7 +89,7 @@ impl DimCheckContext<'_> {
         &self,
         expr: &crate::hir::Expr,
         owner: Option<&ResolvedDeclName>,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         self.env.infer_with_expression_facts(
             expr,
             owner,
@@ -103,13 +103,12 @@ fn validate_declared_shape(
     ctx: &DimCheckContext<'_>,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
 ) -> Result<(), GraphcalError> {
-    expression_axes::checked_expression_shape(
-        annotation.checked().declared(),
+    expression_axes::check_materializable(
+        &annotation.checked().declared().to_symbolic(),
         ctx.env.tir,
         ctx.env.src,
         annotation.span,
     )
-    .map(|_| ())
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -145,14 +144,14 @@ fn check_decl_expr_type(
         // interface. Retain that proof rather than treating them as unchecked.
         return ctx.expression_facts.record(
             hir_expr,
-            declared,
+            &declared.to_symbolic(),
             ctx.env.dag,
             ctx.env.tir,
             ctx.env.src,
         );
     }
     let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
-    if declared != &inferred {
+    if declared.to_symbolic() != inferred {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_checked_type(declared, ctx.env.registry),
             inferred: format_checked_type(&inferred, ctx.env.registry),
@@ -343,11 +342,11 @@ fn check_ineffective_conversions_inner(
 
 #[derive(Debug)]
 struct AssertionIndexShape {
-    axes: Vec<IndexTypeRef>,
+    axes: Vec<IndexTypeRef<Symbolic>>,
 }
 
 impl AssertionIndexShape {
-    fn from_bool_type(ty: &CheckedType) -> Self {
+    fn from_bool_type(ty: &CheckedType<Symbolic>) -> Self {
         Self {
             axes: peel_index_axes(ty).0,
         }
@@ -461,7 +460,9 @@ fn check_hir_assert_body(
 }
 
 /// Peel the index axes off an inferred type, outermost first.
-fn peel_index_axes(ty: &CheckedType) -> (Vec<IndexTypeRef>, &CheckedType) {
+fn peel_index_axes(
+    ty: &CheckedType<Symbolic>,
+) -> (Vec<IndexTypeRef<Symbolic>>, &CheckedType<Symbolic>) {
     let mut axes = Vec::new();
     let mut current = ty;
     while let CheckedType::Indexed { element, index } = current {
@@ -476,13 +477,13 @@ fn peel_index_axes(ty: &CheckedType) -> (Vec<IndexTypeRef>, &CheckedType) {
 /// exactly the same axes in the same order. Returns the operand's element
 /// type.
 fn broadcast_operand_element<'a>(
-    actual_axes: &[IndexTypeRef],
-    actual_type: &CheckedType,
-    operand_type: &'a CheckedType,
+    actual_axes: &[IndexTypeRef<Symbolic>],
+    actual_type: &CheckedType<Symbolic>,
+    operand_type: &'a CheckedType<Symbolic>,
     operand_span: crate::syntax::span::Span,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'a CheckedType, GraphcalError> {
+) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
     if !operand_axes.is_empty() && operand_axes != *actual_axes {
         return Err(GraphcalError::IndexedShapeMismatch {
@@ -558,7 +559,7 @@ fn validate_expected_fail_key(
     for (part, expected_axis) in key.iter().zip(&shape.axes) {
         match part {
             ExpectedFailKeyPart::Named { index, .. } => {
-                if !index.matches_ref(expected_axis) {
+                if !index.to_symbolic().matches_ref(expected_axis) {
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
                         expected: expected_axis.display_name().to_string(),
                         found: part.display(),
@@ -947,7 +948,7 @@ pub fn check_external_value_expr_type(
         expr.span,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    if expected == &inferred {
+    if expected.to_symbolic() == inferred {
         collector.record_contextual(expr, src)?;
         crate::tir::expression_facts::CheckedExpressionFacts::publish(
             tir.root_dag_id().clone(),
@@ -1124,7 +1125,7 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
 fn check_one_bound(
     name: &DeclName,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &CheckedType,
+    inferred: &CheckedType<Symbolic>,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
@@ -1412,7 +1413,9 @@ fn expected_bound_from_resolved(
     }
 }
 
-fn expected_bound_from_inferred(inferred: &CheckedType) -> Option<ExpectedBound> {
+fn expected_bound_from_inferred<V: Concreteness>(
+    inferred: &CheckedType<V>,
+) -> Option<ExpectedBound> {
     match inferred {
         CheckedType::Indexed { element, .. } => expected_bound_from_inferred(element),
         CheckedType::Quantity(dimension) => Some(ExpectedBound::Quantity(dimension.clone())),
@@ -1429,7 +1432,7 @@ fn check_deferred_generic_quantity_bound(
     display_name: &str,
     resolved_target: &crate::tir::typed::ResolvedValueType,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &CheckedType,
+    inferred: &CheckedType<Symbolic>,
     registry: &FormattingRegistry,
 ) -> Result<(), GraphcalError> {
     if inferred.quantity_dimension().is_some() || matches!(inferred, CheckedType::Int) {
@@ -1448,10 +1451,10 @@ fn check_deferred_generic_quantity_bound(
 /// Variant of [`check_one_bound`] that takes a pre-formatted display name
 /// for the constrained target (e.g. `"SatelliteSpec.mass"`) so a single
 /// helper can serve both top-level decls and struct fields.
-fn check_one_bound_with_display_name(
+fn check_one_bound_with_display_name<V: Concreteness>(
     display_name: &str,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &CheckedType,
+    inferred: &CheckedType<V>,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
@@ -1497,7 +1500,10 @@ fn check_one_bound_with_display_name(
             }
             Err(GraphcalError::DatetimeDomainBoundTypeMismatch {
                 name: display_name.to_string(),
-                target_type: format_checked_type(&CheckedType::Datetime(*target_scale), registry),
+                target_type: format_checked_type(
+                    &CheckedType::<Concrete>::Datetime(*target_scale),
+                    registry,
+                ),
                 bound_name: bound.kind.to_string(),
                 bound_type: format_checked_type(inferred, registry),
                 src: src.clone(),

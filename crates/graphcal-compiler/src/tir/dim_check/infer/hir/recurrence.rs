@@ -1,7 +1,7 @@
 //! Inference of `scan` and `unfold` recurrences.
 
 use crate::hir::expr::{Expr, LocalDef};
-use crate::registry::checked_type::IndexTypeRef;
+use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 
 use crate::registry::checked_type::CheckedType;
@@ -17,7 +17,7 @@ impl Infer<'_> {
         acc: &LocalDef,
         val: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
         let CheckedType::Indexed { element, index } = source_type else {
@@ -62,7 +62,7 @@ impl Infer<'_> {
         prev_index: &LocalDef,
         current_index: &LocalDef,
         body: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let init_type = self.infer_hir_type(init)?;
         let index = IndexTypeRef::from_resolved(axis.value.clone());
         let idx_def = self

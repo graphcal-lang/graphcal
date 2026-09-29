@@ -3,7 +3,7 @@
 use crate::hir::expr::{Expr, ExternFnRef};
 use std::collections::HashMap;
 
-use crate::registry::checked_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{IndexTypeRef, StructTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
@@ -21,7 +21,7 @@ impl Infer<'_> {
         ext: &ExternFnRef,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
         use crate::tir::dim_check::builtins::SignatureDimWalk;
@@ -49,8 +49,10 @@ impl Infer<'_> {
         let display_name = ext.to_string();
         let mut dim_walk =
             SignatureDimWalk::new(&display_name, sig, self.env.registry, self.env.src);
-        let mut index_bindings: HashMap<crate::function_signature::IndexBinder, IndexTypeRef> =
-            HashMap::new();
+        let mut index_bindings: HashMap<
+            crate::function_signature::IndexBinder,
+            IndexTypeRef<Symbolic>,
+        > = HashMap::new();
         for (param, arg) in sig.params().iter().zip(args) {
             let arg_type = self.infer_arg(arg)?;
             match &param.kind {

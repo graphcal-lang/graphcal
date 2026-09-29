@@ -20,11 +20,11 @@ use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
 use super::super::helpers::{expect_quantity, format_checked_type};
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 
 /// A typed operand with the span diagnostics should point at.
 pub(super) struct Operand {
-    pub ty: CheckedType,
+    pub ty: CheckedType<Symbolic>,
     pub span: Span,
 }
 
@@ -36,7 +36,7 @@ fn comparison_operand_type<'a>(
     operand: &'a Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'a CheckedType, GraphcalError> {
+) -> Result<&'a CheckedType<Symbolic>, GraphcalError> {
     match &operand.ty {
         CheckedType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
             found: format_checked_type(&operand.ty, registry),
@@ -56,12 +56,12 @@ fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
 /// `k : Key<Fin(N)>` plus a static Nat constant `c` yields `Key<Fin(N + c)>`.
 fn fin_key_additive_rule(
     op: BinOp,
-    key_index: &crate::registry::checked_type::IndexTypeRef,
+    key_index: &crate::registry::checked_type::IndexTypeRef<Symbolic>,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let reject = |help: &str| {
         Err(GraphcalError::DimensionMismatch {
             expected: "a static Nat constant".to_string(),
@@ -129,7 +129,7 @@ pub(super) fn binop_rule(
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let lhs_type = &lhs.ty;
     let rhs_type = &rhs.ty;
     match op {
@@ -547,7 +547,7 @@ pub(super) fn unary_rule(
     operand: &Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     match op {
         UnaryOp::Not => {
             if operand.ty != CheckedType::Bool {
@@ -583,7 +583,7 @@ pub(super) fn if_rule(
     else_branch: &Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     if cond.ty != CheckedType::Bool {
         return Err(GraphcalError::DimensionMismatch {
             expected: "Bool".to_string(),
@@ -644,12 +644,12 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
 /// least one arm must exist. `arm_body_span` maps an arm index to the span
 /// of its body for diagnostics (the two engines carry different arm types).
 pub(in crate::tir::dim_check) fn match_arms_rule(
-    arm_types: &[CheckedType],
+    arm_types: &[CheckedType<Symbolic>],
     arm_body_span: impl Fn(usize) -> Span,
     expr_span: Span,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     let Some(first) = arm_types.first() else {
         return Err(GraphcalError::EvalError {
             message: "match expression has no arms".to_string(),

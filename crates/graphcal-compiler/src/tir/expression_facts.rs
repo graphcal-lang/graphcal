@@ -9,6 +9,7 @@ pub use static_index::{Readiness, StaticIndexError, StaticIndexRequirement, Stat
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
@@ -19,73 +20,84 @@ use crate::expression_id::ExprId;
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, visit_expr_children};
 use crate::hir::nominal::ResolvedConstructor;
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef};
+use crate::registry::checked_type::{
+    CheckedGenericArg, CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic,
+};
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
-use crate::tir::materialized_shape::MaterializedShape;
+/// The cardinality of an axis, or `None` while it awaits a Static or generic binding.
+pub(crate) type AxisCardinality<'a> = dyn Fn(
+        &IndexTypeRef<Symbolic>,
+    ) -> Result<Option<crate::registry::index::IndexCardinality>, ExpressionFactsError>
+    + 'a;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExpressionShape {
-    Scalar,
-    Concrete(MaterializedShape),
-    /// Axes whose cardinalities require a Static or lexical generic binding.
-    Symbolic(Vec<IndexTypeRef>),
-}
-
-impl ExpressionShape {
-    fn matches_type(
-        &self,
-        checked_type: &CheckedType,
-        cardinality: &dyn Fn(
-            &IndexTypeRef,
-        ) -> Result<
-            Option<crate::registry::index::IndexCardinality>,
-            ExpressionFactsError,
-        >,
-    ) -> Result<bool, ExpressionFactsError> {
-        let mut axes = Vec::new();
-        let mut ty = checked_type;
-        while let CheckedType::Indexed { element, index } = ty {
-            axes.push(index);
-            ty = element;
-        }
-        let sizes = axes
-            .iter()
-            .map(|index| cardinality(index))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(match self {
-            Self::Scalar => axes.is_empty(),
-            Self::Concrete(shape) => {
-                shape.rank() == axes.len()
-                    && sizes
-                        .iter()
-                        .zip(shape.axes().iter())
-                        .all(|(expected, actual)| *expected == Some(*actual))
-            }
-            Self::Symbolic(symbolic) => {
-                !axes.is_empty()
-                    && sizes.iter().any(Option::is_none)
-                    && axes.iter().copied().eq(symbolic.iter())
-            }
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConstructorApplication {
+pub struct ConstructorApplication<V: Concreteness = Concrete> {
     /// The applied constructor and its owning definition. The definition's
     /// field annotations are the application's field constraints.
     pub constructor: ResolvedConstructor,
     pub runtime_type: ResolvedStructTypeName,
-    pub generic_args: Vec<CheckedGenericArg>,
+    pub generic_args: Vec<CheckedGenericArg<V>>,
 }
 
-impl ConstructorApplication {
+impl<V: Concreteness> ConstructorApplication<V> {
     /// Definition identity used by field contracts, distinct from runtime owner.
     #[must_use]
     pub fn definition(&self) -> &ResolvedStructTypeName {
         self.constructor.owning_type()
+    }
+}
+
+/// The checked type of a value expression and, for a constructor, its
+/// nominal application.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueFact<V: Concreteness = Concrete> {
+    pub checked_type: CheckedType<V>,
+    pub constructor: Option<Box<ConstructorApplication<V>>>,
+}
+
+impl ValueFact<Concrete> {
+    /// View a concrete fact at the symbolic level.
+    #[must_use]
+    pub fn to_symbolic(&self) -> ValueFact<Symbolic> {
+        ValueFact {
+            checked_type: self.checked_type.to_symbolic(),
+            constructor: self.constructor.as_ref().map(|application| {
+                Box::new(ConstructorApplication {
+                    runtime_type: application.runtime_type.clone(),
+                    constructor: application.constructor.clone(),
+                    generic_args: application
+                        .generic_args
+                        .iter()
+                        .map(CheckedGenericArg::to_symbolic)
+                        .collect(),
+                })
+            }),
+        }
+    }
+}
+
+impl ValueFact<Symbolic> {
+    /// The concrete fact, when neither the type nor the constructor
+    /// arguments mention a `Nat` variable.
+    #[must_use]
+    pub fn to_concrete(&self) -> Option<ValueFact<Concrete>> {
+        Some(ValueFact {
+            checked_type: self.checked_type.to_concrete()?,
+            constructor: match &self.constructor {
+                None => None,
+                Some(application) => Some(Box::new(ConstructorApplication {
+                    runtime_type: application.runtime_type.clone(),
+                    constructor: application.constructor.clone(),
+                    generic_args: application
+                        .generic_args
+                        .iter()
+                        .map(CheckedGenericArg::to_concrete)
+                        .collect::<Option<_>>()?,
+                })),
+            },
+        })
     }
 }
 
@@ -106,14 +118,43 @@ pub enum ContextualOperand {
     TypeSystem,
 }
 
+/// The checking result of one expression.
+///
+/// A value is recorded [`Symbolic`](ExpressionFact::Symbolic) by inference;
+/// publication classifies it by what evaluation may rely on, so readiness is
+/// a property of the fact itself rather than of a side table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpressionFact {
-    Value {
-        checked_type: CheckedType,
-        shape: ExpressionShape,
-        constructor: Option<Box<ConstructorApplication>>,
-    },
+    /// A value whose type and every obligation of its subtree are discharged.
+    Executable(ValueFact),
+    /// A concrete-typed value whose axis cardinalities, static index proofs,
+    /// or operands still await Static bindings.
+    Pending(ValueFact),
+    /// A value whose type mentions unbound `Nat` parameters.
+    Symbolic(ValueFact<Symbolic>),
+    /// Contextual metadata, never an executable value.
     Contextual(ContextualOperand),
+}
+
+impl ExpressionFact {
+    /// The concrete-typed value fact, executable or pending.
+    #[must_use]
+    pub const fn concrete_value(&self) -> Option<&ValueFact> {
+        match self {
+            Self::Executable(value) | Self::Pending(value) => Some(value),
+            Self::Symbolic(_) | Self::Contextual(_) => None,
+        }
+    }
+
+    /// The value fact viewed at the symbolic level, whatever its classification.
+    #[must_use]
+    pub fn symbolic_value(&self) -> Option<Cow<'_, ValueFact<Symbolic>>> {
+        match self {
+            Self::Executable(value) | Self::Pending(value) => Some(Cow::Owned(value.to_symbolic())),
+            Self::Symbolic(value) => Some(Cow::Borrowed(value)),
+            Self::Contextual(_) => None,
+        }
+    }
 }
 
 /// Direct requirements compose over `children`; no quadratic transitive sets.
@@ -263,10 +304,10 @@ pub enum NominalObservation {
     },
     TypeArgument(ResolvedStructTypeName),
     IndexLabel {
-        identity: IndexTypeRef,
+        identity: IndexTypeRef<Symbolic>,
         variant: crate::syntax::index_name::IndexVariantName,
     },
-    IndexArgument(IndexTypeRef),
+    IndexArgument(IndexTypeRef<Symbolic>),
 }
 
 /// One immutable checking environment is shared by all rows of a product.
@@ -367,53 +408,28 @@ impl CheckedExpressionRecord {
     }
 }
 
-fn type_is_ready(
-    ty: &CheckedType,
-    cardinality: &dyn Fn(
-        &IndexTypeRef,
-    ) -> Result<
-        Option<crate::registry::index::IndexCardinality>,
-        ExpressionFactsError,
-    >,
+/// Whether every index a type mentions has a known cardinality.
+///
+/// Every index is queried, even after an unknown one, so an unavailable index
+/// definition is always reported.
+fn cardinalities_known(
+    ty: &CheckedType<Symbolic>,
+    cardinality: &AxisCardinality<'_>,
 ) -> Result<bool, ExpressionFactsError> {
-    Ok(match ty {
-        CheckedType::Indexed { element, index } => {
-            cardinality(index)?.is_some() & type_is_ready(element, cardinality)?
-        }
-        CheckedType::Key(index) => cardinality(index)?.is_some(),
-        CheckedType::Struct(_, args) => args.iter().try_fold(true, |ready, arg| {
-            Ok::<_, ExpressionFactsError>(
-                ready
-                    & match arg {
-                        CheckedGenericArg::Nat(form) => form.is_constant(),
-                        CheckedGenericArg::Type(ty) => type_is_ready(ty, cardinality)?,
-                        CheckedGenericArg::Index(index) => cardinality(index)?.is_some(),
-                        CheckedGenericArg::Dim(_) => true,
-                    },
-            )
-        })?,
-        CheckedType::Quantity(_)
-        | CheckedType::Complex(_)
-        | CheckedType::Bool
-        | CheckedType::Int
-        | CheckedType::Datetime(_) => true,
+    ty.indexes().into_iter().try_fold(true, |known, index| {
+        Ok(known & cardinality(index)?.is_some())
     })
 }
 
-fn record_is_ready(
+/// Whether a value may execute: its type and static index proofs are
+/// discharged and no operand is still waiting.
+fn value_is_ready(
     record: &CheckedExpressionRecord,
-    deferred: &HashSet<ExprId>,
-    cardinality: &dyn Fn(
-        &IndexTypeRef,
-    ) -> Result<
-        Option<crate::registry::index::IndexCardinality>,
-        ExpressionFactsError,
-    >,
+    value: &ValueFact<Symbolic>,
+    waiting: &HashSet<ExprId>,
+    cardinality: &AxisCardinality<'_>,
 ) -> Result<bool, ExpressionFactsError> {
-    let mut ready = match &record.fact {
-        ExpressionFact::Value { checked_type, .. } => type_is_ready(checked_type, cardinality)?,
-        ExpressionFact::Contextual(_) => true,
-    };
+    let mut ready = cardinalities_known(&value.checked_type, cardinality)?;
     for requirement in &record.static_indexes {
         ready &= requirement.check(cardinality(&requirement.axis)?)? == Readiness::Ready;
     }
@@ -421,7 +437,16 @@ fn record_is_ready(
         && record
             .children()
             .iter()
-            .all(|child| !deferred.contains(child)))
+            .all(|child| !waiting.contains(child)))
+}
+
+/// Classify a published value by what evaluation may rely on.
+fn classify(value: ValueFact<Symbolic>, ready: bool) -> ExpressionFact {
+    match value.to_concrete() {
+        Some(concrete) if ready => ExpressionFact::Executable(concrete),
+        Some(concrete) => ExpressionFact::Pending(concrete),
+        None => ExpressionFact::Symbolic(value),
+    }
 }
 
 fn matches_constructor_targets(expr: &Expr, record: &CheckedExpressionRecord) -> bool {
@@ -443,19 +468,18 @@ fn matches_constructor_targets(expr: &Expr, record: &CheckedExpressionRecord) ->
             .all(|id| record.constructor_matches.contains_key(id))
 }
 
-fn value_type<'a>(
-    records: &'a HashMap<ExprId, Box<CheckedExpressionRecord>>,
+fn value_type(
+    records: &HashMap<ExprId, Box<CheckedExpressionRecord>>,
     expr: &Expr,
-) -> Result<&'a CheckedType, ExpressionFactsError> {
+) -> Result<CheckedType<Symbolic>, ExpressionFactsError> {
     let id = expr.id();
-    match &records
+    records
         .get(id)
         .ok_or_else(|| ExpressionFactsError::Missing(id.clone()))?
         .fact
-    {
-        ExpressionFact::Value { checked_type, .. } => Ok(checked_type),
-        ExpressionFact::Contextual(_) => Err(ExpressionFactsError::Incompatible(id.clone())),
-    }
+        .symbolic_value()
+        .map(|value| value.checked_type.clone())
+        .ok_or_else(|| ExpressionFactsError::Incompatible(id.clone()))
 }
 
 /// Inventory required static checks by operand identity, never by replaying
@@ -466,7 +490,7 @@ fn static_requirement_coverage(
     records: &HashMap<ExprId, Box<CheckedExpressionRecord>>,
 ) -> Result<bool, ExpressionFactsError> {
     let mut requirements = record.static_indexes.iter();
-    let mut consume_requirement = |operand: &ExprId, axis: &IndexTypeRef, usage| {
+    let mut consume_requirement = |operand: &ExprId, axis: &IndexTypeRef<Symbolic>, usage| {
         requirements.next().is_some_and(|requirement| {
             *operand == requirement.operand
                 && *axis == requirement.axis
@@ -482,10 +506,11 @@ fn static_requirement_coverage(
             let CheckedType::Key(axis) = value_type(records, expr)? else {
                 return Ok(false);
             };
-            consume_requirement(arg.id(), axis, StaticIndexUse::Key)
+            consume_requirement(arg.id(), &axis, StaticIndexUse::Key)
         }
         ExprKind::IndexAccess { expr: inner, args } => {
-            let mut ty = value_type(records, inner)?;
+            let inner = value_type(records, inner)?;
+            let mut ty = &inner;
             for arg in args {
                 let CheckedType::Indexed { element, index } = ty else {
                     return Ok(false);
@@ -518,7 +543,6 @@ struct PublishedExpressionFacts {
     revision: BodyRevision,
     records: HashMap<ExprId, Box<CheckedExpressionRecord>>,
     source: ExpressionSourceMap,
-    deferred: HashSet<ExprId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -530,7 +554,7 @@ pub enum ExpressionFactsError {
     #[error("missing checked expression: {0:?}")]
     Missing(ExprId),
     #[error("checked expression references an unavailable index: {0}")]
-    MissingIndex(Box<IndexTypeRef>),
+    MissingIndex(Box<IndexTypeRef<Symbolic>>),
     #[error("extra checked expression: {0:?}")]
     Extra(ExprId),
     #[error("incompatible checked expression: {0:?}")]
@@ -550,16 +574,14 @@ impl CheckedExpressionFacts {
         owner: DagId,
         revision: BodyRevision,
         roots: &[&Expr],
-        records: HashMap<ExprId, Box<CheckedExpressionRecord>>,
-        cardinality: &dyn Fn(
-            &IndexTypeRef,
-        ) -> Result<
-            Option<crate::registry::index::IndexCardinality>,
-            ExpressionFactsError,
-        >,
+        mut records: HashMap<ExprId, Box<CheckedExpressionRecord>>,
+        cardinality: &AxisCardinality<'_>,
     ) -> Result<Self, ExpressionFactsError> {
         let mut inventory = HashMap::new();
-        let mut deferred = HashSet::new();
+        // Values still waiting on a binding, consulted by their parents while
+        // this publication classifies each fact bottom-up.
+        let mut waiting = HashSet::new();
+        let mut classified = Vec::new();
         let mut error = Ok(());
         for root in roots {
             crate::hir::expr::visit_expr_postorder(root, &mut |expr| {
@@ -583,47 +605,45 @@ impl CheckedExpressionFacts {
                     if !matches_constructor_targets(expr, record) {
                         return Err(ExpressionFactsError::Incompatible(id));
                     }
-                    let compatible = match (&record.fact, record.operation.as_ref()) {
+                    let value = record.fact.symbolic_value();
+                    let compatible = match (&record.fact, &value, record.operation.as_ref()) {
                         (
                             ExpressionFact::Contextual(actual),
+                            _,
                             ExpressionOperation::Contextual(expected),
                         ) => actual == expected,
-                        (ExpressionFact::Contextual(_), _)
-                        | (ExpressionFact::Value { .. }, ExpressionOperation::Contextual(_)) => {
-                            false
-                        }
-                        (
-                            ExpressionFact::Value {
-                                checked_type,
-                                shape,
-                                constructor,
-                            },
-                            operation,
-                        ) => {
-                            let shape_matches = shape.matches_type(checked_type, cardinality)?;
+                        (ExpressionFact::Contextual(_), _, _)
+                        | (_, _, ExpressionOperation::Contextual(_))
+                        | (_, None, _) => false,
+                        (_, Some(value), operation) => {
                             let constructor_matches = matches!(
                                 operation,
                                 ExpressionOperation::Constructor
                                     | ExpressionOperation::Constant(ConstRef::Constructor(_))
-                            ) == constructor.is_some();
+                            ) == value.constructor.is_some();
                             let application_matches =
-                                constructor
-                                    .as_ref()
-                                    .is_none_or(|application| match checked_type {
+                                value.constructor.as_ref().is_none_or(|application| {
+                                    match &value.checked_type {
                                         CheckedType::Struct(identity, args) => {
                                             identity.resolved() == &application.runtime_type
                                                 && args == &application.generic_args
                                         }
                                         _ => false,
-                                    });
-                            shape_matches && constructor_matches && application_matches
+                                    }
+                                });
+                            constructor_matches && application_matches
                         }
                     };
                     if !compatible {
                         return Err(ExpressionFactsError::Incompatible(id));
                     }
-                    if !record_is_ready(record, &deferred, cardinality)? {
-                        deferred.insert(id.clone());
+                    if let Some(value) = value {
+                        let ready = value_is_ready(record, &value, &waiting, cardinality)?;
+                        let fact = classify(value.into_owned(), ready);
+                        if !matches!(fact, ExpressionFact::Executable(_)) {
+                            waiting.insert(id.clone());
+                        }
+                        classified.push((id.clone(), fact));
                     }
                     match inventory.entry(id) {
                         std::collections::hash_map::Entry::Vacant(entry) => {
@@ -645,13 +665,17 @@ impl CheckedExpressionFacts {
         if let Some(extra) = records.keys().find(|id| !inventory.contains_key(*id)) {
             return Err(ExpressionFactsError::Extra(extra.clone()));
         }
+        for (id, fact) in classified {
+            if let Some(record) = records.get_mut(&id) {
+                record.fact = fact;
+            }
+        }
         Ok(Self {
             data: std::sync::Arc::new(PublishedExpressionFacts {
                 owner,
                 revision,
                 records,
                 source: ExpressionSourceMap::try_new(inventory)?,
-                deferred,
             }),
         })
     }
@@ -693,11 +717,11 @@ impl CheckedExpressionFacts {
         id: &ExprId,
     ) -> Result<&CheckedExpressionRecord, ExpressionFactsError> {
         let record = self.get(id)?;
-        if self.data.deferred.contains(id) {
-            return Err(ExpressionFactsError::Deferred(id.clone()));
-        }
         match record.fact {
-            ExpressionFact::Value { .. } => Ok(record),
+            ExpressionFact::Executable(_) => Ok(record),
+            ExpressionFact::Pending(_) | ExpressionFact::Symbolic(_) => {
+                Err(ExpressionFactsError::Deferred(id.clone()))
+            }
             ExpressionFact::Contextual(_) => Err(ExpressionFactsError::Contextual(id.clone())),
         }
     }

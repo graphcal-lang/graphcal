@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::builtin::ComplexFn;
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum ComplexTypeError {
@@ -30,8 +30,8 @@ pub(super) enum ComplexTypeError {
 /// types; this rule does not re-check the count.
 pub(super) fn infer(
     function: ComplexFn,
-    arguments: &[CheckedType],
-) -> Result<CheckedType, ComplexTypeError> {
+    arguments: &[CheckedType<Symbolic>],
+) -> Result<CheckedType<Symbolic>, ComplexTypeError> {
     match function {
         ComplexFn::Rectangular => {
             let re = quantity_dimension(arguments, 0)?;
@@ -89,7 +89,7 @@ pub(super) fn infer(
 }
 
 fn quantity_dimension(
-    arguments: &[CheckedType],
+    arguments: &[CheckedType<Symbolic>],
     argument: usize,
 ) -> Result<&Dimension, ComplexTypeError> {
     arguments[argument]
@@ -98,7 +98,7 @@ fn quantity_dimension(
 }
 
 fn complex_dimension(
-    arguments: &[CheckedType],
+    arguments: &[CheckedType<Symbolic>],
     argument: usize,
 ) -> Result<&Dimension, ComplexTypeError> {
     arguments[argument]
