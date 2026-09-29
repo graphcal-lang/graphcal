@@ -1427,7 +1427,92 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "dim_check", "infer", "hir", "finite_axis_form_tests"]
+path = ["tir", "dim_check", "infer", "hir", "calls"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "context"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "conversion_calls"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "dag_call"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "dispatch"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "extern_call"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "facts"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "generics"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "indexing"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "indexing", "finite_axis_form_tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "map_literal"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "match_expr"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "nat_forms"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "nominal"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "operators"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "override_deps"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "recurrence"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "infer", "hir", "refs"]
 role = "checking"
 
 [[module]]
