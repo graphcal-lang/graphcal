@@ -9,7 +9,6 @@ use super::{
     DagTIR, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
     ResolvedTypeExpr, TIR,
 };
-use crate::dag_id::{DescendantRebase, InstanceId};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ir::instance::{
@@ -444,18 +443,17 @@ fn extend_binding_constructor_refs(
 
 fn resolve_instance_override_target(
     target: &crate::ir::override_reconciliation::PendingOverrideTarget,
+    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
     substitution: &StaticSubstitution,
-    src: &NamedSource<Arc<String>>,
-    include_span: crate::syntax::span::Span,
 ) -> Result<super::ResolvedOverrideTarget, GraphcalError> {
     use crate::ir::override_reconciliation::PendingOverrideTarget;
 
+    let source_owner = pending.source_owner();
+    let src = pending.src();
+    let include_span = pending.include_span();
+
     match target {
-        PendingOverrideTarget::Index {
-            overridden,
-            source_owner,
-            ..
-        } => {
+        PendingOverrideTarget::Index { overridden, .. } => {
             let source = ResolvedIndexName::from_def(source_owner.clone(), overridden.clone());
             let replacement = substitution.indexes.get(&source).ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -479,11 +477,7 @@ fn resolve_instance_override_target(
                 },
             })
         }
-        PendingOverrideTarget::Type {
-            overridden,
-            source_owner,
-            ..
-        } => {
+        PendingOverrideTarget::Type { overridden, .. } => {
             let source = ResolvedStructTypeName::from_def(source_owner.clone(), overridden.clone());
             let replacement = substitution.types.get(&source).cloned().ok_or_else(|| {
                 GraphcalError::internal_error(
@@ -507,7 +501,7 @@ fn install_override_reconciliations(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
 ) -> Result<(), GraphcalError> {
-    let owner = edge.instance.id.owner();
+    let owner = edge.instance.id().owner();
     instance.semantic.override_reconciliations = edge
         .override_reconciliations
         .iter()
@@ -517,24 +511,12 @@ fn install_override_reconciliations(
             let reconciliations = pending
                 .iter()
                 .map(|pending| {
-                    let targets = pending
-                        .targets
-                        .iter()
-                        .map(|target| {
-                            resolve_instance_override_target(
-                                target,
-                                &edge.instance.specialization.substitution,
-                                &pending.src,
-                                pending.include_span,
-                            )
-                        })
-                        .collect::<Result<_, GraphcalError>>()?;
-                    Ok(super::OverrideReconciliation {
-                        source_decl: pending.source_decl.clone(),
-                        orphan_decl: pending.orphan_decl.clone(),
-                        targets,
-                        src: pending.src.clone(),
-                        include_span: pending.include_span,
+                    super::resolve_override_reconciliation(pending, |target| {
+                        resolve_instance_override_target(
+                            target,
+                            pending,
+                            edge.instance.substitution(),
+                        )
                     })
                 })
                 .collect::<Result<_, GraphcalError>>()?;
@@ -602,66 +584,30 @@ fn compose_dimension_targets<'a>(
     }
 }
 
+/// Re-parent one instance edge of the template under the concrete `owner`.
+///
+/// Every edge in a DAG's instance list is parented by that DAG, so the
+/// template's edges are parented by the template and move to `owner`.
 fn rebase_nested_instance(
     mut nested: HirInstanceRecord,
-    template_owner: &crate::dag_id::DagId,
     owner: &crate::dag_id::DagId,
     substitution: &StaticSubstitution,
     runtime_owner_rebases: &mut HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
 ) -> HirInstanceRecord {
-    let template_nested_owner = nested.instance.id.owner().clone();
-    let nested_parent = match nested
+    let template_nested_owner = nested.instance.id().owner().clone();
+    nested
         .instance
-        .id
-        .parent()
-        .rebase_descendant(template_owner, owner)
-    {
-        DescendantRebase::Rebased(rebased) => rebased,
-        DescendantRebase::OutsideSubtree => owner.clone(),
-    };
-    let nested_id = InstanceId::new(
-        nested_parent,
-        nested.instance.id.scope().clone(),
-        nested.instance.specialization.template.clone(),
-    );
-    runtime_owner_rebases.insert(template_nested_owner, nested_id.owner().clone());
-    compose_index_targets(
-        nested
-            .instance
-            .specialization
-            .substitution
-            .indexes
-            .values_mut()
-            .chain(nested.instance.bindings.indexes.values_mut()),
-        substitution,
-    );
-    compose_type_targets(
-        nested
-            .instance
-            .specialization
-            .substitution
-            .types
-            .values_mut()
-            .chain(nested.instance.bindings.types.values_mut()),
-        substitution,
-    );
-    compose_dimension_targets(
-        nested
-            .instance
-            .specialization
-            .substitution
-            .dimensions
-            .values_mut()
-            .chain(nested.instance.bindings.dimensions.values_mut()),
-        substitution,
-    );
+        .rebase(owner.clone(), |nested_substitution| {
+            compose_index_targets(nested_substitution.indexes.values_mut(), substitution);
+            compose_type_targets(nested_substitution.types.values_mut(), substitution);
+            compose_dimension_targets(nested_substitution.dimensions.values_mut(), substitution);
+        });
+    runtime_owner_rebases.insert(template_nested_owner, nested.instance.id().owner().clone());
     nested
         .assertion_projections
         .iter_mut()
         .filter_map(|projection| projection.expected_fail.as_mut())
         .for_each(|expected| specialize_expected_fail(expected, substitution));
-    nested.instance.id = nested_id;
-    nested.instance.parent_owner = owner.clone();
     nested.owner_rebases.extend(runtime_owner_rebases.clone());
     nested
 }
@@ -671,8 +617,8 @@ fn initialize_instance_identity(
     template: &DagTIR,
     edge: &HirInstanceRecord,
 ) {
-    let owner = edge.instance.id.owner();
-    let specialization = &edge.instance.specialization;
+    let owner = edge.instance.id().owner();
+    let specialization = edge.instance.specialization();
     instance.dag_id = owner.clone();
     instance.begin_checking_revision();
     instance.semantic_specialization = Some(specialization.clone());
@@ -707,7 +653,6 @@ fn initialize_instance_identity(
         .map(|nested| {
             rebase_nested_instance(
                 nested,
-                template.dag_id(),
                 owner,
                 &specialization.substitution,
                 &mut instance.runtime_owner_rebases,
@@ -717,8 +662,8 @@ fn initialize_instance_identity(
 }
 
 fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
-    let owner = edge.instance.id.owner();
-    let specialization = &edge.instance.specialization;
+    let owner = edge.instance.id().owner();
+    let specialization = edge.instance.specialization();
     instance
         .consts
         .iter_mut()
@@ -794,8 +739,8 @@ fn specialize_instance_semantics(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let owner = edge.instance.id.owner();
-    let specialization = &edge.instance.specialization;
+    let owner = edge.instance.id().owner();
+    let specialization = edge.instance.specialization();
     instance.resolved_decl_types = instance
         .resolved_decl_types
         .iter()
@@ -869,8 +814,8 @@ fn clone_checked_instance(
     specialize_instance_declarations(&mut instance, edge);
     specialize_dynamic_unit_scales(
         &mut instance,
-        &edge.instance.specialization,
-        edge.instance.id.owner(),
+        edge.instance.specialization(),
+        edge.instance.id().owner(),
         tir,
         src,
     )?;
@@ -954,7 +899,7 @@ fn install_plot_projections_for_dag(
         .iter()
         .flat_map(|edge| {
             edge.plot_projections.iter().map(|projection| {
-                let instance_owner = edge.instance.id.owner().clone();
+                let instance_owner = edge.instance.id().owner().clone();
                 let target = ResolvedDeclName::from_def(
                     instance_owner.clone(),
                     projection.target.to_unowned_def_name(),
@@ -1069,7 +1014,7 @@ fn install_semantic_projection_bindings(
                     dag.semantic.decl_bindings.insert(
                         projection.exposed_name,
                         ResolvedDeclName::from_def(
-                            edge.instance.id.owner().clone(),
+                            edge.instance.id().owner().clone(),
                             projection.target.to_unowned_def_name(),
                         ),
                     );
@@ -1079,7 +1024,7 @@ fn install_semantic_projection_bindings(
                 dag.semantic.decl_bindings.insert(
                     projection.exposed_name,
                     ResolvedDeclName::from_def(
-                        edge.instance.id.owner().clone(),
+                        edge.instance.id().owner().clone(),
                         projection.target.to_unowned_def_name(),
                     ),
                 );
@@ -1094,15 +1039,15 @@ fn instantiate_semantic_edge(
     edge: &HirInstanceRecord,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let owner = edge.instance.id.owner();
+    let owner = edge.instance.id().owner();
     let template = tir
         .dags
-        .get(edge.instance.id.template())
+        .get(edge.instance.id().template())
         .ok_or_else(|| {
             GraphcalError::internal_error(
                 format!(
                     "checked template `{}` is unavailable for semantic instance `{owner}`",
-                    edge.instance.id.template()
+                    edge.instance.id().template()
                 ),
                 src,
                 DiagnosticAnchor::WholeFile,
@@ -1125,7 +1070,7 @@ fn instantiate_semantic_edge(
         .into_iter()
         .map(|name| {
             let source =
-                ResolvedUnitName::from_def(edge.instance.id.template().clone(), name.clone());
+                ResolvedUnitName::from_def(edge.instance.id().template().clone(), name.clone());
             let mut info = tir.unit_info(&source).cloned().ok_or_else(|| {
                 GraphcalError::internal_error(
                     format!("template runtime unit `{source}` has no checked definition"),
@@ -1135,7 +1080,7 @@ fn instantiate_semantic_edge(
             })?;
             info.dimension = specialize_dimension(
                 &info.dimension,
-                &edge.instance.specialization.substitution,
+                edge.instance.substitution(),
                 tir.project_type_store(),
                 src,
             )?;
@@ -1167,7 +1112,7 @@ pub fn instantiate_semantic_edges(
             .dags
             .iter()
             .flat_map(|(_, dag)| dag.semantic_instances().iter().cloned())
-            .filter(|edge| tir.dags.get(edge.instance.id.owner()).is_none())
+            .filter(|edge| tir.dags.get(edge.instance.id().owner()).is_none())
             .collect::<Vec<_>>();
         if edges.is_empty() {
             return install_semantic_projection_bindings(tir, src);

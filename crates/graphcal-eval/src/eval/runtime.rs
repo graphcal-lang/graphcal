@@ -368,12 +368,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     for record in tir.root().semantic_instances() {
         let instance_dag = tir
             .dag_registry()
-            .get(record.instance.id.owner())
+            .get(record.instance.id().owner())
             .ok_or_else(|| {
                 GraphcalError::internal_error(
                     format!(
                         "semantic instance `{}` is absent from checked TIR",
-                        record.instance.id.owner()
+                        record.instance.id().owner()
                     ),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -481,7 +481,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .get(&record.debug_scope)
                 .is_some_and(|count| *count > 1)
             {
-                record.instance.id.scope().clone()
+                record.instance.id().scope().clone()
             } else {
                 ScopeSegment::Named(record.debug_scope.clone())
             };
@@ -541,12 +541,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     for record in tir.root().semantic_instances() {
         let outer_instance = tir
             .dag_registry()
-            .get(record.instance.id.owner())
+            .get(record.instance.id().owner())
             .ok_or_else(|| {
                 GraphcalError::internal_error(
                     format!(
                         "semantic instance `{}` is absent from checked TIR",
-                        record.instance.id.owner()
+                        record.instance.id().owner()
                     ),
                     src,
                     DiagnosticAnchor::WholeFile,
@@ -768,12 +768,12 @@ fn semantic_instance_dag<'tir>(
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'tir graphcal_compiler::tir::typed::DagTIR, GraphcalError> {
     tir.dag_registry()
-        .get(record.instance.id.owner())
+        .get(record.instance.id().owner())
         .ok_or_else(|| {
             GraphcalError::internal_error(
                 format!(
                     "semantic instance `{}` is absent from checked TIR",
-                    record.instance.id.owner()
+                    record.instance.id().owner()
                 ),
                 src,
                 DiagnosticAnchor::WholeFile,

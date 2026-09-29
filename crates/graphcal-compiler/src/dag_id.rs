@@ -217,18 +217,6 @@ impl PartialOrd for DagId {
     }
 }
 
-/// Result of attempting to move a [`DagId`] subtree onto a new owner.
-///
-/// Callers must choose explicitly whether an outside-subtree identity is a
-/// legitimate external reference or a broken ownership invariant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DescendantRebase {
-    /// The identity was the requested ancestor or one of its descendants.
-    Rebased(DagId),
-    /// The identity lies outside the requested ancestor's subtree.
-    OutsideSubtree,
-}
-
 /// Typed identity of one concrete include or DAG-call instance.
 ///
 /// `owner` is the fresh runtime namespace allocated at the call/include site:
@@ -460,31 +448,6 @@ impl DagId {
             .collect()
     }
 
-    /// Rebase this identity from one ancestor onto another while preserving
-    /// every inline-DAG/concrete-instance segment in the descendant suffix.
-    ///
-    /// Returns [`DescendantRebase::OutsideSubtree`] when `self` is neither
-    /// `ancestor` nor its descendant. The typed result forces each caller to
-    /// decide whether that case is expected or an invariant violation.
-    #[must_use]
-    pub fn rebase_descendant(&self, ancestor: &Self, replacement: &Self) -> DescendantRebase {
-        if self == ancestor {
-            return DescendantRebase::Rebased(replacement.clone());
-        }
-        if !self.is_descendant_of(ancestor) {
-            return DescendantRebase::OutsideSubtree;
-        }
-
-        DescendantRebase::Rebased(
-            self.segments
-                .iter()
-                .skip(ancestor.segments.len())
-                .fold(replacement.clone(), |rebased, segment| {
-                    rebased.with_child(segment.clone())
-                }),
-        )
-    }
-
     /// Create a package-qualified `DagId` from a relative file path, stripping
     /// the `.gcl` extension and using the file stem as the package id.
     ///
@@ -678,10 +641,6 @@ mod tests {
         assert_eq!(file.parent(), None);
         assert!(!file.is_descendant_of(&parent));
         assert!(inline.is_descendant_of(&parent));
-        assert_eq!(
-            file.rebase_descendant(&parent, &DagId::root_in_package("test", "other")),
-            DescendantRebase::OutsideSubtree
-        );
     }
 
     #[test]
@@ -695,37 +654,6 @@ mod tests {
         assert_eq!(
             root.instance_child(named("inner")).module_path_spelling(),
             None
-        );
-    }
-
-    #[test]
-    fn rebase_descendant_preserves_instance_edges() {
-        let template = DagId::root_in_package("test", "template");
-        let nested = template
-            .instance_child(named("inner"))
-            .inline_dag_child(dag("helper"));
-        let configured = DagId::root_in_package("test", "main").instance_child(named("configured"));
-
-        let DescendantRebase::Rebased(rebased) = nested.rebase_descendant(&template, &configured)
-        else {
-            panic!("nested identity must be inside the template subtree");
-        };
-        let expected = configured
-            .instance_child(named("inner"))
-            .inline_dag_child(dag("helper"));
-        assert_eq!(rebased, expected);
-        assert_eq!(rebased.to_string(), "main.configured.inner.helper");
-    }
-
-    #[test]
-    fn rebase_descendant_classifies_an_external_owner() {
-        let template = DagId::root_in_package("test", "template");
-        let external = DagId::root_in_package("dependency", "external");
-        let configured = DagId::root_in_package("test", "main").instance_child(named("configured"));
-
-        assert_eq!(
-            external.rebase_descendant(&template, &configured),
-            DescendantRebase::OutsideSubtree
         );
     }
 
@@ -890,9 +818,5 @@ mod tests {
         assert!(nested.is_descendant_of(&instance));
         assert!(nested.is_descendant_of(&root));
         assert!(!nested.is_descendant_of(&module));
-        assert_eq!(
-            nested.rebase_descendant(&module, &root),
-            DescendantRebase::OutsideSubtree
-        );
     }
 }

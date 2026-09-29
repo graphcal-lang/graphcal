@@ -2277,10 +2277,10 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
     let instances = checked.tir().root().semantic_instances();
     assert_eq!(instances.len(), 2);
     assert_eq!(
-        instances[0].instance.specialization,
-        instances[1].instance.specialization
+        instances[0].instance.specialization(),
+        instances[1].instance.specialization()
     );
-    assert_ne!(instances[0].instance.id, instances[1].instance.id);
+    assert_ne!(instances[0].instance.id(), instances[1].instance.id());
     let prepared = ProjectCompiler::new(&project).prepare().unwrap();
     let row = prepared.binding_builder().finish().unwrap();
     let result = prepared.evaluate(&row).unwrap();
@@ -2329,34 +2329,32 @@ fn checked_tir_records_typed_template_instance_bindings() {
     let template = loaded_file_dag_id(&project, "lib.gcl");
     let template_param =
         ResolvedDeclName::for_test(template.clone(), DeclName::expect_valid("factor"));
-    let instances = tir
+    let records = tir
         .root()
         .semantic_instances()
         .iter()
-        .map(|record| &record.instance)
-        .filter(|record| record.id.template() == &template)
+        .filter(|record| record.instance.id().template() == &template)
         .collect::<Vec<_>>();
-    assert_eq!(instances.len(), 2);
-    assert_ne!(instances[0].id.owner(), instances[1].id.owner());
+    assert_eq!(records.len(), 2);
+    assert_ne!(
+        records[0].instance.id().owner(),
+        records[1].instance.id().owner()
+    );
 
-    for instance in instances {
-        assert_eq!(instance.parent_owner, *tir.root_dag_id());
-        assert!(
-            instance
-                .bindings
-                .explicitly_bound_values
-                .contains(&template_param)
-        );
-        let concrete = &instance.bindings.value_ports[&template_param];
-        assert_eq!(concrete.owner(), instance.id.owner());
+    for record in records {
+        let instance = &record.instance;
+        assert_eq!(instance.id().parent(), tir.root_dag_id());
+        assert!(record.value_bindings.contains_key(&template_param));
+        let concrete = instance.value_port(&template_param).unwrap();
+        assert_eq!(concrete.owner(), instance.id().owner());
         assert_eq!(concrete.as_str(), "factor");
 
         let output_name = ScopedName::in_scope(
-            instance.id.scope().clone(),
+            instance.id().scope().clone(),
             DeclName::expect_valid("output"),
         );
         let output = &tir.root().semantic().decl_bindings[&output_name];
-        assert_eq!(output.owner(), instance.id.owner());
+        assert_eq!(output.owner(), instance.id().owner());
     }
 }
 
@@ -2387,8 +2385,8 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
         .root()
         .semantic_instances()
         .iter()
-        .filter(|record| record.instance.id.template() == &middle_template)
-        .map(|record| record.instance.id.owner().clone())
+        .filter(|record| record.instance.id().template() == &middle_template)
+        .map(|record| record.instance.id().owner().clone())
         .collect::<HashSet<_>>();
     let nested = tir
         .root()
@@ -2396,22 +2394,22 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
         .iter()
         .flat_map(|outer| {
             tir.dag_registry()
-                .get(outer.instance.id.owner())
+                .get(outer.instance.id().owner())
                 .expect("materialized outer instance")
                 .semantic_instances()
                 .iter()
                 .map(|record| &record.instance)
         })
-        .filter(|record| record.id.template() == &leaf_template)
+        .filter(|record| record.id().template() == &leaf_template)
         .collect::<Vec<_>>();
 
     assert_eq!(outer_owners.len(), 2);
     assert_eq!(nested.len(), 2);
     assert!(nested.iter().all(|record| {
-        outer_owners.contains(&record.parent_owner)
-            && record.id.owner().parent().as_ref() == Some(&record.parent_owner)
+        outer_owners.contains(record.id().parent())
+            && record.id().owner().parent().as_ref() == Some(record.id().parent())
     }));
-    assert_ne!(nested[0].id.owner(), nested[1].id.owner());
+    assert_ne!(nested[0].id().owner(), nested[1].id().owner());
 }
 
 #[test]

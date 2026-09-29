@@ -964,10 +964,7 @@ instance segments. Virtual single-file projects,
 manifest-backed packages, locked dependency instances, and synthetic test
 contexts all receive package ids at the loader/test boundary; there is no
 package-less DAG, and the compiler core does not inspect the package id's
-origin. `DagId::rebase_descendant` returns typed `Rebased` versus
-`OutsideSubtree` outcomes. Include assembly preserves the latter only for
-known external references; declaration and concrete-instance owners must
-rebase successfully or produce an internal diagnostic at the include site.
+origin.
 
 Examples:
 
@@ -1334,9 +1331,9 @@ lexical bindings only. A canonical `ModuleTemplateStore` elaborates each file or
 inline-DAG template once per project session and shares it through `Arc`.
 Instantiated `include` or call sites clone that immutable template only at the
 specialization boundary and record an `InstanceRecord`: its `InstanceId` pairs
-the canonical template with a fresh concrete owner, while
-`InstanceBindingEnvironment` carries value, index, type, and dimension
-substitutions. The current evaluator still monomorphizes declarations into the
+the canonical template with a fresh concrete owner, while its
+`StaticSpecializationId` carries the index, type, and dimension substitution
+and its value ports are derived from the concrete owner. The current evaluator still monomorphizes declarations into the
 importer, but semantic declaration records carry the explicit concrete owner;
 source-facing prefixes are lookup/presentation names, not the source of semantic
 identity. Runtime-dependent units are rebased onto that concrete owner and are
@@ -1632,12 +1629,12 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 103. `crates/graphcal-compiler/src/diagnostic_render.rs`
 104. `crates/graphcal-compiler/src/registry/runtime_value.rs`
 105. `crates/graphcal-compiler/src/ir/imported_binding.rs`
-106. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
-107. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
-108. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
-109. `crates/graphcal-compiler/src/plot_shape.rs`
-110. `crates/graphcal-compiler/src/static_interface.rs`
-111. `crates/graphcal-compiler/src/ir/mod.rs`
+106. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
+107. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
+108. `crates/graphcal-compiler/src/plot_shape.rs`
+109. `crates/graphcal-compiler/src/static_interface.rs`
+110. `crates/graphcal-compiler/src/ir/mod.rs`
+111. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
 112. `crates/graphcal-compiler/src/ir/required_bindability.rs`
 113. `crates/graphcal-compiler/src/hir/source_interface.rs`
 114. `crates/graphcal-compiler/src/tir/presentation.rs`

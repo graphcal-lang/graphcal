@@ -84,7 +84,7 @@ impl UnfrozenIR {
                         .find(|projection| projection.exposed_name.leaf() == name)
                         .map(|projection| {
                             ResolvedDeclName::from_def(
-                                instance.instance.id.owner().clone(),
+                                instance.instance.id().owner().clone(),
                                 projection.target.to_unowned_def_name(),
                             )
                         })
@@ -111,12 +111,12 @@ impl UnfrozenIR {
         if self
             .semantic_instances
             .iter()
-            .any(|existing| existing.instance.id.owner() == input.instance.id.owner())
+            .any(|existing| existing.instance.id().owner() == input.instance.id().owner())
         {
             return Err(GraphcalError::InternalError {
                 message: format!(
                     "duplicate semantic instance identity `{}`",
-                    input.instance.id.owner()
+                    input.instance.id().owner()
                 ),
                 src: src.clone(),
                 span: span.into(),
@@ -208,7 +208,7 @@ impl UnfrozenIR {
         alias: UnitName,
     ) {
         let exposes_unit = self.semantic_instances.iter().any(|record| {
-            record.instance.id.owner() == instance_owner
+            record.instance.id().owner() == instance_owner
                 && record.runtime_unit_names.contains(source)
         });
         if exposes_unit {
@@ -273,8 +273,8 @@ impl UnfrozenIR {
             .iter()
             .map(|record| {
                 (
-                    record.instance.id.owner().clone(),
-                    record.instance.id.template().clone(),
+                    record.instance.id().owner().clone(),
+                    record.instance.id().template().clone(),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -300,10 +300,10 @@ impl UnfrozenIR {
             decl_bindings.insert(name.clone(), canonical);
         }
         for record in &self.semantic_instances {
-            let scope = record.instance.id.scope();
-            for target in record.instance.bindings.value_ports.values() {
+            let scope = record.instance.id().scope();
+            for target in record.instance.concrete_value_ports() {
                 let name = ScopedName::in_scope(scope.clone(), target.to_unowned_def_name());
-                if decl_bindings.insert(name.clone(), target.clone()).is_some() {
+                if decl_bindings.insert(name.clone(), target).is_some() {
                     return Err(GraphcalError::internal_error(
                         format!("semantic instance binding `{name}` collides with a declaration"),
                         src,

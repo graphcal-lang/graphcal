@@ -302,8 +302,8 @@ fn project_cluster_provenance(
         .flat_map(|dag| dag.semantic_instances())
         .map(|record| &record.instance)
     {
-        let owner = record.id.owner().clone();
-        let template = record.id.template().clone();
+        let owner = record.id().owner().clone();
+        let template = record.id().template().clone();
         let template_dag = tir.dag_registry().get(&template).ok_or_else(|| {
             GraphProjectionError::MissingTemplate {
                 instance: owner.clone(),
@@ -312,7 +312,7 @@ fn project_cluster_provenance(
         })?;
         let cluster = GraphCluster {
             dag_id: owner.clone(),
-            parent: Some(record.parent_owner.clone()),
+            parent: Some(record.id().parent().clone()),
             kind: GraphClusterKind::Instance { template },
             node_ids: Vec::new(),
         };

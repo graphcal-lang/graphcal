@@ -527,6 +527,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "override_reconciliation", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["ir", "registry_build"]
 role = "checking"
 
