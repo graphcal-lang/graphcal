@@ -11,7 +11,6 @@ pub enum Event {
     #[cfg(test)]
     UnsharedImportedBody,
     PlanConstruction,
-    ScheduleConstruction,
     ImportedSourceResolution,
     FrameExecution,
     ConstructorFactConsumption,
@@ -55,7 +54,6 @@ mod observer {
         pub imported_body_references: u64,
         pub unshared_imported_bodies: u64,
         pub plan_constructions: u64,
-        pub schedule_constructions: u64,
         pub imported_source_resolutions: u64,
         pub frame_executions: u64,
         pub constructor_fact_consumptions: u64,
@@ -74,7 +72,6 @@ mod observer {
                 Event::ImportedBodyReference => &mut counts.imported_body_references,
                 Event::UnsharedImportedBody => &mut counts.unshared_imported_bodies,
                 Event::PlanConstruction => &mut counts.plan_constructions,
-                Event::ScheduleConstruction => &mut counts.schedule_constructions,
                 Event::ImportedSourceResolution => &mut counts.imported_source_resolutions,
                 Event::FrameExecution => &mut counts.frame_executions,
                 Event::ConstructorFactConsumption => &mut counts.constructor_fact_consumptions,
@@ -104,9 +101,6 @@ mod observer {
                 plan_constructions: after
                     .plan_constructions
                     .saturating_sub(before.plan_constructions),
-                schedule_constructions: after
-                    .schedule_constructions
-                    .saturating_sub(before.schedule_constructions),
                 imported_source_resolutions: after
                     .imported_source_resolutions
                     .saturating_sub(before.imported_source_resolutions),

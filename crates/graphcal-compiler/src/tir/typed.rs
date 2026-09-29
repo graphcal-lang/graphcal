@@ -779,6 +779,7 @@ fn type_resolve_dag(
         decl_bindings: HashMap::new(),
         expression_facts: None,
         presentation: crate::tir::presentation::DagPresentationFacts::default(),
+        runtime_schedule: None,
     };
 
     Ok(DagTIRSeed {

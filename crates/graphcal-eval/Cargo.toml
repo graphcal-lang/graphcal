@@ -21,7 +21,6 @@ jiff.workspace = true
 miette.workspace = true
 num-rational = "0.4.2"
 num-traits = "0.2.19"
-petgraph = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

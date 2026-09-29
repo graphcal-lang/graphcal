@@ -1582,6 +1582,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "schedule"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "dim_check", "schedules"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "template_closure"]
 role = "checking"
 
@@ -2125,7 +2135,7 @@ role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "execution_check", "const_schedule"]
+path = ["project_compiler", "execution_check", "const_eval"]
 role = "checking"
 
 [[module]]

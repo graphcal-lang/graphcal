@@ -17,7 +17,7 @@ pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 /// Checked execution facts for one canonical DAG.
 ///
 /// A callable DAG cannot be evaluated without this value: its constants,
-/// declaration constraints, schedule, and diagnostic source are produced as
+/// declaration constraints, and diagnostic source are produced as
 /// one atomic checked artifact. Canonical owner and body revision are both
 /// required: equal names or shared source trees cannot authorize stale facts.
 #[derive(Debug, Clone)]
@@ -28,7 +28,6 @@ pub struct CheckedDagExecutionFacts {
     pub const_values: Arc<RuntimeValueMap>,
     /// Compile-time selections only; dynamic display requests have no invocation state.
     pub const_presentations: Arc<crate::presentation_evidence::PresentationInstanceMap>,
-    pub topo_order: Arc<Vec<ResolvedDeclName>>,
     pub domain_constraints: Arc<HashMap<ResolvedDeclName, ResolvedDomainConstraint>>,
 }
 

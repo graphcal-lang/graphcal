@@ -33,6 +33,7 @@ use expression_facts::install_instance_expression_facts;
 mod model_schema;
 mod plot;
 mod presentation;
+mod schedules;
 mod template_closure;
 
 pub use model_schema::{
@@ -685,7 +686,8 @@ pub fn check_dimensions_tir_with_cancellation(
     tir.dags
         .values_mut()
         .for_each(crate::tir::typed::DagTIR::begin_checking_revision);
-    detect_decl_cycles(tir, src)?;
+    tir.const_schedule = None;
+    let schedules = schedules::CheckedSchedules::build(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
 
     // Canonical bodies are checked once. Instance facts are specialized below,
@@ -757,7 +759,8 @@ pub fn check_dimensions_tir_with_cancellation(
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
     install_presentation_facts(tir, presentation_facts, src)?;
     crate::tir::typed::install_semantic_presentation_facts(tir, &port_generic_plot_channels, src)?;
-    crate::tir::typed::install_semantic_plot_projection_facts(tir, src)
+    crate::tir::typed::install_semantic_plot_projection_facts(tir, src)?;
+    schedules.install(tir, src)
 }
 
 /// Canonical nominal identity whose use in a parameter default is queried at
@@ -1513,25 +1516,6 @@ fn check_one_bound_with_display_name<V: Concreteness>(
     }
 }
 
-/// Detect cycles in the cross-dag inline-call graph.
-///
-/// A dag `A` that transitively inline-calls itself — directly or through a
-/// chain `A → B → … → A` — would recurse unboundedly at evaluation time. We
-/// reject such programs at compile time with
-/// [`GraphcalError::CyclicDependency`] pointing at one dag involved in the
-/// cycle (chosen deterministically by the DFS entry order).
-///
-/// Per the issue thread, a dag — not a file — is the semantic unit of
-/// cycle detection, so the same check applies whether the cycle is within
-/// a single file or spans multiple files.
-enum DagCycleFrame {
-    Enter {
-        dag_id: crate::dag_id::DagId,
-        call_span: Option<Span>,
-    },
-    Leave(crate::dag_id::DagId),
-}
-
 /// Collect DAG-call targets and the first source span for each call edge.
 fn collect_dag_call_targets_from_dag(
     dag: &crate::tir::typed::DagTIR,
@@ -1544,156 +1528,63 @@ fn collect_dag_call_targets_from_dag(
     });
 }
 
-/// Detect cycles in same-file declaration dependencies.
+/// Detect cycles in the cross-dag inline-call graph.
 ///
-/// A graph cycle is a topological property of source — knowable without
-/// evaluating any value. This check rejects cyclic params/nodes (`runtime_deps`)
-/// and cyclic consts (`const_deps`) at compile time so the diagnostic appears
-/// under `graphcal check`, not only at evaluation. Mirrors the toposort-based
-/// cycle detection in `graphcal-eval`'s `eval_const_pools_for_dags` and
-/// `build_runtime_dag` (`project_compiler/execution_check/const_schedule.rs`),
-/// which now act as defense-in-depth backstops.
-fn detect_decl_cycles(
-    tir: &crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    use std::collections::BTreeSet;
-
-    use petgraph::algo::toposort;
-    use petgraph::graph::DiGraph;
-
-    fn check_resolved<'a>(
-        declarations: impl Iterator<Item = (&'a DeclName, ResolvedDeclName, crate::syntax::span::Span)>,
-        deps: &HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<(), GraphcalError> {
-        let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
-        let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut local_name_by_key: HashMap<ResolvedDeclName, DeclName> = HashMap::new();
-        let mut span_by_key: HashMap<ResolvedDeclName, crate::syntax::span::Span> = HashMap::new();
-        for (name, key, span) in declarations {
-            let idx = graph.add_node(key.clone());
-            index_map.insert(key.clone(), idx);
-            local_name_by_key.insert(key.clone(), name.clone());
-            span_by_key.insert(key, span);
-        }
-        if index_map.is_empty() {
-            return Ok(());
-        }
-        for (name, dep_set) in deps {
-            let Some(&to) = index_map.get(name) else {
-                continue;
-            };
-            for dep in dep_set {
-                if let Some(&from) = index_map.get(dep) {
-                    graph.add_edge(from, to, ());
-                }
-            }
-        }
-        toposort(&graph, None).map(|_| ()).map_err(|cycle| {
-            let cycle_node = &graph[cycle.node_id()];
-            match (
-                span_by_key.get(cycle_node).copied(),
-                local_name_by_key.get(cycle_node),
-            ) {
-                (Some(span), Some(name)) => GraphcalError::CyclicDependency {
-                    name: name.to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                },
-                _ => GraphcalError::internal_error(
-                    format!("cycle node `{cycle_node}` is missing declaration metadata"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ),
-            }
-        })
-    }
-
-    for dag in tir.dags.values() {
-        let deps = &dag.semantic.dependencies;
-        check_resolved(
-            dag.consts().map(|e| (&e.name, e.identity(), e.span)),
-            &deps.const_deps,
-            src,
-        )?;
-        check_resolved(
-            dag.params()
-                .map(|e| (&e.name, e.identity(), e.span))
-                .chain(dag.nodes().map(|e| (&e.name, e.identity(), e.span))),
-            &deps.runtime_deps,
-            src,
-        )?;
-    }
-    Ok(())
-}
-
+/// A dag `A` that transitively inline-calls itself — directly or through a
+/// chain `A → B → … → A` — would recurse unboundedly at evaluation time. We
+/// reject such programs at compile time with
+/// [`GraphcalError::CyclicDependency`] naming the dag at which the
+/// dependency-graph search (dags and call targets in `DagId` order)
+/// re-entered the cycle, spanning the call that re-entered it.
+///
+/// Per the issue thread, a dag — not a file — is the semantic unit of
+/// cycle detection, so the same check applies whether the cycle is within
+/// a single file or spans multiple files.
 fn detect_cross_dag_cycles(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
 
     use crate::dag_id::DagId;
 
-    let mut edges: BTreeMap<DagId, BTreeMap<DagId, Span>> = BTreeMap::new();
-    for (key, dag_tir) in tir.dags.iter() {
-        let mut targets = BTreeMap::new();
-        collect_dag_call_targets_from_dag(dag_tir, &mut targets);
-        edges.insert(key.clone(), targets);
+    let calls: BTreeMap<&DagId, BTreeMap<DagId, Span>> = tir
+        .dags
+        .iter()
+        .map(|(dag_id, dag)| {
+            let mut targets = BTreeMap::new();
+            collect_dag_call_targets_from_dag(dag, &mut targets);
+            (dag_id, targets)
+        })
+        .collect();
+    let mut graph = crate::dependency_graph::DependencyGraph::new();
+    for caller in calls.keys() {
+        graph.add_node(*caller);
     }
-
-    let mut visited: HashSet<DagId> = HashSet::new();
-    let mut on_stack: HashSet<DagId> = HashSet::new();
-
-    for start in edges.keys() {
-        if visited.contains(start) {
-            continue;
-        }
-        let mut work = vec![DagCycleFrame::Enter {
-            dag_id: start.clone(),
-            call_span: None,
-        }];
-        while let Some(frame) = work.pop() {
-            match frame {
-                DagCycleFrame::Enter { dag_id, call_span } => {
-                    if visited.contains(&dag_id) {
-                        continue;
-                    }
-                    if on_stack.contains(&dag_id) {
-                        let Some(span) = call_span else {
-                            return Err(GraphcalError::internal_error(
-                                format!("cycle entry `{dag_id}` has no incoming call span"),
-                                src,
-                                DiagnosticAnchor::WholeFile,
-                            ));
-                        };
-                        return Err(GraphcalError::CyclicDependency {
-                            name: dag_id.to_string(),
-                            src: src.clone(),
-                            span: span.into(),
-                        });
-                    }
-                    on_stack.insert(dag_id.clone());
-                    work.push(DagCycleFrame::Leave(dag_id.clone()));
-                    if let Some(targets) = edges.get(&dag_id) {
-                        for (target, span) in targets {
-                            if edges.contains_key(target) {
-                                work.push(DagCycleFrame::Enter {
-                                    dag_id: target.clone(),
-                                    call_span: Some(*span),
-                                });
-                            }
-                        }
-                    }
-                }
-                DagCycleFrame::Leave(dag_id) => {
-                    on_stack.remove(&dag_id);
-                    visited.insert(dag_id);
-                }
-            }
+    for (caller, targets) in &calls {
+        for target in targets.keys().filter(|target| calls.contains_key(target)) {
+            graph.add_dependency(*caller, target);
         }
     }
-
-    Ok(())
+    let Err(cycle) = graph.into_topo_order() else {
+        return Ok(());
+    };
+    let entry = *cycle.entry();
+    // The last dag on the cycle path is the caller that re-entered the entry.
+    let reentering_caller = cycle.path().last().copied().unwrap_or(entry);
+    let span = calls
+        .get(reentering_caller)
+        .and_then(|targets| targets.get(entry))
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("cycle entry `{entry}` has no incoming call span"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+    Err(GraphcalError::CyclicDependency {
+        name: entry.to_string(),
+        src: src.clone(),
+        span: (*span).into(),
+    })
 }

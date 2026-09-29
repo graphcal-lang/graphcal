@@ -75,9 +75,8 @@ pub struct CallablePlan {
     /// Retained constant references and explicit runtime imports, selected once
     /// from lexical bindings during preparation.
     pub(crate) imports: PreparedImports,
-    /// Topologically sorted names for runtime evaluation (params + nodes).
-    pub(crate) topo_order: Vec<ResolvedDeclName>,
-    pub(crate) dependencies: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
+    /// The checker's runtime schedule of this body and its instance closure.
+    pub(crate) schedule: graphcal_compiler::tir::schedule::RuntimeSchedule,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,

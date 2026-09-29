@@ -160,7 +160,7 @@ impl<'a> ExecutionFrame<'a> {
         ) -> Result<EvaluatedRuntimeValue, GraphcalError>,
     ) -> Result<(), GraphcalError> {
         crate::pipeline_metrics::record(crate::pipeline_metrics::Event::FrameExecution);
-        for key in &self.callable.topo_order {
+        for (key, dependencies) in self.callable.schedule.steps() {
             cancellation.checkpoint()?;
             if self.values.contains_key(key) || self.errors.contains_key(key) {
                 continue;
@@ -175,11 +175,6 @@ impl<'a> ExecutionFrame<'a> {
                 .map_err(|error| internal(error.to_string()))?;
             let scope = CheckedExecutionScope::new(tir, &self.plan.checked_execution_facts, body)
                 .map_err(|error| internal(error.to_string()))?;
-            let dependencies = self.callable.dependencies.get(key).ok_or_else(|| {
-                internal(format!(
-                    "scheduled declaration `{key}` has no prepared dependencies"
-                ))
-            })?;
             if scope.dag().todo(key).is_some() {
                 self.errors.insert(
                     key.clone(),

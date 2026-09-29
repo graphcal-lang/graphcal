@@ -3176,10 +3176,14 @@ param src: Length = 1.0 m;
 node y: Length = @a(v: @src)::out;
 ";
     let err = check(source).unwrap_err();
-    assert!(
-        matches!(err, GraphcalError::CyclicDependency { .. }),
-        "expected CyclicDependency, got: {err:?}"
-    );
+    // The search visits `a` first and re-enters it from the call inside `b`.
+    let GraphcalError::CyclicDependency { name, span, .. } = &err else {
+        panic!("expected CyclicDependency, got: {err:?}");
+    };
+    assert!(name.ends_with('a'), "{name}");
+    let dag_b = source.find("dag b").unwrap();
+    let param_src = source.find("param src").unwrap();
+    assert!((dag_b..param_src).contains(&span.offset()), "{span:?}");
 }
 
 #[test]
@@ -3664,4 +3668,102 @@ node y: Length = match @x { Elsewhere => 1.0 m, Some(value: v) => v, None => 0.0
         err.to_string(),
         "unknown field `Elsewhere` on struct `Maybe`"
     );
+}
+
+fn root_decl(name: &str) -> ResolvedDeclName {
+    ResolvedDeclName::for_test(test_dag_id(), DeclName::expect_valid(name))
+}
+
+#[test]
+fn checker_retains_dependency_then_source_ordered_schedules() {
+    let source = "const node c: Dimensionless = @b + 1.0;\n\
+                  const node a: Dimensionless = 1.0;\n\
+                  const node b: Dimensionless = @a + 1.0;\n\
+                  node n: Dimensionless = @m + @c;\n\
+                  param p: Dimensionless = 1.0;\n\
+                  node m: Dimensionless = @p + 1.0;\n\
+                  node q: Dimensionless = 2.0;";
+    let (mut tir, src) = module_aware_tir(source);
+    assert!(tir.const_schedule().is_none());
+    assert!(tir.root().runtime_schedule().is_none());
+    check_dimensions_tir(&mut tir, &src).unwrap();
+
+    let constants = tir.const_schedule().unwrap();
+    assert_eq!(constants.dags(), [test_dag_id()]);
+    assert_eq!(
+        constants.order().as_slice(),
+        [root_decl("a"), root_decl("b"), root_decl("c")]
+    );
+
+    let runtime = tir.root().runtime_schedule().unwrap();
+    assert_eq!(runtime.execution_dags(), [test_dag_id()]);
+    assert_eq!(
+        runtime.order().as_slice(),
+        [
+            root_decl("p"),
+            root_decl("q"),
+            root_decl("m"),
+            root_decl("n")
+        ]
+    );
+    let steps = runtime
+        .steps()
+        .map(|(declaration, reads)| (declaration.clone(), reads.to_vec()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        steps,
+        [
+            (root_decl("p"), vec![]),
+            (root_decl("q"), vec![]),
+            (root_decl("m"), vec![root_decl("p")]),
+            (root_decl("n"), vec![root_decl("c"), root_decl("m")]),
+        ]
+    );
+    assert_eq!(
+        runtime.dependencies_of(&root_decl("n")),
+        Some(&[root_decl("c"), root_decl("m")][..])
+    );
+    assert_eq!(runtime.dependencies_of(&root_decl("c")), None);
+
+    // A new checking revision rebuilds the same schedules.
+    let retained = runtime.clone();
+    let constants = constants.clone();
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    assert_eq!(tir.root().runtime_schedule(), Some(&retained));
+    assert_eq!(tir.const_schedule(), Some(&constants));
+}
+
+#[test]
+fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration() {
+    for (source, expected) in [
+        (
+            "const node a: Dimensionless = @c;\n\
+             const node b: Dimensionless = @a;\n\
+             const node c: Dimensionless = @b;",
+            "b",
+        ),
+        (
+            "node x: Dimensionless = @z;\n\
+             node y: Dimensionless = @x;\n\
+             node z: Dimensionless = @y;",
+            "y",
+        ),
+        (
+            "param seed: Dimensionless = 1.0;\n\
+             node a: Dimensionless = @b + @seed;\n\
+             node b: Dimensionless = @a;",
+            "b",
+        ),
+    ] {
+        for _ in 0..4 {
+            let (mut tir, src) = module_aware_tir(source);
+            let error = check_dimensions_tir(&mut tir, &src).unwrap_err();
+            assert!(
+                matches!(&error, GraphcalError::CyclicDependency { name, .. } if name == expected),
+                "{source}: {error:?}"
+            );
+            assert!(tir.const_schedule().is_none());
+            assert!(tir.root().runtime_schedule().is_none());
+        }
+    }
 }
