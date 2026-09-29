@@ -1,7 +1,6 @@
 //! Expression-fact and nominal-dependency recording for HIR inference.
 
 use crate::hir::expr::{ConstRef, Expr, ExprKind, MatchPattern, visit_expr};
-use crate::hir::nominal::NominalGenericParam;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -117,23 +116,6 @@ impl ExpressionFactCollector {
             .entry(root.clone())
             .or_default()
             .push(observation);
-    }
-
-    pub(in crate::tir::dim_check) fn retain_nat_scope(
-        &self,
-        root: &Expr,
-        parameters: &[NominalGenericParam],
-    ) {
-        let scope: HashMap<_, _> = parameters
-            .iter()
-            .map(|parameter| (parameter.name().clone(), parameter.id().clone()))
-            .collect();
-        let scope = (!scope.is_empty()).then(|| Arc::new(scope));
-        visit_expr(root, &mut |expr| {
-            if let Some(record) = self.records.borrow_mut().get_mut(expr.id()) {
-                record.nat_parameters.clone_from(&scope);
-            }
-        });
     }
 
     fn insert(

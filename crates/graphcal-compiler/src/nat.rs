@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use thiserror::Error;
 
+use crate::generic_param::GenericParamId;
 use crate::sparse_monomial::{MonomialExponent, SparseMonomial};
-use crate::syntax::type_name::GenericParamName;
 
 /// Arithmetic overflow while combining type-level Nat forms.
 ///
@@ -40,7 +40,7 @@ impl MonomialExponent for u64 {
 /// A monomial: product of variables raised to natural number exponents.
 ///
 /// The unit monomial (no factors) is the constant monomial (= 1).
-pub(crate) type Monomial = SparseMonomial<GenericParamName, u64>;
+pub(crate) type Monomial = SparseMonomial<GenericParamId, u64>;
 
 /// `var^exponent` evaluated under `binding`, failing on overflow.
 fn eval_factor<E: From<NatOverflowError>>(value: u64, exponent: u64) -> Result<u64, E> {
@@ -54,7 +54,7 @@ fn eval_factor<E: From<NatOverflowError>>(value: u64, exponent: u64) -> Result<u
 fn evaluate_monomial<E: From<NatOverflowError>>(
     monomial: &Monomial,
     coefficient: u64,
-    binding: &mut impl FnMut(&GenericParamName) -> Result<u64, E>,
+    binding: &mut impl FnMut(&GenericParamId) -> Result<u64, E>,
 ) -> Result<u64, E> {
     monomial
         .iter()
@@ -73,7 +73,7 @@ fn evaluate_monomial<E: From<NatOverflowError>>(
 #[cfg(test)]
 pub(crate) fn substitute_monomial(
     monomial: &Monomial,
-    bindings: &HashMap<GenericParamName, u64>,
+    bindings: &HashMap<GenericParamId, u64>,
 ) -> Option<(Monomial, u64)> {
     let mut remaining = Vec::new();
     let mut factor: u64 = 1;
@@ -126,7 +126,7 @@ impl NatPolyForm {
 
     /// Create a polynomial from a single variable with coefficient 1.
     #[must_use]
-    pub(crate) fn from_var(name: GenericParamName) -> Self {
+    pub(crate) fn from_var(name: GenericParamId) -> Self {
         let mut terms = BTreeMap::new();
         terms.insert(Monomial::single(name, 1), 1);
         Self { terms }
@@ -168,7 +168,7 @@ impl NatPolyForm {
     /// strings or requiring the replacement forms to be concrete.
     pub(crate) fn substitute_forms(
         &self,
-        bindings: &HashMap<GenericParamName, Self>,
+        bindings: &HashMap<GenericParamId, Self>,
     ) -> Result<Self, NatOverflowError> {
         self.terms
             .iter()
@@ -215,6 +215,19 @@ impl NatPolyForm {
         self.is_constant().then(|| self.constant())
     }
 
+    /// The parameter when this form is exactly one variable (`N`, not `2 * N`
+    /// or `N + 1`).
+    #[must_use]
+    pub fn as_variable(&self) -> Option<&GenericParamId> {
+        match self.terms.iter().collect::<Vec<_>>().as_slice() {
+            [(monomial, 1)] => match monomial.as_single()? {
+                (variable, 1) => Some(variable),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Returns `true` if this form has no variables (is a constant).
     #[must_use]
     pub(crate) fn is_constant(&self) -> bool {
@@ -225,16 +238,18 @@ impl NatPolyForm {
     ///
     /// Returns `None` if any variable is unbound or arithmetic overflows.
     #[must_use]
-    pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamName, u64>) -> Option<u64> {
+    pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamId, u64>) -> Option<u64> {
         self.evaluate_with(|name| bindings.get(name).copied().ok_or(NatOverflowError))
             .ok()
     }
 
-    /// Evaluate with a lexical resolver supplied by the owning semantic layer.
-    /// Ownership never crosses this algebra boundary as a flattened name map.
+    /// Evaluate with a fallible binding lookup supplied by the caller.
+    ///
+    /// Variables are owner-qualified [`GenericParamId`]s, so the lookup never
+    /// needs a lexical scope to recover which parameter a variable names.
     pub fn evaluate_with<E: From<NatOverflowError>>(
         &self,
-        mut binding: impl FnMut(&GenericParamName) -> Result<u64, E>,
+        mut binding: impl FnMut(&GenericParamId) -> Result<u64, E>,
     ) -> Result<u64, E> {
         self.terms
             .iter()
@@ -293,7 +308,7 @@ impl NatPolyForm {
 
     /// Collect all variable names that appear in any monomial of this polynomial.
     #[must_use]
-    pub(crate) fn variables(&self) -> BTreeSet<GenericParamName> {
+    pub(crate) fn variables(&self) -> BTreeSet<GenericParamId> {
         self.terms
             .keys()
             .flat_map(|mono| mono.keys().cloned())
@@ -310,11 +325,12 @@ impl std::fmt::Display for NatPolyForm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generic_param::test_support::type_param;
 
     #[test]
     fn substitute_forms_composes_and_normalizes_polynomials() {
-        let m = GenericParamName::expect_valid("M");
-        let n = GenericParamName::expect_valid("N");
+        let m = type_param("M");
+        let n = type_param("N");
         let source = NatPolyForm::from_var(m.clone())
             .mul(&NatPolyForm::from_var(m.clone()))
             .unwrap();
@@ -325,5 +341,21 @@ mod tests {
         let bindings = HashMap::from([(m, replacement)]);
 
         assert_eq!(source.substitute_forms(&bindings).unwrap(), expected);
+    }
+
+    #[test]
+    fn as_variable_recognizes_only_a_lone_parameter() {
+        let n = type_param("N");
+        let var = NatPolyForm::from_var(n.clone());
+        assert_eq!(var.as_variable(), Some(&n));
+        assert_eq!(NatPolyForm::from_constant(1).as_variable(), None);
+        assert_eq!(
+            var.add(&NatPolyForm::from_constant(1))
+                .unwrap()
+                .as_variable(),
+            None
+        );
+        assert_eq!(var.add(&var).unwrap().as_variable(), None);
+        assert_eq!(var.mul(&var).unwrap().as_variable(), None);
     }
 }

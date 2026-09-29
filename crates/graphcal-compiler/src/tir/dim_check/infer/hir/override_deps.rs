@@ -10,7 +10,6 @@ use crate::syntax::type_name::FieldName;
 use crate::tir::expression_facts::NominalObservation;
 
 use super::context::Infer;
-use super::nat_forms::hir_nat_to_linear_form;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum TypeNominalUse<'a> {
@@ -184,10 +183,8 @@ impl Infer<'_> {
         let actual = match index {
             IndexRef::Concrete(index) => IndexTypeRef::from_resolved(index.value.clone()),
             IndexRef::Finite(cardinality) => {
-                let Ok(form) = hir_nat_to_linear_form(cardinality) else {
-                    return Ok(());
-                };
-                let Ok(index) = IndexTypeRef::from_finite_index_form(form) else {
+                let Ok(index) = IndexTypeRef::from_finite_index_form(cardinality.value.clone())
+                else {
                     return Ok(());
                 };
                 index

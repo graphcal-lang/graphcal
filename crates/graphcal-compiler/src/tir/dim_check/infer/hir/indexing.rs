@@ -15,7 +15,7 @@ use crate::tir::dim_check::InferredType;
 use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
 
 use super::context::Infer;
-use super::nat_forms::{finite_index_error, resolve_hir_nat_form};
+use super::nat_forms::finite_index_error;
 use super::operators::try_const_int;
 use super::override_deps::IndexNominalUse;
 
@@ -52,7 +52,7 @@ impl Infer<'_> {
                 (identity, finite_form)
             }
             ForBindingIndex::Finite { cardinality, span } => {
-                let form = resolve_hir_nat_form(cardinality, self.env.src)?;
+                let form = cardinality.value.clone();
                 let identity = IndexTypeRef::from_finite_index_form(form.clone())
                     .map_err(|err| finite_index_error(err, self.env.src, *span))?;
                 (identity, Some(form))
@@ -209,7 +209,7 @@ impl Infer<'_> {
                     InferredType::Key(index_identity)
                 }
                 ForBindingIndex::Finite { cardinality, span } => {
-                    let form = resolve_hir_nat_form(cardinality, self.env.src)?;
+                    let form = cardinality.value.clone();
                     InferredType::Key(
                         IndexTypeRef::from_finite_index_form(form)
                             .map_err(|err| finite_index_error(err, self.env.src, *span))?,
@@ -223,7 +223,7 @@ impl Infer<'_> {
             let index = match &binding.index {
                 ForBindingIndex::Named(index) => IndexTypeRef::from_resolved(index.value.clone()),
                 ForBindingIndex::Finite { cardinality, span } => {
-                    let form = resolve_hir_nat_form(cardinality, self.env.src)?;
+                    let form = cardinality.value.clone();
                     IndexTypeRef::from_finite_index_form(form)
                         .map_err(|err| finite_index_error(err, self.env.src, *span))?
                 }

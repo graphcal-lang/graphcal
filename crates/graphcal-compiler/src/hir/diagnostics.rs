@@ -444,6 +444,7 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
+        | hir::HirLowerError::NatOverflow { span, .. }
         | hir::HirLowerError::WrongGenericArgCount { span, .. }
         | hir::HirLowerError::GenericArgumentSortMismatch { span, .. }
         | hir::HirLowerError::ExpectedTimeScale { span }

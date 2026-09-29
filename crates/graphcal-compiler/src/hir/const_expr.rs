@@ -448,18 +448,15 @@ impl CoordinateExpr {
 
 /// Evaluate a static natural-number expression.
 ///
-/// Generic parameters have no value here: a static count must be closed.
+/// A static count is closed: lowering (`lower_static_nat_expr`) already
+/// rejected every name.
 ///
 /// # Errors
 ///
-/// Returns a [`ConstExprError`] for a generic parameter or `u64` overflow.
+/// Returns a [`ConstExprError`] on `u64` overflow.
 pub fn evaluate_static_nat(expr: &NatExpr) -> Result<u64, ConstExprError> {
     match expr {
         NatExpr::Literal(value, _) => Ok(*value),
-        NatExpr::Param(param) => Err(ConstExprError::NonConstantNat {
-            name: param.value.name.clone(),
-            span: param.span,
-        }),
         NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
             sum.checked_add(evaluate_static_nat(operand)?)
                 .ok_or(ConstExprError::NatAdditionOverflow { span: *span })

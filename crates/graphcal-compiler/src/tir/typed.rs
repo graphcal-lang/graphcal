@@ -12,12 +12,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::generic_param::GenericParamId;
 use crate::hir;
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
 use crate::ir::lower::HirDag;
@@ -844,7 +844,7 @@ impl PublicSignatureDependency {
 fn collect_public_signature_generic_arg_dependencies(
     arg: &hir::GenericArg,
     defs: &ResolvedTypeDefs,
-    visited_defaults: &mut std::collections::HashSet<(ResolvedStructTypeName, GenericParamName)>,
+    visited_defaults: &mut std::collections::HashSet<GenericParamId>,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
     match arg {
@@ -895,7 +895,7 @@ fn collect_public_signature_index_dependencies(
 fn collect_public_signature_type_dependencies(
     value_type: &hir::ValueType,
     defs: &ResolvedTypeDefs,
-    visited_defaults: &mut std::collections::HashSet<(ResolvedStructTypeName, GenericParamName)>,
+    visited_defaults: &mut std::collections::HashSet<GenericParamId>,
     dependencies: &mut Vec<PublicSignatureDependency>,
 ) {
     match &value_type.kind {
@@ -933,7 +933,7 @@ fn collect_public_signature_type_dependencies(
             }
             if let Some(type_def) = defs.struct_types.get(&name.value) {
                 for param in type_def.generic_params().iter().skip(generic_args.len()) {
-                    let key = (name.value.clone(), param.name().clone());
+                    let key = param.id().clone();
                     if !visited_defaults.insert(key) {
                         continue;
                     }
@@ -985,7 +985,7 @@ fn validate_public_generic_defaults(
             let Some(default) = param.default() else {
                 continue;
             };
-            let key = (type_name.clone(), param.name().clone());
+            let key = param.id().clone();
             let mut dependencies = Vec::new();
             let mut visited_defaults = std::collections::HashSet::from([key]);
             collect_public_signature_generic_arg_dependencies(
@@ -1119,10 +1119,8 @@ fn record_resolved_struct_type_def(
             if let ResolvedGenericArg::Type(type_expr) = &resolved {
                 collect_struct_type_defs_from_resolved_type(type_expr, ctx, defs)?;
             }
-            defs.generic_defaults.insert(
-                (name.clone(), param.name().clone()),
-                ResolvedGenericDefault { resolved },
-            );
+            defs.generic_defaults
+                .insert(param.id().clone(), ResolvedGenericDefault { resolved });
         }
     }
 

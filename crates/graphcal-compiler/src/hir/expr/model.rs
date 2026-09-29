@@ -19,7 +19,8 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 
-use crate::hir::types::{GenericArg, NatExpr};
+use crate::hir::types::GenericArg;
+use crate::nat::NatPolyForm;
 
 #[cfg(doc)]
 use super::completeness::Draft;
@@ -543,7 +544,10 @@ pub struct ForBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForBindingIndex {
     Named(Spanned<ResolvedIndexName>),
-    Finite { cardinality: NatExpr, span: Span },
+    Finite {
+        cardinality: Spanned<NatPolyForm>,
+        span: Span,
+    },
 }
 
 /// A resolved index-access argument.

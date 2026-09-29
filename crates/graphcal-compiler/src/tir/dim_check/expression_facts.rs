@@ -23,8 +23,6 @@ mod tests;
 enum BoundNatError {
     #[error(transparent)]
     Overflow(#[from] crate::nat::NatOverflowError),
-    #[error("Nat variable `{0}` has no retained lexical owner")]
-    MissingScope(crate::syntax::type_name::GenericParamName),
     #[error("required Nat binding is missing: {0:?}")]
     MissingBinding(crate::hir::types::GenericParamId),
 }
@@ -49,19 +47,17 @@ pub fn specialize_bound_expression_facts(
         .map_err(|error| diagnostic(error.to_string()))?;
     let mut ids = Vec::new();
     visit_expr(root, &mut |expr| ids.push(expr.id().clone()));
-    let no_parameters = HashMap::new();
     let records = ids
         .into_iter()
         .map(|id| {
             let record = facts
                 .get(&id)
                 .map_err(|error| diagnostic(error.to_string()))?;
-            let scope = record.nat_parameters.as_deref().unwrap_or(&no_parameters);
             let record = specialize_record(
                 record,
                 dag,
                 tir,
-                &FactSubstitution::Nat { scope, bindings },
+                &FactSubstitution::Nat(bindings),
                 src,
                 root.span,
                 &record.environment,
@@ -94,13 +90,9 @@ pub fn specialize_bound_expression_facts(
 
 fn evaluate_bound_nat(
     form: &crate::nat::NatPolyForm,
-    scope: &HashMap<crate::syntax::type_name::GenericParamName, crate::hir::types::GenericParamId>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
 ) -> Result<u64, BoundNatError> {
-    form.evaluate_with(|name| {
-        let id = scope
-            .get(name)
-            .ok_or_else(|| BoundNatError::MissingScope(name.clone()))?;
+    form.evaluate_with(|id| {
         bindings
             .get(id)
             .copied()
@@ -110,14 +102,13 @@ fn evaluate_bound_nat(
 
 fn bind_index_nats(
     index: &crate::registry::declared_type::IndexTypeRef,
-    scope: &HashMap<crate::syntax::type_name::GenericParamName, crate::hir::types::GenericParamId>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
 ) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
     match index.finite_index_form() {
         Some(form) => {
-            let cardinality = evaluate_bound_nat(&form, scope, bindings).map_err(|error| {
+            let cardinality = evaluate_bound_nat(&form, bindings).map_err(|error| {
                 GraphcalError::internal_error(
                     error.to_string(),
                     src,
@@ -139,19 +130,18 @@ fn bind_index_nats(
 
 fn bind_type_nats(
     ty: &DeclaredType,
-    scope: &HashMap<crate::syntax::type_name::GenericParamName, crate::hir::types::GenericParamId>,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
 ) -> Result<DeclaredType, GraphcalError> {
     use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
     let evaluate = |form: &crate::nat::NatPolyForm| {
-        evaluate_bound_nat(form, scope, bindings).map_err(|error: BoundNatError| {
+        evaluate_bound_nat(form, bindings).map_err(|error: BoundNatError| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
         })
     };
-    let bind_index = |index: &IndexTypeRef| bind_index_nats(index, scope, bindings, src, span);
-    let recurse = |ty: &DeclaredType| bind_type_nats(ty, scope, bindings, src, span);
+    let bind_index = |index: &IndexTypeRef| bind_index_nats(index, bindings, src, span);
+    let recurse = |ty: &DeclaredType| bind_type_nats(ty, bindings, src, span);
     Ok(match ty {
         DeclaredType::Key(index) => DeclaredType::Key(bind_index(index)?),
         DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
@@ -331,13 +321,7 @@ fn check_instance_defaults(
 
 enum FactSubstitution<'a> {
     Static(&'a crate::ir::static_substitution::StaticSubstitution),
-    Nat {
-        scope: &'a HashMap<
-            crate::syntax::type_name::GenericParamName,
-            crate::hir::types::GenericParamId,
-        >,
-        bindings: &'a HashMap<crate::hir::types::GenericParamId, u64>,
-    },
+    Nat(&'a HashMap<crate::hir::types::GenericParamId, u64>),
 }
 
 impl FactSubstitution<'_> {
@@ -350,7 +334,7 @@ impl FactSubstitution<'_> {
     ) -> Result<DeclaredType, GraphcalError> {
         match self {
             Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
-            Self::Nat { scope, bindings } => bind_type_nats(ty, scope, bindings, src, span),
+            Self::Nat(bindings) => bind_type_nats(ty, bindings, src, span),
         }
     }
 
@@ -362,7 +346,7 @@ impl FactSubstitution<'_> {
     ) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
         match self {
             Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
-            Self::Nat { scope, bindings } => bind_index_nats(index, scope, bindings, src, span),
+            Self::Nat(bindings) => bind_index_nats(index, bindings, src, span),
         }
     }
 }
@@ -449,7 +433,6 @@ fn specialize_record(
         children: record.children.clone(),
         unit_dependencies: record.unit_dependencies.clone(),
         nominal_observations: record.nominal_observations.clone(),
-        nat_parameters: record.nat_parameters.clone(),
     }))
 }
 

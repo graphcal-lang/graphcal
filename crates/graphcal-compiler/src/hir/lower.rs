@@ -31,8 +31,9 @@ use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
     BuiltinType, DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamId, IndexRef, NatExpr, ValueType, ValueTypeKind,
+    GenericParamId, IndexRef, ValueType, ValueTypeKind,
 };
+use crate::nat::{NatOverflowError, NatPolyForm};
 
 /// Render accepted generic constraints as `A or B` at the diagnostic boundary.
 fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
@@ -91,6 +92,13 @@ pub enum HirLowerError {
     /// A Nat was supplied where an explicit Index is required.
     #[error("expected Index, found Nat `{expression}`; write `Fin({expression})`")]
     ExpectedIndexFoundNat { expression: String, span: Span },
+    /// A type-level natural-number expression's normalized form overflowed.
+    #[error("{source}")]
+    NatOverflow {
+        #[source]
+        source: NatOverflowError,
+        span: Span,
+    },
     /// A natural-number expression referenced a name that is not a generic parameter.
     #[error("unknown generic parameter `{name}`")]
     UnknownGenericParam { name: GenericParamName, span: Span },
@@ -1106,18 +1114,36 @@ fn lower_index_expr_name(
         })
 }
 
-/// Lower a syntax type-level natural-number expression into HIR.
+/// Lower a syntax type-level natural-number expression into its normalized
+/// HIR form.
+///
+/// Normalization happens here, at the AST-to-HIR boundary, so every later
+/// phase consumes one canonical [`NatPolyForm`] whose variables are
+/// owner-qualified [`GenericParamId`]s.
 ///
 /// # Errors
 ///
 /// Returns [`HirLowerError`] if the expression references an unknown generic
-/// parameter or a generic parameter whose constraint is not `Nat`.
+/// parameter, a generic parameter whose constraint is not `Nat`, or if its
+/// normalized coefficients overflow.
 pub(crate) fn lower_nat_expr(
     nat_expr: &ast::NatExpr,
     ctx: ModuleScope<'_>,
-) -> Result<NatExpr, HirLowerError> {
+) -> Result<Spanned<NatPolyForm>, HirLowerError> {
+    let span = nat_expr.span();
+    normalize_nat_expr(nat_expr, ctx)?
+        .map(|form| Spanned::new(form, span))
+        .map_err(|source| HirLowerError::NatOverflow { source, span })
+}
+
+/// Normalize one Nat expression. Name errors are reported before overflow,
+/// in source order; overflow is reported once for the whole expression.
+fn normalize_nat_expr(
+    nat_expr: &ast::NatExpr,
+    ctx: ModuleScope<'_>,
+) -> Result<Result<NatPolyForm, NatOverflowError>, HirLowerError> {
     match nat_expr {
-        ast::NatExpr::Literal(value, span) => Ok(NatExpr::Literal(*value, *span)),
+        ast::NatExpr::Literal(value, _) => Ok(Ok(NatPolyForm::from_constant(*value))),
         ast::NatExpr::Var(ident) => {
             let name = ident.as_generic_param_name();
             let binding =
@@ -1135,16 +1161,30 @@ pub(crate) fn lower_nat_expr(
                     span: ident.span,
                 });
             }
-            Ok(NatExpr::Param(binding.spanned_id(ident.span)))
+            Ok(Ok(NatPolyForm::from_var(binding.id.clone())))
         }
-        ast::NatExpr::Add(operands, span) => Ok(NatExpr::Add(
-            operands.try_map_ref(|operand| lower_nat_expr(operand, ctx))?,
-            *span,
-        )),
-        ast::NatExpr::Mul(operands, span) => Ok(NatExpr::Mul(
-            operands.try_map_ref(|operand| lower_nat_expr(operand, ctx))?,
-            *span,
-        )),
+        ast::NatExpr::Add(operands, _) => {
+            let operands = operands
+                .iter()
+                .map(|operand| normalize_nat_expr(operand, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(operands
+                .into_iter()
+                .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
+                    sum.add(&operand?)
+                }))
+        }
+        ast::NatExpr::Mul(operands, _) => {
+            let operands = operands
+                .iter()
+                .map(|operand| normalize_nat_expr(operand, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(operands
+                .into_iter()
+                .try_fold(NatPolyForm::from_constant(1), |product, operand| {
+                    product.mul(&operand?)
+                }))
+        }
     }
 }
 
@@ -1371,19 +1411,127 @@ mod tests {
 
         let [
             IndexRef::GenericParam(index_param),
-            IndexRef::Finite(NatExpr::Param(nat_param)),
+            IndexRef::Finite(cardinality),
         ] = indexes.as_slice()
         else {
             panic!("expected generic index and Fin(N), got {indexes:?}");
         };
         assert_eq!(index_param.value.name.as_str(), "I");
-        assert_eq!(nat_param.value.name.as_str(), "N");
+        // The cardinality is normalized during lowering and names the
+        // owner-qualified `N` of the same generic scope as `I`.
+        assert_eq!(
+            cardinality.value,
+            NatPolyForm::from_var(GenericParamId::new(
+                index_param.value.owner().clone(),
+                GenericParamName::expect_valid("N"),
+            ))
+        );
     }
 
     const INDEX_PRELUDE: &str = "base dim Length; index M = { A, B }; index J = { X, Y }; \
          type Box<F: Type> { Box(value: Dimensionless) } \
          type Vec<D: Dim> { Vec(x: D) } \
          type Axis<I: Index> { Axis(v: Dimensionless[I]) }";
+
+    /// Lower every payload field type of `type Grid<N: Nat, M: Nat, D: Dim>`.
+    fn lower_grid_fields(
+        fields: &str,
+    ) -> (GenericParamOwner, Vec<Result<DeclType, HirLowerError>>) {
+        let owner_id = DagId::root_in_package("test", "main");
+        let file = desugared_source(&format!(
+            "type Grid<N: Nat, M: Nat, D: Dim> {{ Grid({fields}) }}"
+        ));
+        let mut modules = crate::resolve::builder::TestModules::default();
+        modules.add(owner_id.clone(), &file.declarations);
+        let resolver = modules.build().unwrap();
+        let type_decl = first_type_decl(&file);
+        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+            owner_id.clone(),
+            StructTypeName::expect_valid("Grid"),
+        ));
+        let mut scope = GenericScope::new();
+        for param in &type_decl.generic_params {
+            scope
+                .insert_binding(GenericParamBinding::new(
+                    GenericParamId::new(type_owner.clone(), param.name.value.clone()),
+                    param.constraint,
+                    param.name.span,
+                ))
+                .unwrap();
+        }
+        let ast::TypeDeclBody::Constructors(members) = &type_decl.body else {
+            panic!("expected constructor body");
+        };
+        let lowered = members[0]
+            .payload
+            .as_ref()
+            .expect("Grid constructor should have payload")
+            .iter()
+            .map(|field| {
+                lower_decl_type(
+                    &field.type_ann,
+                    ModuleScope::new(&owner_id, &resolver, &scope),
+                )
+            })
+            .collect();
+        (type_owner, lowered)
+    }
+
+    fn finite_cardinality(lowered: &Result<DeclType, HirLowerError>) -> &Spanned<NatPolyForm> {
+        let Ok(DeclType::Indexed { indexes, .. }) = lowered else {
+            panic!("expected an indexed type, got {lowered:?}");
+        };
+        let [IndexRef::Finite(cardinality)] = indexes.as_slice() else {
+            panic!("expected one finite axis, got {indexes:?}");
+        };
+        cardinality
+    }
+
+    #[test]
+    fn nat_expressions_are_normalized_during_lowering() {
+        let (owner, lowered) =
+            lower_grid_fields("a: Dimensionless[Fin(N * M + N + N)], b: Dimensionless[Fin(2 + 3)]");
+        let n = NatPolyForm::from_var(GenericParamId::new(
+            owner.clone(),
+            GenericParamName::expect_valid("N"),
+        ));
+        let m = NatPolyForm::from_var(GenericParamId::new(
+            owner,
+            GenericParamName::expect_valid("M"),
+        ));
+        // N * M + N + N = M * N + 2 * N
+        let expected = n
+            .mul(&m)
+            .and_then(|mn| mn.add(&n))
+            .and_then(|sum| sum.add(&n))
+            .unwrap();
+        assert_eq!(finite_cardinality(&lowered[0]).value, expected);
+        assert_eq!(
+            finite_cardinality(&lowered[1]).value,
+            NatPolyForm::from_constant(5)
+        );
+    }
+
+    #[test]
+    fn nat_lowering_reports_names_before_overflow() {
+        let (_, lowered) = lower_grid_fields(
+            "a: Dimensionless[Fin(18446744073709551615 + 1)], \
+             b: Dimensionless[Fin(18446744073709551615 + 1 + K)], \
+             c: Dimensionless[Fin(D + 1)]",
+        );
+        let Err(HirLowerError::NatOverflow { span, .. }) = &lowered[0] else {
+            panic!("expected Nat overflow, got {:?}", lowered[0]);
+        };
+        assert!(span.len() > 1, "overflow blames the whole expression");
+        assert!(matches!(
+            &lowered[1],
+            Err(HirLowerError::UnknownGenericParam { name, .. }) if name.as_str() == "K"
+        ));
+        assert!(matches!(
+            &lowered[2],
+            Err(HirLowerError::GenericConstraintMismatch { name, .. }) if name.as_str() == "D"
+        ));
+    }
 
     fn lower_param_type(param_type: &str) -> Result<DeclType, HirLowerError> {
         let owner_id = DagId::root_in_package("test", "main");
@@ -1521,26 +1669,18 @@ mod tests {
             StructTypeName::expect_valid("T"),
         ));
         let span = Span::new(0, 1);
-        let param = |name: &str| {
-            NatExpr::Param(Spanned::new(
-                GenericParamId::new(owner.clone(), GenericParamName::expect_valid(name)),
-                span,
-            ))
-        };
-        let sum = NatExpr::Add(
-            crate::syntax::non_empty::AtLeastTwo::new(
-                NatExpr::Mul(
-                    crate::syntax::non_empty::AtLeastTwo::new(
-                        NatExpr::Literal(2, span),
-                        param("N"),
-                    ),
-                    span,
-                ),
-                NatExpr::Literal(1, span),
-            ),
-            span,
+        let n = NatPolyForm::from_var(GenericParamId::new(
+            owner.clone(),
+            GenericParamName::expect_valid("N"),
+        ));
+        let sum = NatPolyForm::from_constant(2)
+            .mul(&n)
+            .and_then(|doubled| doubled.add(&NatPolyForm::from_constant(1)))
+            .unwrap();
+        assert_eq!(
+            IndexRef::Finite(Spanned::new(sum, span)).to_string(),
+            "Fin(2 * N + 1)"
         );
-        assert_eq!(IndexRef::Finite(sum).to_string(), "Fin(2 * N + 1)");
         assert_eq!(
             IndexRef::GenericParam(Spanned::new(
                 GenericParamId::new(owner, GenericParamName::expect_valid("I")),

@@ -1565,15 +1565,7 @@ pub(in crate::project_compiler) fn extract_index_binding_target(
             .map(|name| IndexBindingTarget::Declared(IndexName::classify(name.clone())))
             .ok_or_else(invalid_binding),
         IndexExpr::Finite { cardinality, .. } => {
-            let normalized =
-                graphcal_compiler::tir::typed::normalize_nat_expr(&cardinality, &[], file_src)?;
-            let cardinality = normalized.constant_value().ok_or_else(|| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: "Fin cardinality in an index binding must be concrete".to_string(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            })?;
+            let cardinality = closed_binding_cardinality(&cardinality, file_src)?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
                 CompileError::Eval(GraphcalError::EvalError {
                     message: error.describe_finite_index(),
@@ -1584,6 +1576,39 @@ pub(in crate::project_compiler) fn extract_index_binding_target(
             Ok(IndexBindingTarget::Finite(finite))
         }
         IndexExpr::BareNat(_) => Err(invalid_binding()),
+    }
+}
+
+/// Evaluate the cardinality of an importer-side `Fin(...)` binding value.
+///
+/// An include binding has no generic scope, so a name here is an unknown
+/// index and the expression must be closed.
+fn closed_binding_cardinality(
+    expr: &graphcal_compiler::desugar::desugared_ast::NatExpr,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<u64, GraphcalError> {
+    use graphcal_compiler::desugar::desugared_ast::NatExpr;
+    let overflow = |span: graphcal_compiler::syntax::span::Span| GraphcalError::EvalError {
+        message: graphcal_compiler::nat::NatOverflowError.to_string(),
+        src: file_src.clone(),
+        span: span.into(),
+    };
+    match expr {
+        NatExpr::Literal(value, _) => Ok(*value),
+        NatExpr::Var(ident) => Err(GraphcalError::UnknownIndex {
+            name: IndexName::classify(ident.name.atom().clone()).into(),
+            src: file_src.clone(),
+            span: ident.span.into(),
+        }),
+        NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
+            sum.checked_add(closed_binding_cardinality(operand, file_src)?)
+                .ok_or_else(|| overflow(*span))
+        }),
+        NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
+            product
+                .checked_mul(closed_binding_cardinality(operand, file_src)?)
+                .ok_or_else(|| overflow(*span))
+        }),
     }
 }
 

@@ -298,7 +298,10 @@ fn static_membership_proof_cannot_be_deleted_misowned_or_invalid() {
         ExprKind::KeyForm {
             kind: crate::syntax::ast::KeyFormKind::Static,
             axis: crate::hir::expr::ForBindingIndex::Finite {
-                cardinality: crate::hir::types::NatExpr::Literal(2, span),
+                cardinality: crate::syntax::span::Spanned::new(
+                    crate::nat::NatPolyForm::from_constant(2),
+                    span,
+                ),
                 span,
             },
             axis_span: span,

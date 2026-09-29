@@ -1,12 +1,13 @@
 use super::*;
 use crate::dimension::{BaseDimId, Dimension, Rational};
+use crate::generic_param::test_support::type_param;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::FormattingRegistry;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::parser::Parser;
-use crate::syntax::type_name::StructTypeName;
+use crate::syntax::type_name::{GenericParamName, StructTypeName};
 
 fn make_registry() -> FormattingRegistry {
     FormattingRegistry::graphcal_prelude().unwrap()
@@ -131,8 +132,7 @@ fn decl_type_rejects_identities_owned_by_unknown_dags() {
 #[test]
 fn checked_decl_type_requires_a_concrete_type() {
     let src = NamedSource::new("test.gcl", Arc::new(String::new()));
-    let generic =
-        ResolvedTypeExpr::GenericTypeParam(GenericParamName::expect_valid("T"), Span::new(0, 0));
+    let generic = ResolvedTypeExpr::GenericTypeParam(type_param("T"), Span::new(0, 0));
     assert!(CheckedDeclType::new(generic, &src).is_err());
     let checked = CheckedDeclType::new(ResolvedTypeExpr::Int, &src).unwrap();
     assert_eq!(checked.declared(), &DeclaredType::Int);
@@ -229,7 +229,9 @@ fn resolve_struct_type() {
 fn resolve_generic_dim_param() {
     let dim_params = vec![GenericParamName::expect_valid("D")];
     let resolved = resolve_source_type("D", &dim_params, &[], &[]).unwrap();
-    assert!(matches!(resolved, ResolvedTypeExpr::GenericDimParam(name, _) if name.as_str() == "D"));
+    assert!(
+        matches!(resolved, ResolvedTypeExpr::GenericDimParam(name, _) if name.name.as_str() == "D")
+    );
 }
 
 #[test]
@@ -241,7 +243,7 @@ fn resolve_generic_dim_expr_with_power() {
             assert_eq!(terms.len(), 1);
             match &terms[0] {
                 ResolvedDimTerm::GenericParam { name, power, .. } => {
-                    assert_eq!(name.as_str(), "D");
+                    assert_eq!(name.name.as_str(), "D");
                     assert_eq!(*power, Rational::from(2));
                 }
                 ResolvedDimTerm::Concrete { .. } => panic!("expected GenericParam term"),
@@ -259,7 +261,7 @@ fn resolve_mixed_generic_concrete() {
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
             assert_eq!(terms.len(), 2);
             assert!(
-                matches!(&terms[0], ResolvedDimTerm::GenericParam { name, .. } if name.as_str() == "D")
+                matches!(&terms[0], ResolvedDimTerm::GenericParam { name, .. } if name.name.as_str() == "D")
             );
             assert!(matches!(&terms[1], ResolvedDimTerm::Concrete { .. }));
         }
@@ -299,11 +301,11 @@ fn resolve_generic_indexed() {
     match resolved {
         ResolvedTypeExpr::Indexed { base, indexes } => {
             assert!(
-                matches!(*base, ResolvedTypeExpr::GenericDimParam(ref name, _) if name.as_str() == "D")
+                matches!(*base, ResolvedTypeExpr::GenericDimParam(ref name, _) if name.name.as_str() == "D")
             );
             assert_eq!(indexes.len(), 1);
             assert!(
-                matches!(&indexes[0], ResolvedIndex::GenericParam(name, _) if name.as_str() == "I")
+                matches!(&indexes[0], ResolvedIndex::GenericParam(name, _) if name.name.as_str() == "I")
             );
         }
         _ => panic!("expected Indexed"),
@@ -1022,7 +1024,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
     let registry = make_registry();
     let owner = crate::dag_id::DagId::root_in_package("test", "a");
     let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase"));
-    let generic = GenericParamName::expect_valid("I");
+    let generic = type_param("I");
     let resolved_type = ResolvedTypeExpr::Indexed {
         base: Box::new(ResolvedTypeExpr::Dimensionless),
         indexes: vec![ResolvedIndex::GenericParam(
@@ -1136,7 +1138,7 @@ fn convert_indexed() {
 #[test]
 fn convert_generic_dim_param_fails() {
     let err = resolved_to_declared_type(
-        &ResolvedTypeExpr::GenericDimParam(GenericParamName::expect_valid("D"), Span::new(0, 0)),
+        &ResolvedTypeExpr::GenericDimParam(type_param("D"), Span::new(0, 0)),
         &make_src(),
     )
     .unwrap_err();
@@ -1149,7 +1151,7 @@ fn convert_generic_index_fails() {
         &ResolvedTypeExpr::Indexed {
             base: Box::new(ResolvedTypeExpr::Dimensionless),
             indexes: vec![ResolvedIndex::GenericParam(
-                GenericParamName::expect_valid("I"),
+                type_param("I"),
                 Span::new(0, 0),
             )],
         },
@@ -1239,16 +1241,16 @@ fn nat_leq_constant_greater() {
 #[test]
 fn nat_leq_same_var() {
     // N <= N
-    let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
-    let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let a = NatPolyForm::from_var(type_param("N"));
+    let b = NatPolyForm::from_var(type_param("N"));
     assert!(a.is_leq(&b));
 }
 
 #[test]
 fn nat_leq_var_plus_constant() {
     // N <= N + 1
-    let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
-    let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+    let a = NatPolyForm::from_var(type_param("N"));
+    let b = NatPolyForm::from_var(type_param("N"))
         .add(&NatPolyForm::from_constant(1))
         .unwrap();
     assert!(a.is_leq(&b));
@@ -1257,18 +1259,18 @@ fn nat_leq_var_plus_constant() {
 #[test]
 fn nat_leq_var_plus_constant_reverse() {
     // N + 1 <= N → false
-    let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+    let a = NatPolyForm::from_var(type_param("N"))
         .add(&NatPolyForm::from_constant(1))
         .unwrap();
-    let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let b = NatPolyForm::from_var(type_param("N"));
     assert!(!a.is_leq(&b));
 }
 
 #[test]
 fn nat_leq_different_vars() {
     // N <= M → false (N could be larger)
-    let a = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
-    let b = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
+    let a = NatPolyForm::from_var(type_param("N"));
+    let b = NatPolyForm::from_var(type_param("M"));
     assert!(!a.is_leq(&b));
 }
 
@@ -1276,7 +1278,7 @@ fn nat_leq_different_vars() {
 fn nat_leq_zero_leq_anything() {
     // 0 <= N
     let a = NatPolyForm::from_constant(0);
-    let b = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let b = NatPolyForm::from_var(type_param("N"));
     assert!(a.is_leq(&b));
 }
 
@@ -1303,7 +1305,7 @@ fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::err
 fn finite_index_symbolic_form_to_display_only_index_type_ref()
 -> Result<(), Box<dyn std::error::Error>> {
     let reference = crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
-        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+        NatPolyForm::from_var(type_param("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap(),
     )?;
@@ -1324,9 +1326,9 @@ fn resolved_index_display_renders_source_spelling() {
         ),
         span,
     );
-    let generic = ResolvedIndex::GenericParam(GenericParamName::expect_valid("I"), span);
+    let generic = ResolvedIndex::GenericParam(type_param("I"), span);
     let finite = ResolvedIndex::Finite(
-        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+        NatPolyForm::from_var(type_param("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap(),
         span,
@@ -1358,49 +1360,49 @@ fn nat_mul_constants() {
 #[test]
 fn nat_mul_var_by_constant() {
     // N * 3
-    let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let n = NatPolyForm::from_var(type_param("N"));
     let three = NatPolyForm::from_constant(3);
     let result = n.mul(&three).unwrap();
     // Should format as "3 * N"
     assert_eq!(result.format(), "3 * N");
     // Evaluate with N=5 → 15
     let mut bindings = HashMap::new();
-    bindings.insert(GenericParamName::expect_valid("N"), 5);
+    bindings.insert(type_param("N"), 5);
     assert_eq!(result.evaluate(&bindings), Some(15));
 }
 
 #[test]
 fn nat_mul_two_vars() {
     // M * N
-    let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
-    let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let m = NatPolyForm::from_var(type_param("M"));
+    let n = NatPolyForm::from_var(type_param("N"));
     let result = m.mul(&n).unwrap();
     assert_eq!(result.format(), "M * N");
     let mut bindings = HashMap::new();
-    bindings.insert(GenericParamName::expect_valid("M"), 3);
-    bindings.insert(GenericParamName::expect_valid("N"), 4);
+    bindings.insert(type_param("M"), 3);
+    bindings.insert(type_param("N"), 4);
     assert_eq!(result.evaluate(&bindings), Some(12));
 }
 
 #[test]
 fn nat_mul_distributive() {
     // (M + 1) * N = M * N + N
-    let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
-    let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let m = NatPolyForm::from_var(type_param("M"));
+    let n = NatPolyForm::from_var(type_param("N"));
     let m_plus_1 = m.add(&NatPolyForm::from_constant(1)).unwrap();
     let result = m_plus_1.mul(&n).unwrap();
     // Evaluate with M=2, N=3 → (2+1)*3 = 9
     let mut bindings = HashMap::new();
-    bindings.insert(GenericParamName::expect_valid("M"), 2);
-    bindings.insert(GenericParamName::expect_valid("N"), 3);
+    bindings.insert(type_param("M"), 2);
+    bindings.insert(type_param("N"), 3);
     assert_eq!(result.evaluate(&bindings), Some(9));
 }
 
 #[test]
 fn nat_mul_mixed_add() {
     // M * N + 1
-    let m = NatPolyForm::from_var(GenericParamName::expect_valid("M"));
-    let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let m = NatPolyForm::from_var(type_param("M"));
+    let n = NatPolyForm::from_var(type_param("N"));
     let result = m
         .mul(&n)
         .unwrap()
@@ -1408,8 +1410,8 @@ fn nat_mul_mixed_add() {
         .unwrap();
     assert_eq!(result.format(), "M * N + 1");
     let mut bindings = HashMap::new();
-    bindings.insert(GenericParamName::expect_valid("M"), 2);
-    bindings.insert(GenericParamName::expect_valid("N"), 3);
+    bindings.insert(type_param("M"), 2);
+    bindings.insert(type_param("N"), 3);
     assert_eq!(result.evaluate(&bindings), Some(7));
 }
 
@@ -1418,11 +1420,11 @@ fn nat_poly_is_constant() {
     let c = NatPolyForm::from_constant(5);
     assert!(c.is_constant());
 
-    let n = NatPolyForm::from_var(GenericParamName::expect_valid("N"));
+    let n = NatPolyForm::from_var(type_param("N"));
     assert!(!n.is_constant());
 
-    let mn = NatPolyForm::from_var(GenericParamName::expect_valid("M"))
-        .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
+    let mn = NatPolyForm::from_var(type_param("M"))
+        .mul(&NatPolyForm::from_var(type_param("N")))
         .unwrap();
     assert!(!mn.is_constant());
 }
@@ -1430,8 +1432,8 @@ fn nat_poly_is_constant() {
 #[test]
 fn nat_poly_leq_with_mul() {
     // M * N <= M * N + 1
-    let mn = NatPolyForm::from_var(GenericParamName::expect_valid("M"))
-        .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
+    let mn = NatPolyForm::from_var(type_param("M"))
+        .mul(&NatPolyForm::from_var(type_param("N")))
         .unwrap();
     let mn_plus_1 = mn.add(&NatPolyForm::from_constant(1)).unwrap();
     assert!(mn.is_leq(&mn_plus_1));
@@ -1462,10 +1464,10 @@ fn nat_unify_substituted_term_overflow_errors() {
     // release wraparound). `2 * N` with N bound near u64::MAX must report
     // a mismatch instead.
     let form = NatPolyForm::from_constant(2)
-        .mul(&NatPolyForm::from_var(GenericParamName::expect_valid("N")))
+        .mul(&NatPolyForm::from_var(type_param("N")))
         .unwrap();
     let mut nat_sub = HashMap::new();
-    nat_sub.insert(GenericParamName::expect_valid("N"), u64::MAX / 2 + 1);
+    nat_sub.insert(type_param("N"), u64::MAX / 2 + 1);
     let src = NamedSource::new("<test>", Arc::new(String::new()));
     let result = unify_nat_poly_form(
         &form,
