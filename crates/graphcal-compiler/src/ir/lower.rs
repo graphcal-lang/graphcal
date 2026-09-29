@@ -20,7 +20,6 @@ use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::resolve_types::ParsedExpectedFail;
-use crate::registry::type_def::TypeRegistry;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimRef, UnitName, UnitRef};
@@ -32,13 +31,9 @@ use super::entry::{self, BodyPhase, Syntax};
 #[cfg(test)]
 use super::extern_fns::resolve_extern_struct_return;
 pub use super::extern_fns::{ExternFunctionEntry, ExternStructResult};
-pub use super::include::{
-    IncludeOverrideReconciliations, SemanticInstanceInput, specialize_type_definition,
-    substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
-};
+pub use super::include::{IncludeOverrideReconciliations, SemanticInstanceInput};
 use super::module_definitions::{ModuleDefinitions, StaticDefinitions};
-use super::registry_build::register_file_types;
-pub use super::registry_build::register_selected_types;
+
 use super::static_definitions::StaticDefinitionEvaluator;
 
 // ---------------------------------------------------------------------------
@@ -383,16 +378,15 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
         )],
         src,
     )?;
-    let (types, unresolved) = lower_to_types_with_imported_bindings(
+    let unresolved = lower_module_with_imported_bindings(
         ast,
         src,
         &ImportedValueNames::default(),
         HashMap::new(),
         &dag_id,
-        None,
         &mut definitions,
     )?;
-    unresolved.freeze(&types, &dag_id, &mut definitions, src)
+    unresolved.freeze(&dag_id, &mut definitions, src)
 }
 
 /// Create a definition evaluator over `sources`, reporting a broken prelude
@@ -496,29 +490,27 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
             })),
             src,
         )?;
-        let (types, unresolved) = lower_to_types_with_imported_bindings(
+        let unresolved = lower_module_with_imported_bindings(
             ast,
             src,
             &ImportedValueNames::default(),
             HashMap::new(),
             &dag_id,
-            None,
             &mut definitions,
         )?;
-        let root = unresolved.freeze(&types, &dag_id, &mut definitions, src)?;
+        let root = unresolved.freeze(&dag_id, &mut definitions, src)?;
         let inline_dags = dag_bodies
             .iter()
             .map(|(owner, body)| {
-                let (types, unresolved) = lower_dag_module_to_types_with_imported_bindings(
+                let unresolved = lower_dag_module_with_imported_bindings(
                     body,
                     &ImportedValueNames::default(),
                     HashMap::new(),
                     src,
                     owner,
-                    None,
                     &mut definitions,
                 )?;
-                unresolved.freeze(&types, owner, &mut definitions, src)
+                unresolved.freeze(owner, &mut definitions, src)
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
         (root, inline_dags)
@@ -615,12 +607,8 @@ fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration>
         .collect()
 }
 
-/// Hook that installs imported nominal type definitions into a module's
-/// frontend type table before the module's own types are registered.
-pub type TypeSeed<'a> = &'a mut dyn FnMut(&mut TypeRegistry) -> Result<(), GraphcalError>;
-
-/// Lower an AST with imported value bindings, returning the module's frontend
-/// type table, which include elaboration may still extend before freezing.
+/// Lower an AST with imported value bindings into an [`UnfrozenIR`], which
+/// include elaboration may still extend before freezing.
 ///
 /// Imported lexical names are added to the resolution scope without injecting
 /// parallel AST expressions. Canonical targets remain attached to those names
@@ -633,22 +621,20 @@ pub type TypeSeed<'a> = &'a mut dyn FnMut(&mut TypeRegistry) -> Result<(), Graph
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_types_with_imported_bindings(
+pub fn lower_module_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    type_seed: Option<TypeSeed<'_>>,
     definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
-    lower_to_types_with_imported_bindings_and_cancellation(
+) -> Result<UnfrozenIR, GraphcalError> {
+    lower_module_with_imported_bindings_and_cancellation(
         ast,
         src,
         imported_names,
         imported_bindings,
         dag_id,
-        type_seed,
         definitions,
         &crate::cancellation::CancellationToken::unbounded(),
     )
@@ -663,29 +649,22 @@ pub fn lower_to_types_with_imported_bindings(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "module lowering threads imported bindings, the type seed, definitions, and cancellation"
-)]
-pub fn lower_to_types_with_imported_bindings_and_cancellation(
+pub fn lower_module_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    type_seed: Option<TypeSeed<'_>>,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
+) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
     let resolved = resolve_with_imported_values(ast, src, imported_names, dag_id)?;
-    let (types, mut unfrozen) = build_ir_from_resolved(
+    let mut unfrozen = build_ir_from_resolved(
         ast,
-        src,
         resolved,
         imported_bindings,
         dag_id,
-        type_seed,
         definitions,
         cancellation,
     )?;
@@ -698,7 +677,7 @@ pub fn lower_to_types_with_imported_bindings_and_cancellation(
         .map(|(name, _span)| IncludedPlotEntry { name: name.clone() })
         .collect();
 
-    Ok((types, unfrozen))
+    Ok(unfrozen)
 }
 
 /// Lower a `dag { ... }` body as if it were a standalone file.
@@ -715,22 +694,20 @@ pub fn lower_to_types_with_imported_bindings_and_cancellation(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_dag_module_to_types_with_imported_bindings(
+pub fn lower_dag_module_with_imported_bindings(
     dag_body: &File,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-    type_seed: Option<TypeSeed<'_>>,
     definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
-    lower_dag_module_to_types_with_imported_bindings_and_cancellation(
+) -> Result<UnfrozenIR, GraphcalError> {
+    lower_dag_module_with_imported_bindings_and_cancellation(
         dag_body,
         imported_names,
         imported_bindings,
         src,
         dag_id,
-        type_seed,
         definitions,
         &crate::cancellation::CancellationToken::unbounded(),
     )
@@ -745,30 +722,23 @@ pub fn lower_dag_module_to_types_with_imported_bindings(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "dag-module lowering threads imported bindings, the type seed, definitions, and cancellation"
-)]
-pub fn lower_dag_module_to_types_with_imported_bindings_and_cancellation(
+pub fn lower_dag_module_with_imported_bindings_and_cancellation(
     dag_body: &File,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-    type_seed: Option<TypeSeed<'_>>,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
+) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
     let resolved = resolve_with_imported_values(dag_body, src, imported_names, dag_id)?;
 
     build_ir_from_resolved(
         dag_body,
-        src,
         resolved,
         imported_bindings,
         dag_id,
-        type_seed,
         definitions,
         cancellation,
     )
@@ -784,30 +754,17 @@ pub struct DagBodySelfImports {
 
 /// Shared implementation for local and imported-binding lowering.
 ///
-/// Builds the registry, augments runtime deps for dynamic units, and
-/// constructs the `UnfrozenIR` from the collected declaration entries.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "IR construction threads imported bindings and registry state"
-)]
+/// Evaluates the module's canonical Static definitions and constructs the
+/// `UnfrozenIR` from the collected declaration entries.
 fn build_ir_from_resolved(
     ast: &File,
-    src: &NamedSource<Arc<String>>,
     resolved: CollectedFile,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    type_seed: Option<TypeSeed<'_>>,
     definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
+) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
-    // Imported nominal definitions enter the frontend type table before the
-    // module's own types.
-    let mut types = TypeRegistry::new();
-    if let Some(seed) = type_seed {
-        seed(&mut types)?;
-    }
-    register_file_types(ast, &mut types, src)?;
     // Dimensions, units, and indexes are evaluated canonically through the
     // module resolver; nothing is registered under a source spelling.
     let module_statics = definitions.module_definitions(dag_id)?;
@@ -858,7 +815,7 @@ fn build_ir_from_resolved(
         semantic_instances: Vec::new(),
     };
 
-    Ok((types, unfrozen))
+    Ok(unfrozen)
 }
 
 /// Value declaration metadata needed to create a selective include alias.
@@ -924,10 +881,8 @@ pub struct UnfrozenSemanticInstance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::types;
     use crate::syntax::names::{NameAtom, NamePath};
     use crate::syntax::parser::Parser;
-    use crate::syntax::type_name::ConstructorName;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
@@ -1089,31 +1044,6 @@ mod tests {
     }
 
     #[test]
-    fn checked_union_member_api_rejects_duplicate_fields() {
-        let field = types::StructField::new(
-            crate::syntax::type_name::FieldName::expect_valid("value"),
-            crate::desugar::desugared_ast::TypeExpr {
-                kind: crate::desugar::desugared_ast::TypeExprKind::Dimensionless,
-                constraints: Vec::new(),
-                span: Span::new(0, 0),
-            },
-        );
-        let error = types::UnionMemberDef::try_new(
-            ConstructorName::expect_valid("Pair"),
-            vec![field.clone(), field],
-        )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            types::TypeDefError::DuplicateConstructorField {
-                first_index: 0,
-                duplicate_index: 1,
-                ..
-            }
-        ));
-    }
-
-    #[test]
     fn unknown_unit_dimension_reports_referenced_dimension() {
         let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
         assert!(matches!(
@@ -1168,14 +1098,14 @@ mod tests {
         let resolver = crate::resolve::ModuleResolver::default();
         let source = make_src("missing.Dimension");
         let mut definitions = definition_evaluator(&resolver, [], &source).unwrap();
-        let types = TypeRegistry::new();
+        let nominal_types = crate::hir::NominalTypeRegistry::default();
 
         let error = resolve_extern_struct_return(
             &path,
             Span::new(0, source.inner().len()),
             &mut super::super::extern_fns::ExternSignatureScope {
                 owner: &owner,
-                types: &types,
+                nominal_types: &nominal_types,
                 definitions: &mut definitions,
             },
             &source,

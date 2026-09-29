@@ -6,22 +6,19 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::declaration_category::DeclCategory;
-use crate::desugar::desugared_ast::{DimExpr, Expr, ExprKind, TypeExpr};
+use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::type_def::TypeRegistry;
 use crate::registry::types;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, UnitName, UnitRef};
+use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
-use crate::syntax::names::{NameDef, NameNamespace};
-use crate::syntax::span::{Span, Spanned};
-use crate::syntax::token::SourceIdentifier;
+use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::ExprVisitor;
 
@@ -239,13 +236,11 @@ impl UnfrozenIR {
     /// cannot be resolved.
     pub fn freeze(
         self,
-        types: &TypeRegistry,
         owner: &crate::dag_id::DagId,
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<HirDag, GraphcalError> {
         self.freeze_with_cancellation(
-            types,
             owner,
             definitions,
             src,
@@ -264,7 +259,6 @@ impl UnfrozenIR {
     )]
     pub fn freeze_with_cancellation(
         self,
-        types: &TypeRegistry,
         owner: &crate::dag_id::DagId,
         definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
@@ -286,6 +280,7 @@ impl UnfrozenIR {
                 )
             })
             .collect::<HashMap<_, _>>();
+        let nominal_types = self.lower_nominal_types(owner, definitions, src, cancellation)?;
         let table = DeclTable::new(owner, self.decls).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
@@ -363,14 +358,6 @@ impl UnfrozenIR {
                     span: type_ann.span,
                 })
             };
-
-        let nominal_types = crate::hir::nominal::lower_nominal_type_registry(
-            owner,
-            types,
-            resolver,
-            src,
-            cancellation,
-        )?;
 
         let dynamic_unit_scales = self
             .dynamic_unit_scales
@@ -626,16 +613,13 @@ impl UnfrozenIR {
             &self.plugin_imports,
             &mut super::extern_fns::ExternSignatureScope {
                 owner,
-                types,
+                nominal_types: &nominal_types,
                 definitions,
             },
             src,
         )?;
         let display_dimensions = definitions.display_dimensions(owner)?;
 
-        // Syntax-backed nominal definitions are a lowering capability, not a
-        // HIR semantic authority: the frontend type table is dropped here and
-        // only the canonical definitions cross into HIR.
         let definitions = super::module_definitions::ModuleDefinitions::try_new(
             self.static_definitions,
             nominal_types,
@@ -659,6 +643,158 @@ impl UnfrozenIR {
             imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
             semantic_instances,
+        })
+    }
+
+    /// Lower every nominal type symbol of `owner` to its canonical definition.
+    ///
+    /// A declared type is lowered from its own declaration. A type a
+    /// selective include projects under Static bindings is lowered from the
+    /// template's declaration in the template's scope and specialized through
+    /// that include's canonical substitution.
+    fn lower_nominal_types(
+        &self,
+        owner: &crate::dag_id::DagId,
+        definitions: &super::static_definitions::StaticDefinitionEvaluator<'_>,
+        src: &NamedSource<Arc<String>>,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<crate::hir::NominalTypeRegistry, GraphcalError> {
+        use crate::hir::nominal_lower::{
+            NominalLowering, lower_type_declaration, specialize_nominal_type,
+        };
+
+        let resolver = definitions.resolver();
+        let Some(symbols) = resolver.symbols(owner) else {
+            return Ok(crate::hir::NominalTypeRegistry::default());
+        };
+        let lowering = NominalLowering {
+            resolver,
+            cancellation,
+        };
+        let invariant = |message: String, span: Span| GraphcalError::InternalError {
+            message,
+            src: src.clone(),
+            span: span.into(),
+        };
+        let mut declarations = symbols.struct_types().iter().collect::<Vec<_>>();
+        declarations.sort_by_key(|(_, symbol)| symbol.span().offset());
+        declarations.into_iter().try_fold(
+            crate::hir::NominalTypeRegistry::default(),
+            |mut lowered, (name, symbol)| {
+                cancellation.checkpoint()?;
+                let identity = symbol.resolved().clone();
+                let source = symbols.struct_type_projection(name).map_or(
+                    &identity,
+                    crate::resolve::symbols::StaticProjection::template,
+                );
+                let Some((declaration, declaration_src)) = definitions.type_declaration(source)
+                else {
+                    return Err(invariant(
+                        format!("nominal type `{source}` has no source declaration"),
+                        symbol.span(),
+                    ));
+                };
+                let definition = match symbols.struct_type_projection(name) {
+                    Some(projection) => {
+                        let template = lower_type_declaration(
+                            declaration,
+                            projection.template().clone(),
+                            declaration.name.span,
+                            declaration_src,
+                            lowering,
+                        )?;
+                        let substitution = self
+                            .projection_substitution(symbols, projection)
+                            .ok_or_else(|| {
+                                invariant(
+                                    format!("projected type `{identity}` has no include instance"),
+                                    symbol.span(),
+                                )
+                            })?;
+                        specialize_nominal_type(
+                            &template,
+                            identity,
+                            &substitution,
+                            src.clone(),
+                            symbol.span(),
+                        )
+                        .map_err(|error| invariant(error.to_string(), symbol.span()))?
+                    }
+                    None => {
+                        lower_type_declaration(declaration, identity, symbol.span(), src, lowering)?
+                    }
+                };
+                lowered.insert(definition).map_err(|error| {
+                    invariant(
+                        format!("cannot register HIR nominal type: {error}"),
+                        symbol.span(),
+                    )
+                })?;
+                Ok(lowered)
+            },
+        )
+    }
+
+    /// The canonical substitution of the include that projects a template
+    /// type: its Static bindings plus the template dimensions it projects as
+    /// this module's own specialized declarations.
+    fn projection_substitution(
+        &self,
+        symbols: &crate::resolve::symbols::ModuleSymbols,
+        projection: &crate::resolve::symbols::StaticProjection<
+            crate::syntax::type_name::StructTypeNameNamespace,
+        >,
+    ) -> Option<crate::hir::nominal_lower::NominalSubstitution> {
+        use crate::hir::nominal_lower::{NominalIndexTarget, NominalSubstitution};
+        use crate::ir::instance::InstanceIndexBindingTarget;
+
+        let template = projection.template().owner();
+        let record = self.semantic_instances.iter().find(|record| {
+            record.instance.id().scope() == projection.instance()
+                && record.instance.id().template() == template
+        })?;
+        let substitution = &record.instance.specialization().substitution;
+        let projected_dimensions = symbols
+            .dimension_projections()
+            .filter(|(_, dimension)| {
+                dimension.instance() == projection.instance()
+                    && dimension.template().owner() == template
+            })
+            .filter_map(|(local, dimension)| {
+                symbols
+                    .dimensions()
+                    .get(local)
+                    .map(|symbol| (dimension.template().clone(), symbol.resolved().clone()))
+            });
+        Some(NominalSubstitution {
+            types: substitution
+                .types
+                .iter()
+                .map(|(source, target)| (source.clone(), target.clone()))
+                .collect(),
+            dimensions: substitution
+                .dimensions
+                .iter()
+                .map(|(source, target)| (source.clone(), target.clone()))
+                .chain(projected_dimensions)
+                .collect(),
+            indexes: substitution
+                .indexes
+                .iter()
+                .map(|(source, target)| {
+                    (
+                        source.clone(),
+                        match target {
+                            InstanceIndexBindingTarget::Declared(target) => {
+                                NominalIndexTarget::Declared(target.clone())
+                            }
+                            InstanceIndexBindingTarget::Finite(finite) => {
+                                NominalIndexTarget::Finite(*finite)
+                            }
+                        },
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -715,14 +851,14 @@ impl UnfrozenIR {
     /// reject them before TIR exists.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the include boundary supplies bindings, canonical owners, types, and source provenance"
+        reason = "the include boundary supplies bindings, canonical owners, the resolver, and source provenance"
     )]
     pub fn include_override_reconciliations(
         &self,
         bindings: &HashMap<DeclName, Expr>,
         index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
-        dependency_types: &TypeRegistry,
+        resolver: &crate::resolve::ModuleResolver,
         dependency_owner: &crate::dag_id::DagId,
         importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
@@ -738,7 +874,8 @@ impl UnfrozenIR {
                     NominalOverridePreflight {
                         index_bindings,
                         type_bindings,
-                        type_registry: dependency_types,
+                        resolver,
+                        dependency_owner,
                         orphan_decl: param.name.leaf(),
                         importer_src,
                         include_span,
@@ -773,16 +910,18 @@ impl UnfrozenIR {
     }
 }
 
-/// Narrow pre-HIR guard for nominal syntax resolved by the producer registry.
+/// Narrow pre-HIR guard for nominal syntax of the producer's parameter
+/// defaults.
 ///
-/// HIR lowering validates explicit labels and constructor patterns against the
-/// substituted registry. An incompatible replacement could therefore fail
-/// before TIR ownership is available. Field and generic-argument dependencies
-/// remain deferred to canonical inference.
+/// HIR lowering validates explicit labels and constructor patterns against
+/// the substituted definitions. An incompatible replacement could therefore
+/// fail before TIR ownership is available. Field and generic-argument
+/// dependencies remain deferred to canonical inference.
 struct NominalOverridePreflight<'a> {
     index_bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
     type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
-    type_registry: &'a TypeRegistry,
+    resolver: &'a crate::resolve::ModuleResolver,
+    dependency_owner: &'a crate::dag_id::DagId,
     orphan_decl: &'a DeclName,
     importer_src: &'a NamedSource<Arc<String>>,
     include_span: Span,
@@ -808,14 +947,18 @@ impl NominalOverridePreflight<'_> {
         constructor: &ConstructorName,
         detail: String,
     ) -> Result<(), GraphcalError> {
-        let Some((owning_type, _)) = self.type_registry.lookup_ctor(constructor) else {
+        let Ok(symbol) = self.resolver.resolve_constructor_path(
+            self.dependency_owner,
+            &crate::syntax::names::NamePath::local(constructor.atom().clone()),
+        ) else {
             return Ok(());
         };
-        if !self.type_bindings.contains_key(owning_type.name()) {
+        let owning_type = symbol.kind().owner_type();
+        if !self.type_bindings.contains_key(owning_type) {
             return Ok(());
         }
         Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: owning_type.name().to_string(),
+            overridden: owning_type.to_string(),
             overridden_kind: "type".to_string(),
             orphan_decl: self.orphan_decl.to_string(),
             detail,
@@ -927,284 +1070,4 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             .iter()
             .try_for_each(|field| self.visit_expr(&field.value))
     }
-}
-
-fn rewrite_ambiguous_generic_arg_names<Ns: NameNamespace>(
-    arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
-    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
-) {
-    match arg {
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-            if let Some(new_name) = bindings.get(&NameDef::classify(ident.name.atom().clone()))
-                && let Ok(identifier) = SourceIdentifier::parse(new_name.as_str())
-            {
-                ident.name = identifier;
-            }
-        }
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
-            for operand in operands {
-                rewrite_ambiguous_generic_arg_names(operand, bindings);
-            }
-        }
-    }
-}
-
-fn rewrite_ambiguous_index_arg_declared_names(
-    arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
-    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-) {
-    match arg {
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-            if let Some(identifier) = bindings
-                .get(&IndexName::classify(ident.name.atom().clone()))
-                .and_then(types::IndexBindingTarget::declared_name)
-                .and_then(|name| SourceIdentifier::parse(name.as_str()).ok())
-            {
-                ident.name = identifier;
-            }
-        }
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
-            for operand in operands {
-                rewrite_ambiguous_index_arg_declared_names(operand, bindings);
-            }
-        }
-    }
-}
-
-fn index_expr_for_binding_target(
-    target: &types::IndexBindingTarget,
-    span: Span,
-) -> crate::desugar::desugared_ast::IndexExpr {
-    use crate::desugar::desugared_ast::{IndexExpr, NatExpr};
-
-    match target {
-        types::IndexBindingTarget::Declared(name) => IndexExpr::Name(Spanned::new(
-            crate::syntax::names::NamePath::expect_local(name.as_str()),
-            span,
-        )),
-        types::IndexBindingTarget::Finite(finite) => IndexExpr::Finite {
-            cardinality: NatExpr::Literal(finite.size_u64(), span),
-            span,
-        },
-    }
-}
-
-fn substitute_generic_arg_indexes(
-    arg: &mut crate::desugar::desugared_ast::GenericArg,
-    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-) {
-    use crate::desugar::desugared_ast::{AmbiguousGenericArg, GenericArg};
-
-    let finite_replacement = match arg {
-        GenericArg::Ambiguous(AmbiguousGenericArg::Name(ident)) => bindings
-            .get(&NameDef::classify(ident.name.atom().clone()))
-            .filter(|target| matches!(target, types::IndexBindingTarget::Finite(_)))
-            .map(|target| GenericArg::Index(index_expr_for_binding_target(target, ident.span))),
-        GenericArg::Type(_)
-        | GenericArg::Index(_)
-        | GenericArg::Nat(_)
-        | GenericArg::Ambiguous(AmbiguousGenericArg::Mul(..)) => None,
-    };
-    if let Some(replacement) = finite_replacement {
-        *arg = replacement;
-        return;
-    }
-
-    match arg {
-        GenericArg::Type(type_expr) => substitute_type_expr_indexes(type_expr, bindings),
-        GenericArg::Index(index) => substitute_index_expr(index, bindings),
-        GenericArg::Ambiguous(ambiguous) => {
-            rewrite_ambiguous_index_arg_declared_names(ambiguous, bindings);
-        }
-        GenericArg::Nat(_) => {}
-    }
-}
-
-fn substitute_generic_arg_nominal_names<Ns: NameNamespace>(
-    arg: &mut crate::desugar::desugared_ast::GenericArg,
-    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
-) {
-    match arg {
-        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-            substitute_type_expr_nominal_names(type_expr, bindings);
-        }
-        crate::desugar::desugared_ast::GenericArg::Index(_)
-        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
-        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-            rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
-        }
-    }
-}
-
-fn substitute_index_expr(
-    index: &mut crate::desugar::desugared_ast::IndexExpr,
-    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-) {
-    let replacement = match index {
-        crate::desugar::desugared_ast::IndexExpr::Name(path) => path
-            .value
-            .as_bare()
-            .and_then(|atom| bindings.get(&NameDef::classify(atom.clone())))
-            .map(|target| index_expr_for_binding_target(target, path.span)),
-        crate::desugar::desugared_ast::IndexExpr::Finite { .. }
-        | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => None,
-    };
-    if let Some(replacement) = replacement {
-        *index = replacement;
-    }
-}
-
-/// Rewrite index arguments within a type expression according to a binding map.
-///
-/// `TypeExpr` is not part of the `Expr` tree, so it needs a separate
-/// substitution pass. This rewrites index identifiers in `Indexed` types to a
-/// declared target or structural `Fin(N)` target and recurses into
-/// `TypeApplication` arguments.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn substitute_type_expr_indexes(
-    type_expr: &mut TypeExpr,
-    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-) {
-    use crate::desugar::desugared_ast::TypeExprKind;
-
-    if bindings.is_empty() {
-        return;
-    }
-    match &mut type_expr.kind {
-        TypeExprKind::Indexed { base, indexes } => {
-            for index in indexes {
-                substitute_index_expr(index, bindings);
-            }
-            substitute_type_expr_indexes(base, bindings);
-        }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            for arg in generic_args {
-                substitute_generic_arg_indexes(arg, bindings);
-            }
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            for arg in generic_args {
-                substitute_generic_arg_indexes(arg, bindings);
-            }
-        }
-        TypeExprKind::DatetimeApplication { type_args } => {
-            for arg in type_args {
-                substitute_type_expr_indexes(arg, bindings);
-            }
-        }
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::DimExpr(_) => {}
-    }
-}
-
-/// Rewrite bare dimension names within a dimension expression.
-///
-/// This is the shared syntactic substitution used by include-time dimension
-/// bindings. Qualified references retain their producer-owned path; only a bare
-/// bindable declaration name can be replaced by an importer-side binding.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn substitute_dim_expr_names<Ns: NameNamespace>(
-    dim_expr: &mut DimExpr,
-    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
-) {
-    for item in &mut dim_expr.terms {
-        if let Some(atom) = item.term.name.value.as_bare()
-            && let Some(new_name) = bindings.get(&NameDef::classify(atom.clone()))
-        {
-            item.term.name.value = crate::syntax::names::NamePath::local(new_name.atom().clone());
-        }
-    }
-}
-
-/// Rewrite nominally-tied names (types or dimensions) within a type expression.
-///
-/// `TypeExpr` uses `DimExpr` to carry single-identifier type references (the
-/// resolver disambiguates them into `StructType` / `Dim` later). Both type and
-/// dimension bindings therefore need to walk `DimExpr` terms and rewrite their
-/// names. `TypeApplication.name` is rewritten for type bindings (generic
-/// parametric types like `Vec3<Length>`), which is harmless for dim bindings
-/// because type and dim names can't collide (A6 nominal identity).
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn substitute_type_expr_nominal_names<Ns: NameNamespace>(
-    type_expr: &mut TypeExpr,
-    bindings: &HashMap<NameDef<Ns>, NameDef<Ns>>,
-) {
-    use crate::desugar::desugared_ast::TypeExprKind;
-
-    if bindings.is_empty() {
-        return;
-    }
-    match &mut type_expr.kind {
-        TypeExprKind::DimExpr(dim_expr) => substitute_dim_expr_names(dim_expr, bindings),
-        TypeExprKind::Indexed { base, .. } => {
-            substitute_type_expr_nominal_names(base, bindings);
-        }
-        TypeExprKind::TypeApplication { name, generic_args } => {
-            if let Some(atom) = name.value.as_bare()
-                && let Some(new_name) = bindings.get(&NameDef::classify(atom.clone()))
-            {
-                name.value = crate::syntax::names::NamePath::local(new_name.atom().clone());
-            }
-            for arg in generic_args {
-                substitute_generic_arg_nominal_names(arg, bindings);
-            }
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            for arg in generic_args {
-                substitute_generic_arg_nominal_names(arg, bindings);
-            }
-        }
-        TypeExprKind::DatetimeApplication { type_args } => {
-            // The built-in `Datetime` name is fixed; only the type args can
-            // carry user-bindable nominal names.
-            for arg in type_args {
-                substitute_type_expr_nominal_names(arg, bindings);
-            }
-        }
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime => {}
-    }
-}
-
-/// Apply include-time Static substitutions to a registered nominal signature.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "the include boundary uses the project's canonical binding-map types"
-)]
-pub fn specialize_type_definition(
-    definition: &mut crate::registry::type_def::TypeDef,
-    index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-) {
-    definition.transform_signatures(
-        |argument| {
-            substitute_generic_arg_indexes(argument, index_bindings);
-            substitute_generic_arg_nominal_names(argument, type_bindings);
-            substitute_generic_arg_nominal_names(argument, dim_bindings);
-        },
-        |type_expr| {
-            substitute_type_expr_indexes(type_expr, index_bindings);
-            substitute_type_expr_nominal_names(type_expr, type_bindings);
-            substitute_type_expr_nominal_names(type_expr, dim_bindings);
-        },
-    );
 }

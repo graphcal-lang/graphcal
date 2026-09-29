@@ -392,10 +392,7 @@ pub type NamePath = Qualified<NameAtom, NameAtom>;
 
 impl NamePath {
     /// Construct a local name from trusted leaf text, panicking if invalid.
-    #[expect(
-        clippy::panic,
-        reason = "trusted constructor centralizes explicit panic policy"
-    )]
+    #[cfg(test)]
     pub(crate) fn expect_local(s: impl Into<String>) -> Self {
         NameAtom::parse(s).map_or_else(
             |err| panic!("trusted NamePath leaf must be valid: {err}"),

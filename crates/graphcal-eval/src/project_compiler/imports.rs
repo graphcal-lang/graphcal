@@ -15,7 +15,7 @@ use graphcal_compiler::ir::module_interface::{
 };
 use graphcal_compiler::ir::static_dependencies::{
     ModuleDeclarations, StaticImportRejection, StaticScope, declaration_static_references,
-    static_import_rejection, static_import_rejections,
+    static_import_rejection,
 };
 use graphcal_compiler::ir::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
@@ -138,7 +138,6 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             loaded_file.interface(),
             file_src,
-            module_artifacts,
             module_resolver,
             ctx,
         )?;
@@ -665,53 +664,18 @@ fn validate_concrete_static_binding_targets(
     }
 }
 
-/// Record one non-Term include projection for the importer's lowering.
-///
-/// Dimension and index projections are resolver bindings with canonical
-/// definitions and need nothing here. A unit projection may alias a dynamic
-/// instance unit. A type projection binds its local name in the frontend
-/// type table to its effective target; an unbound, unspecialized source type
-/// is registered from the dependency's declaration.
-fn record_include_projection(
-    ctx: &mut ImportContext<'_>,
-    dag_id: &graphcal_compiler::dag_id::DagId,
+/// Record a unit include projection, which may alias a dynamic instance
+/// unit. Every Static projection is a resolver binding with a canonical
+/// definition and needs nothing here.
+fn record_unit_projection(
     import_item: &graphcal_compiler::syntax::ast::ImportItem,
-    type_bindings: &DepToImporter<StructTypeName>,
-    has_static_bindings: bool,
     unit_projection_aliases: &mut Vec<UnitProjectionAlias>,
 ) {
-    let source = import_item.name.name.atom().clone();
-    let alias = import_item.local_name_atom().clone();
-    match import_item.namespace {
-        ImportItemNamespace::Unit => unit_projection_aliases.push(UnitProjectionAlias {
-            source: UnitName::classify(source),
-            alias: UnitName::classify(alias),
-        }),
-        ImportItemNamespace::Type => {
-            let source = StructTypeName::classify(source);
-            let target = type_bindings
-                .get(&source)
-                .cloned()
-                .unwrap_or_else(|| source.clone());
-            // A projected type specialized by this include's Static bindings
-            // is composed from the template's specialized definition instead.
-            if target == source && !has_static_bindings {
-                ctx.imported_types
-                    .entry(dag_id.clone())
-                    .or_default()
-                    .insert(source);
-            }
-            ctx.projected_type_aliases
-                .push(graphcal_compiler::syntax::span::Spanned::new(
-                    ProjectedTypeAlias {
-                        alias: StructTypeName::classify(alias),
-                        target,
-                    },
-                    import_item.local_span(),
-                ));
-        }
-        ImportItemNamespace::Dimension | ImportItemNamespace::Index | ImportItemNamespace::Term => {
-        }
+    if import_item.namespace == ImportItemNamespace::Unit {
+        unit_projection_aliases.push(UnitProjectionAlias {
+            source: UnitName::classify(import_item.name.name.atom().clone()),
+            alias: UnitName::classify(import_item.local_name_atom().clone()),
+        });
     }
 }
 
@@ -829,7 +793,6 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
@@ -900,8 +863,6 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         file_src,
         include_decl.path.span(),
     )?;
-    let has_static_bindings =
-        !index_bindings.is_empty() || !type_bindings.is_empty() || !dim_bindings.is_empty();
 
     // Index existence, category, and effective coordinate dimension are checked
     // uniformly with inline-DAG bindings after both typed registries are available.
@@ -942,14 +903,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                record_include_projection(
-                    ctx,
-                    import_dag_id,
-                    import_item,
-                    &type_bindings,
-                    has_static_bindings,
-                    &mut unit_projection_aliases,
-                );
+                record_unit_projection(import_item, &mut unit_projection_aliases);
                 let is_plot = is_term_namespace
                     && (dep.declares(orig_name.atom(), IntroducedKind::Plot)
                         || file_exports_plot(project, import_dag_id, orig_name.atom()));
@@ -1019,22 +973,6 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     ctx.imported_names.param_names.push((scoped, import_span));
                 }
             }
-            // Import type-system declarations (pub items only). Dependency
-            // interfaces are complete before any dependent HIR is lowered.
-            let artifact = module_artifacts.get(import_dag_id).ok_or_else(|| {
-                CompileError::Eval(GraphcalError::InternalError {
-                    message: format!(
-                        "HIR interface for included module `{import_dag_id}` is unavailable"
-                    ),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                })
-            })?;
-            ctx.frontend_type_imports.push(super::FrontendTypeImport {
-                types: artifact.frontend_types(),
-                external_surface: artifact.external_surface(),
-                pure_import_rejections: None,
-            });
             None
         }
     };
@@ -1152,8 +1090,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
         file_src,
         include_decl.path.span(),
     )?;
-    let has_static_bindings =
-        !index_bindings.is_empty() || !type_bindings.is_empty() || !dim_bindings.is_empty();
 
     // Register imported names in the importer's scope.
     let mut import_item_attributes: HashMap<
@@ -1190,14 +1126,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                record_include_projection(
-                    ctx,
-                    dag_id,
-                    import_item,
-                    &type_bindings,
-                    has_static_bindings,
-                    &mut unit_projection_aliases,
-                );
+                record_unit_projection(import_item, &mut unit_projection_aliases);
                 let is_plot =
                     is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Plot);
                 let is_assert =
@@ -1424,15 +1353,8 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                             import_item.name.span,
                         )?;
                     }
-                    // Dimensions, units, and indexes resolve canonically;
-                    // only a nominal type's syntax-backed definition is
-                    // registered in the frontend type table.
-                    if import_item.namespace == ImportItemNamespace::Type {
-                        ctx.imported_types
-                            .entry(module_target.clone())
-                            .or_default()
-                            .insert(StructTypeName::classify(orig_name.atom().clone()));
-                    }
+                    // Static and unit items resolve canonically through the
+                    // module resolver; nothing is registered here.
                     continue;
                 }
 
@@ -1567,11 +1489,6 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             )?;
             // Import all public type-system declarations from dep's registry.
             // The module alias keys the dep's pub units in this file's scope.
-            ctx.frontend_type_imports.push(super::FrontendTypeImport {
-                types: dep.frontend_types(),
-                external_surface: dep.external_surface(),
-                pure_import_rejections: Some(static_import_rejections(dependency)),
-            });
         }
     }
 

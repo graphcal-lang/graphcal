@@ -17,7 +17,7 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{IndexBindingTarget, TypeRegistry};
+use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::DimName;
@@ -37,7 +37,7 @@ mod imports;
 mod lowering;
 mod model;
 mod pipeline;
-mod registry_merge;
+
 mod session;
 mod template;
 
@@ -74,9 +74,9 @@ pub use hir_project::HirProject;
 use lowering::ProjectSemanticContext;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, FrontendTypeImport, HirFile, ImportAlias, ImportContext, IncludeInstanceRequest,
-    IndexBindings, LoweringModuleInterface, ModuleArtifact, ModuleArtifactStore,
-    ProjectModuleBinding, ProjectedTypeAlias, UnitProjectionAlias,
+    DepToImporter, HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IndexBindings,
+    LoweringModuleInterface, ModuleArtifact, ModuleArtifactStore, ProjectModuleBinding,
+    UnitProjectionAlias,
 };
 pub(crate) use session::CheckedProjectRuntimeParts;
 pub use session::{CheckedProject, ProjectCompiler, check_project};

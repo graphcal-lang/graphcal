@@ -33,6 +33,7 @@ pub(crate) mod expr_lower;
 pub mod lower;
 pub mod node_definition;
 pub mod nominal;
+pub(crate) mod nominal_lower;
 pub mod source_interface;
 pub mod types;
 

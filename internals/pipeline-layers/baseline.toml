@@ -26,46 +26,6 @@ reason = "Observed compiler::hir::nominal -> compiler::hir (production) at ./cra
 
 [[exception]]
 from_package = "compiler"
-from_path = ["hir", "nominal"]
-to_package = "compiler"
-to_path = ["hir", "diagnostics"]
-test_only = false
-reason = "Observed compiler::hir::nominal -> compiler::hir::diagnostics (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:518 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "nominal"]
-to_package = "compiler"
-to_path = ["hir", "expr_lower", "context"]
-test_only = false
-reason = "Observed compiler::hir::nominal -> compiler::hir::expr_lower::context (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:574 (qualified path); roles are contracts -> checking. Exposed by the P5-0 split of the former contracts-labelled hir::expr (replaces its hir::expr -> hir::lower / resolve exceptions). Planned deletion seam: move nominal field/default lowering out of the nominal data module."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "nominal"]
-to_package = "compiler"
-to_path = ["hir", "expr_lower", "lower"]
-test_only = false
-reason = "Observed compiler::hir::nominal -> compiler::hir::expr_lower::lower (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:589 (qualified path); roles are contracts -> checking. Exposed by the P5-0 split of the former contracts-labelled hir::expr. Planned deletion seam: move nominal field/default lowering out of the nominal data module."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "nominal"]
-to_package = "compiler"
-to_path = ["hir", "lower"]
-test_only = false
-reason = "Observed compiler::hir::nominal -> compiler::hir::lower (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:486 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["hir", "nominal"]
-to_package = "compiler"
-to_path = ["resolve"]
-test_only = false
-reason = "Observed compiler::hir::nominal -> compiler::resolve (production) at ./crates/graphcal-compiler/src/hir/nominal.rs:22 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["hir", "types"]
 to_package = "compiler"
 to_path = ["hir"]
@@ -575,14 +535,6 @@ to_package = "eval"
 to_path = ["loader"]
 test_only = false
 reason = "Observed eval::project_compiler::pipeline -> eval::loader (production) at ./crates/graphcal-eval/src/project_compiler/pipeline.rs:18 (qualified path); roles are checking -> loading. Planned deletion seam: split checking from source/project loading and pass a typed input boundary."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "registry_merge"]
-to_package = "eval"
-to_path = ["loader"]
-test_only = false
-reason = "Observed eval::project_compiler::registry_merge -> eval::loader (production) at ./crates/graphcal-eval/src/project_compiler/registry_merge.rs:44 (qualified path); roles are checking -> loading. Planned deletion seam: split checking from source/project loading and pass a typed input boundary."
 
 [[exception]]
 from_package = "eval"

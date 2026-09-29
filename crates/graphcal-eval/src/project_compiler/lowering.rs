@@ -25,7 +25,6 @@ use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
-use super::registry_merge::{merge_instance_types, seed_imported_types};
 
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project, 'session> {
@@ -285,25 +284,13 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         file_src,
     )?;
     let include_debug_names = include_debug_name_map(&ctx);
-
-    let mut type_seed = |types: &mut TypeRegistry| {
-        seed_imported_types(
-            types,
-            project,
-            &ctx.imported_types,
-            &ctx.frontend_type_imports,
-            &ctx.projected_type_aliases,
-            file_src,
-        )
-    };
-    let (mut types, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_to_types_with_imported_bindings_and_cancellation(
+    let mut unfrozen =
+        graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
             file_ast,
             file_src,
             &ctx.imported_names,
             ctx.imported_bindings,
             file_dag_id,
-            Some(&mut type_seed),
             semantic.definitions,
             cancellation,
         )
@@ -334,25 +321,17 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         module_artifacts,
         file_src,
         importer,
-        &mut types,
         &mut unfrozen,
         cancellation,
     )?;
 
     cancellation.checkpoint()?;
-    let frontend_types = types.clone();
-    let root = store_and_freeze_module_template(
-        semantic,
-        file_dag_id,
-        unfrozen,
-        types,
-        file_src,
-        cancellation,
-    )?;
+    let root =
+        store_and_freeze_module_template(semantic, file_dag_id, unfrozen, file_src, cancellation)?;
     let inline_dags =
         lower_inline_dag_modules(semantic, loaded_file, module_artifacts, cancellation)?;
 
-    let lowering_interface = LoweringModuleInterface::new(frontend_types, &root);
+    let lowering_interface = LoweringModuleInterface::new(&root);
     Ok((
         HirFile {
             source: file_src.clone(),
@@ -483,10 +462,6 @@ fn lower_inline_dag_modules(
         .collect()
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one template-lowering transaction threads project semantic services and cancellation"
-)]
 fn compile_loaded_dag_module_ir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     parent_loaded: &crate::loader::LoadedFile,
@@ -521,10 +496,7 @@ fn compile_loaded_dag_module_ir(
         imported_names: ImportedValueNames::default(),
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
-        imported_types: HashMap::new(),
-        projected_type_aliases: Vec::new(),
         module_map: HashMap::new(),
-        frontend_type_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
@@ -542,7 +514,6 @@ fn compile_loaded_dag_module_ir(
         loaded_dag,
         dag_body,
         file_src,
-        module_artifacts,
         module_resolver,
         &mut ctx,
     )?;
@@ -565,24 +536,13 @@ fn compile_loaded_dag_module_ir(
         module_resolver,
         file_src,
     )?;
-    let mut type_seed = |types: &mut TypeRegistry| {
-        seed_imported_types(
-            types,
-            project,
-            &ctx.imported_types,
-            &ctx.frontend_type_imports,
-            &ctx.projected_type_aliases,
-            file_src,
-        )
-    };
-    let (mut types, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_dag_module_to_types_with_imported_bindings_and_cancellation(
+    let mut unfrozen =
+        graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
             &dag_ast,
             &ctx.imported_names,
             ctx.imported_bindings,
             file_src,
             loaded_dag.dag_id(),
-            Some(&mut type_seed),
             semantic.definitions,
             cancellation,
         )?;
@@ -594,7 +554,6 @@ fn compile_loaded_dag_module_ir(
         module_artifacts,
         file_src,
         loaded_dag.module(parent_loaded),
-        &mut types,
         &mut unfrozen,
         cancellation,
     )?;
@@ -604,7 +563,6 @@ fn compile_loaded_dag_module_ir(
         semantic,
         loaded_dag.dag_id(),
         unfrozen,
-        types,
         file_src,
         cancellation,
     )
@@ -618,7 +576,6 @@ fn freeze_inline_module_template(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     Ok(template.unfrozen.clone().freeze_with_cancellation(
-        &template.frontend_types,
         dag_id,
         definitions,
         src,
@@ -630,23 +587,16 @@ fn store_and_freeze_module_template(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     dag_id: &graphcal_compiler::dag_id::DagId,
     unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
-    types: TypeRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     let template_unfrozen = unfrozen.clone();
-    let frozen = unfrozen.freeze_with_cancellation(
-        &types,
-        dag_id,
-        semantic.definitions,
-        src,
-        cancellation,
-    )?;
+    let frozen =
+        unfrozen.freeze_with_cancellation(dag_id, semantic.definitions, src, cancellation)?;
     semantic.module_templates.insert(
         dag_id.clone(),
         ElaboratedModuleTemplate {
             unfrozen: template_unfrozen,
-            frontend_types: types,
         },
     );
     Ok(frozen)
@@ -743,7 +693,6 @@ fn process_dag_body_include_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
@@ -765,7 +714,6 @@ fn process_dag_body_include_declarations<'a>(
                 decl,
                 loaded_dag.interface(),
                 file_src,
-                module_artifacts,
                 module_resolver,
                 ctx,
             )?;
@@ -1262,8 +1210,7 @@ fn record_semantic_instance(
 ///    include sits).
 /// 2. Assemble the body with canonical imported targets set up.
 /// 3. Validate every index binding against the body's effective typed
-///    contract, with both sides resolved canonically, and compose the
-///    template's specialized nominal types.
+///    contract, with both sides resolved canonically.
 /// 4. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
 /// 5. Record a typed semantic instance edge without copying dependency bodies.
@@ -1274,7 +1221,7 @@ fn record_semantic_instance(
 )]
 #[expect(
     clippy::too_many_lines,
-    reason = "single cohesive include pipeline: source resolution, type composition, validation, HIR merge"
+    reason = "single cohesive include pipeline: source resolution, validation, HIR merge"
 )]
 fn elaborate_include_instances(
     semantic: &mut ProjectSemanticContext<'_, '_>,
@@ -1283,7 +1230,6 @@ fn elaborate_include_instances(
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     importer_src: &NamedSource<Arc<String>>,
     importer: crate::loader::LoadedModule<'_>,
-    types: &mut TypeRegistry,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -1311,10 +1257,7 @@ fn elaborate_include_instances(
                     imported_names: ImportedValueNames::default(),
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
-                    imported_types: HashMap::new(),
-                    projected_type_aliases: Vec::new(),
                     module_map: HashMap::new(),
-                    frontend_type_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 imports::process_file_body_declarations(
@@ -1333,23 +1276,12 @@ fn elaborate_include_instances(
                     module_resolver,
                     dep_src,
                 )?;
-                let mut type_seed = |types: &mut TypeRegistry| {
-                    seed_imported_types(
-                        types,
-                        project,
-                        &body_ctx.imported_types,
-                        &body_ctx.frontend_type_imports,
-                        &body_ctx.projected_type_aliases,
-                        dep_src,
-                    )
-                };
-                let (mut dep_types, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_types_with_imported_bindings_and_cancellation(
+                let mut dep_unfrozen = graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
                                 dep_body,
                                 dep_src,
                                 &body_ctx.imported_names,
                                 body_ctx.imported_bindings,
                                 dep_dag_id,
-                                Some(&mut type_seed),
                                 semantic.definitions,
                                 cancellation,
                             )?;
@@ -1360,7 +1292,6 @@ fn elaborate_include_instances(
                     module_artifacts,
                     dep_src,
                     dep_loaded.module(),
-                    &mut dep_types,
                     &mut dep_unfrozen,
                     cancellation,
                 )?;
@@ -1368,7 +1299,6 @@ fn elaborate_include_instances(
                     dep_dag_id.clone(),
                     ElaboratedModuleTemplate {
                         unfrozen: dep_unfrozen,
-                        frontend_types: dep_types,
                     },
                 );
                 (
@@ -1400,10 +1330,7 @@ fn elaborate_include_instances(
                     imported_names: ImportedValueNames::default(),
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
-                    imported_types: HashMap::new(),
-                    projected_type_aliases: Vec::new(),
                     module_map: HashMap::new(),
-                    frontend_type_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 process_dag_body_import_declarations(
@@ -1420,7 +1347,6 @@ fn elaborate_include_instances(
                     loaded_inline,
                     inline_body,
                     importer_src,
-                    module_artifacts,
                     module_resolver,
                     &mut body_ctx,
                 )?;
@@ -1442,24 +1368,12 @@ fn elaborate_include_instances(
                     module_resolver,
                     importer_src,
                 )?;
-
-                let mut type_seed = |types: &mut TypeRegistry| {
-                    seed_imported_types(
-                        types,
-                        project,
-                        &body_ctx.imported_types,
-                        &body_ctx.frontend_type_imports,
-                        &body_ctx.projected_type_aliases,
-                        importer_src,
-                    )
-                };
-                let (mut dag_types, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_types_with_imported_bindings_and_cancellation(
+                let mut dag_unfrozen = graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
                                 &stripped_body,
                                 &body_ctx.imported_names,
                                 imported_bindings,
                                 importer_src,
                                 dag_id,
-                                Some(&mut type_seed),
                                 semantic.definitions,
                                 cancellation,
                             )?;
@@ -1470,7 +1384,6 @@ fn elaborate_include_instances(
                     module_artifacts,
                     importer_src,
                     loaded_inline.module(parent_loaded),
-                    &mut dag_types,
                     &mut dag_unfrozen,
                     cancellation,
                 )?;
@@ -1478,14 +1391,12 @@ fn elaborate_include_instances(
                     dag_id.clone(),
                     ElaboratedModuleTemplate {
                         unfrozen: dag_unfrozen,
-                        frontend_types: dag_types,
                     },
                 );
                 (template, dag_id.clone(), inline_body)
             }
         };
         let dep_unfrozen = &template.unfrozen;
-        let dep_types = &template.frontend_types;
 
         // ---- 2. Validate typed index binding contracts -------------------
         validate_index_binding_contracts(
@@ -1502,21 +1413,12 @@ fn elaborate_include_instances(
             &instance.dim_bindings,
         )?;
 
-        // ---- 3. Compose the template's specialized nominal types. -------
-        merge_instance_types(
-            types,
-            dep_types,
-            &instance.index_bindings,
-            &instance.type_bindings,
-            &instance.dim_bindings,
-        );
-
         // ---- 4. Validation checks -----------------------------------------
         let override_reconciliations = dep_unfrozen.include_override_reconciliations(
             &instance.bindings,
             &instance.index_bindings,
             &instance.type_bindings,
-            dep_types,
+            module_resolver,
             &dep_resolution_owner,
             importer_dag_id,
             importer_src,

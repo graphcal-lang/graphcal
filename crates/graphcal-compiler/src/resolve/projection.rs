@@ -24,7 +24,7 @@ use super::category::SymbolTable;
 use super::error::{ModuleResolveError, NameCategory};
 use super::imports::ExportLookup;
 use super::scope::Access;
-use super::symbols::{DimensionPortBinding, DimensionProjection, Symbol};
+use super::symbols::{DimensionPortBinding, DimensionProjection, StaticProjection, Symbol};
 use super::tables::NamespaceTables;
 
 impl ModuleResolver {
@@ -89,8 +89,16 @@ impl ModuleResolver {
                             })?;
                         let generic_params = source_symbol.data().clone();
                         let local_name = StructTypeName::classify(local);
+                        let projection = StaticProjection::new(
+                            ResolvedStructTypeName::from_def(template.clone(), source_name.clone()),
+                            include.instance_scope(),
+                        );
                         let entry = self.entry_mut(owner)?;
                         entry.scope.selected_struct_types.remove(&local_name);
+                        entry
+                            .symbols
+                            .struct_type_projections
+                            .insert(local_name.clone(), projection);
                         entry.symbols.struct_types.insert(
                             local_name,
                             Symbol::new(
@@ -123,9 +131,12 @@ impl ModuleResolver {
                         // declaration rather than the template's identity.
                         let local_name = DimName::classify(local);
                         let projection = DimensionProjection::new(
-                            ResolvedDimName::from_def(
-                                template.clone(),
-                                DimName::classify(source.clone()),
+                            StaticProjection::new(
+                                ResolvedDimName::from_def(
+                                    template.clone(),
+                                    DimName::classify(source.clone()),
+                                ),
+                                include.instance_scope(),
                             ),
                             dimension_port_bindings(include),
                         );

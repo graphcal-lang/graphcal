@@ -7,7 +7,6 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::TypeExpr;
 use crate::registry::error::GraphcalError;
-use crate::registry::type_def::TypeRegistry;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
@@ -88,13 +87,41 @@ impl crate::function_signature::StructResult for ExternStructResult {
 /// signature may name.
 pub(super) struct ExternSignatureScope<'s, 'a> {
     pub(super) owner: &'s crate::dag_id::DagId,
-    pub(super) types: &'s TypeRegistry,
+    /// Nominal types the declaring module owns, already lowered.
+    pub(super) nominal_types: &'s crate::hir::nominal::NominalTypeRegistry,
     pub(super) definitions: &'s mut super::static_definitions::StaticDefinitionEvaluator<'a>,
 }
 
 impl ExternSignatureScope<'_, '_> {
     const fn resolver(&self) -> &crate::resolve::ModuleResolver {
         self.definitions.resolver()
+    }
+
+    /// The canonical definition of a nominal type visible to the declaring
+    /// module: one of its own, or one lowered from its declaring module.
+    fn nominal_type(
+        &self,
+        identity: &crate::resolved_name::ResolvedStructTypeName,
+    ) -> Result<Option<Arc<crate::hir::nominal::NominalTypeDef>>, GraphcalError> {
+        if let Some(definition) = self.nominal_types.get(identity) {
+            return Ok(Some(Arc::clone(definition)));
+        }
+        self.definitions
+            .type_declaration(identity)
+            .map(|(declaration, src)| {
+                crate::hir::nominal_lower::lower_type_declaration(
+                    declaration,
+                    identity.clone(),
+                    declaration.name.span,
+                    src,
+                    crate::hir::nominal_lower::NominalLowering {
+                        resolver: self.resolver(),
+                        cancellation: &crate::cancellation::CancellationToken::unbounded(),
+                    },
+                )
+                .map(Arc::new)
+            })
+            .transpose()
     }
 
     /// The dimension a bare name denotes in the declaring module, if any.
@@ -382,7 +409,7 @@ fn resolve_extern_result_kind(
 }
 
 /// Resolve a record-type extern result: nominal identity through the
-/// module resolver, flattened field shape from the registry's definition.
+/// module resolver, flattened field shape from its canonical HIR definition.
 pub(super) fn resolve_extern_struct_return(
     path: &NamePath,
     span: Span,
@@ -410,10 +437,10 @@ pub(super) fn resolve_extern_struct_return(
         });
     };
     let leaf = resolved_type.to_unowned_def_name();
-    let Some(type_def) = scope.types.get_type(&leaf).cloned() else {
+    let Some(type_def) = scope.nominal_type(&resolved_type)? else {
         return Err(invalid(format!(
-            "record type `{leaf}` is not available in this file's registry; extern struct \
-             returns must use a type declared in (or imported into) the declaring file"
+            "record type `{leaf}` has no declaration; extern struct returns must use a type \
+             declared in (or imported into) the declaring file"
         )));
     };
     if !type_def.generic_params().is_empty() {
@@ -422,15 +449,15 @@ pub(super) fn resolve_extern_struct_return(
              this phase"
         )));
     }
-    let Some(record) = type_def.record_member() else {
+    let (Some(fields), Some([record])) = (type_def.record_fields(), type_def.union_members())
+    else {
         return Err(invalid(format!(
             "`{leaf}` is not a record type; extern struct returns need a single constructor \
              named after the type"
         )));
     };
 
-    let shape_fields = record
-        .fields()
+    let shape_fields = fields
         .iter()
         .map(|field| {
             let kind = resolve_extern_struct_field(field, scope, src)?;
@@ -443,20 +470,21 @@ pub(super) fn resolve_extern_struct_return(
     let shape = StructShape::try_new(shape_fields).map_err(|err| invalid(err.to_string()))?;
     Ok(ResultKind::Struct(ExternStructResult {
         resolved: resolved_type,
-        constructor: record.name().clone(),
+        constructor: record.name(),
         shape,
     }))
 }
 
 /// Resolve one record field to its concrete boundary kind.
 fn resolve_extern_struct_field(
-    field: &crate::registry::type_def::StructField,
+    field: &crate::hir::nominal::NominalField,
     scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::StructFieldKind, GraphcalError> {
-    use crate::desugar::desugared_ast::TypeExprKind;
     use crate::function_signature::StructFieldKind;
+    use crate::hir::types::{BuiltinType, DeclType, DimTermTarget, ValueTypeKind};
 
+    let annotation = field.type_annotation();
     let unsupported = || GraphcalError::InvalidExternSignature {
         message: format!(
             "field `{}` has a type that cannot cross the plugin boundary; struct-return \
@@ -464,30 +492,51 @@ fn resolve_extern_struct_field(
             field.name()
         ),
         src: src.clone(),
-        span: field.type_ann().span.into(),
+        span: annotation.span.into(),
     };
-    if !field.type_ann().constraints.is_empty() {
+    if !annotation.domain_bounds.is_empty() {
         return Err(unsupported());
     }
-    match &field.type_ann().kind {
-        TypeExprKind::Bool => Ok(StructFieldKind::Bool),
-        TypeExprKind::Int => Ok(StructFieldKind::Int),
-        TypeExprKind::Dimensionless => Ok(StructFieldKind::Quantity(
+    let DeclType::Value(value) = &annotation.decl_type else {
+        return Err(unsupported());
+    };
+    match &value.kind {
+        ValueTypeKind::Builtin(BuiltinType::Bool) => Ok(StructFieldKind::Bool),
+        ValueTypeKind::Builtin(BuiltinType::Int) => Ok(StructFieldKind::Int),
+        ValueTypeKind::Builtin(BuiltinType::Dimensionless) => Ok(StructFieldKind::Quantity(
             crate::dimension::Dimension::dimensionless(),
         )),
-        TypeExprKind::DimExpr(dim_expr) => {
+        ValueTypeKind::DimExpr(expr) => {
             // No dimension variables are in scope inside a record's fields;
-            // the monomial is therefore concrete by construction.
-            let monomial = resolve_extern_dim_monomial(dim_expr, &[], scope, src)?;
-            Ok(StructFieldKind::Quantity(monomial.fixed_factor().clone()))
+            // the dimension is therefore concrete by construction.
+            let overflow = || GraphcalError::DimensionOverflow {
+                src: src.clone(),
+                span: annotation.span.into(),
+            };
+            let mut dimension = crate::dimension::Dimension::dimensionless();
+            for item in &expr.terms {
+                let DimTermTarget::Dimension(name) = &item.term.target else {
+                    return Err(unsupported());
+                };
+                let factor = scope
+                    .definitions
+                    .dimension(&name.value)?
+                    .pow(item.term.power)
+                    .map_err(|_| overflow())?;
+                dimension = match item.op {
+                    crate::syntax::ast::MulDivOp::Mul => dimension.checked_mul(&factor),
+                    crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&factor),
+                }
+                .map_err(|_| overflow())?;
+            }
+            Ok(StructFieldKind::Quantity(dimension))
         }
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Datetime
-        | TypeExprKind::DatetimeApplication { .. }
-        | TypeExprKind::ComplexApplication { .. }
-        | TypeExprKind::KeyApplication { .. }
-        | TypeExprKind::Indexed { .. }
-        | TypeExprKind::TypeApplication { .. } => Err(unsupported()),
+        ValueTypeKind::Builtin(BuiltinType::Datetime(_))
+        | ValueTypeKind::Struct(_)
+        | ValueTypeKind::GenericTypeParam(_)
+        | ValueTypeKind::Complex(_)
+        | ValueTypeKind::Key(_)
+        | ValueTypeKind::TypeApplication { .. } => Err(unsupported()),
     }
 }
 

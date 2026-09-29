@@ -127,6 +127,7 @@ struct ModuleSource<'a> {
     dimensions: HashMap<DimName, DimensionSource<'a>>,
     units: HashMap<UnitName, &'a UnitDecl>,
     indexes: HashMap<IndexName, (&'a IndexDecl, Span)>,
+    types: HashMap<crate::syntax::type_name::StructTypeName, &'a ast::TypeDecl>,
 }
 
 impl<'a> ModuleSource<'a> {
@@ -137,6 +138,7 @@ impl<'a> ModuleSource<'a> {
             dimensions: HashMap::new(),
             units: HashMap::new(),
             indexes: HashMap::new(),
+            types: HashMap::new(),
         };
         for declaration in source.declarations {
             match &declaration.kind {
@@ -167,6 +169,12 @@ impl<'a> ModuleSource<'a> {
                         .entry(index.name.value.clone())
                         .or_insert((index, declaration.span));
                 }
+                DeclKind::Type(type_decl) => {
+                    module
+                        .types
+                        .entry(type_decl.name.value.clone())
+                        .or_insert(type_decl);
+                }
                 DeclKind::Param(_)
                 | DeclKind::Node(_)
                 | DeclKind::ConstNode(_)
@@ -174,7 +182,6 @@ impl<'a> ModuleSource<'a> {
                 | DeclKind::Plot(_)
                 | DeclKind::Figure(_)
                 | DeclKind::Layer(_)
-                | DeclKind::Type(_)
                 | DeclKind::Import(_)
                 | DeclKind::PluginImport(_)
                 | DeclKind::Include(_)
@@ -265,6 +272,20 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     #[must_use]
     pub const fn base_dimensions(&self) -> &BTreeMap<BaseDimId, BaseDimensionInfo> {
         &self.base_dimensions
+    }
+
+    /// The `type` declaration of a module-owned nominal type, with the
+    /// declaring module's diagnostic source.
+    #[must_use]
+    pub fn type_declaration(
+        &self,
+        identity: &crate::resolved_name::ResolvedStructTypeName,
+    ) -> Option<(&'a ast::TypeDecl, &'a NamedSource<Arc<String>>)> {
+        let module = self.modules.get(identity.owner())?;
+        module
+            .types
+            .get(&identity.to_unowned_def_name())
+            .map(|declaration| (*declaration, module.src))
     }
 
     /// Resolve a dimension reference written in `owner`.
