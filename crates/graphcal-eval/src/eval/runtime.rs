@@ -527,7 +527,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 Ok(plot) => plots.push(plot),
                 Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
-                        name: ScopedName::local(entry.name.clone()),
+                        name: ScopedName::local(entry.name().clone()),
                         reason,
                     });
                 }
@@ -607,14 +607,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     },
                 ) {
                     Ok(evaluated) => Some(super::types::FigureSpec {
-                        name: ScopedName::local(entry.name.clone()),
+                        name: ScopedName::local(entry.name().clone()),
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
                     Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
-                            name: ScopedName::local(entry.name.clone()),
+                            name: ScopedName::local(entry.name().clone()),
                             reason,
                         });
                         None
@@ -645,14 +645,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     },
                 ) {
                     Ok(evaluated) => Some(super::types::LayerSpec {
-                        name: ScopedName::local(entry.name.clone()),
+                        name: ScopedName::local(entry.name().clone()),
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
                     Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
-                            name: ScopedName::local(entry.name.clone()),
+                            name: ScopedName::local(entry.name().clone()),
                             reason,
                         });
                         None
@@ -791,7 +791,7 @@ pub(super) fn evaluate_assertions(
                     })
                 });
             Ok((
-                ScopedName::local(entry.name.clone()),
+                ScopedName::local(entry.name().clone()),
                 assert_result,
                 entry.span,
             ))
@@ -1135,7 +1135,7 @@ fn evaluate_plot(
     }
 
     Ok(PlotSpec {
-        name: ScopedName::local(entry.name.clone()),
+        name: ScopedName::local(entry.name().clone()),
         mark_type: entry.mark_type,
         encodings,
         encoding_meta,

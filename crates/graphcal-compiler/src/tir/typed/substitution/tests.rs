@@ -120,8 +120,8 @@ fn dimension_parameters_bound_to_products_are_expanded_with_their_power() {
 #[test]
 fn index_type_and_nat_parameters_are_replaced_everywhere() {
     let owner = DagId::root_in_package("test", "main");
-    let phase = ResolvedIndexName::from_def(owner.clone(), IndexName::expect_valid("Phase"));
-    let wrapper = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Wrap"));
+    let phase = ResolvedIndexName::for_test(owner.clone(), IndexName::expect_valid("Phase"));
+    let wrapper = ResolvedStructTypeName::for_test(owner, StructTypeName::expect_valid("Wrap"));
     let i = type_param("I");
     let n = type_param("N");
     let t = type_param("T");
@@ -171,7 +171,7 @@ fn index_type_and_nat_parameters_are_replaced_everywhere() {
 fn for_params_binds_owner_qualified_parameters_pairwise() {
     let owner = DagId::root_in_package("test", "main");
     let make_owner = |name| {
-        GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+        GenericParamOwner::Type(ResolvedStructTypeName::for_test(
             owner.clone(),
             StructTypeName::expect_valid(name),
         ))

@@ -78,9 +78,9 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
 fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, CheckedType> {
     let root = tir.root();
     root.consts()
-        .map(|entry| (&entry.name, &entry.type_ann))
-        .chain(root.params().map(|entry| (&entry.name, &entry.type_ann)))
-        .chain(root.nodes().map(|entry| (&entry.name, &entry.type_ann)))
+        .map(|entry| (entry.name(), &entry.type_ann))
+        .chain(root.params().map(|entry| (entry.name(), &entry.type_ann)))
+        .chain(root.nodes().map(|entry| (entry.name(), &entry.type_ann)))
         .map(|(name, annotation)| {
             (
                 ScopedName::local(name.clone()),
@@ -225,16 +225,16 @@ param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
 
     let summary = collect_override_dependency_summary(&tir, &src).unwrap();
     let owner = test_dag_id();
-    let record = NominalOverrideIdentity::Type(ResolvedStructTypeName::from_def(
+    let record = NominalOverrideIdentity::Type(ResolvedStructTypeName::for_test(
         owner.clone(),
         crate::syntax::type_name::StructTypeName::expect_valid("Record"),
     ));
-    let axis = NominalOverrideIdentity::Index(ResolvedIndexName::from_def(
+    let axis = NominalOverrideIdentity::Index(ResolvedIndexName::for_test(
         owner.clone(),
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     ));
     let dependencies = |param: &str| {
-        summary.get(&ResolvedDeclName::from_def(
+        summary.get(&ResolvedDeclName::for_test(
             owner.clone(),
             DeclName::expect_valid(param),
         ))
@@ -285,10 +285,10 @@ fn cycle_detection_uses_semantic_dependencies() {
     let (mut tir, src) = module_aware_tir(source);
     let dag_id = test_dag_id();
 
-    let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-    let b = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("b"));
-    let x = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("x"));
-    let y = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("y"));
+    let a = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("a"));
+    let b = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("b"));
+    let x = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("x"));
+    let y = ResolvedDeclName::for_test(dag_id, DeclName::expect_valid("y"));
 
     let mut resolved = crate::tir::typed::ResolvedDagDependencies::default();
     resolved.const_deps.insert(a.clone(), BTreeSet::new());
@@ -3612,7 +3612,7 @@ fn resolved_constructor_carries_owning_definition_and_field_constraints() {
     );
     let lookup = |name: &str| {
         tir.project_type_store()
-            .lookup_constructor(&crate::resolved_name::ResolvedConstructorName::from_def(
+            .lookup_constructor(&crate::resolved_name::ResolvedConstructorName::for_test(
                 test_dag_id(),
                 ConstructorName::expect_valid(name),
             ))

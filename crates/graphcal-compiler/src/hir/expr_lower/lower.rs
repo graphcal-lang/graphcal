@@ -23,7 +23,7 @@ use crate::hir::expr::{
     MapEntry, MapEntryKey, MatchArm, MatchPattern, ParamBinding, PatternBinding, UnfoldRecurrence,
 };
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
-use crate::hir::lower::{PreludeTypeScope, lower_generic_args, lower_nat_expr};
+use crate::hir::lower::{lower_generic_args, lower_nat_expr};
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 
 /// Lower a syntax expression into tolerant HIR.
@@ -584,7 +584,7 @@ impl ExprLowerer<'_> {
                     {
                         Ok(value) => value,
                         Err(source @ ModuleResolveError::UnknownName { .. }) => {
-                            PreludeTypeScope::graphcal()
+                            crate::registry::prelude::prelude_type_scope()
                                 .resolve_dimension_path(&value_path)
                                 .ok_or(ExprLowerError::ModuleResolve {
                                     source,

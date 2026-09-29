@@ -9,9 +9,9 @@
 //! The per-namespace aliases ([`ResolvedDeclName`], [`ResolvedIndexName`], …)
 //! pair the namespace markers owned by the syntax modules with this type.
 
-use std::marker::PhantomData;
-
 use crate::dag_id::DagId;
+use crate::ir::instance::mint::SpecializationMint;
+use crate::resolve::mint::ResolverMint;
 use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::dimension::{DimNameNamespace, UnitNameNamespace};
 use crate::syntax::index_name::{IndexNameNamespace, IndexVariantName};
@@ -29,8 +29,7 @@ use crate::syntax::type_name::{
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResolvedName<Ns: NameNamespace> {
     owner: DagId,
-    name: NameAtom,
-    _ns: PhantomData<Ns>,
+    name: NameDef<Ns>,
 }
 
 impl<Ns: NameNamespace> std::fmt::Debug for ResolvedName<Ns> {
@@ -44,20 +43,31 @@ impl<Ns: NameNamespace> std::fmt::Debug for ResolvedName<Ns> {
 }
 
 impl<Ns: NameNamespace> ResolvedName<Ns> {
-    /// Construct a resolved name from its canonical owner and leaf atom.
-    #[must_use]
-    pub(crate) const fn new(owner: DagId, name: NameAtom) -> Self {
-        Self {
-            owner,
-            name,
-            _ns: PhantomData,
-        }
+    /// Construct a resolved name from its canonical owner and leaf.
+    ///
+    /// Private: an identity is declared by the resolver ([`Self::from_def`]),
+    /// copied into an instance by specialization ([`Self::specialized`]), or
+    /// derived from another identity.
+    const fn new(owner: DagId, name: NameDef<Ns>) -> Self {
+        Self { owner, name }
     }
 
-    /// Resolve an existing definition-site name into a canonical owner.
+    /// Declare the definition-site `name` of `owner`: the identity the
+    /// resolver records for one declaration.
     #[must_use]
-    pub(crate) fn from_def(owner: DagId, name: NameDef<Ns>) -> Self {
-        Self::new(owner, name.into_atom())
+    pub(crate) const fn from_def(_: ResolverMint, owner: DagId, name: NameDef<Ns>) -> Self {
+        Self::new(owner, name)
+    }
+
+    /// The identity of template declaration `name` materialized in the
+    /// concrete instance owner `owner`, which the resolver never declared.
+    #[must_use]
+    pub(crate) const fn specialized(
+        _: SpecializationMint,
+        owner: DagId,
+        name: NameDef<Ns>,
+    ) -> Self {
+        Self::new(owner, name)
     }
 
     /// Construct an identity outside module resolution, for tests that
@@ -67,15 +77,15 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// module resolver only.
     #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub fn for_test(owner: DagId, name: NameDef<Ns>) -> Self {
-        Self::from_def(owner, name)
+    pub const fn for_test(owner: DagId, name: NameDef<Ns>) -> Self {
+        Self::new(owner, name)
     }
 
     /// The same owner with another leaf in the same namespace, e.g. the
     /// identity a declaration would take if it were renamed.
     #[must_use]
     pub fn with_leaf(&self, name: NameDef<Ns>) -> Self {
-        Self::new(self.owner.clone(), name.into_atom())
+        Self::new(self.owner.clone(), name)
     }
 
     /// The canonical DAG/module that owns this name.
@@ -87,6 +97,12 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// The leaf atom inside [`Self::owner`].
     #[must_use]
     pub const fn atom(&self) -> &NameAtom {
+        self.name.atom()
+    }
+
+    /// The definition-site leaf inside [`Self::owner`].
+    #[must_use]
+    pub const fn leaf(&self) -> &NameDef<Ns> {
         &self.name
     }
 
@@ -103,13 +119,13 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     /// cannot yet carry [`ResolvedName`] itself.
     #[must_use]
     pub fn to_unowned_def_name(&self) -> NameDef<Ns> {
-        NameDef::classify(self.name.clone())
+        self.name.clone()
     }
 
     /// Consume this value and return the canonical owner plus leaf atom.
     #[must_use]
     pub fn into_parts(self) -> (DagId, NameAtom) {
-        (self.owner, self.name)
+        (self.owner, self.name.into_atom())
     }
 }
 
@@ -177,7 +193,7 @@ impl ResolvedDeclName {
     #[must_use]
     pub fn naming_inline_dag(dag: &DagId) -> Option<Self> {
         let name = dag.leaf().inline_dag()?.clone();
-        Some(Self::from_def(dag.parent()?, name))
+        Some(Self::new(dag.parent()?, name))
     }
 }
 
@@ -186,7 +202,7 @@ impl ResolvedStructTypeName {
     /// type in the same module.
     #[must_use]
     pub fn constructor(&self, member: ConstructorName) -> ResolvedConstructorName {
-        ResolvedName::new(self.owner.clone(), member.into_atom())
+        ResolvedName::new(self.owner.clone(), member)
     }
 }
 
@@ -252,7 +268,7 @@ mod tests {
 
     #[test]
     fn resolved_name_carries_canonical_owner_and_leaf() {
-        let resolved = ResolvedDeclName::from_def(
+        let resolved = ResolvedDeclName::for_test(
             DagId::new("test", NonEmpty::new("helpers", vec!["mass"])),
             DeclName::expect_valid("dry_mass"),
         );
@@ -268,7 +284,7 @@ mod tests {
 
     #[test]
     fn resolved_index_variant_carries_resolved_index_owner() {
-        let index = ResolvedIndexName::from_def(
+        let index = ResolvedIndexName::for_test(
             DagId::root_in_package("test", "mission"),
             IndexName::expect_valid("Phase"),
         );
@@ -283,12 +299,12 @@ mod tests {
     #[test]
     fn derived_identities_keep_the_owner() {
         let owner = DagId::root_in_package("test", "mission");
-        let node = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("mass"));
+        let node = ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("mass"));
         let renamed = node.with_leaf(DeclName::expect_valid("dry_mass"));
         assert_eq!(renamed.owner(), &owner);
         assert_eq!(renamed.as_str(), "dry_mass");
 
-        let choice = ResolvedStructTypeName::from_def(
+        let choice = ResolvedStructTypeName::for_test(
             owner.clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Choice"),
         );
@@ -303,7 +319,7 @@ mod tests {
         let inline = file.inline_dag_child(DeclName::expect_valid("stage"));
         assert_eq!(
             ResolvedDeclName::naming_inline_dag(&inline),
-            Some(ResolvedDeclName::from_def(
+            Some(ResolvedDeclName::for_test(
                 file.clone(),
                 DeclName::expect_valid("stage")
             ))

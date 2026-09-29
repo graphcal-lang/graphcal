@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::dag_id::DagId;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
@@ -29,12 +28,11 @@ pub struct OverrideReconciliation {
 }
 
 impl OverrideReconciliation {
-    /// The obligation of `orphan_decl` (declared in `source_owner`) under the
-    /// index and type overrides of one include's canonical `substitution`.
+    /// The obligation of the template param `source_decl` under the index and
+    /// type overrides of one include's canonical `substitution`.
     #[must_use]
     pub(crate) fn new(
-        orphan_decl: DeclName,
-        source_owner: &DagId,
+        source_decl: ResolvedDeclName,
         substitution: &StaticSubstitution,
         src: NamedSource<Arc<String>>,
         include_span: Span,
@@ -64,7 +62,7 @@ impl OverrideReconciliation {
                 }))
                 .collect();
         Self {
-            source_decl: ResolvedDeclName::from_def(source_owner.clone(), orphan_decl),
+            source_decl,
             targets,
             src,
             include_span,
@@ -96,6 +94,7 @@ pub enum OverrideTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dag_id::DagId;
     use crate::registry::index::FiniteIndex;
     use crate::resolved_name::ResolvedDimName;
     use crate::syntax::dimension::DimName;
@@ -104,12 +103,12 @@ mod tests {
     fn obligations_cover_index_and_type_overrides_only() {
         let template = DagId::root_in_package("test", "lib");
         let importer = DagId::root_in_package("test", "main");
-        let axis = ResolvedIndexName::from_def(template.clone(), IndexName::expect_valid("Axis"));
-        let slot = ResolvedStructTypeName::from_def(
+        let axis = ResolvedIndexName::for_test(template.clone(), IndexName::expect_valid("Axis"));
+        let slot = ResolvedStructTypeName::for_test(
             template.clone(),
             StructTypeName::expect_valid("Slot"),
         );
-        let cell = ResolvedStructTypeName::from_def(
+        let cell = ResolvedStructTypeName::for_test(
             importer.clone(),
             StructTypeName::expect_valid("Cell"),
         );
@@ -120,13 +119,13 @@ mod tests {
         );
         substitution.types.insert(slot.clone(), cell.clone());
         substitution.dimensions.insert(
-            ResolvedDimName::from_def(template.clone(), DimName::expect_valid("Q")),
-            ResolvedDimName::from_def(importer, DimName::expect_valid("Length")),
+            ResolvedDimName::for_test(template.clone(), DimName::expect_valid("Q")),
+            ResolvedDimName::for_test(importer, DimName::expect_valid("Length")),
         );
 
+        let fallback = ResolvedDeclName::for_test(template, DeclName::expect_valid("fallback"));
         let reconciliation = OverrideReconciliation::new(
-            DeclName::expect_valid("fallback"),
-            &template,
+            fallback.clone(),
             &substitution,
             NamedSource::new("main.gcl", Arc::new(String::new())),
             Span::new(0, 0),
@@ -143,10 +142,7 @@ mod tests {
             OverrideTarget::Type { source, replacement, .. }
                 if source == &slot && replacement == &cell
         )));
-        assert_eq!(
-            reconciliation.source_decl,
-            ResolvedDeclName::from_def(template, DeclName::expect_valid("fallback"))
-        );
+        assert_eq!(reconciliation.source_decl, fallback);
         assert_eq!(reconciliation.orphan_decl().as_str(), "fallback");
     }
 }

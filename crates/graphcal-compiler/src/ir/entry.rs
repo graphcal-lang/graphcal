@@ -95,9 +95,8 @@ impl BodyPhase for Syntax {
 /// A `const node` declaration.
 #[derive(Debug, Clone)]
 pub struct ConstEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
     pub(crate) expr: P::Expr,
     pub span: Span,
@@ -106,9 +105,8 @@ pub struct ConstEntry<P: BodyPhase> {
 /// A `param` declaration with its optional default.
 #[derive(Debug, Clone)]
 pub struct ParamEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
     pub default: Option<P::Expr>,
     pub span: Span,
@@ -121,9 +119,8 @@ pub struct ParamEntry<P: BodyPhase> {
 /// A `node` declaration.
 #[derive(Debug, Clone)]
 pub struct NodeEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
     pub definition: P::NodeDefinition,
     pub span: Span,
@@ -132,9 +129,8 @@ pub struct NodeEntry<P: BodyPhase> {
 /// An `assert` declaration.
 #[derive(Debug, Clone)]
 pub struct AssertEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     pub body: P::AssertBody,
     pub span: Span,
 }
@@ -142,9 +138,8 @@ pub struct AssertEntry<P: BodyPhase> {
 /// A `plot` declaration.
 #[derive(Debug, Clone)]
 pub struct PlotEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     /// Mark shape rendered for this plot.
     pub mark_type: MarkType,
     pub body: P::PlotBody,
@@ -156,9 +151,8 @@ pub struct PlotEntry<P: BodyPhase> {
 /// A `figure` declaration.
 #[derive(Debug, Clone)]
 pub struct FigureEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     /// Plots composed by this figure, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
     pub fields: P::CompositionFields,
@@ -167,9 +161,8 @@ pub struct FigureEntry<P: BodyPhase> {
 /// A `layer` declaration.
 #[derive(Debug, Clone)]
 pub struct LayerEntry<P: BodyPhase> {
-    pub name: DeclName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: DagId,
+    /// Canonical identity: the owning DAG and the local name in it.
+    pub(crate) identity: ResolvedDeclName,
     /// Plots composed by this layer, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
     pub fields: P::CompositionFields,
@@ -195,21 +188,19 @@ pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     pub src: NamedSource<Arc<String>>,
 }
 
-/// Canonical identity of a declaration entry owned by `owner`.
-///
-/// Every entry is authored under a local, unqualified name; qualified names
-/// reach a DAG only as lexical bindings to other owners' declarations.
-fn entry_identity(owner: &DagId, name: &DeclName) -> ResolvedDeclName {
-    ResolvedDeclName::from_def(owner.clone(), name.clone())
-}
-
 macro_rules! impl_entry_identity {
     ($($entry:ident),* $(,)?) => {$(
         impl<P: BodyPhase> $entry<P> {
             /// Canonical identity of this declaration.
             #[must_use]
             pub fn identity(&self) -> ResolvedDeclName {
-                entry_identity(&self.declaration_owner, &self.name)
+                self.identity.clone()
+            }
+
+            /// Local name of the declaration in its owning DAG.
+            #[must_use]
+            pub const fn name(&self) -> &DeclName {
+                self.identity.leaf()
             }
         }
     )*};
@@ -241,49 +232,45 @@ impl<P: BodyPhase> Decl<P> {
     /// Local name of the declaration in its owning DAG.
     #[must_use]
     pub const fn name(&self) -> &DeclName {
-        match self {
-            Self::Const(entry) => &entry.name,
-            Self::Param(entry) => &entry.name,
-            Self::Node(entry) => &entry.name,
-            Self::Assert(entry) => &entry.name,
-            Self::Plot(entry) => &entry.name,
-            Self::Figure(entry) => &entry.name,
-            Self::Layer(entry) => &entry.name,
-        }
+        self.identity_ref().leaf()
     }
 
     /// Canonical owner of the declaration.
     #[must_use]
     pub const fn declaration_owner(&self) -> &DagId {
-        match self {
-            Self::Const(entry) => &entry.declaration_owner,
-            Self::Param(entry) => &entry.declaration_owner,
-            Self::Node(entry) => &entry.declaration_owner,
-            Self::Assert(entry) => &entry.declaration_owner,
-            Self::Plot(entry) => &entry.declaration_owner,
-            Self::Figure(entry) => &entry.declaration_owner,
-            Self::Layer(entry) => &entry.declaration_owner,
-        }
+        self.identity_ref().owner()
     }
 
     /// Canonical identity of the declaration.
     #[must_use]
     pub fn identity(&self) -> ResolvedDeclName {
-        entry_identity(self.declaration_owner(), self.name())
+        self.identity_ref().clone()
     }
 
-    /// Move the declaration to DAG `owner`.
-    pub(crate) fn set_declaration_owner(&mut self, owner: DagId) {
+    const fn identity_ref(&self) -> &ResolvedDeclName {
+        match self {
+            Self::Const(entry) => &entry.identity,
+            Self::Param(entry) => &entry.identity,
+            Self::Node(entry) => &entry.identity,
+            Self::Assert(entry) => &entry.identity,
+            Self::Plot(entry) => &entry.identity,
+            Self::Figure(entry) => &entry.identity,
+            Self::Layer(entry) => &entry.identity,
+        }
+    }
+
+    /// Replace the declaration's identity, e.g. with its copy in an instance.
+    pub(crate) fn set_identity(&mut self, identity: ResolvedDeclName) {
         let slot = match self {
-            Self::Const(entry) => &mut entry.declaration_owner,
-            Self::Param(entry) => &mut entry.declaration_owner,
-            Self::Node(entry) => &mut entry.declaration_owner,
-            Self::Assert(entry) => &mut entry.declaration_owner,
-            Self::Plot(entry) => &mut entry.declaration_owner,
-            Self::Figure(entry) => &mut entry.declaration_owner,
-            Self::Layer(entry) => &mut entry.declaration_owner,
+            Self::Const(entry) => &mut entry.identity,
+            Self::Param(entry) => &mut entry.identity,
+            Self::Node(entry) => &mut entry.identity,
+            Self::Assert(entry) => &mut entry.identity,
+            Self::Plot(entry) => &mut entry.identity,
+            Self::Figure(entry) => &mut entry.identity,
+            Self::Layer(entry) => &mut entry.identity,
         };
-        *slot = owner;
+        *slot = identity;
     }
 
     /// Evaluation source-order category of the declaration.

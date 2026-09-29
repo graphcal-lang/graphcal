@@ -6,7 +6,6 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::complex_value::ComplexValue;
-use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::ValueDeclCategory;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
@@ -16,11 +15,11 @@ use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef,
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::parser::{ParseError, ParseErrorKind};
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 /// Display unit metadata: the unit name(s) and validated scale factor for pretty-printing.
 #[derive(Debug, Clone, PartialEq)]
@@ -261,11 +260,12 @@ pub struct ValueError {
 }
 
 impl Value {
-    /// Construct a label value after resolving the index leaf into an owner.
+    /// Construct a label value whose index is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn label_with_owner(
-        owner: DagId,
-        index_name: IndexName,
+        owner: graphcal_compiler::dag_id::DagId,
+        index_name: graphcal_compiler::syntax::index_name::IndexName,
         variant: IndexVariantName,
     ) -> Self {
         Self::Label {
@@ -274,11 +274,13 @@ impl Value {
         }
     }
 
-    /// Construct a non-generic struct value after resolving the struct leaf into an owner.
+    /// Construct a non-generic struct value whose type is named directly, for
+    /// tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn struct_with_owner(
-        owner: DagId,
-        type_name: StructTypeName,
+        owner: graphcal_compiler::dag_id::DagId,
+        type_name: graphcal_compiler::syntax::type_name::StructTypeName,
         constructor: ConstructorName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
@@ -290,11 +292,12 @@ impl Value {
         }
     }
 
-    /// Construct an indexed value after resolving the index leaf into an owner.
+    /// Construct an indexed value whose index is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn indexed_with_owner(
-        owner: DagId,
-        index_name: IndexName,
+        owner: graphcal_compiler::dag_id::DagId,
+        index_name: graphcal_compiler::syntax::index_name::IndexName,
         entries: IndexMap<IndexEntryKey, Self>,
     ) -> Self {
         Self::Indexed {
@@ -1215,9 +1218,12 @@ mod tests {
         generic_args: Vec<CheckedGenericArg>,
         fields: IndexMap<FieldName, Value>,
     ) -> Value {
-        let owner = DagId::root_in_package("test", "main");
+        let owner = graphcal_compiler::dag_id::DagId::root_in_package("test", "main");
         Value::Struct {
-            type_name: StructTypeRef::with_owner(owner, StructTypeName::expect_valid("Mode")),
+            type_name: StructTypeRef::with_owner(
+                owner,
+                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Mode"),
+            ),
             constructor: ConstructorName::expect_valid(constructor),
             generic_args,
             fields,

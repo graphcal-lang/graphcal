@@ -10,7 +10,7 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
     let owner = tir
         .root()
         .require_bound_decl_identity(
-            &ScopedName::local(original.name.clone()),
+            &ScopedName::local(original.name().clone()),
             &src,
             DiagnosticAnchor::WholeFile,
         )

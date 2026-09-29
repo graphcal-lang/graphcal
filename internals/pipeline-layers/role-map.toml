@@ -537,6 +537,21 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "instance", "identity"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "instance", "identity", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "instance", "mint"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["ir", "lower"]
 role = "checking"
 
@@ -1112,7 +1127,22 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["resolve", "mint"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["resolve", "namespace"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "prelude"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["resolve", "prelude", "tests"]
 role = "contracts"
 
 [[module]]

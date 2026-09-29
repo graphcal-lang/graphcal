@@ -1601,11 +1601,11 @@ impl DagTIR {
         self.runtime_owner_rebases.get(target.owner()).map_or_else(
             || match &self.semantic_specialization {
                 Some(specialization) if target.owner() == &specialization.template => {
-                    ResolvedDeclName::from_def(self.dag_id.clone(), target.to_unowned_def_name())
+                    crate::ir::instance::identity::rebased_declaration(target, &self.dag_id)
                 }
                 Some(_) | None => target.clone(),
             },
-            |owner| ResolvedDeclName::from_def(owner.clone(), target.to_unowned_def_name()),
+            |owner| crate::ir::instance::identity::rebased_declaration(target, owner),
         )
     }
 
@@ -1618,19 +1618,11 @@ impl DagTIR {
         self.runtime_owner_rebases.get(target.owner()).map_or_else(
             || match &self.semantic_specialization {
                 Some(specialization) if target.owner() == &specialization.template => {
-                    crate::resolved_name::ResolvedUnitName::from_def(
-                        self.dag_id.clone(),
-                        target.to_unowned_def_name(),
-                    )
+                    crate::ir::instance::identity::rebased_declaration(target, &self.dag_id)
                 }
                 Some(_) | None => target.clone(),
             },
-            |owner| {
-                crate::resolved_name::ResolvedUnitName::from_def(
-                    owner.clone(),
-                    target.to_unowned_def_name(),
-                )
-            },
+            |owner| crate::ir::instance::identity::rebased_declaration(target, owner),
         )
     }
 

@@ -109,10 +109,10 @@ mod tests {
     fn frozen_overlay_answers_from_its_maps() {
         let owner = DagId::root_in_package("test", "main");
         let template = DagId::root_in_package("test", "lib");
-        let bound_unit = ResolvedUnitName::from_def(template.clone(), UnitName::expect_valid("u"));
+        let bound_unit = ResolvedUnitName::for_test(template.clone(), UnitName::expect_valid("u"));
         let unit_bindings = HashMap::from([(unit("u"), bound_unit.clone())]);
         let name = ScopedName::from(DeclName::expect_valid("x"));
-        let bound_decl = ResolvedDeclName::from_def(template.clone(), DeclName::expect_valid("x"));
+        let bound_decl = ResolvedDeclName::for_test(template.clone(), DeclName::expect_valid("x"));
         let decl_bindings = HashMap::from([(name.clone(), bound_decl.clone())]);
         let instance_templates = HashMap::from([(owner.clone(), template.clone())]);
         let overlay = BindingOverlay::Frozen(FrozenBindings {

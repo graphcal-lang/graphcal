@@ -1,6 +1,5 @@
 //! Checked type of a declaration or expression, and the type-level references it carries.
 
-use crate::dag_id::DagId;
 use crate::dimension::Dimension;
 use crate::resolved_name::{ResolvedIndexName, ResolvedName};
 use crate::syntax::index_name::{IndexName, IndexNameNamespace};
@@ -47,10 +46,12 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         Self { name, resolved }
     }
 
-    /// Resolve a definition-site leaf into the given owner.
+    /// A reference to the declaration `name` of `owner`, named directly
+    /// for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub fn with_owner(owner: DagId, name: NameDef<Ns>) -> Self {
-        Self::from_resolved(ResolvedName::from_def(owner, name))
+    pub fn with_owner(owner: crate::dag_id::DagId, name: NameDef<Ns>) -> Self {
+        Self::from_resolved(ResolvedName::for_test(owner, name))
     }
 
     /// The leaf definition name used by registries and diagnostics.
@@ -403,9 +404,14 @@ impl<V: Concreteness> IndexTypeRef<V> {
         Self::Declared(TypeNameRef::from_resolved(resolved))
     }
 
-    /// Resolve a declared-index definition-site leaf into the given owner.
+    /// A reference to the declared index `name` of `owner`, named directly
+    /// for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub fn with_owner(owner: DagId, name: IndexName) -> Self {
+    pub fn with_owner(
+        owner: crate::dag_id::DagId,
+        name: crate::syntax::index_name::IndexName,
+    ) -> Self {
         Self::Declared(TypeNameRef::with_owner(owner, name))
     }
 
@@ -555,6 +561,7 @@ pub type StructTypeRef = TypeNameRef<StructTypeNameNamespace>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dag_id::DagId;
     use crate::generic_param::test_support::type_param;
     use crate::syntax::type_name::StructTypeName;
 
@@ -644,7 +651,7 @@ mod tests {
     #[test]
     fn instantiate_binds_symbolic_axes_and_nat_arguments() {
         let owner = DagId::root_in_package("test", "main");
-        let vec = StructTypeRef::from_resolved(ResolvedName::from_def(
+        let vec = StructTypeRef::from_resolved(ResolvedName::for_test(
             owner,
             StructTypeName::expect_valid("Vec"),
         ));
@@ -733,7 +740,7 @@ mod tests {
             IndexTypeRef::<Concrete>::with_owner(owner.clone(), IndexName::expect_valid("Phase"));
         let finite = IndexTypeRef::from_finite_index(fin(2));
         let nested = CheckedType::Struct(
-            StructTypeRef::from_resolved(ResolvedName::from_def(
+            StructTypeRef::from_resolved(ResolvedName::for_test(
                 owner,
                 StructTypeName::expect_valid("Pair"),
             )),
@@ -819,7 +826,7 @@ mod tests {
     #[test]
     fn type_name_ref_equality_uses_canonical_identity_not_display_leaf() {
         let owner = DagId::root_in_package("test", "main");
-        let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Result"));
+        let resolved = ResolvedName::for_test(owner, StructTypeName::expect_valid("Result"));
         let canonical = StructTypeRef::from_resolved(resolved.clone());
         let display_variant =
             StructTypeRef::with_display_leaf(StructTypeName::expect_valid("Success"), resolved);

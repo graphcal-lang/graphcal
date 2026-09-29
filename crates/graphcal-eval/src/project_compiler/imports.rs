@@ -574,7 +574,7 @@ fn resolve_include_static_bindings(
             .map_err(|error| lowering::module_resolve_compile_error(error, src))?;
         bindings.substitution.types.insert(identity, target);
     }
-    let prelude = graphcal_compiler::hir::lower::PreludeTypeScope::graphcal();
+    let prelude = graphcal_compiler::registry::prelude::prelude_type_scope();
     for (port, target) in dims {
         let identity = resolver
             .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))

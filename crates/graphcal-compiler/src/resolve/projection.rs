@@ -90,7 +90,11 @@ impl ModuleResolver {
                         let generic_params = source_symbol.data().clone();
                         let local_name = StructTypeName::classify(local);
                         let projection = StaticProjection::new(
-                            ResolvedStructTypeName::from_def(template.clone(), source_name.clone()),
+                            ResolvedStructTypeName::from_def(
+                                super::mint::ResolverMint(()),
+                                template.clone(),
+                                source_name.clone(),
+                            ),
                             include.instance_scope(),
                         );
                         let entry = self.entry_mut(owner)?;
@@ -102,7 +106,11 @@ impl ModuleResolver {
                         entry.symbols.struct_types.insert(
                             local_name,
                             Symbol::new(
-                                ResolvedStructTypeName::from_def(owner.clone(), source_name),
+                                ResolvedStructTypeName::from_def(
+                                    super::mint::ResolverMint(()),
+                                    owner.clone(),
+                                    source_name,
+                                ),
                                 visibility,
                                 local_span,
                                 generic_params,
@@ -133,6 +141,7 @@ impl ModuleResolver {
                         let projection = DimensionProjection::new(
                             StaticProjection::new(
                                 ResolvedDimName::from_def(
+                                    super::mint::ResolverMint(()),
                                     template.clone(),
                                     DimName::classify(source.clone()),
                                 ),
@@ -149,7 +158,11 @@ impl ModuleResolver {
                         entry.symbols.dimensions.insert(
                             local_name.clone(),
                             Symbol::new(
-                                ResolvedDimName::from_def(owner.clone(), local_name),
+                                ResolvedDimName::from_def(
+                                    super::mint::ResolverMint(()),
+                                    owner.clone(),
+                                    local_name,
+                                ),
                                 visibility,
                                 local_span,
                                 (),
@@ -185,7 +198,11 @@ impl ModuleResolver {
                         symbols.indexes.insert(
                             local.clone(),
                             Symbol::new(
-                                ResolvedIndexName::from_def(owner.clone(), local),
+                                ResolvedIndexName::from_def(
+                                    super::mint::ResolverMint(()),
+                                    owner.clone(),
+                                    local,
+                                ),
                                 visibility,
                                 local_span,
                                 HashMap::new(),
@@ -235,6 +252,7 @@ impl ModuleResolver {
                             owner: owner.clone(),
                             constructor: source_constructor,
                             owner_type: ResolvedStructTypeName::from_def(
+                                super::mint::ResolverMint(()),
                                 constructor.resolved().owner().clone(),
                                 owner_type.clone(),
                             ),
@@ -249,6 +267,7 @@ impl ModuleResolver {
                     let constructor = if has_specialized_owner {
                         let specialized = Symbol::new(
                             ResolvedConstructorName::from_def(
+                                super::mint::ResolverMint(()),
                                 owner.clone(),
                                 constructor.resolved().to_unowned_def_name(),
                             ),

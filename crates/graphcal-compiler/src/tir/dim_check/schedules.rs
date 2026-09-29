@@ -117,9 +117,9 @@ fn cyclic_dependency(
         .get(closing.owner())
         .and_then(|dag| dag.decls().get(closing))
         .and_then(|decl| match decl {
-            Decl::Const(entry) => Some((&entry.name, entry.span)),
-            Decl::Param(entry) => Some((&entry.name, entry.span)),
-            Decl::Node(entry) => Some((&entry.name, entry.span)),
+            Decl::Const(entry) => Some((entry.name(), entry.span)),
+            Decl::Param(entry) => Some((entry.name(), entry.span)),
+            Decl::Node(entry) => Some((entry.name(), entry.span)),
             Decl::Assert(_) | Decl::Plot(_) | Decl::Figure(_) | Decl::Layer(_) => None,
         });
     match site {

@@ -29,13 +29,16 @@ use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
 use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::resolve_types::{CollectedExpectedFail, ExternalDeclSurface};
+use crate::resolve::ModuleResolver;
+use crate::resolve::error::ModuleResolveError;
 use crate::resolve::namespace::Namespace;
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::phase::never;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub use crate::registry::resolve_types::{AttributeTarget, DeclarationKind, ImportedValueNames};
@@ -164,8 +167,8 @@ fn check_value_namespace_collisions(
 /// each entry carrying its complete signature and attribute-derived policy.
 #[derive(Debug)]
 pub(crate) struct CollectedFile {
-    /// Value, assertion, and visualization declarations in source order.
-    pub(crate) decls: Vec<Decl<Syntax>>,
+    /// Output visibility of each plot; see [`declaration_entries`].
+    pub(crate) plot_visibilities: HashMap<DeclName, PlotVisibility>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
@@ -176,8 +179,25 @@ pub(crate) struct CollectedFile {
     pub(crate) external_surface: ExternalDeclSurface,
 }
 
+/// A collected file together with the entries built from it, for tests.
 #[cfg(test)]
-impl CollectedFile {
+#[derive(Debug)]
+struct CollectedWithEntries {
+    file: CollectedFile,
+    decls: Vec<Decl<Syntax>>,
+}
+
+#[cfg(test)]
+impl std::ops::Deref for CollectedWithEntries {
+    type Target = CollectedFile;
+
+    fn deref(&self) -> &CollectedFile {
+        &self.file
+    }
+}
+
+#[cfg(test)]
+impl CollectedWithEntries {
     fn consts(&self) -> Vec<&ConstEntry<Syntax>> {
         self.decls
             .iter()
@@ -379,40 +399,76 @@ fn collect_local_declarations(
 /// Declaration entries built alongside attribute validation.
 #[derive(Default)]
 struct CollectedEntries {
-    decls: Vec<Decl<Syntax>>,
+    plot_visibilities: HashMap<DeclName, PlotVisibility>,
     assumes_map: HashMap<DeclName, Vec<DeclName>>,
     expected_fail_map: HashMap<DeclName, CollectedExpectedFail>,
 }
 
-impl CollectedEntries {
-    /// Record one declaration's entry with its complete signature. Only value
-    /// and sink declarations have entries; `visibility` is meaningful only for
-    /// plots, the sole target that accepts `#[hidden]`.
-    fn push(&mut self, decl: &Declaration, visibility: PlotVisibility, dag_id: &DagId) {
-        match &decl.kind {
-            DeclKind::BaseDimension(_)
-            | DeclKind::Dimension(_)
-            | DeclKind::Unit(_)
-            | DeclKind::Type(_)
-            | DeclKind::Index(_)
-            | DeclKind::Import(_)
-            | DeclKind::PluginImport(_)
-            | DeclKind::Include(_)
-            | DeclKind::Dag(_) => {}
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) proves this arm unreachable"
-            )]
-            DeclKind::Sugar(s) => never(*s),
-            DeclKind::Assert(a) => self.decls.push(Decl::Assert(AssertEntry {
-                name: a.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+/// Build each value and sink declaration's entry, in source order, under the
+/// identity the resolver declared for it.
+///
+/// `plot_visibilities` holds the output visibility validated for each plot,
+/// the sole target that accepts `#[hidden]`.
+///
+/// # Errors
+///
+/// Returns the resolver's error if it did not declare one of `file`'s own
+/// declarations in `dag_id`, which would be a compiler bug.
+pub(crate) fn declaration_entries(
+    file: &File,
+    plot_visibilities: &HashMap<DeclName, PlotVisibility>,
+    resolver: &ModuleResolver,
+    dag_id: &DagId,
+) -> Result<Vec<Decl<Syntax>>, ModuleResolveError> {
+    file.declarations
+        .iter()
+        .filter_map(|decl| {
+            entry(decl, dag_id, |name| {
+                let visibility = plot_visibilities
+                    .get(&name.value)
+                    .copied()
+                    .unwrap_or(PlotVisibility::Standalone);
+                resolver
+                    .declaration(dag_id, &name.value)
+                    .map(|symbol| (symbol.into_resolved(), visibility))
+            })
+        })
+        .collect()
+}
+
+/// The entry of `decl` with its complete signature, if it is a value or sink
+/// declaration. `declare` supplies the canonical identity (and, for a plot,
+/// the output visibility) of the declared name.
+fn entry<E>(
+    decl: &Declaration,
+    dag_id: &DagId,
+    declare: impl FnOnce(&Spanned<DeclName>) -> Result<(ResolvedDeclName, PlotVisibility), E>,
+) -> Option<Result<Decl<Syntax>, E>> {
+    Some(match &decl.kind {
+        DeclKind::BaseDimension(_)
+        | DeclKind::Dimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Type(_)
+        | DeclKind::Index(_)
+        | DeclKind::Import(_)
+        | DeclKind::PluginImport(_)
+        | DeclKind::Include(_)
+        | DeclKind::Dag(_) => return None,
+        #[expect(
+            clippy::uninhabited_references,
+            reason = "Sugar(Infallible) proves this arm unreachable"
+        )]
+        DeclKind::Sugar(s) => never(*s),
+        DeclKind::Assert(a) => declare(&a.name).map(|(identity, _)| {
+            Decl::Assert(AssertEntry {
+                identity,
                 body: InScope::new(a.body.clone(), dag_id.clone()),
                 span: decl.span,
-            })),
-            DeclKind::Plot(p) => self.decls.push(Decl::Plot(PlotEntry {
-                name: p.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::Plot(p) => declare(&p.name).map(|(identity, visibility)| {
+            Decl::Plot(PlotEntry {
+                identity,
                 mark_type: p.mark.mark_type,
                 body: InScope::new(
                     PlotSyntax {
@@ -423,22 +479,25 @@ impl CollectedEntries {
                     dag_id.clone(),
                 ),
                 visibility,
-            })),
-            DeclKind::Figure(f) => self.decls.push(Decl::Figure(FigureEntry {
-                name: f.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::Figure(f) => declare(&f.name).map(|(identity, _)| {
+            Decl::Figure(FigureEntry {
+                identity,
                 plot_names: f.plot_names.clone(),
                 fields: InScope::new(f.fields.clone(), dag_id.clone()),
-            })),
-            DeclKind::Layer(l) => self.decls.push(Decl::Layer(LayerEntry {
-                name: l.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::Layer(l) => declare(&l.name).map(|(identity, _)| {
+            Decl::Layer(LayerEntry {
+                identity,
                 plot_names: l.plot_names.clone(),
                 fields: InScope::new(l.fields.clone(), dag_id.clone()),
-            })),
-            DeclKind::Param(p) => self.decls.push(Decl::Param(ParamEntry {
-                name: p.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::Param(p) => declare(&p.name).map(|(identity, _)| {
+            Decl::Param(ParamEntry {
+                identity,
                 type_ann: InScope::new(p.type_ann.clone(), dag_id.clone()),
                 default: p
                     .value
@@ -446,23 +505,25 @@ impl CollectedEntries {
                     .map(|expr| InScope::new(expr.clone(), dag_id.clone())),
                 span: decl.span,
                 override_reconciliations: Vec::new(),
-            })),
-            DeclKind::ConstNode(c) => self.decls.push(Decl::Const(ConstEntry {
-                name: c.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::ConstNode(c) => declare(&c.name).map(|(identity, _)| {
+            Decl::Const(ConstEntry {
+                identity,
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
-            })),
-            DeclKind::Node(n) => self.decls.push(Decl::Node(NodeEntry {
-                name: n.name.value.clone(),
-                declaration_owner: dag_id.clone(),
+            })
+        }),
+        DeclKind::Node(n) => declare(&n.name).map(|(identity, _)| {
+            Decl::Node(NodeEntry {
+                identity,
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.definition.clone(), dag_id.clone()),
                 span: decl.span,
-            })),
-        }
-    }
+            })
+        }),
+    })
 }
 
 /// Validate every declaration's attributes, record `assumes_map` /
@@ -471,7 +532,6 @@ fn collect_entries(
     file: &File,
     src: &NamedSource<Arc<String>>,
     assert_names: &HashSet<DeclName>,
-    dag_id: &DagId,
 ) -> Result<CollectedEntries, GraphcalError> {
     let mut entries = CollectedEntries::default();
     for decl in &file.declarations {
@@ -482,7 +542,11 @@ fn collect_entries(
             &mut entries.assumes_map,
             &mut entries.expected_fail_map,
         )?;
-        entries.push(decl, visibility, dag_id);
+        if let DeclKind::Plot(plot) = &decl.kind {
+            entries
+                .plot_visibilities
+                .insert(plot.name.value.clone(), visibility);
+        }
     }
     Ok(entries)
 }
@@ -818,18 +882,32 @@ fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::Na
     }
 }
 
-/// Collect declaration entries and validate declaration shells through the
-/// production imported-binding path.
+/// Validate declaration shells through the production imported-binding path,
+/// then build the declaration entries against a single-module resolver.
 #[cfg(test)]
-fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile, GraphcalError> {
+fn resolve(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+) -> Result<CollectedWithEntries, GraphcalError> {
     let interface = crate::ir::module_interface::ModuleInterface::new(&file.declarations);
-    resolve_with_imported_values(
+    let collected = resolve_with_imported_values(
         file,
         interface.declared_surface(),
         src,
         &ImportedValueNames::default(),
-        &DagId::root_in_package("test", "main"),
-    )
+    )?;
+    let dag_id = DagId::root_in_package("test", "main");
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(dag_id.clone(), &file.declarations);
+    let resolver = modules
+        .build()
+        .expect("validated declarations build a single-module resolver");
+    let decls = declaration_entries(file, &collected.plot_visibilities, &resolver, &dag_id)
+        .expect("the resolver declares every collected declaration");
+    Ok(CollectedWithEntries {
+        file: collected,
+        decls,
+    })
 }
 
 /// Resolve names with imported value declarations in lexical scope.
@@ -848,7 +926,6 @@ pub(crate) fn resolve_with_imported_values(
     declared_surface: &ExternalDeclSurface,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
-    dag_id: &DagId,
 ) -> Result<CollectedFile, GraphcalError> {
     check_imported_graph_value_names(imported, src)?;
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
@@ -883,15 +960,15 @@ pub(crate) fn resolve_with_imported_values(
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
-    // Validate attributes, build assumes_map / expected_fail_map, and build
-    // each declaration entry with its complete signature.
-    let entries = collect_entries(file, src, &all_assert_names, dag_id)?;
+    // Validate attributes and build assumes_map / expected_fail_map and the
+    // plot visibilities that `declaration_entries` needs.
+    let entries = collect_entries(file, src, &all_assert_names)?;
 
     // Validate external signatures: exports and input ports must not reference private type-system items.
     validate_private_in_public(file, src, &local.external_surface)?;
 
     Ok(CollectedFile {
-        decls: entries.decls,
+        plot_visibilities: entries.plot_visibilities,
         assumes_map: entries.assumes_map,
         expected_fail: entries.expected_fail_map,
         external_surface: local.external_surface,

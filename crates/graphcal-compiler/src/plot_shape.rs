@@ -159,7 +159,7 @@ mod tests {
     use crate::syntax::index_name::IndexName;
 
     fn axis(owner: &str, name: &str) -> IndexTypeRef<Symbolic> {
-        IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
+        IndexTypeRef::from_resolved(ResolvedIndexName::for_test(
             DagId::root_in_package("test", owner),
             IndexName::expect_valid(name),
         ))

@@ -83,7 +83,7 @@ fn dimensionless_has_one_spelling() {
 #[test]
 fn struct_format_omits_empty_argument_list() {
     let owner = DagId::root_in_package("test", "main");
-    let name = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Orbit"));
+    let name = ResolvedStructTypeName::for_test(owner, StructTypeName::expect_valid("Orbit"));
     let registry = registry();
     let plain = ResolvedValueType::Struct {
         name: name.clone(),
@@ -106,7 +106,7 @@ fn struct_format_omits_empty_argument_list() {
 fn decl_type_exposes_element_and_axes() {
     let owner = DagId::root_in_package("test", "main");
     let axis = ResolvedIndex::Concrete(
-        ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase")),
+        ResolvedIndexName::for_test(owner, IndexName::expect_valid("Phase")),
         Span::new(0, 0),
     );
     let element = ResolvedValueType::Quantity(ResolvedDim::Concrete(length()));
@@ -150,7 +150,7 @@ fn symbolic_complex_and_generic_args_have_no_checked_type() {
     );
     let owner = DagId::root_in_package("test", "main");
     let applied = |dimension| ResolvedValueType::Struct {
-        name: ResolvedStructTypeName::from_def(owner.clone(), StructTypeName::expect_valid("Vec3")),
+        name: ResolvedStructTypeName::for_test(owner.clone(), StructTypeName::expect_valid("Vec3")),
         generic_args: vec![ResolvedGenericArg::Dim(dimension)],
         span: Span::new(0, 0),
     };

@@ -3,10 +3,9 @@
 //! The index parameter preserves the distinction between source paths and
 //! resolved identities. Collection and attribute parsing are separate clients.
 
-use crate::dag_id::DagId;
 use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::ResolvedIndexVariant;
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 
@@ -41,10 +40,12 @@ impl<I> ExpectedFailKeyPart<I> {
 }
 
 impl ExpectedFailKeyPart<IndexTypeRef> {
+    /// A named key part whose index is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn with_owner(
-        owner: DagId,
-        index: IndexName,
+        owner: crate::dag_id::DagId,
+        index: crate::syntax::index_name::IndexName,
         variant: IndexVariantName,
         span: Span,
     ) -> Self {
@@ -119,7 +120,9 @@ pub enum ExpectedFail<I = IndexTypeRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dag_id::DagId;
     use crate::registry::index::FiniteIndex;
+    use crate::syntax::index_name::IndexName;
     use std::path::Path;
 
     fn axis(file: &str) -> IndexTypeRef {

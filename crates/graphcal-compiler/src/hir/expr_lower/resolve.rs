@@ -24,7 +24,6 @@ use crate::hir::expr::{
     ConstRef, ExprKind, ExternFnRef, ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef,
     UnappliedFunctionRef,
 };
-use crate::hir::lower::PreludeTypeScope;
 
 /// Attach the source span of a failed module-resolver lookup.
 pub(super) fn spanned<T>(
@@ -142,12 +141,14 @@ impl<'a> ExprLowerer<'a> {
                         .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     {
                         Ok(resolved) => resolved,
-                        Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
-                            .resolve_unit_ref(reference)
-                            .ok_or_else(|| ExprLowerError::UnknownUnit {
-                                name: reference.clone(),
-                                span: item.name.span,
-                            })?,
+                        Err(ModuleResolveError::UnknownName { .. }) => {
+                            crate::registry::prelude::prelude_type_scope()
+                                .resolve_unit_ref(reference)
+                                .ok_or_else(|| ExprLowerError::UnknownUnit {
+                                    name: reference.clone(),
+                                    span: item.name.span,
+                                })?
+                        }
                         Err(source) => {
                             return Err(ExprLowerError::ModuleResolve {
                                 source,

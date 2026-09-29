@@ -24,7 +24,6 @@ use crate::hir::const_expr::{ConstExprError, CoordinateAxisError, CoordinateAxis
 use crate::hir::const_lower::{
     UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
 };
-use crate::hir::lower::PreludeTypeScope;
 use crate::ir::module_definitions::StaticDefinitions;
 use crate::registry::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
 use crate::registry::error::GraphcalError;
@@ -37,6 +36,7 @@ use crate::registry::unit::{
     resolve_unit_expr_with,
 };
 use crate::resolve::ModuleResolver;
+use crate::resolve::prelude::PreludeTypeScope;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedUnitName};
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
@@ -251,7 +251,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             .collect();
         Ok(Self {
             resolver,
-            prelude: PreludeTypeScope::graphcal(),
+            prelude: crate::registry::prelude::prelude_type_scope(),
             prelude_dimensions,
             modules: sources
                 .into_iter()

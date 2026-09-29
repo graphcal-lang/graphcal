@@ -3,12 +3,11 @@
 use indexmap::IndexMap;
 
 use crate::complex_value::ComplexValue;
-use crate::dag_id::DagId;
 use crate::finite_value::{FiniteQuantity, NonFiniteQuantity};
 use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
 use crate::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
-use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
-use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
+use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// The kind of a [`RuntimeValue`], used in type-mismatch error reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,11 +139,12 @@ impl RuntimeValue {
         })
     }
 
-    /// Construct a label value after resolving the index leaf into an owner.
+    /// Construct a label value whose index is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn label_with_owner(
-        owner: DagId,
-        index_name: IndexName,
+        owner: crate::dag_id::DagId,
+        index_name: crate::syntax::index_name::IndexName,
         variant: IndexVariantName,
     ) -> Self {
         Self::Label {
@@ -162,27 +162,29 @@ impl RuntimeValue {
         }
     }
 
-    /// Construct a struct value after resolving the struct leaf into an owner.
+    /// Construct a struct value whose type is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
-    pub fn struct_with_owner(
-        owner: DagId,
-        type_name: StructTypeName,
+    pub const fn struct_with_owner(
+        owner: crate::dag_id::DagId,
+        type_name: crate::syntax::type_name::StructTypeName,
         constructor: ConstructorName,
         fields: IndexMap<FieldName, Self>,
     ) -> Self {
         Self::Struct {
-            type_name: ResolvedStructTypeName::from_def(owner, type_name),
+            type_name: ResolvedStructTypeName::for_test(owner, type_name),
             constructor,
             generic_args: Vec::new(),
             fields,
         }
     }
 
-    /// Construct an indexed value after resolving the index leaf into an owner.
+    /// Construct an indexed value whose index is named directly, for tests.
+    #[cfg(any(test, feature = "test-identities"))]
     #[must_use]
     pub fn indexed_with_owner(
-        owner: DagId,
-        index_name: IndexName,
+        owner: crate::dag_id::DagId,
+        index_name: crate::syntax::index_name::IndexName,
         entries: IndexMap<IndexEntryKey, Self>,
     ) -> Self {
         Self::Indexed {

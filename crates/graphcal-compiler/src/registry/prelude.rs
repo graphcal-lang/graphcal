@@ -1,9 +1,12 @@
+use std::sync::LazyLock;
+
 use crate::dag_id::DagId;
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, UnitName};
 
 use crate::registry::types::PositiveFiniteScale;
+use crate::resolve::prelude::PreludeTypeScope;
 
 /// Canonical synthetic owner for Graphcal prelude type-system symbols.
 ///
@@ -35,6 +38,19 @@ pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
 #[must_use]
 pub fn prelude_dag_id() -> DagId {
     DagId::root_in_package(PRELUDE_DAG_ID_SEGMENT, PRELUDE_DAG_ID_SEGMENT)
+}
+
+/// The built-in Graphcal prelude type scope, built once per process.
+#[must_use]
+pub fn prelude_type_scope() -> &'static PreludeTypeScope {
+    static GRAPHCAL: LazyLock<PreludeTypeScope> = LazyLock::new(|| {
+        PreludeTypeScope::new(
+            prelude_dag_id(),
+            prelude_dimension_names().map(DimName::expect_valid),
+            prelude_unit_names().map(UnitName::expect_valid),
+        )
+    });
+    &GRAPHCAL
 }
 
 // Declaration table. Registration and the public name lists are generated
@@ -198,6 +214,8 @@ pub enum PreludeDefinitionError {
     Dimension(#[from] RatioError),
     #[error(transparent)]
     Owner(#[from] crate::ir::module_definitions::ForeignDefinitionError),
+    #[error("the prelude does not declare `{0}`")]
+    Undeclared(&'static str),
 }
 
 /// The Graphcal prelude's dimensions, units, and base-dimension metadata,
@@ -213,11 +231,18 @@ pub fn prelude_definitions()
     use crate::registry::unit::{UnitInfo, UnitScale};
     use crate::resolved_name::{ResolvedDimName, ResolvedUnitName};
 
-    let owner = prelude_dag_id();
-    let mut definitions = crate::ir::module_definitions::StaticDefinitions::new(owner.clone());
-    let dimension =
-        |name: &str| ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name));
-    let unit = |name: &str| ResolvedUnitName::from_def(owner.clone(), UnitName::expect_valid(name));
+    let scope = prelude_type_scope();
+    let mut definitions = crate::ir::module_definitions::StaticDefinitions::new(prelude_dag_id());
+    let dimension = |name: &'static str| -> Result<ResolvedDimName, PreludeDefinitionError> {
+        scope
+            .dimension(&DimName::expect_valid(name))
+            .ok_or(PreludeDefinitionError::Undeclared(name))
+    };
+    let unit = |name: &'static str| -> Result<ResolvedUnitName, PreludeDefinitionError> {
+        scope
+            .unit(&UnitName::expect_valid(name))
+            .ok_or(PreludeDefinitionError::Undeclared(name))
+    };
     let coherent = |dimension| UnitInfo {
         dimension,
         scale: UnitScale::Const(PositiveFiniteScale::ONE),
@@ -231,15 +256,15 @@ pub fn prelude_definitions()
                 is_affine_prone(base),
             ),
         );
-        definitions.insert_dimension(dimension(base.as_str()), Dimension::base(id.clone()))?;
-        definitions.insert_unit(unit(base_symbol(base)), coherent(Dimension::base(id)))?;
+        definitions.insert_dimension(dimension(base.as_str())?, Dimension::base(id.clone()))?;
+        definitions.insert_unit(unit(base_symbol(base))?, coherent(Dimension::base(id)))?;
     }
     for decl in DERIVED_DIMENSIONS {
-        definitions.insert_dimension(dimension(decl.name), dimension_of(decl.factors)?)?;
+        definitions.insert_dimension(dimension(decl.name)?, dimension_of(decl.factors)?)?;
     }
     for decl in DERIVED_UNITS {
         definitions.insert_unit(
-            unit(decl.name),
+            unit(decl.name)?,
             UnitInfo {
                 dimension: dimension_of(decl.factors)?,
                 scale: UnitScale::Const(decl.scale),

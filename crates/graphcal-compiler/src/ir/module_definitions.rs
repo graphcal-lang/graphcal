@@ -273,8 +273,8 @@ mod tests {
         let owner = DagId::root_in_package("test", "owner");
         let other = DagId::root_in_package("test", "other");
         let mut statics = StaticDefinitions::new(owner.clone());
-        let local = ResolvedDimName::from_def(owner, DimName::expect_valid("Local"));
-        let foreign = ResolvedDimName::from_def(other, DimName::expect_valid("Foreign"));
+        let local = ResolvedDimName::for_test(owner, DimName::expect_valid("Local"));
+        let foreign = ResolvedDimName::for_test(other, DimName::expect_valid("Foreign"));
 
         statics
             .insert_dimension(local.clone(), Dimension::dimensionless())

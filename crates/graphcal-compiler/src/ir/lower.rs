@@ -372,7 +372,6 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
         interface.declared_surface(),
         src,
         &ImportedValueNames::default(),
-        &dag_id,
     )?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
     let mut definitions = definition_evaluator(
@@ -452,7 +451,6 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
         interface.declared_surface(),
         src,
         &ImportedValueNames::default(),
-        &dag_id,
     )?;
     let dag_bodies = ast
         .declarations
@@ -560,43 +558,38 @@ fn single_module_resolver(
         })
 }
 
-fn collect_static_ports(ast: &File, owner: &crate::dag_id::DagId) -> Vec<crate::hir::StaticPort> {
+/// The Static ports `owner` declares, with the identities the resolver
+/// declared for them.
+fn collect_static_ports(
+    ast: &File,
+    owner: &crate::dag_id::DagId,
+    resolver: &crate::resolve::ModuleResolver,
+) -> Result<Vec<crate::hir::StaticPort>, crate::resolve::error::ModuleResolveError> {
+    use crate::hir::StaticPortIdentity;
     ast.declarations
         .iter()
         .filter_map(|declaration| {
             let interface = crate::static_interface::static_interface(&declaration.kind)?;
             let identity = match &declaration.kind {
-                DeclKind::Type(type_decl) => crate::hir::StaticPortIdentity::Type(
-                    crate::resolved_name::ResolvedStructTypeName::from_def(
-                        owner.clone(),
-                        type_decl.name.value.clone(),
-                    ),
-                ),
-                DeclKind::BaseDimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
-                    crate::resolved_name::ResolvedDimName::from_def(
-                        owner.clone(),
-                        dimension.name.value.clone(),
-                    ),
-                ),
-                DeclKind::Dimension(dimension) => crate::hir::StaticPortIdentity::Dimension(
-                    crate::resolved_name::ResolvedDimName::from_def(
-                        owner.clone(),
-                        dimension.name.value.clone(),
-                    ),
-                ),
-                DeclKind::Index(index) => crate::hir::StaticPortIdentity::Index(
-                    crate::resolved_name::ResolvedIndexName::from_def(
-                        owner.clone(),
-                        index.name.value.clone(),
-                    ),
-                ),
+                DeclKind::Type(type_decl) => resolver
+                    .declaration(owner, &type_decl.name.value)
+                    .map(|symbol| StaticPortIdentity::Type(symbol.into_resolved())),
+                DeclKind::BaseDimension(dimension) => resolver
+                    .declaration(owner, &dimension.name.value)
+                    .map(|symbol| StaticPortIdentity::Dimension(symbol.into_resolved())),
+                DeclKind::Dimension(dimension) => resolver
+                    .declaration(owner, &dimension.name.value)
+                    .map(|symbol| StaticPortIdentity::Dimension(symbol.into_resolved())),
+                DeclKind::Index(index) => resolver
+                    .declaration(owner, &index.name.value)
+                    .map(|symbol| StaticPortIdentity::Index(symbol.into_resolved())),
                 _ => return None,
             };
-            Some(crate::hir::StaticPort {
+            Some(identity.map(|identity| crate::hir::StaticPort {
                 identity,
                 role: interface.role(),
                 span: declaration.span,
-            })
+            }))
         })
         .collect()
 }
@@ -678,15 +671,11 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
 ) -> Result<UnfrozenIR, GraphcalError> {
     cancellation.checkpoint()?;
     let ModuleBody { ast, interface } = module;
-    let resolved = resolve_with_imported_values(
-        ast,
-        interface.declared_surface(),
-        src,
-        imported_names,
-        dag_id,
-    )?;
+    let resolved =
+        resolve_with_imported_values(ast, interface.declared_surface(), src, imported_names)?;
     let mut unfrozen = build_ir_from_resolved(
         ast,
+        src,
         resolved,
         imported_bindings,
         dag_id,
@@ -764,16 +753,12 @@ pub fn lower_dag_module_with_imported_bindings_and_cancellation(
         ast: dag_body,
         interface,
     } = module;
-    let resolved = resolve_with_imported_values(
-        dag_body,
-        interface.declared_surface(),
-        src,
-        imported_names,
-        dag_id,
-    )?;
+    let resolved =
+        resolve_with_imported_values(dag_body, interface.declared_surface(), src, imported_names)?;
 
     build_ir_from_resolved(
         dag_body,
+        src,
         resolved,
         imported_bindings,
         dag_id,
@@ -810,6 +795,7 @@ pub struct DagBodySelfImports {
 /// `UnfrozenIR` from the collected declaration entries.
 fn build_ir_from_resolved(
     ast: &File,
+    src: &NamedSource<Arc<String>>,
     resolved: CollectedFile,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
@@ -821,12 +807,25 @@ fn build_ir_from_resolved(
     // module resolver; nothing is registered under a source spelling.
     let module_statics = definitions.module_definitions(dag_id)?;
     cancellation.checkpoint()?;
+    // The resolver was built from these same declarations, so it declared
+    // every identity the entries and Static ports need.
+    let module_resolver = definitions.resolver();
+    let (decls, static_ports) = super::resolve::declaration_entries(
+        ast,
+        &resolved.plot_visibilities,
+        module_resolver,
+        dag_id,
+    )
+    .and_then(|decls| Ok((decls, collect_static_ports(ast, dag_id, module_resolver)?)))
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })?;
 
     let unfrozen = UnfrozenIR {
-        decls: resolved.decls,
+        decls,
         included_plots: Vec::new(),
         source_declarations: collect_source_declarations(ast),
-        static_ports: collect_static_ports(ast, dag_id),
+        static_ports,
         assumes_map: resolved
             .assumes_map
             .into_iter()
@@ -1013,11 +1012,11 @@ mod tests {
              type Box<T: Type = Marker> { Box(value: T) }\n",
         )
         .unwrap();
-        let identity = crate::resolved_name::ResolvedStructTypeName::from_def(
+        let identity = crate::resolved_name::ResolvedStructTypeName::for_test(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Box"),
         );
-        let marker = crate::resolved_name::ResolvedStructTypeName::from_def(
+        let marker = crate::resolved_name::ResolvedStructTypeName::for_test(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Marker"),
         );

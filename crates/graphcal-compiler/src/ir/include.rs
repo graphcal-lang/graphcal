@@ -8,15 +8,16 @@ use miette::NamedSource;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::ir::instance::identity::{instance_declaration, projection_alias};
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::registry::error::GraphcalError;
-use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
+use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::ConstructorName;
 use crate::syntax::visitor::ExprVisitor;
@@ -66,7 +67,7 @@ impl UnfrozenIR {
         self.decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Plot(entry) if &entry.name == name => Some(entry.identity()),
+                Decl::Plot(entry) if entry.name() == name => Some(entry.identity()),
                 _ => None,
             })
             .or_else(|| {
@@ -76,8 +77,8 @@ impl UnfrozenIR {
                         .iter()
                         .find(|projection| projection.exposed_name.leaf() == name)
                         .map(|projection| {
-                            ResolvedDeclName::from_def(
-                                instance.instance.id().owner().clone(),
+                            instance_declaration(
+                                instance.instance.id(),
                                 projection.target.to_unowned_def_name(),
                             )
                         })
@@ -91,7 +92,7 @@ impl UnfrozenIR {
         self.decls
             .iter()
             .filter_map(|decl| match decl {
-                Decl::Assert(entry) => Some(entry.name.clone()),
+                Decl::Assert(entry) => Some(entry.name().clone()),
                 _ => None,
             })
             .collect()
@@ -155,9 +156,9 @@ impl UnfrozenIR {
     pub fn include_alias_declaration(&self, name: &DeclName) -> Option<IncludeAliasDeclaration> {
         self.decls.iter().find_map(|decl| {
             let (type_ann, is_const) = match decl {
-                Decl::Const(entry) if &entry.name == name => (&entry.type_ann, true),
-                Decl::Param(entry) if &entry.name == name => (&entry.type_ann, false),
-                Decl::Node(entry) if &entry.name == name => (&entry.type_ann, false),
+                Decl::Const(entry) if entry.name() == name => (&entry.type_ann, true),
+                Decl::Param(entry) if entry.name() == name => (&entry.type_ann, false),
+                Decl::Node(entry) if entry.name() == name => (&entry.type_ann, false),
                 _ => return None,
             };
             Some(IncludeAliasDeclaration {
@@ -180,10 +181,9 @@ impl UnfrozenIR {
     pub fn add_semantic_dynamic_unit_bindings<'a>(
         &mut self,
         units: impl IntoIterator<Item = &'a UnitName>,
-        scope: &ScopeSegment,
-        instance_owner: &crate::dag_id::DagId,
+        instance: &crate::dag_id::InstanceId,
     ) {
-        let Some(alias) = scope.alias() else {
+        let Some(alias) = instance.scope().alias() else {
             return;
         };
         self.unit_bindings.extend(units.into_iter().map(|unit| {
@@ -192,7 +192,7 @@ impl UnfrozenIR {
                     crate::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
                     unit.clone(),
                 ),
-                ResolvedUnitName::from_def(instance_owner.clone(), unit.clone()),
+                instance_declaration(instance, unit.clone()),
             )
         }));
     }
@@ -205,15 +205,16 @@ impl UnfrozenIR {
         source: &UnitName,
         alias: UnitName,
     ) {
-        let exposes_unit = self.semantic_instances.iter().any(|record| {
-            record.instance.id().owner() == instance_owner
-                && record.runtime_unit_names.contains(source)
-        });
-        if exposes_unit {
-            self.unit_bindings.insert(
-                UnitRef::local(alias),
-                ResolvedUnitName::from_def(instance_owner.clone(), source.clone()),
-            );
+        let exposed = self
+            .semantic_instances
+            .iter()
+            .find(|record| {
+                record.instance.id().owner() == instance_owner
+                    && record.runtime_unit_names.contains(source)
+            })
+            .map(|record| instance_declaration(record.instance.id(), source.clone()));
+        if let Some(target) = exposed {
+            self.unit_bindings.insert(UnitRef::local(alias), target);
         }
     }
 
@@ -286,24 +287,27 @@ impl UnfrozenIR {
             .filter(|decl| matches!(decl.category(), DeclCategory::Value(_)))
             .map(|decl| (ScopedName::local(decl.name().clone()), decl.identity()))
             .collect::<HashMap<_, _>>();
-        for record in &self.semantic_instances {
+        // Instance ports, then imported values, join the local declarations;
+        // no lexical binding may shadow another.
+        let instance_ports = self.semantic_instances.iter().flat_map(|record| {
             let scope = record.instance.id().scope();
-            for target in record.instance.concrete_value_ports() {
-                let name = ScopedName::in_scope(scope.clone(), target.to_unowned_def_name());
-                if decl_bindings.insert(name.clone(), target).is_some() {
-                    return Err(GraphcalError::internal_error(
-                        format!("semantic instance binding `{name}` collides with a declaration"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ));
-                }
-            }
-        }
-        for (name, target) in &self.imported_bindings {
+            record.instance.concrete_value_ports().map(move |target| {
+                (
+                    ScopedName::in_scope(scope.clone(), target.to_unowned_def_name()),
+                    target,
+                    "semantic instance binding",
+                )
+            })
+        });
+        let imported = self
+            .imported_bindings
+            .iter()
+            .map(|(name, target)| (name.clone(), target.clone(), "imported lexical binding"));
+        for (name, target, origin) in instance_ports.chain(imported) {
             cancellation.checkpoint()?;
-            if decl_bindings.insert(name.clone(), target.clone()).is_some() {
+            if decl_bindings.insert(name.clone(), target).is_some() {
                 return Err(GraphcalError::internal_error(
-                    format!("imported lexical binding `{name}` collides with a local declaration"),
+                    format!("{origin} `{name}` collides with a declaration"),
                     src,
                     DiagnosticAnchor::WholeFile,
                 ));
@@ -424,15 +428,13 @@ impl UnfrozenIR {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
                         type_ann: lower_type_annotation(&entry.type_ann)?,
                         expr: lower_scoped(&entry.expr)?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         span: entry.span,
                     }),
                     Decl::Param(entry) => Decl::Param(ParamEntry {
                         type_ann: lower_type_annotation(&entry.type_ann)?,
                         default: entry.default.as_ref().map(lower_scoped).transpose()?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         span: entry.span,
                         override_reconciliations: entry.override_reconciliations,
                     }),
@@ -451,8 +453,7 @@ impl UnfrozenIR {
                             ),
                         )
                         .map_err(|error| crate::hir::expr_lower_error_to_graphcal(&error, src))?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         span: entry.span,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
@@ -471,8 +472,7 @@ impl UnfrozenIR {
                         .map_err(|err| {
                             crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
                         })?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         span: entry.span,
                     }),
                     // Sink expressions are semantic program bodies, not
@@ -506,22 +506,19 @@ impl UnfrozenIR {
                                     LoweredPlotProperty::plot,
                                 )?,
                             },
-                            name: entry.name,
-                            declaration_owner: entry.declaration_owner,
+                            identity: entry.identity,
                             mark_type: entry.mark_type,
                             visibility: entry.visibility,
                         })
                     }
                     Decl::Figure(entry) => Decl::Figure(FigureEntry {
                         fields: lower_composition_fields(&entry.fields)?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
                     Decl::Layer(entry) => Decl::Layer(LayerEntry {
                         fields: lower_composition_fields(&entry.fields)?,
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         plot_names: entry.plot_names,
                     }),
                 })
@@ -540,8 +537,8 @@ impl UnfrozenIR {
                             .iter()
                             .find(|projection| &projection.exposed_name == name)
                             .map(|projection| {
-                                ResolvedDeclName::from_def(
-                                    record.instance.id().owner().clone(),
+                                instance_declaration(
+                                    record.instance.id(),
                                     projection.target.to_unowned_def_name(),
                                 )
                             })
@@ -776,8 +773,7 @@ impl UnfrozenIR {
         span: Span,
     ) {
         self.decls.push(Decl::Const(entry::ConstEntry {
-            name,
-            declaration_owner: body_resolution_owner.clone(),
+            identity: projection_alias(&body_resolution_owner, name),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
             span,
@@ -797,8 +793,7 @@ impl UnfrozenIR {
         span: Span,
     ) {
         self.decls.push(Decl::Node(entry::NodeEntry {
-            name,
-            declaration_owner: body_resolution_owner.clone(),
+            identity: projection_alias(&body_resolution_owner, name),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(
                 crate::node_definition::NodeDefinition::Formula(expr),
@@ -824,7 +819,7 @@ impl UnfrozenIR {
         include_span: Span,
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
         self.params()
-            .filter(|param| !bindings.contains_key(&param.name))
+            .filter(|param| !bindings.contains_key(param.name()))
             .map(|param| {
                 let mut reconciliations = param.override_reconciliations.clone();
                 if let Some(default) = &param.default
@@ -834,15 +829,14 @@ impl UnfrozenIR {
                         substitution,
                         resolver,
                         dependency_owner,
-                        orphan_decl: &param.name,
+                        orphan_decl: param.name(),
                         importer_src,
                         include_span,
                     }
                     .visit_expr(&default.syntax)?;
                     reconciliations.push(
                         crate::ir::override_reconciliation::OverrideReconciliation::new(
-                            param.name.clone(),
-                            dependency_owner,
+                            param.identity(),
                             substitution,
                             importer_src.clone(),
                             include_span,
@@ -909,10 +903,7 @@ impl NominalOverridePreflight<'_> {
             return Ok(());
         };
         let owning_type = symbol.kind().owner_type();
-        let owning_identity = crate::resolved_name::ResolvedStructTypeName::from_def(
-            symbol.resolved().owner().clone(),
-            owning_type.clone(),
-        );
+        let owning_identity = symbol.owner_type_identity();
         if !self.substitution.types.contains_key(&owning_identity) {
             return Ok(());
         }

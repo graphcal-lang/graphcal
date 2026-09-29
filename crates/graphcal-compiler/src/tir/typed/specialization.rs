@@ -12,6 +12,9 @@ use super::{
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ir::instance::HirInstanceRecord;
+use crate::ir::instance::identity::{
+    instance_declaration, projection_alias, rebased_declaration, template_declaration,
+};
 use crate::ir::static_substitution::{
     InstanceIndexBindingTarget, StaticSpecializationId, StaticSubstitution,
 };
@@ -297,7 +300,7 @@ fn rebase_runtime_decl(
 ) -> ResolvedDeclName {
     runtime_owner_rebases.get(declaration.owner()).map_or_else(
         || declaration.clone(),
-        |owner| ResolvedDeclName::from_def(owner.clone(), declaration.to_unowned_def_name()),
+        |owner| rebased_declaration(declaration, owner),
     )
 }
 
@@ -338,17 +341,10 @@ fn instance_decl(
     owner: &crate::dag_id::DagId,
 ) -> ResolvedDeclName {
     if target.owner() == &specialization.template {
-        local_instance_decl(target, owner)
+        rebased_declaration(target, owner)
     } else {
         target.clone()
     }
-}
-
-fn local_instance_decl(
-    target: &ResolvedDeclName,
-    owner: &crate::dag_id::DagId,
-) -> ResolvedDeclName {
-    ResolvedDeclName::from_def(owner.clone(), target.to_unowned_def_name())
 }
 
 fn specialize_dependencies(
@@ -361,7 +357,7 @@ fn specialize_dependencies(
             .iter()
             .map(|(declaration, dependencies)| {
                 (
-                    local_instance_decl(declaration, owner),
+                    rebased_declaration(declaration, owner),
                     dependencies
                         .iter()
                         .map(|dependency| instance_decl(dependency, specialization, owner))
@@ -375,13 +371,12 @@ fn specialize_dependencies(
 }
 
 fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
-    let owner = edge.instance.id().owner();
     instance.semantic.override_reconciliations = edge
         .override_reconciliations
         .iter()
         .map(|(template_port, reconciliations)| {
             (
-                ResolvedDeclName::from_def(owner.clone(), template_port.to_unowned_def_name()),
+                instance_declaration(edge.instance.id(), template_port.to_unowned_def_name()),
                 reconciliations.clone(),
             )
         })
@@ -585,7 +580,7 @@ fn specialize_dynamic_unit_scales(
                     .cloned()
                     .unwrap_or_else(|| unit.owner().clone())
             };
-            let unit = ResolvedUnitName::from_def(unit_owner, unit.to_unowned_def_name());
+            let unit = rebased_declaration(unit, &unit_owner);
             let mut entry = entry.clone();
             entry.unit = unit.clone();
             entry.declared_dimension = specialize_dimension(
@@ -657,7 +652,7 @@ fn specialize_instance_semantics(
         .semantic
         .domain_bounds
         .iter()
-        .map(|(target, bounds)| (local_instance_decl(target, owner), bounds.clone()))
+        .map(|(target, bounds)| (rebased_declaration(target, owner), bounds.clone()))
         .collect();
     install_override_reconciliations(instance, edge);
     Ok(())
@@ -788,14 +783,11 @@ fn install_plot_projections_for_dag(
         .flat_map(|edge| {
             edge.plot_projections.iter().map(|projection| {
                 let instance_owner = edge.instance.id().owner().clone();
-                let target = ResolvedDeclName::from_def(
-                    instance_owner.clone(),
+                let target = instance_declaration(
+                    edge.instance.id(),
                     projection.target.to_unowned_def_name(),
                 );
-                let exposed = ResolvedDeclName::from_def(
-                    parent.clone(),
-                    projection.exposed_name.leaf().clone(),
-                );
+                let exposed = projection_alias(parent, projection.exposed_name.leaf().clone());
                 (instance_owner, target, exposed)
             })
         })
@@ -911,8 +903,8 @@ fn install_semantic_projection_bindings(
                 if !has_local_body {
                     dag.semantic.decl_bindings.insert(
                         projection.exposed_name,
-                        ResolvedDeclName::from_def(
-                            edge.instance.id().owner().clone(),
+                        instance_declaration(
+                            edge.instance.id(),
                             projection.target.to_unowned_def_name(),
                         ),
                     );
@@ -921,8 +913,8 @@ fn install_semantic_projection_bindings(
             for projection in edge.assertion_projections {
                 dag.semantic.decl_bindings.insert(
                     projection.exposed_name,
-                    ResolvedDeclName::from_def(
-                        edge.instance.id().owner().clone(),
+                    instance_declaration(
+                        edge.instance.id(),
                         projection.target.to_unowned_def_name(),
                     ),
                 );
@@ -967,8 +959,7 @@ fn instantiate_semantic_edge(
     let runtime_unit_infos = runtime_unit_names
         .into_iter()
         .map(|name| {
-            let source =
-                ResolvedUnitName::from_def(edge.instance.id().template().clone(), name.clone());
+            let source: ResolvedUnitName = template_declaration(edge.instance.id(), name.clone());
             let mut info = tir.unit_info(&source).cloned().ok_or_else(|| {
                 GraphcalError::internal_error(
                     format!("template runtime unit `{source}` has no checked definition"),
@@ -982,7 +973,7 @@ fn instantiate_semantic_edge(
                 tir.project_type_store(),
                 src,
             )?;
-            Ok((ResolvedUnitName::from_def(owner.clone(), name), info))
+            Ok((instance_declaration(edge.instance.id(), name), info))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let instance = clone_checked_instance(&template, edge, tir, src)?;

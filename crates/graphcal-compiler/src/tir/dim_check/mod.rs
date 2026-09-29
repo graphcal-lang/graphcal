@@ -984,7 +984,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> 
         if entry.default.is_none() {
             continue;
         }
-        check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
+        check_decl_expr_type(ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
     }
     Ok(())
 }
@@ -1014,12 +1014,12 @@ fn check_dimensions_dag(
     for entry in dag.consts() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
+        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
     }
     for entry in dag.nodes() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
+        check_decl_expr_type(&ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
     }
     check_param_defaults(&ctx)?;
 
@@ -1029,7 +1029,7 @@ fn check_dimensions_dag(
     for entry in dag.asserts() {
         ctx.checkpoint()?;
         let owner = entry.identity();
-        let body = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
+        let body = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&owner) {
             validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;
@@ -1093,9 +1093,9 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
     let dag = ctx.env.dag;
     let decl_iter = dag
         .consts()
-        .map(|e| (&e.name, e.identity(), &e.type_ann))
-        .chain(dag.params().map(|e| (&e.name, e.identity(), &e.type_ann)))
-        .chain(dag.nodes().map(|e| (&e.name, e.identity(), &e.type_ann)));
+        .map(|e| (e.name(), e.identity(), &e.type_ann))
+        .chain(dag.params().map(|e| (e.name(), e.identity(), &e.type_ann)))
+        .chain(dag.nodes().map(|e| (e.name(), e.identity(), &e.type_ann)));
 
     for (name, key, annotation) in decl_iter {
         let bounds = dag.semantic.domain_bounds.get(&key);

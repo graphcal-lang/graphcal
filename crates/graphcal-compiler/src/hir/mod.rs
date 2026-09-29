@@ -54,7 +54,7 @@ pub use expr_lower::tolerant::{LoweringFailure, Tolerant};
 pub(crate) use lower::lower_decl_type;
 pub use lower::{
     GenericApplicationTarget, GenericArgArity, GenericParamBinding, GenericScope, HirLowerError,
-    ModuleScope, PreludeTypeScope, TypePathSlot,
+    ModuleScope, TypePathSlot,
 };
 pub use nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,

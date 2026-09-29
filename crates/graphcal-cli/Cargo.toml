@@ -41,6 +41,7 @@ walkdir = { workspace = true }
 arrow-array.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
+graphcal-eval = { workspace = true, features = ["test-identities"] }
 graphcal-plugin-abi.workspace = true
 indexmap.workspace = true
 insta.workspace = true

@@ -154,6 +154,19 @@ impl<'r, Ns: NameNamespace, Kind> SymbolRef<'r, Ns, Kind> {
     }
 }
 
+impl SymbolRef<'_, ConstructorNameNamespace, ConstructorSignature> {
+    /// Canonical identity of the constructor's owning type, which is
+    /// declared beside the constructor's canonical declaration.
+    #[must_use]
+    pub fn owner_type_identity(self) -> ResolvedName<StructTypeNameNamespace> {
+        ResolvedName::from_def(
+            super::mint::ResolverMint(()),
+            self.resolved().owner().clone(),
+            self.kind().owner_type.clone(),
+        )
+    }
+}
+
 impl SymbolRef<'_, DeclNameNamespace, DeclSymbolKind> {
     /// Whether an instantiated declaration may be referenced by its consumer.
     ///
@@ -590,7 +603,11 @@ impl ModuleSymbols {
             });
         }
         let symbol = Symbol::new(
-            ResolvedName::from_def(self.owner.clone(), name.value.clone()),
+            ResolvedName::from_def(
+                super::mint::ResolverMint(()),
+                self.owner.clone(),
+                name.value.clone(),
+            ),
             visibility,
             name.span,
             data,

@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
-        let resolved = crate::resolved_name::ResolvedDimName::from_def(
+        let resolved = crate::resolved_name::ResolvedDimName::for_test(
             crate::dag_id::DagId::root_in_package("test", "test"),
             crate::syntax::dimension::DimName::expect_valid("Information"),
         );
