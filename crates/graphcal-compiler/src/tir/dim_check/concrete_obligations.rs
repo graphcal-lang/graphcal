@@ -11,7 +11,7 @@ use crate::registry::checked_type::{
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::{ExpressionFact, ValueFact};
-use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TIR};
+use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, UncheckedTir};
 use miette::NamedSource;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ struct Application {
 
 struct Context<'a> {
     dag: &'a DagTIR,
-    tir: &'a TIR,
+    tir: &'a UncheckedTir,
     src: &'a NamedSource<Arc<String>>,
     span: Span,
     cancellation: &'a CancellationToken,
@@ -32,7 +32,7 @@ struct Context<'a> {
 pub(super) fn validate_concrete_type_obligations(
     inferred: &CheckedType<Symbolic>,
     dag: &DagTIR,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
     span: Span,
     cancellation: &CancellationToken,
@@ -51,7 +51,7 @@ pub(super) fn validate_concrete_type_obligations(
 }
 
 pub(super) fn validate_project(
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
 ) -> Result<(), GraphcalError> {
@@ -228,7 +228,7 @@ fn check_bound(
                 DiagnosticAnchor::Source(bound.span),
             )
         })?;
-    let facts = super::expression_facts::specialize_bound_expression_facts(
+    let facts = super::expression_facts::specialize_bound_facts(
         ctx.tir,
         owner,
         &bound.value,

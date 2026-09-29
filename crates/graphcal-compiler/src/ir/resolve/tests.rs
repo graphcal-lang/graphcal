@@ -20,7 +20,7 @@ fn parse_and_resolve(source: &str) -> Result<CollectedWithEntries, GraphcalError
 
 /// Run the full per-file pipeline (desugar → IR → HIR/TIR) so tests can
 /// observe reference resolution and the HIR-derived dependency graph.
-fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError> {
+fn compile_to_tir(source: &str) -> Result<crate::tir::typed::UncheckedTir, GraphcalError> {
     let file = parse_and_desugar(source);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
     let ir = crate::ir::lower::lower(&file, &src)?;
@@ -30,7 +30,8 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types))
+    crate::tir::typed::type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
+        .map(crate::tir::typed::TirDraft::finish)
 }
 
 /// Dependency names of `decl` in `map`, as leaf strings.

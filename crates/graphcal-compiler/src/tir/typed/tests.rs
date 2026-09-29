@@ -65,14 +65,14 @@ fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, Gr
 }
 
 /// The checked type of a root declaration written as `name`, if any.
-fn root_decl_type_opt<'a>(tir: &'a TIR, name: &str) -> Option<&'a ResolvedDeclType> {
+fn root_decl_type_opt<'a>(tir: &'a UncheckedTir, name: &str) -> Option<&'a ResolvedDeclType> {
     let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
     let identity = tir.root().bound_decl_identity(&written)?;
     tir.decl_type(identity).map(CheckedDeclType::resolved)
 }
 
 /// The checked type of a root declaration written as `name`.
-fn root_decl_type<'a>(tir: &'a TIR, name: &str) -> &'a ResolvedDeclType {
+fn root_decl_type<'a>(tir: &'a UncheckedTir, name: &str) -> &'a ResolvedDeclType {
     root_decl_type_opt(tir, name).unwrap_or_else(|| panic!("`{name}` has no checked type"))
 }
 
@@ -516,7 +516,7 @@ fn dag_store_clones_share_canonical_body_handles() {
     assert!(Arc::ptr_eq(first, second));
 }
 
-fn importer_tir(path: &str, stores: &[&DagStore]) -> TIR {
+fn importer_tir(path: &str, stores: &[&DagStore]) -> UncheckedTir {
     let mut builder =
         parse_and_type_resolve_builder_named("node x: Dimensionless = 1;", path).unwrap();
     stores
@@ -526,7 +526,7 @@ fn importer_tir(path: &str, stores: &[&DagStore]) -> TIR {
     builder.finish()
 }
 
-fn unit_overlay_tir(path: &str) -> (TIR, ResolvedUnitName) {
+fn unit_overlay_tir(path: &str) -> (UncheckedTir, ResolvedUnitName) {
     let mut tir = parse_and_type_resolve_builder_named(
         "const unit local_step: Length = 2.0 m; node distance: Length = 1.0 local_step;",
         path,
@@ -741,18 +741,18 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
 /// directly (no self-import preprocessing — fixtures exercised here
 /// either don't use self-imports or are expected to surface errors that
 /// fall out of the unprocessed body).
-fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
-    parse_and_type_resolve_builder(source).map(TirBuilder::finish)
+fn parse_and_type_resolve(source: &str) -> Result<UncheckedTir, GraphcalError> {
+    parse_and_type_resolve_builder(source).map(TirDraft::finish)
 }
 
-fn parse_and_type_resolve_builder(source: &str) -> Result<TirBuilder, GraphcalError> {
+fn parse_and_type_resolve_builder(source: &str) -> Result<TirDraft, GraphcalError> {
     parse_and_type_resolve_builder_named(source, "test.gcl")
 }
 
 fn parse_and_type_resolve_builder_named(
     source: &str,
     path: &str,
-) -> Result<TirBuilder, GraphcalError> {
+) -> Result<TirDraft, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
@@ -780,7 +780,7 @@ fn parse_and_type_resolve_builder_named(
         &project_types,
         &cancellation,
     )?;
-    let mut builder = type_resolve_signed_builder_with_imported_bindings_and_cancellation(
+    let mut builder = TirDraft::resolve_root(
         signed,
         HashMap::new(),
         &src,
@@ -813,14 +813,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    let mut builder = type_resolve_builder_with_modules_and_cancellation(
-        ir,
-        &src,
-        &resolver,
-        Arc::new(project_types),
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap();
+    let mut builder = type_resolve_draft(ir, &src, &resolver, Arc::new(project_types)).unwrap();
 
     assert_eq!(builder.root().dag_id(), &root_id);
     let duplicate = builder.root().clone();
@@ -879,7 +872,9 @@ fn module_aware_type_resolve_records_semantic_deps() {
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
 
-    let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
+    let tir = type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
+        .unwrap()
+        .finish();
     let deps = &tir.root().semantic.dependencies;
     let c = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("C"));
     let d = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("D"));

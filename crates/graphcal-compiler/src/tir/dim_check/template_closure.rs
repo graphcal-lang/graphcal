@@ -335,7 +335,7 @@ type ExpressionRecords = std::collections::HashMap<
 /// plots with `plots`. Returns `plots`'s result and the facts the rigid
 /// inference recorded.
 fn check_in_rigid_view<R>(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
     failure: RigidFailure<'_>,
@@ -404,7 +404,7 @@ pub(super) struct PortGenericFacts {
 /// The closure check has accepted every body with each port rigid, so any
 /// failure here is reported unchanged.
 pub(super) fn port_generic_facts(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
     src: &miette::NamedSource<std::sync::Arc<String>>,

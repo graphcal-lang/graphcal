@@ -173,7 +173,7 @@ impl std::fmt::Debug for CheckedProject {
 impl CheckedProject {
     /// Borrow the checked typed program.
     #[must_use]
-    pub const fn tir(&self) -> &graphcal_compiler::tir::typed::TIR {
+    pub const fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
         &self.compiled.tir
     }
 
@@ -219,7 +219,7 @@ pub fn check_project(project: &LoadedProject) -> Result<CheckedProject, CompileE
 #[cfg(test)]
 pub fn compile_to_tir_from_project(
     project: &LoadedProject,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
     check_project(project).map(|checked| checked.compiled.tir)
 }
 
@@ -228,7 +228,7 @@ pub fn compile_to_tir_from_project(
 pub fn compile_to_tir(
     source: &str,
     name: &str,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
     let project = LoadedProject::from_source(source, name)?;
     compile_to_tir_from_project(&project)
 }
@@ -239,7 +239,7 @@ pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     project_root: Option<&Path>,
     fs: &F,
-) -> Result<(graphcal_compiler::tir::typed::TIR, LoadedProject), CompileError> {
+) -> Result<(graphcal_compiler::tir::typed::CheckedTir, LoadedProject), CompileError> {
     let project = crate::loader::load_project(root_path, project_root, fs)?;
     let tir = compile_to_tir_from_project(&project)?;
     Ok((tir, project))

@@ -11,7 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, DagTIR, StructFieldConstraintKey};
 use miette::NamedSource;
 
 use crate::domain_constraint::ResolvedDomainConstraint;
@@ -44,7 +44,7 @@ pub struct EvalEnvironment<'a> {
     pub(in crate::eval_expr) work_budget: WorkBudget,
     pub registry: &'a FormattingRegistry,
     pub src: &'a NamedSource<Arc<String>>,
-    pub tir: &'a TIR,
+    pub tir: &'a CheckedTir,
     pub current_dag: &'a DagTIR,
     pub current_decl: Option<ResolvedDeclName>,
     pub root_values: Option<&'a RuntimeValueMap>,
@@ -77,7 +77,7 @@ impl<'a> Deref for EvalContext<'a> {
 
 impl<'a> EvalContext<'a> {
     fn environment(
-        tir: &'a TIR,
+        tir: &'a CheckedTir,
         dag: &'a DagTIR,
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
@@ -100,7 +100,7 @@ impl<'a> EvalContext<'a> {
     /// Select a provisional constant scope. DAG/host calls are unavailable and
     /// field constraints are deferred to mandatory constant-field checking.
     pub fn provisional_constants(
-        tir: &'a TIR,
+        tir: &'a CheckedTir,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
@@ -122,7 +122,7 @@ impl<'a> EvalContext<'a> {
     /// Select a checked runtime scope. Field constraints cannot be omitted or
     /// supplied independently of the selected checked project facts.
     pub fn checked(
-        tir: &'a TIR,
+        tir: &'a CheckedTir,
         plan: &'a ExecPlan,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,

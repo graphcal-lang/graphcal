@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use super::{
     DagTIR, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg,
-    ResolvedIndex, ResolvedValueType, TIR,
+    ResolvedIndex, ResolvedValueType, UncheckedTir,
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
@@ -245,7 +245,7 @@ fn specialize_struct_ref(
 pub fn specialize_expression_type<V: Concreteness>(
     ty: &crate::registry::checked_type::CheckedType<V>,
     substitution: &StaticSubstitution,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::registry::checked_type::CheckedType<V>, GraphcalError> {
     use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
@@ -307,7 +307,7 @@ fn rebase_runtime_decl(
 fn specialize_plot_channel(
     channel: &PlotChannelShape,
     substitution: &StaticSubstitution,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<PlotChannelShape, GraphcalError> {
     let leaf = match channel.leaf() {
@@ -563,7 +563,7 @@ fn specialize_dynamic_unit_scales(
     instance: &mut DagTIR,
     specialization: &StaticSpecializationId,
     owner: &crate::dag_id::DagId,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     instance.semantic.dynamic_unit_scales = instance
@@ -604,7 +604,7 @@ fn specialize_dynamic_unit_scales(
 fn specialize_instance_semantics(
     instance: &mut DagTIR,
     edge: &HirInstanceRecord,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
@@ -662,7 +662,7 @@ fn specialize_instance_semantics(
 fn clone_checked_instance(
     template: &DagTIR,
     edge: &HirInstanceRecord,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagTIR, GraphcalError> {
     // An instance rebinding a defaulted dimension port is built from the
@@ -708,7 +708,7 @@ fn clone_checked_instance(
 }
 
 fn specialize_instance_presentation_facts(
-    tir: &TIR,
+    tir: &UncheckedTir,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
@@ -753,7 +753,7 @@ fn specialize_instance_presentation_facts(
 }
 
 fn install_plot_projections_for_dag(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     parent: &crate::dag_id::DagId,
     visiting: &mut HashSet<crate::dag_id::DagId>,
     complete: &mut HashSet<crate::dag_id::DagId>,
@@ -830,7 +830,7 @@ fn install_plot_projections_for_dag(
     Ok(())
 }
 
-fn dag_identity_snapshot(tir: &TIR) -> Vec<crate::dag_id::DagId> {
+fn dag_identity_snapshot(tir: &UncheckedTir) -> Vec<crate::dag_id::DagId> {
     // Imported bodies are immutable handles. Only local assembly bodies can
     // receive instance/projection facts.
     tir.dags.local_keys().cloned().collect()
@@ -838,7 +838,7 @@ fn dag_identity_snapshot(tir: &TIR) -> Vec<crate::dag_id::DagId> {
 
 /// Copy requested instance plots into their semantic parents from leaves upward.
 pub fn install_semantic_plot_projection_facts(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     // Projection installation mutates the registry, so traversal owns a stable
@@ -863,7 +863,7 @@ pub type PlotChannels =
 /// dimension checker subsequently recomputes concrete provenance from each
 /// instance body while retaining these already-checked plot shapes.
 pub fn install_semantic_presentation_facts(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -883,7 +883,7 @@ pub fn install_semantic_presentation_facts(
 }
 
 fn install_semantic_projection_bindings(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let dag_ids = tir.dags.local_keys().cloned().collect::<Vec<_>>();
@@ -926,7 +926,7 @@ fn install_semantic_projection_bindings(
 }
 
 fn instantiate_semantic_edge(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     edge: &HirInstanceRecord,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -994,7 +994,7 @@ fn instantiate_semantic_edge(
 /// Template bodies are reused after the Option A closure check; only checked
 /// signatures, concrete owners, and value-binding environments are specialized.
 pub fn instantiate_semantic_edges(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     loop {

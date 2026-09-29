@@ -277,7 +277,7 @@ impl BodyObservations {
         expr: &Expr,
         inferred: &CheckedType<Symbolic>,
         dag: &crate::tir::typed::DagTIR,
-        tir: &crate::tir::typed::TIR,
+        tir: &crate::tir::typed::UncheckedTir,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         let checked_type = inferred.clone();

@@ -100,7 +100,7 @@ fn hir_exists_before_static_checking_and_tir_requires_validation() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).starts_with("TIR {"));
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("CheckedTir {"));
 
     let dir = tempfile::tempdir().unwrap();
     let invalid = write_source(dir.path(), "node bad: Length(min: 0.0 m) = 1.0 s;\n");

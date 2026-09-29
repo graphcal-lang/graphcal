@@ -29,6 +29,8 @@ use crate::syntax::module_name::ScopedName;
 
 pub mod model;
 pub use model::*;
+pub mod override_dependencies;
+pub use override_dependencies::CheckedOverrideDependencies;
 pub mod resolved_type;
 pub use resolved_type::*;
 
@@ -141,137 +143,124 @@ pub fn resolve_hir_signature_with_modules_and_cancellation(
     Ok(SignatureResolvedHirDag { hir, decl_types })
 }
 
-/// Resolve all canonical HIR type annotations in an `HirDag` against the
-/// authoritative project type store.
-///
-/// Syntax paths were eliminated while freezing HIR. This conversion therefore
-/// reads owner-qualified references directly and never performs source-path
-/// lookup or AST-to-HIR lowering.
-pub fn type_resolve_with_modules(
-    hir: HirDag,
+/// Resolve a HIR DAG without imports into a draft whose only DAG is its root.
+#[cfg(test)]
+pub(crate) fn type_resolve_draft(
+    dag: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: Arc<ProjectTypeStore>,
-) -> Result<TIR, GraphcalError> {
-    type_resolve_with_modules_and_cancellation(
-        hir,
+) -> Result<TirDraft, GraphcalError> {
+    let cancellation = crate::cancellation::CancellationToken::unbounded();
+    let signed = resolve_hir_signature_with_modules_and_cancellation(
+        dag,
         src,
         module_resolver,
-        project_types,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Resolve a HIR DAG to TIR while observing cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] for invalid types or cancellation.
-pub fn type_resolve_with_modules_and_cancellation(
-    hir: HirDag,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TIR, GraphcalError> {
-    type_resolve_builder_with_modules_and_cancellation(
-        hir,
-        src,
-        module_resolver,
-        project_types,
-        cancellation,
-    )
-    .map(TirBuilder::finish)
-}
-
-/// Resolve a root DAG into mutable project-assembly state.
-///
-/// Callers add every file-defined or imported DAG through
-/// [`TirBuilder::insert_dag`] and consume the builder with
-/// [`TirBuilder::finish`] before checking or evaluation.
-pub fn type_resolve_builder_with_modules_and_cancellation(
-    hir: HirDag,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirBuilder, GraphcalError> {
-    type_resolve_builder_with_imported_bindings_and_cancellation(
-        hir,
+        &project_types,
+        &cancellation,
+    )?;
+    TirDraft::resolve_root(
+        signed,
         HashMap::new(),
         src,
         module_resolver,
         project_types,
-        cancellation,
+        &cancellation,
     )
 }
 
-/// Resolve a root HIR module after attaching checked imported interfaces.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when an imported lexical target is missing or
-/// does not match the canonical target recorded by HIR, or when type
-/// resolution otherwise fails.
-pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
-    hir: HirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirBuilder, GraphcalError>
-where
-    S: std::hash::BuildHasher,
-{
-    let signed = resolve_hir_signature_with_modules_and_cancellation(
-        hir,
-        src,
-        module_resolver,
-        &project_types,
-        cancellation,
-    )?;
-    type_resolve_signed_builder_with_imported_bindings_and_cancellation(
-        signed,
-        imported_bindings,
-        src,
-        module_resolver,
-        project_types,
-        cancellation,
-    )
-}
+impl TirDraft {
+    /// Resolve a signature-complete root HIR module's bodies into a draft.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] when an imported interface is inconsistent
+    /// or body semantic resolution fails.
+    pub fn resolve_root<S>(
+        signed: SignatureResolvedHirDag,
+        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+        src: &NamedSource<Arc<String>>,
+        module_resolver: &ModuleResolver,
+        project_types: Arc<ProjectTypeStore>,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<Self, GraphcalError>
+    where
+        S: std::hash::BuildHasher,
+    {
+        cancellation.checkpoint()?;
+        validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
+        let imported_bindings = imported_bindings.into_iter().collect();
+        let dag_id = signed.dag_id().clone();
+        let context_types = Arc::clone(&project_types);
+        let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
+        type_resolve_impl(
+            signed,
+            imported_bindings,
+            src,
+            ctx,
+            project_types,
+            cancellation,
+        )
+    }
 
-/// Resolve a signature-complete root HIR module's bodies and assemble TIR.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when an imported interface is inconsistent or
-/// body semantic resolution fails.
-pub fn type_resolve_signed_builder_with_imported_bindings_and_cancellation<S>(
-    signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirBuilder, GraphcalError>
-where
-    S: std::hash::BuildHasher,
-{
-    cancellation.checkpoint()?;
-    validate_checked_imported_bindings(signed.hir(), &imported_bindings, src)?;
-    let imported_bindings = imported_bindings.into_iter().collect();
-    let dag_id = signed.dag_id().clone();
-    let context_types = Arc::clone(&project_types);
-    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, &context_types);
-    type_resolve_impl(
-        signed,
-        imported_bindings,
-        src,
-        ctx,
-        project_types,
-        cancellation,
-    )
+    /// Resolve a signature-complete same-file inline DAG's bodies and add it
+    /// to this draft, merging the extern signatures its own `import plugin`
+    /// blocks declare.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] when a declared extern signature conflicts,
+    /// an imported interface is inconsistent, or body semantic resolution
+    /// fails.
+    pub fn add_inline_dag<S>(
+        &mut self,
+        signed: SignatureResolvedHirDag,
+        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+        src: &NamedSource<Arc<String>>,
+        module_resolver: &ModuleResolver,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<(), GraphcalError>
+    where
+        S: std::hash::BuildHasher,
+    {
+        cancellation.checkpoint()?;
+        // A nested DAG's `import plugin` signatures join the file's extern
+        // map, exactly like the root body's, so calls inside it resolve.
+        self.merge_declared_extern_functions(signed.hir(), src)?;
+        let project_types = Arc::clone(&self.project_types);
+        let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
+            signed,
+            imported_bindings,
+            src,
+            module_resolver,
+            &project_types,
+            cancellation,
+        )?;
+        self.insert_dag(dag).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })
+    }
+
+    /// Complete assembly and materialize every semantic include edge as a
+    /// concrete instance DAG.
+    ///
+    /// `overrides` refines the include override obligations of every local
+    /// body (materialized instances included) with the canonical dependency
+    /// summaries of already-checked source modules.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] when an instance cannot be specialized.
+    pub fn instantiate(
+        self,
+        overrides: &CheckedOverrideDependencies,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<InstantiatedTir, GraphcalError> {
+        let mut tir = self.finish();
+        specialization::instantiate_semantic_edges(&mut tir, src)?;
+        overrides.reconcile(&mut tir);
+        Ok(InstantiatedTir { tir })
+    }
 }
 
 fn validate_checked_imported_bindings<S>(
@@ -339,7 +328,7 @@ fn type_resolve_impl(
     module_ctx: ModuleTypeContext<'_>,
     project_types: Arc<ProjectTypeStore>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirBuilder, GraphcalError> {
+) -> Result<TirDraft, GraphcalError> {
     cancellation.checkpoint()?;
     let SignatureResolvedHirDag {
         hir: mut ir,
@@ -377,7 +366,7 @@ fn type_resolve_impl(
         src,
         cancellation,
     )?;
-    Ok(TirBuilder::new(
+    Ok(TirDraft::new(
         crate::registry::types::FormattingRegistry::new(
             project_types.base_dimensions().clone(),
             ir.display_dimensions,
@@ -388,86 +377,34 @@ fn type_resolve_impl(
     ))
 }
 
-/// Resolve type annotations for one DAG body with module-aware type-system
-/// path lookup.
-pub fn type_resolve_single_with_modules(
-    hir: HirDag,
+/// Resolve type annotations for one DAG body without imports.
+#[cfg(test)]
+pub(crate) fn type_resolve_single_with_modules(
+    dag: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<DagTIR, GraphcalError> {
-    type_resolve_single_with_modules_and_cancellation(
-        hir,
-        src,
-        module_resolver,
-        project_types,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Resolve one HIR DAG while observing cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] for invalid types or cancellation.
-pub fn type_resolve_single_with_modules_and_cancellation(
-    hir: HirDag,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError> {
-    type_resolve_single_with_imported_bindings_and_cancellation(
-        hir,
-        HashMap::new(),
-        src,
-        module_resolver,
-        project_types,
-        cancellation,
-    )
-}
-
-/// Resolve one HIR DAG after attaching checked imported interfaces.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when an imported lexical target is missing or
-/// mismatched, or when type resolution otherwise fails.
-pub fn type_resolve_single_with_imported_bindings_and_cancellation<S>(
-    hir: HirDag,
-    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    src: &NamedSource<Arc<String>>,
-    module_resolver: &ModuleResolver,
-    project_types: &ProjectTypeStore,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, GraphcalError>
-where
-    S: std::hash::BuildHasher,
-{
+    let cancellation = crate::cancellation::CancellationToken::unbounded();
     let signed = resolve_hir_signature_with_modules_and_cancellation(
-        hir,
+        dag,
         src,
         module_resolver,
         project_types,
-        cancellation,
+        &cancellation,
     )?;
     type_resolve_signed_single_with_imported_bindings_and_cancellation(
         signed,
-        imported_bindings,
+        HashMap::<_, _, std::hash::RandomState>::new(),
         src,
         module_resolver,
         project_types,
-        cancellation,
+        &cancellation,
     )
 }
 
 /// Resolve a signature-complete non-root HIR module's bodies.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when an imported interface is inconsistent or
-/// body semantic resolution fails.
-pub fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
+fn type_resolve_signed_single_with_imported_bindings_and_cancellation<S>(
     signed: SignatureResolvedHirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
     src: &NamedSource<Arc<String>>,
@@ -1741,11 +1678,11 @@ impl DagTIRSeed {
 /// and an include binding the ports can specialize them, without mutating the
 /// authoritative result.
 pub(crate) fn rigid_dimension_view(
-    tir: &TIR,
+    tir: &UncheckedTir,
     dag_id: &crate::dag_id::DagId,
     ports: &[ResolvedDimName],
     src: &NamedSource<Arc<String>>,
-) -> Result<TIR, GraphcalError> {
+) -> Result<UncheckedTir, GraphcalError> {
     let rigid_types = tir
         .project_types
         .with_rigid_dimensions(ports)
@@ -1784,7 +1721,6 @@ pub(crate) fn rigid_dimension_view(
 pub(crate) mod specialization;
 mod substitution;
 mod type_expr;
-pub use specialization::instantiate_semantic_edges;
 pub(crate) use specialization::{
     install_semantic_plot_projection_facts, install_semantic_presentation_facts,
 };

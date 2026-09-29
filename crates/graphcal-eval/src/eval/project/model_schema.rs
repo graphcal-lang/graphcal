@@ -361,7 +361,7 @@ fn collect_schema_type_refs<'schema>(
 }
 
 pub(super) struct ModelSchemaGraphBuilder<'a> {
-    tir: &'a graphcal_compiler::tir::typed::TIR,
+    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
     source: &'a NamedSource<Arc<String>>,
     graph: ModelSchemaGraph,
     building: HashSet<ModelTypeId>,
@@ -369,7 +369,7 @@ pub(super) struct ModelSchemaGraphBuilder<'a> {
 
 impl<'a> ModelSchemaGraphBuilder<'a> {
     pub(super) fn new(
-        tir: &'a graphcal_compiler::tir::typed::TIR,
+        tir: &'a graphcal_compiler::tir::typed::CheckedTir,
         source: &'a NamedSource<Arc<String>>,
     ) -> Self {
         Self {
@@ -473,7 +473,7 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
 
 fn model_quantity_schema(
     dimension: &graphcal_compiler::dimension::Dimension,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
 ) -> ModelQuantitySchema {
     let canonical_unit = (!dimension.is_dimensionless())
         .then(|| {
@@ -495,7 +495,7 @@ fn model_quantity_schema(
 
 fn model_index_schema(
     index: &IndexTypeRef,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     source: &NamedSource<Arc<String>>,
 ) -> Result<ModelIndexSchema, GraphcalError> {
     if let Some(finite) = index.finite_index() {
@@ -542,7 +542,7 @@ fn model_index_schema(
 
 pub(super) fn index_def_for_ref<'tir>(
     index: &IndexTypeRef,
-    tir: &'tir graphcal_compiler::tir::typed::TIR,
+    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
 ) -> Option<std::borrow::Cow<'tir, IndexDef>> {
     tir.index_def(index)
 }

@@ -7,14 +7,14 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::TIR;
+use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr_with_presentation};
 use crate::execution_facts::RuntimeValueMap;
 use crate::presentation_evidence::PresentationInstanceMap;
 
 pub(super) fn eval_const_pools_for_dags(
-    tir: &TIR,
+    tir: &CheckedTir,
     dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,
     mut visible_values: RuntimeValueMap,
     mut presentations: PresentationInstanceMap,

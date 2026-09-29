@@ -5,13 +5,13 @@ use crate::dag_id::DagId;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::error::GraphcalError;
 use crate::tir::presentation::DagPresentationFacts;
-use crate::tir::typed::TIR;
+use crate::tir::typed::UncheckedTir;
 use miette::NamedSource;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(super) fn collect_presentation_facts(
-    tir: &TIR,
+    tir: &UncheckedTir,
     shapes: &HashMap<DagId, super::plot::CheckedPlotChannelShapes>,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,

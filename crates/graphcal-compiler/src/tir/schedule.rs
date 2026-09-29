@@ -12,7 +12,7 @@ use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::dependency_graph::{Cycle, DependencyGraph, TopoOrder};
 use crate::resolved_name::ResolvedDeclName;
-use crate::tir::typed::model::{DagTIR, TIR};
+use crate::tir::typed::model::{DagTIR, UncheckedTir};
 
 /// Evaluation order of every constant of a checked file's local DAGs.
 ///
@@ -101,7 +101,10 @@ impl RuntimeSchedule {
     ///
     /// Returns [`RuntimeScheduleError`] for a dangling instance edge or a
     /// dependency cycle.
-    pub(crate) fn build(tir: &TIR, callable: &DagTIR) -> Result<Self, RuntimeScheduleError> {
+    pub(crate) fn build(
+        tir: &UncheckedTir,
+        callable: &DagTIR,
+    ) -> Result<Self, RuntimeScheduleError> {
         let dags = instance_closure(tir, callable)?;
         let mut graph = DependencyGraph::new();
         let mut dependencies = HashMap::new();
@@ -182,7 +185,7 @@ impl RuntimeSchedule {
 /// `callable` followed by every DAG its semantic instance edges reach, in
 /// [`DagId`] order.
 fn instance_closure<'a>(
-    tir: &'a TIR,
+    tir: &'a UncheckedTir,
     callable: &'a DagTIR,
 ) -> Result<Vec<&'a DagTIR>, RuntimeScheduleError> {
     let mut pending = vec![callable];

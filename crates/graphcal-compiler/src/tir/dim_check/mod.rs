@@ -1,4 +1,4 @@
-use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
+use crate::resolved_name::ResolvedDeclName;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -44,6 +44,9 @@ pub use model_schema::{
 mod tests;
 
 pub use crate::registry::checked_type::CheckedType;
+pub use crate::tir::typed::override_dependencies::{
+    NominalOverrideIdentity, OverrideDependencySummary,
+};
 
 /// Per-DAG context bundle threaded through the dimension-check passes.
 ///
@@ -629,7 +632,7 @@ fn validate_expected_fail(
 }
 
 fn install_presentation_facts(
-    tir: &mut crate::tir::typed::TIR,
+    tir: &mut crate::tir::typed::UncheckedTir,
     facts: HashMap<crate::dag_id::DagId, crate::tir::presentation::DagPresentationFacts>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -646,35 +649,32 @@ fn install_presentation_facts(
     Ok(())
 }
 
-/// Check dimensions for all declarations in a file.
-///
-/// For each const/param/node, infers the dimension of the RHS expression
-/// and verifies it matches the checked type carried by its declaration record.
-///
-/// Starts a new semantic checking revision and retains its derived shape and
-/// presentation facts. Returns `()` only after validation succeeds.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if dimensions are inconsistent.
-pub fn check_dimensions_tir(
-    tir: &mut crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    check_dimensions_tir_with_cancellation(
-        tir,
-        src,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
+impl crate::tir::typed::InstantiatedTir {
+    /// Check every local body and publish its facts: the only transition
+    /// into a [`CheckedTir`](crate::tir::typed::CheckedTir).
+    ///
+    /// For each const/param/node, infers the dimension of the RHS expression
+    /// and verifies it matches the checked type carried by its declaration
+    /// record; canonical bodies are inferred once and semantic instances
+    /// specialize their template's facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] for invalid dimensions or cancellation.
+    pub fn check(
+        self,
+        src: &NamedSource<Arc<String>>,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<crate::tir::typed::CheckedTir, GraphcalError> {
+        let mut tir = self.tir;
+        check_dimensions_tir_with_cancellation(&mut tir, src, cancellation)?;
+        Ok(crate::tir::typed::CheckedTir::new(tir))
+    }
 }
 
 /// Check dimensions while observing cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] for invalid dimensions or cancellation.
-pub fn check_dimensions_tir_with_cancellation(
-    tir: &mut crate::tir::typed::TIR,
+fn check_dimensions_tir_with_cancellation(
+    tir: &mut crate::tir::typed::UncheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
@@ -760,60 +760,6 @@ pub fn check_dimensions_tir_with_cancellation(
     schedules.install(tir, src)
 }
 
-/// Canonical nominal identity whose use in a parameter default is queried at
-/// an include boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum NominalOverrideIdentity {
-    Index(ResolvedIndexName),
-    Type(ResolvedStructTypeName),
-}
-
-/// Canonical nominal dependencies keyed by the producer parameter default that
-/// uses them.
-pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOverrideIdentity>>;
-
-/// Refine include override obligations from independently checked source modules.
-///
-/// HIR records each possible nominal override before substituting an include
-/// instance. Once a source module has been checked, its canonical dependency
-/// summary distinguishes a true dependency on the replaced nominal from an
-/// unrelated use of the replacement type or index itself. The refinement is
-/// applied to every materialized semantic instance, not only the entry DAG,
-/// because each instance owns its own executable reconciliation facts.
-pub fn reconcile_external_override_dependencies<S>(
-    tir: &mut crate::tir::typed::TIR,
-    summary: &OverrideDependencySummary,
-    complete_owners: &HashSet<crate::dag_id::DagId, S>,
-) where
-    S: std::hash::BuildHasher,
-{
-    for dag in tir.dags.values_mut() {
-        dag.semantic
-            .override_reconciliations
-            .retain(|_, reconciliations| {
-                reconciliations.retain_mut(|reconciliation| {
-                    if !complete_owners.contains(reconciliation.source_decl.owner()) {
-                        return true;
-                    }
-                    let dependencies = summary.get(&reconciliation.source_decl);
-                    reconciliation.targets.retain(|target| {
-                        let source = match target {
-                            crate::tir::typed::OverrideTarget::Index { source, .. } => {
-                                NominalOverrideIdentity::Index(source.clone())
-                            }
-                            crate::tir::typed::OverrideTarget::Type { source, .. } => {
-                                NominalOverrideIdentity::Type(source.clone())
-                            }
-                        };
-                        dependencies.is_some_and(|dependencies| dependencies.contains(&source))
-                    });
-                    !reconciliation.targets.is_empty()
-                });
-                !reconciliations.is_empty()
-            });
-    }
-}
-
 /// Collect canonical nominal dependencies for every checked parameter default
 /// in every DAG module in `tir`.
 ///
@@ -826,7 +772,7 @@ pub fn reconcile_external_override_dependencies<S>(
 ///
 /// Returns a compiler diagnostic if retained checking results are unavailable.
 pub fn collect_override_dependency_summary(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
     collect_override_dependency_summary_with_cancellation(
@@ -842,7 +788,7 @@ pub fn collect_override_dependency_summary(
 ///
 /// Returns a compiler diagnostic for inconsistent TIR or cancellation.
 pub fn collect_override_dependency_summary_with_cancellation(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
@@ -922,11 +868,12 @@ fn is_bindable_nominal(
 /// Returns a [`GraphcalError`] when the expression is not well typed in the
 /// root module or does not exactly match `expected`.
 pub fn check_external_value_expr_type(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::CheckedTir,
     expr: &crate::hir::Expr,
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
+    let tir = tir.tir();
     let observations = infer::hir::BodyObservations::new(tir.root());
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
@@ -993,7 +940,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> 
 /// the full flat dag map.
 fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     registry: &crate::registry::types::FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1214,7 +1161,7 @@ fn first_constrained_field_bound<'a>(
 }
 
 fn check_field_domain_constraint_targets(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut seen = std::collections::HashSet::new();
@@ -1257,7 +1204,7 @@ fn field_type_annotation<'a>(
 }
 
 fn field_constraint_definition_dag<'a>(
-    tir: &'a crate::tir::typed::TIR,
+    tir: &'a crate::tir::typed::UncheckedTir,
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -1282,7 +1229,7 @@ fn field_constraint_definition_dag<'a>(
 /// owner-qualified field can be referenced
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1532,7 +1479,7 @@ fn collect_dag_call_targets_from_dag(
 /// cycle detection, so the same check applies whether the cycle is within
 /// a single file or spans multiple files.
 fn detect_cross_dag_cycles(
-    tir: &crate::tir::typed::TIR,
+    tir: &crate::tir::typed::UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     use std::collections::BTreeMap;

@@ -1704,7 +1704,7 @@ fn collect_import_links(
 /// Unlike builtins, extern signatures are per-file (they depend on the
 /// file's `import plugin` blocks and its registry's dimension names).
 fn build_extern_fn_signatures(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
     let mut format_dim = |dim: &Dimension| tir.registry().dimensions.format_dimension(dim);
@@ -2043,7 +2043,7 @@ struct BuiltProjectDocument {
 fn build_project_symbol_documents(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
-    tir: Option<&graphcal_compiler::tir::typed::TIR>,
+    tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>, Cancelled>
@@ -2187,7 +2187,7 @@ fn collect_file_imported_symbols(
 fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
-    tir: Option<&graphcal_compiler::tir::typed::TIR>,
+    tir: Option<&graphcal_compiler::tir::typed::CheckedTir>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     cancellation: &CancellationToken,
 ) -> std::result::Result<ImportedSymbols, Cancelled> {

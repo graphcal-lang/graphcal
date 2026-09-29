@@ -1,4 +1,4 @@
-//! Graph IR — a one-way projection of a compiled [`TIR`] into a node-link
+//! Graph IR — a one-way projection of a compiled [`CheckedTir`] into a node-link
 //! dependency-graph model for visualization exports (#512).
 //!
 //! The IR is a *projection*: TIR → IR → renderer. It is never parsed back
@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, DagTIR, DiagnosticDeclProbe};
 use thiserror::Error;
 
 /// Stable identity of a graph node: the declaration's canonical resolved name.
@@ -136,7 +136,7 @@ pub enum GraphProjectionError {
     MissingRootCluster { root: DagId },
 }
 
-/// Project a compiled [`TIR`] into its dependency [`GraphIr`].
+/// Project a compiled [`CheckedTir`] into its dependency [`GraphIr`].
 ///
 /// Vertices are the const/param/node declarations of the file's root DAG and
 /// every inline `dag` block nested inside it; asserts, plots, figures, and
@@ -154,7 +154,7 @@ pub enum GraphProjectionError {
 ///
 /// Returns [`GraphProjectionError`] if the checked TIR is missing an
 /// authoritative declaration identity or consistent module provenance.
-pub fn project_tir(tir: &TIR) -> Result<GraphIr, GraphProjectionError> {
+pub fn project_tir(tir: &CheckedTir) -> Result<GraphIr, GraphProjectionError> {
     let mut child_dags: Vec<&DagTIR> = tir
         .local_dags()
         .filter_map(|(dag_id, dag)| (dag_id != tir.root_dag_id()).then_some(dag))
@@ -268,7 +268,7 @@ pub fn project_tir(tir: &TIR) -> Result<GraphIr, GraphProjectionError> {
 }
 
 fn project_cluster_provenance(
-    tir: &TIR,
+    tir: &CheckedTir,
     local_dags: &[&DagTIR],
 ) -> Result<ProjectedClusterProvenance, GraphProjectionError> {
     let mut clusters = BTreeMap::<DagId, GraphCluster>::new();
@@ -329,7 +329,7 @@ fn project_cluster_provenance(
 /// declaration owners may identify nested concrete instances merged into this
 /// body; grouping happens after this projection.
 fn project_dag_nodes(
-    tir: &TIR,
+    tir: &CheckedTir,
     dag: &DagTIR,
     output_names: &BTreeMap<DagId, HashSet<DeclName>>,
 ) -> Vec<GraphNode> {
@@ -373,11 +373,11 @@ mod tests {
     use graphcal_compiler::ir::lower::lower;
     use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
+    use graphcal_compiler::tir::typed::ProjectTypeStore;
     use miette::NamedSource;
     use std::sync::Arc;
 
-    fn tir_from_source(source: &str) -> TIR {
+    fn tir_from_source(source: &str) -> CheckedTir {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
@@ -388,13 +388,38 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_module(ir.definitions()).unwrap();
-        type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap()
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let signed =
+            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+                ir,
+                &src,
+                &resolver,
+                &project_types,
+                &cancellation,
+            )
+            .unwrap();
+        graphcal_compiler::tir::typed::TirDraft::resolve_root(
+            signed,
+            std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
+            &src,
+            &resolver,
+            Arc::new(project_types),
+            &cancellation,
+        )
+        .unwrap()
+        .instantiate(
+            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
+            &src,
+        )
+        .unwrap()
+        .check(&src, &cancellation)
+        .unwrap()
     }
 
     /// Compile through the full project pipeline (loader + inline-DAG body
     /// compilation), which is what the CLI does. Needed for inline `dag`
-    /// blocks: bare `type_resolve_with_modules` does not compile their bodies.
-    fn tir_from_project_source(source: &str) -> TIR {
+    /// blocks: a bare root check does not compile their bodies.
+    fn tir_from_project_source(source: &str) -> CheckedTir {
         let mut fs = graphcal_io::InMemoryFileSystem::new();
         fs.add_file(
             graphcal_io::VirtualAbsolutePath::new("/proj/test.gcl").unwrap(),

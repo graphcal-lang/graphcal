@@ -11,7 +11,7 @@ use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::TIR;
+use graphcal_compiler::tir::typed::CheckedTir;
 use miette::NamedSource;
 
 use crate::eval::types::CompileError;
@@ -130,7 +130,7 @@ fn missing_interface_fact(
 /// Attach checked types and runtime identities to HIR source-interface records.
 pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
-    tir: &TIR,
+    tir: &CheckedTir,
     external_surface: &ExternalDeclSurface,
     source: &NamedSource<Arc<String>>,
 ) -> Result<CheckedEntryInterface, CompileError> {

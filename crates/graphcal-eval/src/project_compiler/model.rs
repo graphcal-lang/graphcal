@@ -135,7 +135,7 @@ pub(super) struct ModuleArtifactOwnerConflict {
 
 /// Result of checking one file in project context.
 pub struct CompiledFile {
-    pub(crate) tir: graphcal_compiler::tir::typed::TIR,
+    pub(crate) tir: graphcal_compiler::tir::typed::CheckedTir,
     pub(crate) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
     pub(crate) entry_interface: super::CheckedEntryInterface,
     pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, CheckedType)>,

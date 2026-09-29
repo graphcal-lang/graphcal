@@ -17,7 +17,7 @@ use crate::ir::entry::Decl;
 use crate::registry::error::GraphcalError;
 use crate::resolved_name::ResolvedDeclName;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule, RuntimeScheduleError};
-use crate::tir::typed::TIR;
+use crate::tir::typed::UncheckedTir;
 
 /// Schedules computed for one checking revision, installed only after the
 /// whole TIR has been accepted.
@@ -34,7 +34,10 @@ impl CheckedSchedules {
     ///
     /// Returns [`GraphcalError::CyclicDependency`] for the first cycle found,
     /// at the declaration that closes it.
-    pub(super) fn build(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<Self, GraphcalError> {
+    pub(super) fn build(
+        tir: &UncheckedTir,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<Self, GraphcalError> {
         let constants = ConstSchedule::build(tir.dags.local_iter().map(|(_, dag)| dag))
             .map_err(|cycle| cyclic_dependency(tir, &cycle, None, src))?;
         let mut callables = tir
@@ -71,7 +74,7 @@ impl CheckedSchedules {
     /// Retain the schedules on the accepted TIR.
     pub(super) fn install(
         self,
-        tir: &mut TIR,
+        tir: &mut UncheckedTir,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         for (dag_id, schedule) in self.callables {
@@ -98,7 +101,7 @@ impl CheckedSchedules {
 /// reported at the last declaration on the path that `callable` owns itself,
 /// so the diagnostic points into the source being checked.
 fn cyclic_dependency(
-    tir: &TIR,
+    tir: &UncheckedTir,
     cycle: &Cycle<ResolvedDeclName>,
     callable: Option<&DagId>,
     src: &NamedSource<Arc<String>>,
