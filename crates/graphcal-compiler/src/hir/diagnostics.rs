@@ -142,7 +142,7 @@ pub fn expr_lower_error_to_graphcal(
             span,
         } => {
             return GraphcalError::WrongArity {
-                name: name.clone(),
+                name: crate::registry::error::CalledFunction::Builtin(*name),
                 expected: *expected,
                 got: *got,
                 src: src.clone(),

@@ -1,7 +1,7 @@
 //! Inference of field access and constructor calls on nominal types.
 
 use crate::hir::expr::{Expr, FieldInit};
-use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
+use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::resolved_name::ResolvedConstructorName;
 
@@ -76,7 +76,7 @@ impl Infer<'_> {
         {
             return Err(GraphcalError::UnknownField {
                 type_name: type_name.name().clone(),
-                field_name: field.value.clone(),
+                member: crate::registry::error::NominalMember::Field(field.value.clone()),
                 src: self.env.src.clone(),
                 span: field.span.into(),
             });
@@ -121,15 +121,10 @@ impl Infer<'_> {
             callee.span,
         )?;
 
-        let def_field_names: std::collections::HashSet<&str> = variant
-            .fields()
-            .iter()
-            .map(|field| field.name().as_str())
-            .collect();
-        let provided_names: Vec<&str> = fields
-            .iter()
-            .map(|field| field.name.value.as_str())
-            .collect();
+        let def_field_names: std::collections::HashSet<&FieldName> =
+            variant.fields().iter().map(NominalField::name).collect();
+        let provided_names: Vec<&FieldName> =
+            fields.iter().map(|field| &field.name.value).collect();
         let mut seen_fields = std::collections::HashSet::new();
         for field in fields {
             if !seen_fields.insert(field.name.value.clone()) {
@@ -147,7 +142,7 @@ impl Infer<'_> {
         let extra: Vec<FieldName> = provided_names
             .iter()
             .filter(|name| !def_field_names.contains(**name))
-            .map(|name| FieldName::expect_valid(*name))
+            .map(|name| (*name).clone())
             .collect();
         if !extra.is_empty() {
             return Err(GraphcalError::ExtraFields {
@@ -158,12 +153,12 @@ impl Infer<'_> {
             });
         }
 
-        let provided_set: std::collections::HashSet<&str> =
+        let provided_set: std::collections::HashSet<&FieldName> =
             provided_names.iter().copied().collect();
         let missing: Vec<FieldName> = variant
             .fields()
             .iter()
-            .filter(|field| !provided_set.contains(field.name().as_str()))
+            .filter(|field| !provided_set.contains(field.name()))
             .map(|field| field.name().clone())
             .collect();
         if !missing.is_empty() {

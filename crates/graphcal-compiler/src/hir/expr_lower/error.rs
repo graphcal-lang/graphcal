@@ -121,7 +121,7 @@ pub enum ExprLowerError {
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
-        name: crate::syntax::function_name::FnName,
+        name: crate::builtin::BuiltinFn,
         expected: usize,
         got: usize,
         span: Span,

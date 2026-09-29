@@ -18,7 +18,6 @@ use crate::function_signature::{
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
-use crate::syntax::function_name::FnName;
 use crate::syntax::span::{Span, Spanned};
 
 /// Check quantity argument dimensions against `sig` and compute the result
@@ -29,7 +28,7 @@ use crate::syntax::span::{Span, Spanned};
 /// built-in registry signatures are all-quantity, so built-in inference calls
 /// this directly.
 pub(super) fn infer_fn_dim(
-    fn_name: &str,
+    function: crate::builtin::BuiltinFn,
     sig: &FunctionSignature,
     args: &[Spanned<Dimension>],
     call_span: Span,
@@ -42,7 +41,7 @@ pub(super) fn infer_fn_dim(
             .or_else(|| args.last())
             .map_or(call_span, |arg| arg.span);
         return Err(GraphcalError::WrongArity {
-            name: FnName::expect_valid(fn_name),
+            name: crate::registry::error::CalledFunction::Builtin(function),
             expected: sig.arity(),
             got: args.len(),
             src: src.clone(),
@@ -50,6 +49,7 @@ pub(super) fn infer_fn_dim(
         });
     }
 
+    let fn_name = function.as_str();
     let mut walk = SignatureDimWalk::new(fn_name, sig, registry, src);
 
     for (param, arg) in sig.params().iter().zip(args) {
@@ -281,7 +281,15 @@ mod tests {
         let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));
         let call_span = Span::new(0, 3);
 
-        let error = infer_fn_dim("f", &signature, &[], call_span, &registry, &source).unwrap_err();
+        let error = infer_fn_dim(
+            crate::builtin::BuiltinFn::Scalar(crate::builtin::ScalarFn::Sqrt),
+            &signature,
+            &[],
+            call_span,
+            &registry,
+            &source,
+        )
+        .unwrap_err();
         let GraphcalError::WrongArity { span, .. } = error else {
             panic!("expected wrong-arity diagnostic");
         };

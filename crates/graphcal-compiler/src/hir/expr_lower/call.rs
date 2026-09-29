@@ -276,7 +276,7 @@ impl ExprLowerer<'_> {
     /// Validate a built-in call's argument count when lowering owns the check
     /// (see [`lowering_arity`]). Other built-ins and externs defer shape
     /// checks to their typed rules.
-    pub(super) fn check_function_arity(
+    pub(super) const fn check_function_arity(
         function_ref: &FunctionRef,
         got: usize,
         span: Span,
@@ -289,7 +289,7 @@ impl ExprLowerer<'_> {
         };
         if got != expected {
             return Err(ExprLowerError::WrongArity {
-                name: crate::syntax::function_name::FnName::expect_valid(builtin.as_str()),
+                name: builtin,
                 expected,
                 got,
                 span,

@@ -1272,11 +1272,11 @@ fn check_sink_body_policies(
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let is_explicit_export =
-        |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
+    let is_explicit_export = |leaf: &DeclName| external_surface.is_explicit_export(leaf);
     for entry in &dag.asserts {
         let key = entry.identity();
-        let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
+        let check_literals =
+            key.owner() == ctx.owner && is_explicit_export(&key.to_unowned_def_name());
         let checker = HirPolicyChecker { ctx, src };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => {
@@ -1296,8 +1296,7 @@ fn check_sink_body_policies(
     }
     for entry in &dag.plots {
         let body = &entry.body;
-        let check_literals =
-            !entry.name.is_qualified() && is_explicit_export(entry.name.leaf().as_str());
+        let check_literals = !entry.name.is_qualified() && is_explicit_export(entry.name.leaf());
         let checker = HirPolicyChecker { ctx, src };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1312,7 +1311,7 @@ fn check_sink_body_policies(
         .map(|entry| (&entry.name, &entry.fields))
         .chain(dag.layers.iter().map(|entry| (&entry.name, &entry.fields)))
     {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.leaf().as_str());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.leaf());
         let checker = HirPolicyChecker { ctx, src };
         for field in fields {
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;

@@ -29,6 +29,40 @@ fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
         .join(", ")
 }
 
+/// The function an arity diagnostic names: a closed built-in or a plugin
+/// function spelled by its declared name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalledFunction {
+    Builtin(crate::builtin::BuiltinFn),
+    Extern(FnName),
+}
+
+impl std::fmt::Display for CalledFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Builtin(function) => function.fmt(f),
+            Self::Extern(name) => name.fmt(f),
+        }
+    }
+}
+
+/// A member a nominal-type diagnostic names: a payload field, or a
+/// constructor that does not belong to the scrutinized type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NominalMember {
+    Field(FieldName),
+    Constructor(ConstructorName),
+}
+
+impl std::fmt::Display for NominalMember {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Field(name) => name.fmt(f),
+            Self::Constructor(name) => name.fmt(f),
+        }
+    }
+}
+
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum GraphcalError {
@@ -662,7 +696,7 @@ pub enum GraphcalError {
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     #[diagnostic(code(graphcal::N006))]
     WrongArity {
-        name: FnName,
+        name: CalledFunction,
         expected: usize,
         got: usize,
         #[source_code]
@@ -1047,11 +1081,11 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown field `{field_name}` on struct `{type_name}`")]
+    #[error("unknown field `{member}` on struct `{type_name}`")]
     #[diagnostic(code(graphcal::S003))]
     UnknownField {
         type_name: StructTypeName,
-        field_name: FieldName,
+        member: NominalMember,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("no such field")]
@@ -2647,5 +2681,30 @@ mod tests {
         ] {
             assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
         }
+    }
+
+    #[test]
+    fn typed_member_and_function_payloads_render_their_source_spelling() {
+        use super::{CalledFunction, NominalMember};
+        use crate::builtin::{BuiltinFn, ScalarFn};
+        use crate::syntax::function_name::FnName;
+        use crate::syntax::type_name::{ConstructorName, FieldName};
+
+        assert_eq!(
+            CalledFunction::Builtin(BuiltinFn::Scalar(ScalarFn::Sqrt)).to_string(),
+            "sqrt"
+        );
+        assert_eq!(
+            CalledFunction::Extern(FnName::expect_valid("lerp")).to_string(),
+            "lerp"
+        );
+        assert_eq!(
+            NominalMember::Field(FieldName::expect_valid("dv")).to_string(),
+            "dv"
+        );
+        assert_eq!(
+            NominalMember::Constructor(ConstructorName::expect_valid("Coast")).to_string(),
+            "Coast"
+        );
     }
 }
