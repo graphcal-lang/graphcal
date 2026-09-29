@@ -1254,7 +1254,7 @@ mod tests {
         .unwrap();
         let identity = |spelling: &str| {
             hir.decls()
-                .lookup(&ScopedName::local(DeclName::expect_valid(spelling)))
+                .lookup(&DeclName::expect_valid(spelling))
                 .unwrap()
                 .clone()
         };

@@ -66,7 +66,7 @@ impl UnfrozenIR {
         self.decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Plot(entry) if entry.name.leaf() == name => Some(entry.identity()),
+                Decl::Plot(entry) if &entry.name == name => Some(entry.identity()),
                 _ => None,
             })
             .or_else(|| {
@@ -91,15 +91,15 @@ impl UnfrozenIR {
         self.decls
             .iter()
             .filter_map(|decl| match decl {
-                Decl::Assert(entry) => Some(entry.name.leaf().clone()),
+                Decl::Assert(entry) => Some(entry.name.clone()),
                 _ => None,
             })
             .collect()
     }
 
-    /// Source spellings of the value declarations in this IR, in source
-    /// order, including selective include aliases.
-    pub fn value_names(&self) -> impl Iterator<Item = &ScopedName> {
+    /// Local names of the value declarations in this IR, in source order,
+    /// including selective include aliases.
+    pub fn value_names(&self) -> impl Iterator<Item = &DeclName> {
         self.decls
             .iter()
             .filter(|decl| matches!(decl.category(), DeclCategory::Value(_)))
@@ -153,12 +153,11 @@ impl UnfrozenIR {
     /// only declarations authored directly in the producer's source AST.
     #[must_use]
     pub fn include_alias_declaration(&self, name: &DeclName) -> Option<IncludeAliasDeclaration> {
-        let local = ScopedName::local(name.clone());
         self.decls.iter().find_map(|decl| {
             let (type_ann, is_const) = match decl {
-                Decl::Const(entry) if entry.name == local => (&entry.type_ann, true),
-                Decl::Param(entry) if entry.name == local => (&entry.type_ann, false),
-                Decl::Node(entry) if entry.name == local => (&entry.type_ann, false),
+                Decl::Const(entry) if &entry.name == name => (&entry.type_ann, true),
+                Decl::Param(entry) if &entry.name == name => (&entry.type_ann, false),
+                Decl::Node(entry) if &entry.name == name => (&entry.type_ann, false),
                 _ => return None,
             };
             Some(IncludeAliasDeclaration {
@@ -285,7 +284,7 @@ impl UnfrozenIR {
         let mut decl_bindings = table
             .iter()
             .filter(|decl| matches!(decl.category(), DeclCategory::Value(_)))
-            .map(|decl| (decl.name().clone(), decl.identity()))
+            .map(|decl| (ScopedName::local(decl.name().clone()), decl.identity()))
             .collect::<HashMap<_, _>>();
         for record in &self.semantic_instances {
             let scope = record.instance.id().scope();
@@ -530,8 +529,8 @@ impl UnfrozenIR {
         )?;
 
         let lookup_assertion = |name: &ScopedName| {
-            decls
-                .lookup(name)
+            name.as_bare()
+                .and_then(|local| decls.lookup(local))
                 .or_else(|| self.imported_bindings.get(name))
                 .cloned()
                 .or_else(|| {
@@ -799,7 +798,7 @@ impl UnfrozenIR {
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
     pub fn add_const_alias(
         &mut self,
-        name: ScopedName,
+        name: DeclName,
         type_ann: TypeExpr,
         type_resolution_owner: crate::dag_id::DagId,
         expr: Expr,
@@ -820,7 +819,7 @@ impl UnfrozenIR {
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
     pub fn add_node_alias(
         &mut self,
-        name: ScopedName,
+        name: DeclName,
         type_ann: TypeExpr,
         type_resolution_owner: crate::dag_id::DagId,
         expr: Expr,
@@ -855,7 +854,7 @@ impl UnfrozenIR {
         include_span: Span,
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
         self.params()
-            .filter(|param| !bindings.contains_key(param.name.leaf()))
+            .filter(|param| !bindings.contains_key(&param.name))
             .map(|param| {
                 let mut reconciliations = param.override_reconciliations.clone();
                 if let Some(default) = &param.default
@@ -865,14 +864,14 @@ impl UnfrozenIR {
                         substitution,
                         resolver,
                         dependency_owner,
-                        orphan_decl: param.name.leaf(),
+                        orphan_decl: &param.name,
                         importer_src,
                         include_span,
                     }
                     .visit_expr(&default.syntax)?;
                     reconciliations.push(
                         crate::ir::override_reconciliation::OverrideReconciliation::new(
-                            param.name.leaf().clone(),
+                            param.name.clone(),
                             dependency_owner,
                             substitution,
                             importer_src.clone(),
@@ -880,13 +879,7 @@ impl UnfrozenIR {
                         ),
                     );
                 }
-                Ok((
-                    ResolvedDeclName::from_def(
-                        param.declaration_owner.clone(),
-                        param.name.leaf().clone(),
-                    ),
-                    reconciliations,
-                ))
+                Ok((param.identity(), reconciliations))
             })
             .filter_map(|result| match result {
                 Ok((_, reconciliations)) if reconciliations.is_empty() => None,

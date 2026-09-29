@@ -367,7 +367,7 @@ pub enum GraphcalError {
     )]
     UnknownPlotReference {
         owner_kind: &'static str,
-        owner: ScopedName,
+        owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,
@@ -397,7 +397,7 @@ pub enum GraphcalError {
     )]
     DuplicatePlotReference {
         owner_kind: &'static str,
-        owner: ScopedName,
+        owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
         #[source_code]
         src: NamedSource<Arc<String>>,

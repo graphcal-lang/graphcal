@@ -90,7 +90,12 @@ fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, Decl
                 .iter()
                 .map(|entry| (&entry.name, &entry.type_ann)),
         )
-        .map(|(name, annotation)| (name.clone(), annotation.checked().declared().clone()))
+        .map(|(name, annotation)| {
+            (
+                ScopedName::local(name.clone()),
+                annotation.checked().declared().clone(),
+            )
+        })
         .chain(
             root.imported_bindings()
                 .iter()

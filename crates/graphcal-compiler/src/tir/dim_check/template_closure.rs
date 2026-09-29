@@ -177,7 +177,7 @@ fn check_rigid_value_bodies(
         };
         let body = TemplateBodyIdentity {
             kind,
-            name: name.leaf().atom().clone(),
+            name: name.atom().clone(),
         };
         rigid_dimension_error(
             ctx,
@@ -201,7 +201,7 @@ fn check_rigid_assertion_bodies(
         let assertion = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
-            name: entry.name.leaf().atom().clone(),
+            name: entry.name.atom().clone(),
         };
         rigid_dimension_error(
             ctx,
@@ -224,7 +224,7 @@ fn check_rigid_plot_bodies(
         };
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Plot,
-            name: entry.name.leaf().atom().clone(),
+            name: entry.name.atom().clone(),
         };
         for (_, expression) in &entry.body.encodings {
             rigid_dimension_error(
@@ -278,7 +278,7 @@ fn check_rigid_composition_bodies(
         };
         let body = TemplateBodyIdentity {
             kind,
-            name: name.leaf().atom().clone(),
+            name: name.atom().clone(),
         };
         for field in fields {
             check_rigid_plot_field(ctx, &owner, &body, port, field)?;
@@ -395,7 +395,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
         };
         let identity = TemplateBodyIdentity {
             kind,
-            name: name.leaf().atom().clone(),
+            name: name.atom().clone(),
         };
         check_expr(ctx, Some(&owner), &identity, expr)?;
     }
@@ -410,7 +410,7 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
         };
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
-            name: entry.name.leaf().atom().clone(),
+            name: entry.name.atom().clone(),
         };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => check_expr(ctx, Some(&owner), &identity, expr)?,
@@ -435,7 +435,7 @@ fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
         };
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Plot,
-            name: entry.name.leaf().atom().clone(),
+            name: entry.name.atom().clone(),
         };
         for expr in entry
             .body
@@ -479,7 +479,7 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
         };
         let identity = TemplateBodyIdentity {
             kind,
-            name: name.leaf().atom().clone(),
+            name: name.atom().clone(),
         };
         for field in fields {
             check_expr(ctx, Some(&owner), &identity, &field.value)?;

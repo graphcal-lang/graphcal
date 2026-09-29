@@ -10,7 +10,6 @@ use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::TIR;
 use miette::NamedSource;
@@ -128,17 +127,6 @@ fn missing_interface_fact(
     })
 }
 
-fn checked_runtime_key(
-    tir: &TIR,
-    name: &ScopedName,
-    source: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<ResolvedDeclName, CompileError> {
-    tir.root()
-        .require_bound_decl_identity(name, source, DiagnosticAnchor::Source(span))
-        .map_err(CompileError::from)
-}
-
 /// Attach checked types and runtime identities to HIR source-interface records.
 pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
@@ -153,12 +141,11 @@ pub(super) fn build_checked_entry_interface(
     for declaration in source_declarations {
         match declaration {
             SourceDeclaration::Parameter { name, span } => {
-                let scoped = ScopedName::local(name.clone());
                 let entry = tir
                     .root()
                     .params()
                     .iter()
-                    .find(|entry| entry.name == scoped)
+                    .find(|entry| &entry.name == name)
                     .ok_or_else(|| {
                         missing_interface_fact(
                             format!("HIR entry parameter `{name}` is absent from checked TIR"),
@@ -170,17 +157,16 @@ pub(super) fn build_checked_entry_interface(
                     name: name.clone(),
                     declared_type: entry.type_ann.checked().declared().clone(),
                     has_default: entry.default.is_some(),
-                    runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
+                    runtime_key: entry.identity(),
                     span: *span,
                 });
             }
             SourceDeclaration::Node { name, span } => {
-                let scoped = ScopedName::local(name.clone());
                 let entry = tir
                     .root()
                     .nodes()
                     .iter()
-                    .find(|entry| entry.name == scoped)
+                    .find(|entry| &entry.name == name)
                     .ok_or_else(|| {
                         missing_interface_fact(
                             format!("HIR entry node `{name}` is absent from checked TIR"),
@@ -196,7 +182,7 @@ pub(super) fn build_checked_entry_interface(
                     } else {
                         Visibility::Private
                     },
-                    runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
+                    runtime_key: entry.identity(),
                 });
             }
             SourceDeclaration::Index { name, span } => {

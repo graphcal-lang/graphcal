@@ -160,12 +160,13 @@ fn check_plot_references(
         .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
     for (owner_kind, owner, plot_names) in owners {
         for (i, reference) in plot_names.iter().enumerate() {
-            let is_known_plot = dag.plots.iter().any(|p| p.name == reference.value)
+            let local = reference.value.as_bare();
+            let is_known_plot = dag.plots.iter().any(|p| Some(&p.name) == local)
                 || dag.included_plots.iter().any(|p| p.name == reference.value);
             if !is_known_plot {
-                let actual_kind = if dag.figures.iter().any(|f| f.name == reference.value) {
+                let actual_kind = if dag.figures.iter().any(|f| Some(&f.name) == local) {
                     Some("figure")
-                } else if dag.layers.iter().any(|l| l.name == reference.value) {
+                } else if dag.layers.iter().any(|l| Some(&l.name) == local) {
                     Some("layer")
                 } else {
                     None

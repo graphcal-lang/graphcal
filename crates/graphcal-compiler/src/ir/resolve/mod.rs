@@ -405,13 +405,13 @@ impl CollectedEntries {
             )]
             DeclKind::Sugar(s) => never(*s),
             DeclKind::Assert(a) => self.decls.push(Decl::Assert(AssertEntry {
-                name: ScopedName::local(a.name.value.clone()),
+                name: a.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 body: InScope::new(a.body.clone(), dag_id.clone()),
                 span: decl.span,
             })),
             DeclKind::Plot(p) => self.decls.push(Decl::Plot(PlotEntry {
-                name: ScopedName::local(p.name.value.clone()),
+                name: p.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 mark_type: p.mark.mark_type,
                 body: InScope::new(
@@ -425,19 +425,19 @@ impl CollectedEntries {
                 visibility,
             })),
             DeclKind::Figure(f) => self.decls.push(Decl::Figure(FigureEntry {
-                name: ScopedName::local(f.name.value.clone()),
+                name: f.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 plot_names: f.plot_names.clone(),
                 fields: InScope::new(f.fields.clone(), dag_id.clone()),
             })),
             DeclKind::Layer(l) => self.decls.push(Decl::Layer(LayerEntry {
-                name: ScopedName::local(l.name.value.clone()),
+                name: l.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 plot_names: l.plot_names.clone(),
                 fields: InScope::new(l.fields.clone(), dag_id.clone()),
             })),
             DeclKind::Param(p) => self.decls.push(Decl::Param(ParamEntry {
-                name: ScopedName::local(p.name.value.clone()),
+                name: p.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(p.type_ann.clone(), dag_id.clone()),
                 default: p
@@ -448,14 +448,14 @@ impl CollectedEntries {
                 override_reconciliations: Vec::new(),
             })),
             DeclKind::ConstNode(c) => self.decls.push(Decl::Const(ConstEntry {
-                name: ScopedName::local(c.name.value.clone()),
+                name: c.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
             })),
             DeclKind::Node(n) => self.decls.push(Decl::Node(NodeEntry {
-                name: ScopedName::local(n.name.value.clone()),
+                name: n.name.value.clone(),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.definition.clone(), dag_id.clone()),

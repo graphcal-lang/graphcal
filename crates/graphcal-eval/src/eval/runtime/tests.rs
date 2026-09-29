@@ -9,7 +9,11 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
     let original = &tir.root().plots()[0];
     let owner = tir
         .root()
-        .require_bound_decl_identity(&original.name, &src, DiagnosticAnchor::WholeFile)
+        .require_bound_decl_identity(
+            &ScopedName::local(original.name.clone()),
+            &src,
+            DiagnosticAnchor::WholeFile,
+        )
         .unwrap();
     let ctx = EvalContext::provisional_constants(
         &tir,

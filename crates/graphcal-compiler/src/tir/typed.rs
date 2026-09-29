@@ -40,8 +40,8 @@ impl DagTIR {
         self.projectable_outputs.extend(
             self.params
                 .iter()
-                .map(|entry| entry.name.leaf())
-                .chain(self.nodes.iter().map(|entry| entry.name.leaf()))
+                .map(|entry| &entry.name)
+                .chain(self.nodes.iter().map(|entry| &entry.name))
                 .filter(|name| surface.can_select_output(name))
                 .cloned(),
         );
@@ -568,7 +568,8 @@ fn resolve_declared_type_exprs(
             record
                 .output_projections
                 .iter()
-                .map(|projection| (&projection.exposed_name, record.instance.substitution()))
+                .filter_map(|projection| projection.exposed_name.as_bare())
+                .map(|exposed| (exposed, record.instance.substitution()))
         })
         .collect::<HashMap<_, _>>();
     let decls = hir.decls();
@@ -792,10 +793,7 @@ fn override_reconciliations(
         .filter(|entry| !entry.override_reconciliations.is_empty())
         .map(|entry| {
             (
-                ResolvedDeclName::from_def(
-                    entry.declaration_owner.clone(),
-                    entry.name.leaf().clone(),
-                ),
+                ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone()),
                 entry.override_reconciliations.clone(),
             )
         })
@@ -1307,11 +1305,10 @@ fn check_sink_body_policies(
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let is_explicit_export = |leaf: &DeclName| external_surface.is_explicit_export(leaf);
+    let is_explicit_export = |name: &DeclName| external_surface.is_explicit_export(name);
     for entry in &dag.asserts {
-        let key = entry.identity();
         let check_literals =
-            key.owner() == ctx.owner && is_explicit_export(&key.to_unowned_def_name());
+            entry.declaration_owner == *ctx.owner && is_explicit_export(&entry.name);
         let checker = HirPolicyChecker { ctx, src };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => {
@@ -1331,7 +1328,7 @@ fn check_sink_body_policies(
     }
     for entry in &dag.plots {
         let body = &entry.body;
-        let check_literals = !entry.name.is_qualified() && is_explicit_export(entry.name.leaf());
+        let check_literals = is_explicit_export(&entry.name);
         let checker = HirPolicyChecker { ctx, src };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1346,7 +1343,7 @@ fn check_sink_body_policies(
         .map(|entry| (&entry.name, &entry.fields))
         .chain(dag.layers.iter().map(|entry| (&entry.name, &entry.fields)))
     {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.leaf());
+        let check_literals = is_explicit_export(name);
         let checker = HirPolicyChecker { ctx, src };
         for field in fields {
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
@@ -1627,7 +1624,7 @@ struct HirDeclarations {
     figures: Vec<TypedFigureEntry>,
     layers: Vec<TypedLayerEntry>,
     source_order: Vec<SourceOrderEntry>,
-    spelling: HashMap<ScopedName, ResolvedDeclName>,
+    spelling: HashMap<DeclName, ResolvedDeclName>,
 }
 
 impl HirDeclarations {
@@ -1671,7 +1668,7 @@ struct HirBody {
     figures: Vec<TypedFigureEntry>,
     layers: Vec<TypedLayerEntry>,
     source_order: Vec<SourceOrderEntry>,
-    spelling: HashMap<ScopedName, ResolvedDeclName>,
+    spelling: HashMap<DeclName, ResolvedDeclName>,
     included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     static_ports: Vec<crate::hir::StaticPort>,
     assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
@@ -1715,7 +1712,10 @@ impl DagTIRSeed {
         } = body;
         // The HIR declaration table already binds every local spelling to its
         // canonical identity; imported values add their lexical targets.
-        let mut decl_bindings = spelling;
+        let mut decl_bindings = spelling
+            .into_iter()
+            .map(|(name, identity)| (ScopedName::local(name), identity))
+            .collect::<HashMap<_, _>>();
         decl_bindings.extend(
             imported_bindings
                 .iter()

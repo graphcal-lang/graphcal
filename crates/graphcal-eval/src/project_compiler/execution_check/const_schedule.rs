@@ -9,7 +9,7 @@ use petgraph::graph::DiGraph;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, TIR};
 
@@ -147,7 +147,7 @@ pub(super) fn build_runtime_dag(
     }
 
     impl DeclRef<'_> {
-        const fn name(&self) -> &ScopedName {
+        const fn name(&self) -> &DeclName {
             match self {
                 Self::Param(e) => &e.name,
                 Self::Node(e) => &e.name,
@@ -171,7 +171,7 @@ pub(super) fn build_runtime_dag(
 
     cancellation.checkpoint()?;
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
-    let mut decl_spans: Vec<(ScopedName, ResolvedDeclName, Span)> = Vec::new();
+    let mut decl_spans: Vec<(DeclName, ResolvedDeclName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
         .params()
@@ -190,7 +190,7 @@ pub(super) fn build_runtime_dag(
 }
 
 fn runtime_eval_order(
-    decl_spans: &[(ScopedName, ResolvedDeclName, Span)],
+    decl_spans: &[(DeclName, ResolvedDeclName, Span)],
     deps: &ResolvedDagDependencies,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -198,7 +198,7 @@ fn runtime_eval_order(
     cancellation.checkpoint()?;
     let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
     let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
-    let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
+    let mut local_name_by_key: HashMap<ResolvedDeclName, DeclName> = HashMap::new();
     let mut span_by_key: HashMap<ResolvedDeclName, Span> = HashMap::new();
 
     for (name, key, span) in decl_spans {
