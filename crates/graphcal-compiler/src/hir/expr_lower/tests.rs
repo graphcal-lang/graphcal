@@ -452,7 +452,12 @@ fn collects_canonical_decl_dependencies_from_hir_expr() {
     .unwrap();
     let deps = collect_expr_dependencies(&expr);
 
-    let graph_refs = deps.graph_refs.into_iter().collect::<Vec<_>>();
+    let frame = crate::ir::instance::frame::InstanceFrame::canonical();
+    let graph_refs = deps
+        .graph_refs
+        .iter()
+        .map(|reference| frame.resolve(reference))
+        .collect::<Vec<_>>();
     assert!(deps.const_refs.is_empty());
     assert_eq!(graph_refs.len(), 2, "{graph_refs:?}");
     assert!(
@@ -823,7 +828,10 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
     let ExprKind::GraphRef(reference) = lowered.kind() else {
         panic!("expected a graph reference, got {:?}", lowered.kind());
     };
-    assert_eq!(reference.value, target);
+    assert_eq!(
+        crate::ir::instance::frame::InstanceFrame::canonical().resolve(&reference.value),
+        target
+    );
 
     // A bound output that is not a graph value is rejected.
     let (name, expr) = include_output_ref("checked");

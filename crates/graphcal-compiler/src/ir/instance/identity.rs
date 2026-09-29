@@ -7,6 +7,7 @@
 //! resolver.
 
 use crate::dag_id::{DagId, InstanceId};
+use crate::hir::expr::LocalDecl;
 use crate::resolved_name::{ResolvedDeclName, ResolvedName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::{NameDef, NameNamespace};
@@ -20,6 +21,14 @@ pub fn template_declaration<Ns: NameNamespace>(
     name: NameDef<Ns>,
 ) -> ResolvedName<Ns> {
     ResolvedName::specialized(SpecializationMint(()), instance.template().clone(), name)
+}
+
+/// A reference to the declaration `name` of the template that `instance`
+/// instantiates, as the template names it: the instance's frame resolves it
+/// to the instance's copy.
+#[must_use]
+pub fn template_reference(instance: &InstanceId, name: DeclName) -> LocalDecl {
+    LocalDecl::new(template_declaration(instance, name))
 }
 
 /// The concrete copy that `instance` materializes of its template's

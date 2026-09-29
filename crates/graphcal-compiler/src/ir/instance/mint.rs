@@ -14,3 +14,13 @@
 /// system, not a convention, confines instance identity construction there.
 #[derive(Debug, Clone, Copy)]
 pub struct SpecializationMint(pub(in crate::ir::instance) ());
+
+/// Witness that the caller is the instance frame API in
+/// [`crate::ir::instance`].
+///
+/// Reading the definition a body handle
+/// ([`LocalDecl`](crate::hir::expr::LocalDecl)) names requires one, so only
+/// an [`InstanceFrame`](crate::ir::instance::frame::InstanceFrame) can turn a
+/// handle into a declaration identity.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameAccess(pub(in crate::ir::instance) ());

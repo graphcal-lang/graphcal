@@ -40,7 +40,7 @@ pub mod types;
 pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
     AssertBody, CheckedAssertBody, CheckedExpr, Completeness, ConstRef, Draft, Expr,
-    ExprDependencies, ExprKind, ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId,
+    ExprDependencies, ExprKind, ExternFnRef, FunctionRef, LocalDecl, LocalDef, LocalEnv, LocalId,
     ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, Strict, UnappliedFunctionRef,
     collect_expr_dependencies, find_dag_call,
 };

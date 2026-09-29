@@ -12,9 +12,8 @@ use super::{
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
 use crate::ir::instance::HirInstanceRecord;
-use crate::ir::instance::identity::{
-    instance_declaration, projection_alias, rebased_declaration, template_declaration,
-};
+use crate::ir::instance::frame::InstanceFrame;
+use crate::ir::instance::identity::{instance_declaration, projection_alias, template_declaration};
 use crate::ir::static_substitution::{
     InstanceIndexBindingTarget, StaticSpecializationId, StaticSubstitution,
 };
@@ -25,6 +24,7 @@ use crate::registry::error::GraphcalError;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
+use crate::syntax::dimension::UnitName;
 use crate::tir::presentation::DagPresentationFacts;
 
 fn dimension_substitution<'a>(
@@ -294,16 +294,6 @@ pub fn specialize_expression_type<V: Concreteness>(
     })
 }
 
-fn rebase_runtime_decl(
-    declaration: &ResolvedDeclName,
-    runtime_owner_rebases: &HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
-) -> ResolvedDeclName {
-    runtime_owner_rebases.get(declaration.owner()).map_or_else(
-        || declaration.clone(),
-        |owner| rebased_declaration(declaration, owner),
-    )
-}
-
 fn specialize_plot_channel(
     channel: &PlotChannelShape,
     substitution: &StaticSubstitution,
@@ -335,32 +325,19 @@ fn specialize_plot_channel(
     Ok(shape)
 }
 
-fn instance_decl(
-    target: &ResolvedDeclName,
-    specialization: &StaticSpecializationId,
-    owner: &crate::dag_id::DagId,
-) -> ResolvedDeclName {
-    if target.owner() == &specialization.template {
-        rebased_declaration(target, owner)
-    } else {
-        target.clone()
-    }
-}
-
 fn specialize_dependencies(
     dependencies: &mut super::ResolvedDagDependencies,
-    specialization: &StaticSpecializationId,
-    owner: &crate::dag_id::DagId,
+    frame: &InstanceFrame,
 ) {
     let remap = |values: &HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>| {
         values
             .iter()
             .map(|(declaration, dependencies)| {
                 (
-                    rebased_declaration(declaration, owner),
+                    frame.rebase(declaration),
                     dependencies
                         .iter()
-                        .map(|dependency| instance_decl(dependency, specialization, owner))
+                        .map(|dependency| frame.rebase(dependency))
                         .collect(),
                 )
             })
@@ -449,9 +426,7 @@ fn rebase_nested_instance(
     mut nested: HirInstanceRecord,
     owner: &crate::dag_id::DagId,
     substitution: &StaticSubstitution,
-    runtime_owner_rebases: &mut HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
 ) -> HirInstanceRecord {
-    let template_nested_owner = nested.instance.id().owner().clone();
     nested
         .instance
         .rebase(owner.clone(), |nested_substitution| {
@@ -459,53 +434,39 @@ fn rebase_nested_instance(
             compose_type_targets(nested_substitution.types.values_mut(), substitution);
             compose_dimension_targets(nested_substitution.dimensions.values_mut(), substitution);
         });
-    runtime_owner_rebases.insert(template_nested_owner, nested.instance.id().owner().clone());
     nested
         .assertion_projections
         .iter_mut()
         .filter_map(|projection| projection.expected_fail.as_mut())
         .for_each(|expected| specialize_expected_fail(expected, substitution));
-    nested.owner_rebases.extend(runtime_owner_rebases.clone());
     nested
 }
 
+/// Give `instance` (a copy of `template`) the identity and frame of the
+/// instance `edge` allocates in the DAG that runs in `parent`.
 fn initialize_instance_identity(
     instance: &mut DagTIR,
     template: &DagTIR,
     edge: &HirInstanceRecord,
+    parent: &InstanceFrame,
+    runtime_units: impl IntoIterator<Item = UnitName>,
 ) {
     let owner = edge.instance.id().owner();
-    let specialization = edge.instance.specialization();
     instance.dag_id = owner.clone();
-    instance.semantic_specialization = Some(specialization.clone());
+    instance.frame = edge.instance.frame(
+        parent,
+        template
+            .semantic_instances
+            .iter()
+            .map(|nested| nested.instance.id()),
+        runtime_units,
+    );
     instance.static_ports.clear();
-    instance
-        .runtime_owner_rebases
-        .clone_from(&edge.owner_rebases);
-    instance
-        .runtime_owner_rebases
-        .insert(specialization.template.clone(), owner.clone());
-    for declaration_owner in template
-        .decls()
-        .iter()
-        .map(crate::ir::entry::Decl::declaration_owner)
-    {
-        instance
-            .runtime_owner_rebases
-            .insert(declaration_owner.clone(), owner.clone());
-    }
     instance.semantic_instances = template
         .semantic_instances
         .iter()
         .cloned()
-        .map(|nested| {
-            rebase_nested_instance(
-                nested,
-                owner,
-                &specialization.substitution,
-                &mut instance.runtime_owner_rebases,
-            )
-        })
+        .map(|nested| rebase_nested_instance(nested, owner, edge.instance.substitution()))
         .collect();
 }
 
@@ -535,33 +496,35 @@ fn specialize_instance_declarations(
             )
         })?;
     // Attribute tables are keyed by template-owned identities; the instance
-    // addresses the same declarations under its runtime identities.
-    instance.assumes_map = std::mem::take(&mut instance.assumes_map)
+    // addresses the same declarations under its own identities.
+    let frame = &instance.frame;
+    let assumes_map = std::mem::take(&mut instance.assumes_map)
         .into_iter()
         .map(|(assertion, assumers)| {
             (
-                instance.runtime_decl_identity(&assertion),
+                frame.rebase(&assertion),
                 assumers
                     .iter()
-                    .map(|assumer| instance.runtime_decl_identity(assumer))
+                    .map(|assumer| frame.rebase(assumer))
                     .collect(),
             )
         })
         .collect();
-    instance.expected_fail = std::mem::take(&mut instance.expected_fail)
+    let expected_fail = std::mem::take(&mut instance.expected_fail)
         .into_iter()
         .map(|(assertion, mut expected)| {
             specialize_expected_fail(&mut expected.expected, &specialization.substitution);
-            (instance.runtime_decl_identity(&assertion), expected)
+            (frame.rebase(&assertion), expected)
         })
         .collect();
+    instance.assumes_map = assumes_map;
+    instance.expected_fail = expected_fail;
     Ok(())
 }
 
 fn specialize_dynamic_unit_scales(
     instance: &mut DagTIR,
     specialization: &StaticSpecializationId,
-    owner: &crate::dag_id::DagId,
     tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -570,16 +533,7 @@ fn specialize_dynamic_unit_scales(
         .dynamic_unit_scales
         .iter()
         .map(|(unit, entry)| {
-            let unit_owner = if unit.owner() == &specialization.template {
-                owner.clone()
-            } else {
-                instance
-                    .runtime_owner_rebases
-                    .get(unit.owner())
-                    .cloned()
-                    .unwrap_or_else(|| unit.owner().clone())
-            };
-            let unit = rebased_declaration(unit, &unit_owner);
+            let unit = instance.frame.rebase(unit);
             let mut entry = entry.clone();
             entry.unit = unit.clone();
             entry.declared_dimension = specialize_dimension(
@@ -606,7 +560,6 @@ fn specialize_instance_semantics(
     tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
     let specialized = instance
         .value_decl_types()
@@ -622,31 +575,33 @@ fn specialize_instance_semantics(
         })
         .collect::<Result<_, _>>()?;
     instance.replace_value_decl_types(specialized);
+    let frame = instance.frame.clone();
     instance.semantic.decl_bindings = instance
         .semantic
         .decl_bindings
         .iter()
-        .map(|(name, target)| (name.clone(), instance_decl(target, specialization, owner)))
+        .map(|(name, target)| (name.clone(), frame.rebase(target)))
         .collect();
-    specialize_dependencies(&mut instance.semantic.dependencies, specialization, owner);
+    specialize_dependencies(&mut instance.semantic.dependencies, &frame);
     for (template_port, binding) in &edge.value_bindings {
-        let instance_port = instance_decl(template_port, specialization, owner);
+        // A binding is lowered in the including template and runs here, in
+        // the frame that also re-owns the including template's declarations.
         let dependencies = crate::hir::collect_expr_dependencies(binding)
             .graph_refs
             .iter()
-            .map(|dependency| instance_decl(dependency, specialization, owner))
+            .map(|dependency| frame.resolve(dependency))
             .collect();
         instance
             .semantic
             .dependencies
             .runtime_deps
-            .insert(instance_port, dependencies);
+            .insert(frame.rebase(template_port), dependencies);
     }
     instance.semantic.domain_bounds = instance
         .semantic
         .domain_bounds
         .iter()
-        .map(|(target, bounds)| (rebased_declaration(target, owner), bounds.clone()))
+        .map(|(target, bounds)| (frame.rebase(target), bounds.clone()))
         .collect();
     install_override_reconciliations(instance, edge);
     Ok(())
@@ -655,6 +610,8 @@ fn specialize_instance_semantics(
 fn clone_checked_instance(
     template: &DagTIR,
     edge: &HirInstanceRecord,
+    parent: &InstanceFrame,
+    runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagTIR, GraphcalError> {
@@ -681,7 +638,7 @@ fn clone_checked_instance(
         })?
     };
     let mut instance = template.clone();
-    initialize_instance_identity(&mut instance, template, edge);
+    initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
     for (_, dag) in tir.dags.iter() {
         instance
             .semantic
@@ -689,13 +646,7 @@ fn clone_checked_instance(
             .extend_from(&dag.semantic.type_defs);
     }
     specialize_instance_declarations(&mut instance, edge, src)?;
-    specialize_dynamic_unit_scales(
-        &mut instance,
-        edge.instance.specialization(),
-        edge.instance.id().owner(),
-        tir,
-        src,
-    )?;
+    specialize_dynamic_unit_scales(&mut instance, edge.instance.specialization(), tir, src)?;
     specialize_instance_semantics(&mut instance, edge, tir, src)?;
     Ok(instance)
 }
@@ -725,11 +676,11 @@ fn specialize_instance_presentation_facts(
     tir.dags
         .local_iter()
         .filter_map(|(owner, dag)| {
-            dag.semantic_specialization
-                .as_ref()
-                .map(|specialization| (owner, specialization, &dag.runtime_owner_rebases))
+            dag.frame()
+                .specialization()
+                .map(|specialization| (owner, specialization, dag.frame()))
         })
-        .map(|(owner, specialization, runtime_owner_rebases)| {
+        .map(|(owner, specialization, frame)| {
             let template = checked_presentation(tir, presentation, &specialization.template)
                 .ok_or_else(|| {
                     GraphcalError::internal_error(
@@ -753,9 +704,7 @@ fn specialize_instance_presentation_facts(
                                 .map(|channel| (*encoding, channel))
                         })
                         .collect::<Result<_, _>>()
-                        .map(|channels| {
-                            (rebase_runtime_decl(plot, runtime_owner_rebases), channels)
-                        })
+                        .map(|channels| (frame.rebase(plot), channels))
                 })
                 .collect::<Result<_, GraphcalError>>()?;
             Ok((owner.clone(), DagPresentationFacts { plot_channels }))
@@ -798,10 +747,8 @@ fn add_plot_projections_for_dag(
         .flat_map(|edge| {
             edge.plot_projections.iter().map(|projection| {
                 let instance_owner = edge.instance.id().owner().clone();
-                let target = instance_declaration(
-                    edge.instance.id(),
-                    projection.target.to_unowned_def_name(),
-                );
+                let target =
+                    instance_declaration(edge.instance.id(), projection.target.leaf().clone());
                 let exposed = projection_alias(parent, projection.exposed_name.leaf().clone());
                 (instance_owner, target, exposed)
             })
@@ -879,20 +826,14 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
                 if !has_local_body {
                     dag.semantic.decl_bindings.insert(
                         projection.exposed_name,
-                        instance_declaration(
-                            edge.instance.id(),
-                            projection.target.to_unowned_def_name(),
-                        ),
+                        instance_declaration(edge.instance.id(), projection.target.leaf().clone()),
                     );
                 }
             }
             for projection in edge.assertion_projections {
                 dag.semantic.decl_bindings.insert(
                     projection.exposed_name,
-                    instance_declaration(
-                        edge.instance.id(),
-                        projection.target.to_unowned_def_name(),
-                    ),
+                    instance_declaration(edge.instance.id(), projection.target.leaf().clone()),
                 );
             }
         }
@@ -902,6 +843,7 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
 fn instantiate_semantic_edge(
     tir: &mut UncheckedTir,
     edge: &HirInstanceRecord,
+    parent: &InstanceFrame,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
@@ -932,7 +874,8 @@ fn instantiate_semantic_edge(
         )
         .collect::<BTreeSet<_>>();
     let runtime_unit_infos = runtime_unit_names
-        .into_iter()
+        .iter()
+        .cloned()
         .map(|name| {
             let source: ResolvedUnitName = template_declaration(edge.instance.id(), name.clone());
             let mut info = tir.unit_info(&source).cloned().ok_or_else(|| {
@@ -951,7 +894,7 @@ fn instantiate_semantic_edge(
             Ok((instance_declaration(edge.instance.id(), name), info))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let instance = clone_checked_instance(&template, edge, tir, src)?;
+    let instance = clone_checked_instance(&template, edge, parent, runtime_unit_names, tir, src)?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
@@ -972,18 +915,23 @@ pub fn instantiate_semantic_edges(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     loop {
+        // Each edge is materialized in the frame of the DAG that includes it.
         let edges = tir
             .dags
             .iter()
-            .flat_map(|(_, dag)| dag.semantic_instances().iter().cloned())
-            .filter(|edge| tir.dags.get(edge.instance.id().owner()).is_none())
+            .flat_map(|(_, dag)| {
+                dag.semantic_instances()
+                    .iter()
+                    .map(|edge| (edge.clone(), dag.frame().clone()))
+            })
+            .filter(|(edge, _)| tir.dags.get(edge.instance.id().owner()).is_none())
             .collect::<Vec<_>>();
         if edges.is_empty() {
             install_semantic_projection_bindings(tir);
             return Ok(());
         }
-        for edge in edges {
-            instantiate_semantic_edge(tir, &edge, src)?;
+        for (edge, parent) in edges {
+            instantiate_semantic_edge(tir, &edge, &parent, src)?;
         }
     }
 }

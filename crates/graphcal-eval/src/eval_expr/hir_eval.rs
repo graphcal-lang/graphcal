@@ -138,7 +138,7 @@ fn eval_hir_expr_inner(
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
         hir::ExprKind::GraphRef(target) => {
-            let key = ctx.current_dag.runtime_decl_identity(&target.value);
+            let key = ctx.resolve(&target.value);
             let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
             let presentation = presentation_instance_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
@@ -149,10 +149,9 @@ fn eval_hir_expr_inner(
         hir::ExprKind::ConstRef(target) => {
             let value = eval_hir_const_ref(expr, target, values, local_values, ctx)?;
             let presentation = match &target.value {
-                ConstRef::Decl(target) => presentation_instance_for(
-                    presentation_values,
-                    &ctx.current_dag.runtime_decl_identity(target),
-                ),
+                ConstRef::Decl(target) => {
+                    presentation_instance_for(presentation_values, &ctx.resolve(target))
+                }
                 ConstRef::Builtin(_) | ConstRef::Constructor(_) => PresentationInstance::None,
             };
             Ok(EvaluatedRuntimeValue::new(value, presentation))
@@ -308,12 +307,12 @@ fn eval_hir_expr_inner(
 }
 
 fn resolve_hir_graph_ref<'a>(
-    target: &ResolvedDeclName,
+    target: &hir::LocalDecl,
     target_span: Span,
     values: &'a RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<&'a RuntimeValue, GraphcalError> {
-    let runtime_target = ctx.current_dag.runtime_decl_identity(target);
+    let runtime_target = ctx.resolve(target);
     values.get(&runtime_target).ok_or_else(|| {
         ctx.eval_error(
             format!("undefined graph reference `@{target}`"),
@@ -386,7 +385,7 @@ fn eval_hir_const_ref(
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
         ConstRef::Decl(resolved) => values
-            .get(&ctx.current_dag.runtime_decl_identity(resolved))
+            .get(&ctx.resolve(resolved))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
         ConstRef::Constructor(_) => eval_hir_nullary_constructor(expr, ctx),
@@ -1708,9 +1707,7 @@ fn eval_hir_field_access(
                     inner.span,
                 ));
             };
-            let expected_runtime = ctx
-                .current_dag
-                .runtime_struct_type_identity(expected.resolved());
+            let expected_runtime = ctx.current_dag.frame().struct_type(expected.resolved());
             // Validate the actual tag against the retained expected type, never
             // resolve a source name or infer a constructor application here.
             let definition = ctx
@@ -2153,10 +2150,8 @@ fn eval_hir_index_access(
                 values,
                 ctx,
             )?);
-            let presentation = presentation_instance_for(
-                presentation_values,
-                &ctx.current_dag.runtime_decl_identity(&target.value),
-            );
+            let presentation =
+                presentation_instance_for(presentation_values, &ctx.resolve(&target.value));
             (value, presentation)
         }
         _ => {

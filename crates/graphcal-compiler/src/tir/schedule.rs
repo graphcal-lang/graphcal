@@ -121,7 +121,7 @@ impl RuntimeSchedule {
                     .get(&declaration)
                     .into_iter()
                     .flatten()
-                    .map(|dependency| dag.runtime_decl_identity(dependency))
+                    .cloned()
                     .collect::<Vec<_>>();
                 graph.add_node(declaration.clone());
                 dependencies.insert(declaration, reads);

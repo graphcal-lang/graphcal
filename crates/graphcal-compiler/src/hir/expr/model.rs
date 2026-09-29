@@ -24,6 +24,7 @@ use crate::nat::NatPolyForm;
 #[cfg(doc)]
 use super::completeness::Draft;
 use super::completeness::{Completeness, Strict};
+use super::local_decl::LocalDecl;
 
 /// Stable lexical identity for a local expression binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -238,8 +239,8 @@ pub enum ExprKind<C: Completeness = Strict> {
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
     TypeSystemRef(Spanned<TypeSystemRef>),
-    GraphRef(Spanned<ResolvedDeclName>),
-    ConstRef(Spanned<ConstRef>),
+    GraphRef(Spanned<C::DeclRef>),
+    ConstRef(Spanned<ConstRef<C::DeclRef>>),
     LocalRef(Spanned<LocalId>),
     BinOp {
         op: ast::BinOp,
@@ -369,9 +370,12 @@ impl TypeSystemRef {
 }
 
 /// Resolved constant-like expression target.
+///
+/// `D` is how a declaration reference names its target, per
+/// [`Completeness::DeclRef`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConstRef {
-    Decl(ResolvedDeclName),
+pub enum ConstRef<D = LocalDecl> {
+    Decl(D),
     Constructor(ResolvedConstructorName),
     Builtin(BuiltinConst),
 }

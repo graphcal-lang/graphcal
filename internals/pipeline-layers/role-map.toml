@@ -382,6 +382,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "expr", "local_decl"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr", "local_env"]
 role = "contracts"
 
@@ -534,6 +539,16 @@ role = "checking"
 package = "compiler"
 path = ["ir", "instance", "tests"]
 role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "instance", "frame"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "instance", "frame", "tests"]
+role = "contracts"
 
 [[module]]
 package = "compiler"

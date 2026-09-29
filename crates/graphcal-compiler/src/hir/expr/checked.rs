@@ -1,6 +1,7 @@
 //! Finished HIR bodies: strict trees whose every node carries an occurrence identity.
 
 use super::completeness::{Draft, NoErrorNode, Strict};
+use super::local_decl::LocalDecl;
 #[cfg(test)]
 use super::model::ExprKind;
 use super::model::{AssertBody, Expr};
@@ -138,6 +139,10 @@ impl Expr {
             fn error_node(&mut self, error: NoErrorNode) -> Result<NoErrorNode, Self::Failure> {
                 error.absurd()
             }
+
+            fn decl_ref(&mut self, reference: LocalDecl) -> LocalDecl {
+                reference
+            }
         }
         match refine_expr(self, &mut ForgetIds) {
             Ok(draft) => draft,
@@ -158,6 +163,10 @@ impl Refinement<Draft, Strict> for NumberNodes {
 
     fn error_node(&mut self, error: NoErrorNode) -> Result<NoErrorNode, ExprIdExhausted> {
         error.absurd()
+    }
+
+    fn decl_ref(&mut self, reference: LocalDecl) -> LocalDecl {
+        reference
     }
 }
 

@@ -691,7 +691,10 @@ fn type_resolve_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
-    let dependencies = collect_resolved_dag_dependencies(&decls, module_ctx, src)?;
+    // A type-resolved module or inline DAG is canonical: it runs the bodies
+    // it defines.
+    let frame = crate::ir::instance::frame::InstanceFrame::canonical();
+    let dependencies = collect_resolved_dag_dependencies(&decls, &frame, module_ctx, src)?;
     cancellation.checkpoint()?;
     let override_reconciliations = override_reconciliations(decls.params());
     cancellation.checkpoint()?;
@@ -720,6 +723,7 @@ fn type_resolve_dag(
         dag_id: dag_id.clone(),
         decls,
         semantic,
+        frame,
     })
 }
 
@@ -1174,18 +1178,24 @@ fn check_hir_body_policies(
 
     for entry in dag.consts() {
         let key = entry.identity();
-        HirPolicyChecker { ctx, src }.check_expr(
-            &entry.expr,
-            BodyPhase::CompileTime,
-            local(&key),
-        )?;
+        HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        }
+        .check_expr(&entry.expr, BodyPhase::CompileTime, local(&key))?;
     }
-    check_domain_bound_policies(semantic, ctx)?;
-    check_dynamic_unit_policies(semantic, ctx)?;
+    check_domain_bound_policies(semantic, dag.frame(), ctx)?;
+    check_dynamic_unit_policies(semantic, dag.frame(), ctx)?;
     for entry in dag.nodes() {
         let key = entry.identity();
         entry.definition.formula().map_or(Ok(()), |expression| {
-            HirPolicyChecker { ctx, src }.check_expr(expression, BodyPhase::Runtime, local(&key))
+            HirPolicyChecker {
+                ctx,
+                src,
+                frame: dag.frame(),
+            }
+            .check_expr(expression, BodyPhase::Runtime, local(&key))
         })?;
     }
     for entry in dag.params() {
@@ -1194,13 +1204,19 @@ fn check_hir_body_policies(
         };
         // Params are exempt from A10 (a rebinding importer is forced to
         // rebind the param too — V005 at the include site).
-        HirPolicyChecker { ctx, src }.check_expr(default, BodyPhase::Runtime, false)?;
+        HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        }
+        .check_expr(default, BodyPhase::Runtime, false)?;
     }
     check_sink_body_policies(dag, external_surface, ctx, src)
 }
 
 fn check_domain_bound_policies(
     semantic: &DagSemanticBody,
+    frame: &crate::ir::instance::frame::InstanceFrame,
     ctx: ModuleTypeContext<'_>,
 ) -> Result<(), GraphcalError> {
     let check_bounds = |bounds: &[ResolvedDomainBound],
@@ -1210,6 +1226,7 @@ fn check_domain_bound_policies(
             HirPolicyChecker {
                 ctx,
                 src: &bound.src,
+                frame,
             }
             .check_expr(
                 &bound.value,
@@ -1239,6 +1256,7 @@ fn check_domain_bound_policies(
 
 fn check_dynamic_unit_policies(
     semantic: &DagSemanticBody,
+    frame: &crate::ir::instance::frame::InstanceFrame,
     ctx: ModuleTypeContext<'_>,
 ) -> Result<(), GraphcalError> {
     // Dynamic unit scales may read runtime params/nodes, but otherwise obey
@@ -1248,6 +1266,7 @@ fn check_dynamic_unit_policies(
         HirPolicyChecker {
             ctx,
             src: &entry.src,
+            frame,
         }
         .check_expr(&entry.expr, BodyPhase::Runtime, false)?;
         if let Some((external, span)) = hir::find_extern_call(&entry.expr) {
@@ -1272,7 +1291,11 @@ fn check_sink_body_policies(
     for entry in dag.asserts() {
         let check_literals =
             entry.identity.owner() == ctx.owner && is_explicit_export(entry.name());
-        let checker = HirPolicyChecker { ctx, src };
+        let checker = HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => {
                 checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1292,7 +1315,11 @@ fn check_sink_body_policies(
     for entry in dag.plots() {
         let body = &entry.body;
         let check_literals = is_explicit_export(entry.name());
-        let checker = HirPolicyChecker { ctx, src };
+        let checker = HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
         }
@@ -1306,7 +1333,11 @@ fn check_sink_body_policies(
         .chain(dag.layers().map(|entry| (entry.name(), &entry.fields)))
     {
         let check_literals = is_explicit_export(name);
-        let checker = HirPolicyChecker { ctx, src };
+        let checker = HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        };
         for field in fields {
             checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
         }
@@ -1329,6 +1360,8 @@ impl BodyPhase {
 struct HirPolicyChecker<'a> {
     ctx: ModuleTypeContext<'a>,
     src: &'a NamedSource<Arc<String>>,
+    /// The frame of the DAG whose bodies are checked.
+    frame: &'a crate::ir::instance::frame::InstanceFrame,
 }
 
 impl HirPolicyChecker<'_> {
@@ -1502,14 +1535,15 @@ impl HirPolicyChecker<'_> {
 
     fn check_graph_ref(
         &self,
-        target: &Spanned<ResolvedDeclName>,
+        reference: &Spanned<hir::LocalDecl>,
         ref_span: Span,
         phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
+        let target = self.frame.resolve(&reference.value);
         let Some(kind) = self
             .ctx
             .resolver
-            .symbol(&target.value)
+            .symbol(&target)
             .map(|symbol| *symbol.kind())
         else {
             // Unknown targets get their own diagnostic from dependency
@@ -1518,14 +1552,14 @@ impl HirPolicyChecker<'_> {
         };
         if matches!(kind, crate::resolve::category::DeclSymbolKind::Assert) {
             return Err(GraphcalError::GraphRefToAssert {
-                name: target.value.to_unowned_def_name(),
+                name: target.to_unowned_def_name(),
                 src: self.src.clone(),
                 span: ref_span.into(),
             });
         }
         if phase.is_compile_time() && !kind.is_const() {
             return Err(GraphcalError::GraphRefInConst {
-                name: ScopedName::local(target.value.to_unowned_def_name()),
+                name: ScopedName::local(target.to_unowned_def_name()),
                 src: self.src.clone(),
                 span: ref_span.into(),
             });
@@ -1593,6 +1627,7 @@ struct DagTIRSeed {
     dag_id: crate::dag_id::DagId,
     decls: crate::ir::decl_table::DeclTable<Typed>,
     semantic: DagSemanticBody,
+    frame: crate::ir::instance::frame::InstanceFrame,
 }
 
 impl DagTIRSeed {
@@ -1654,8 +1689,7 @@ impl DagTIRSeed {
             expected_fail,
             imported_bindings,
             semantic_instances,
-            semantic_specialization: None,
-            runtime_owner_rebases: HashMap::new(),
+            frame: self.frame,
             projectable_outputs: std::collections::HashSet::new(),
         };
         // The complete owned-root inventory includes nominal bounds, even when
