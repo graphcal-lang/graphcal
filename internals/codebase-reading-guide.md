@@ -705,9 +705,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | `presentation_evidence.rs`        | Selected value-shaped display data and typed presentation diagnostics |
 | `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Atomic interpreter transport of values and selected evidence |
-| `declaration_locations.rs` | Validated declaration-to-physical-body index prepared from body records |
 | `constant_pools.rs` | Shared constant-pool views and validated imported references |
-| `execution_plan.rs`     | Immutable root/callable plans and fail-closed plan selection |
+| `execution_plan.rs`     | Immutable indexed callable plans and steps borrowing a sealed program |
 | `execution_frame.rs` | Shared binding, dependency, domain, and insertion machine with fixed frame policy |
 | `assertion_eval.rs` | Assertion semantics over an expression callback, independent of root/call reporting |
 | `exec_plan.rs`          | Checked-fact validation and execution-plan preparation       |
@@ -1172,38 +1171,43 @@ each HIR `ExprKind::DagCall` already carries its canonical `DagId` target.
 
 ### 3.8 ExecPlan
 
-`ExecPlan` in `execution_plan.rs` retains one `CallablePlan` for every checked
-body, including its semantic-instance closure. The root uses the same contract
-and is stored once, separately from the non-root map. Preparation and validation
-remain free functions in checking `exec_plan.rs`; runtime consumers import data
-directly, without a checking-layer re-export:
+`ExecPlan<'p>` in `execution_plan.rs` borrows the sealed `CheckedProgram` it was
+prepared from and retains one `CallablePlan` for every checked body, including
+its semantic-instance closure; `exec_plan.rs::PreparedPlan` owns the program
+together with its plan. Preparation and validation remain free functions in
+checking `exec_plan.rs`; runtime consumers import data directly, without a
+checking-layer re-export:
 
 ```text
-ExecPlan
-  declaration_locations: DeclarationLocations  // physical body, not semantic owner
-  root: CallablePlan
-  callables: HashMap<DagId, CallablePlan>  // excludes root
-  checked_execution_facts: CheckedExecutionFacts
+ExecPlan<'p>
+  program: &'p CheckedProgram
+  declarations: HashMap<&ResolvedDeclName, PlannedDeclaration>  // every value declaration
+  callables: IndexVec<CallableIdx, CallablePlan>  // the root first
+  by_dag: HashMap<&DagId, CallableIdx>  // inline-call targets only
 
-CallablePlan
-  owner: DagId
-  execution_dags: Vec<DagId>  // prepared semantic closure
-  const_values: ConstantPools  // canonical pools, including multi-body closures
+PlannedDeclaration<'p>
+  scope: SealedDag  // physical body, not semantic owner
+  body: Todo | Expression { root: &Expr, tree: Result<&TExpr, _> } | Supplied
+  reads: &[ResolvedDeclName]  // the checker's reads, incl. constants and imports
+  domain: Option<&ResolvedDomainConstraint>
+
+CallablePlan<'p>
+  scope: SealedDag
+  execution_dags: Vec<SealedDag>  // prepared semantic closure
   imports: PreparedImports  // retained constants + explicit runtime keys
-  schedule: RuntimeSchedule  // the checker's order and reads of the closure
-  assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>
-  expected_fail: HashMap<ResolvedDeclName, ExpectedFail>  // assertion_expectation.rs contract
-  domain_constraints: Arc<HashMap<ResolvedDeclName, ResolvedDomainConstraint>>
+  steps: IndexVec<StepIdx, Step { declaration, deps: Vec<StepIdx> }>
 ```
 
-Preparation derives physical locations from each body's authoritative
-`DagDeclarationIndex`, including parameters without default expressions. It
-rejects duplicate locations and schedule entries absent from the index or outside
-the selected semantic closure for every callable. Root and call execution require
-those locations and do not scan bodies to find scheduled declarations. Checked
-contexts require prepared plans as well as matching body/fact scopes; missing or
-misowned callable plans fail closed. Calls no longer traverse include graphs or
-construct schedules. Independent plugin invocation order remains unspecified.
+Preparation plans every value declaration of every body once from its
+authoritative declaration index, including parameters without default
+expressions, and rejects duplicate locations. Each callable indexes the checker's
+runtime schedule as steps whose dependencies are earlier steps of the same
+callable; it rejects schedule entries absent from the declaration table or
+outside the selected semantic closure. Running a frame walks the steps by index:
+it looks up neither declarations nor bodies nor DAGs, and never scans bodies.
+Only an inline call selects its callable by the target `DagId` its checked tree
+carries. Assertion expectations and `#[assumes]` tables are read from each
+body's own records.
 
 Preparation retains canonical constant pools for both singleton and multi-body
 closures, resolves imported constants to validated pool references, and selects
@@ -1830,179 +1834,178 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 278. `crates/graphcal-eval/src/project_bundle.rs` (bounded portable artifacts and virtual mounting; consumed by report assembly and browser preparation)
 279. `crates/graphcal-eval/src/project_compiler/template.rs`
 280. `crates/graphcal-eval/src/pipeline_metrics.rs`
-281. `crates/graphcal-eval/src/declaration_locations.rs`
-282. `crates/graphcal-eval/src/presentation_evidence.rs`
-283. `crates/graphcal-eval/src/runtime_presentation.rs`
-284. `crates/graphcal-eval/src/eval/bindings.rs`
-285. `crates/graphcal-eval/src/constant_pools.rs`
-286. `crates/graphcal-eval/src/checked_program.rs`
-287. `crates/graphcal-eval/src/execution_plan.rs`
-288. `crates/graphcal-eval/src/static_incompleteness.rs`
-289. `crates/graphcal-eval/src/execution_frame.rs`
-290. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
-291. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-292. `crates/graphcal-eval/src/host_abi.rs`
-293. `crates/graphcal-eval/src/eval_expr/complex.rs`
-294. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-295. `crates/graphcal-eval/src/eval/types.rs`
-296. `crates/graphcal-eval/src/loader/inline_dags.rs`
-297. `crates/graphcal-eval/src/inline_dag.rs`
-298. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
-299. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
-300. `crates/graphcal-eval/src/exec_plan.rs`
-301. `crates/graphcal-eval/src/eval/plot_data.rs`
-302. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-303. `crates/graphcal-eval/src/assertion_eval.rs`
-304. `crates/graphcal-eval/src/eval/display.rs`
-305. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-306. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
-307. `crates/graphcal-eval/src/project_compiler/model.rs`
-308. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
-309. `crates/graphcal-eval/src/eval/project/output.rs`
-310. `crates/graphcal-eval/src/eval_expr/presentation.rs`
-311. `crates/graphcal-eval/src/loader/source_snapshot.rs`
-312. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-313. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
-314. `crates/graphcal-eval/src/host_fns.rs`
-315. `crates/graphcal-eval/src/eval_expr/context.rs`
-316. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-317. `crates/graphcal-eval/src/loader/source_authority.rs`
-318. `crates/graphcal-eval/src/loader/build.rs`
-319. `crates/graphcal-eval/src/eval/public_projection.rs`
-320. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-321. `crates/graphcal-eval/src/loader.rs`
-322. `crates/graphcal-eval/src/project_compiler/session.rs`
-323. `crates/graphcal-eval/src/eval/runtime.rs`
-324. `crates/graphcal-eval/src/eval/project/prepared.rs`
-325. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-326. `crates/graphcal-eval/src/eval_expr/mod.rs`
-327. `crates/graphcal-eval/src/eval/project/mod.rs`
-328. `crates/graphcal-eval/src/project_compiler/mod.rs`
-329. `crates/graphcal-eval/src/eval/mod.rs`
-330. `crates/graphcal-eval/src/project_compiler/imports.rs`
-331. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
-332. `crates/graphcal-eval/src/project_compiler/checking.rs`
-333. `crates/graphcal-eval/src/eval/project/binding_compile.rs`
-334. `crates/graphcal-eval/src/eval/project/tenax_model.rs`
-335. `crates/graphcal-eval/src/eval/tests.rs`
-336. `crates/graphcal-eval/src/graph_ir/mod.rs`
-337. `crates/graphcal-eval/src/graph_ir/dot.rs`
-338. `crates/graphcal-eval/src/eval/tests/checked_expressions.rs`
-339. `crates/graphcal-eval/src/eval/tests/presentation_evidence.rs`
-340. `crates/graphcal-eval/src/eval/runtime/tests.rs`
-341. `crates/graphcal-eval/src/project_compiler/execution_check/const_eval.rs`
-342. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
-343. `crates/graphcal-eval/src/eval/tests/sealed_program.rs`
-344. `crates/graphcal-report/src/lib.rs`
-345. `crates/graphcal-report/src/escape.rs`
-346. `crates/graphcal-report/src/vega_assets.rs`
-347. `crates/graphcal-report/src/report_hydrate.rs`
-348. `crates/graphcal-report/src/vega.rs`
-349. `crates/graphcal-report/src/plot_page.rs`
-350. `crates/graphcal-report/src/value_display.rs`
-351. `crates/graphcal-report/src/report_ir.rs`
-352. `crates/graphcal-report/src/report_html.rs`
-353. `crates/graphcal-report/src/report_markdown.rs`
-354. `crates/graphcal-test-support/src/lib.rs`
-355. `crates/graphcal-test-support/src/project.rs`
-356. `crates/graphcal-test-support/src/bytes.rs`
-357. `crates/graphcal-tenax/src/lib.rs`
-358. `crates/graphcal-plugin-host/src/cache.rs`
-359. `crates/graphcal-plugin-host/src/convert.rs`
-360. `crates/graphcal-plugin-host/src/module.rs`
-361. `crates/graphcal-plugin-host/src/registry.rs`
-362. `crates/graphcal-plugin-host/src/host.rs`
-363. `crates/graphcal-plugin-host/src/lib.rs`
-364. `crates/graphcal-wasm/src/project.rs`
-365. `crates/graphcal-wasm/src/output.rs`
-366. `crates/graphcal-wasm/src/js_request.rs`
-367. `crates/graphcal-wasm/src/bindings.rs`
-368. `crates/graphcal-wasm/src/diagnostics.rs`
-369. `crates/graphcal-wasm/src/browser_report.rs`
-370. `crates/graphcal-wasm/src/prepared.rs`
-371. `crates/graphcal-wasm/src/lib.rs`
-372. `crates/graphcal-fmt/src/lib.rs`
-373. `crates/graphcal-fmt/src/format/type_expr.rs`
-374. `crates/graphcal-fmt/src/format/expr.rs`
-375. `crates/graphcal-fmt/src/format/decl.rs`
-376. `crates/graphcal-fmt/src/format/mod.rs`
-377. `crates/graphcal-lsp/src/lib.rs`
-378. `crates/graphcal-lsp/src/convert.rs`
-379. `crates/graphcal-lsp/src/cursor_context.rs`
-380. `crates/graphcal-lsp/src/symbol_identity.rs`
-381. `crates/graphcal-lsp/src/nominal_type_index.rs`
-382. `crates/graphcal-lsp/src/symbol_table.rs`
-383. `crates/graphcal-lsp/src/project_symbols.rs`
-384. `crates/graphcal-lsp/src/formatting.rs`
-385. `crates/graphcal-lsp/src/workspace_revision.rs`
-386. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
-387. `crates/graphcal-lsp/src/formatting_scheduler.rs`
-388. `crates/graphcal-lsp/src/client_capabilities.rs`
-389. `crates/graphcal-lsp/src/filesystem_events.rs`
-390. `crates/graphcal-cli/src/lib.rs`
-391. `crates/graphcal-lsp/src/diagnostics.rs`
-392. `crates/graphcal-lsp/src/resolve.rs`
-393. `crates/graphcal-lsp/src/completion.rs`
-394. `crates/graphcal-lsp/src/signature_help.rs`
-395. `crates/graphcal-lsp/src/inlay_hints.rs`
-396. `crates/graphcal-lsp/src/document_symbols.rs`
-397. `crates/graphcal-lsp/src/document_links.rs`
-398. `crates/graphcal-lsp/src/code_actions.rs`
-399. `crates/graphcal-lsp/src/goto_definition.rs`
-400. `crates/graphcal-lsp/src/references.rs`
-401. `crates/graphcal-lsp/src/hover.rs`
-402. `crates/graphcal-lsp/src/rename.rs`
-403. `crates/graphcal-lsp/src/server.rs`
-404. `crates/graphcal-lsp/src/protocol_tests.rs`
-405. `crates/graphcal-cli/src/display.rs`
-406. `crates/graphcal-cli/src/format.rs`
-407. `crates/graphcal-cli/src/json_input.rs`
-408. `crates/graphcal-cli/src/overrides.rs`
-409. `crates/graphcal-cli/src/main.rs`
-410. `crates/graphcal-cli/src/report.rs`
-411. `crates/graphcal-cli/src/model.rs`
-412. `crates/graphcal-cli/src/dump.rs`
-413. `crates/graphcal-cli/src/deps.rs`
-414. Build-time shell (explicit path modules, curated beyond the heuristic):
+281. `crates/graphcal-eval/src/presentation_evidence.rs`
+282. `crates/graphcal-eval/src/runtime_presentation.rs`
+283. `crates/graphcal-eval/src/eval/bindings.rs`
+284. `crates/graphcal-eval/src/constant_pools.rs`
+285. `crates/graphcal-eval/src/checked_program.rs`
+286. `crates/graphcal-eval/src/execution_plan.rs`
+287. `crates/graphcal-eval/src/static_incompleteness.rs`
+288. `crates/graphcal-eval/src/execution_frame.rs`
+289. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
+290. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+291. `crates/graphcal-eval/src/host_abi.rs`
+292. `crates/graphcal-eval/src/eval_expr/complex.rs`
+293. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+294. `crates/graphcal-eval/src/eval/types.rs`
+295. `crates/graphcal-eval/src/loader/inline_dags.rs`
+296. `crates/graphcal-eval/src/inline_dag.rs`
+297. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
+298. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+299. `crates/graphcal-eval/src/exec_plan.rs`
+300. `crates/graphcal-eval/src/eval/plot_data.rs`
+301. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+302. `crates/graphcal-eval/src/assertion_eval.rs`
+303. `crates/graphcal-eval/src/eval/display.rs`
+304. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+305. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
+306. `crates/graphcal-eval/src/project_compiler/model.rs`
+307. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
+308. `crates/graphcal-eval/src/eval/project/output.rs`
+309. `crates/graphcal-eval/src/eval_expr/presentation.rs`
+310. `crates/graphcal-eval/src/loader/source_snapshot.rs`
+311. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+312. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
+313. `crates/graphcal-eval/src/host_fns.rs`
+314. `crates/graphcal-eval/src/eval_expr/context.rs`
+315. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+316. `crates/graphcal-eval/src/loader/source_authority.rs`
+317. `crates/graphcal-eval/src/loader/build.rs`
+318. `crates/graphcal-eval/src/eval/public_projection.rs`
+319. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+320. `crates/graphcal-eval/src/loader.rs`
+321. `crates/graphcal-eval/src/project_compiler/session.rs`
+322. `crates/graphcal-eval/src/eval/runtime.rs`
+323. `crates/graphcal-eval/src/eval/project/prepared.rs`
+324. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+325. `crates/graphcal-eval/src/eval_expr/mod.rs`
+326. `crates/graphcal-eval/src/eval/project/mod.rs`
+327. `crates/graphcal-eval/src/project_compiler/mod.rs`
+328. `crates/graphcal-eval/src/eval/mod.rs`
+329. `crates/graphcal-eval/src/project_compiler/imports.rs`
+330. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
+331. `crates/graphcal-eval/src/project_compiler/checking.rs`
+332. `crates/graphcal-eval/src/eval/project/binding_compile.rs`
+333. `crates/graphcal-eval/src/eval/project/tenax_model.rs`
+334. `crates/graphcal-eval/src/eval/tests.rs`
+335. `crates/graphcal-eval/src/graph_ir/mod.rs`
+336. `crates/graphcal-eval/src/graph_ir/dot.rs`
+337. `crates/graphcal-eval/src/eval/tests/checked_expressions.rs`
+338. `crates/graphcal-eval/src/eval/tests/presentation_evidence.rs`
+339. `crates/graphcal-eval/src/eval/runtime/tests.rs`
+340. `crates/graphcal-eval/src/project_compiler/execution_check/const_eval.rs`
+341. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
+342. `crates/graphcal-eval/src/eval/tests/sealed_program.rs`
+343. `crates/graphcal-report/src/lib.rs`
+344. `crates/graphcal-report/src/escape.rs`
+345. `crates/graphcal-report/src/vega_assets.rs`
+346. `crates/graphcal-report/src/report_hydrate.rs`
+347. `crates/graphcal-report/src/vega.rs`
+348. `crates/graphcal-report/src/plot_page.rs`
+349. `crates/graphcal-report/src/value_display.rs`
+350. `crates/graphcal-report/src/report_ir.rs`
+351. `crates/graphcal-report/src/report_html.rs`
+352. `crates/graphcal-report/src/report_markdown.rs`
+353. `crates/graphcal-test-support/src/lib.rs`
+354. `crates/graphcal-test-support/src/project.rs`
+355. `crates/graphcal-test-support/src/bytes.rs`
+356. `crates/graphcal-tenax/src/lib.rs`
+357. `crates/graphcal-plugin-host/src/cache.rs`
+358. `crates/graphcal-plugin-host/src/convert.rs`
+359. `crates/graphcal-plugin-host/src/module.rs`
+360. `crates/graphcal-plugin-host/src/registry.rs`
+361. `crates/graphcal-plugin-host/src/host.rs`
+362. `crates/graphcal-plugin-host/src/lib.rs`
+363. `crates/graphcal-wasm/src/project.rs`
+364. `crates/graphcal-wasm/src/output.rs`
+365. `crates/graphcal-wasm/src/js_request.rs`
+366. `crates/graphcal-wasm/src/bindings.rs`
+367. `crates/graphcal-wasm/src/diagnostics.rs`
+368. `crates/graphcal-wasm/src/browser_report.rs`
+369. `crates/graphcal-wasm/src/prepared.rs`
+370. `crates/graphcal-wasm/src/lib.rs`
+371. `crates/graphcal-fmt/src/lib.rs`
+372. `crates/graphcal-fmt/src/format/type_expr.rs`
+373. `crates/graphcal-fmt/src/format/expr.rs`
+374. `crates/graphcal-fmt/src/format/decl.rs`
+375. `crates/graphcal-fmt/src/format/mod.rs`
+376. `crates/graphcal-lsp/src/lib.rs`
+377. `crates/graphcal-lsp/src/convert.rs`
+378. `crates/graphcal-lsp/src/cursor_context.rs`
+379. `crates/graphcal-lsp/src/symbol_identity.rs`
+380. `crates/graphcal-lsp/src/nominal_type_index.rs`
+381. `crates/graphcal-lsp/src/symbol_table.rs`
+382. `crates/graphcal-lsp/src/project_symbols.rs`
+383. `crates/graphcal-lsp/src/formatting.rs`
+384. `crates/graphcal-lsp/src/workspace_revision.rs`
+385. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+386. `crates/graphcal-lsp/src/formatting_scheduler.rs`
+387. `crates/graphcal-lsp/src/client_capabilities.rs`
+388. `crates/graphcal-lsp/src/filesystem_events.rs`
+389. `crates/graphcal-cli/src/lib.rs`
+390. `crates/graphcal-lsp/src/diagnostics.rs`
+391. `crates/graphcal-lsp/src/resolve.rs`
+392. `crates/graphcal-lsp/src/completion.rs`
+393. `crates/graphcal-lsp/src/signature_help.rs`
+394. `crates/graphcal-lsp/src/inlay_hints.rs`
+395. `crates/graphcal-lsp/src/document_symbols.rs`
+396. `crates/graphcal-lsp/src/document_links.rs`
+397. `crates/graphcal-lsp/src/code_actions.rs`
+398. `crates/graphcal-lsp/src/goto_definition.rs`
+399. `crates/graphcal-lsp/src/references.rs`
+400. `crates/graphcal-lsp/src/hover.rs`
+401. `crates/graphcal-lsp/src/rename.rs`
+402. `crates/graphcal-lsp/src/server.rs`
+403. `crates/graphcal-lsp/src/protocol_tests.rs`
+404. `crates/graphcal-cli/src/display.rs`
+405. `crates/graphcal-cli/src/format.rs`
+406. `crates/graphcal-cli/src/json_input.rs`
+407. `crates/graphcal-cli/src/overrides.rs`
+408. `crates/graphcal-cli/src/main.rs`
+409. `crates/graphcal-cli/src/report.rs`
+410. `crates/graphcal-cli/src/model.rs`
+411. `crates/graphcal-cli/src/dump.rs`
+412. `crates/graphcal-cli/src/deps.rs`
+413. Build-time shell (explicit path modules, curated beyond the heuristic):
      `crates/graphcal-cli/build_support/bundle.rs` →
      `crates/graphcal-cli/build_support/engine.rs` →
      `crates/graphcal-cli/build.rs` →
      `crates/graphcal-cli/examples/export_report_engine.rs`
-415. `crates/graphcal-cli/src/plugin.rs`
-416. `crates/graphcal-ast-derive/tests/format_equivalent.rs`
-417. `crates/graphcal-ast-derive/tests/phase_lift.rs`
-418. `crates/graphcal-plugin/tests/expansion.rs`
-419. `crates/graphcal-plugin/tests/prelude_drift.rs`
-420. `crates/graphcal-plugin/tests/abi_memory.rs`
-421. `crates/graphcal-eval/tests/todo.rs`
-422. `crates/graphcal-eval/tests/declaration_order.rs`
-423. `crates/graphcal-eval/tests/edge_case_bugs.rs`
-424. `crates/graphcal-eval/tests/phase0_regressions.rs`
-425. `crates/graphcal-eval/tests/error_snapshots.rs`
-426. `crates/graphcal-eval/tests/generated_projects.rs`
-427. `crates/graphcal-eval/tests/chunk5_regressions.rs`
-428. `crates/graphcal-eval/tests/chunk6_regressions.rs`
-429. `crates/graphcal-eval/tests/namespace_formal_conformance.rs`
-430. `crates/graphcal-eval/tests/phase1_regressions.rs`
-431. `crates/graphcal-eval/tests/phase4_regressions.rs`
-432. `crates/graphcal-eval/tests/static_definition_regressions.rs`
-433. `crates/graphcal-report/tests/report.rs`
-434. `crates/graphcal-wasm/tests/tutorial_examples.rs`
-435. `crates/graphcal-wasm/tests/wasm_runtime.rs`
-436. `crates/graphcal-wasm/tests/wasm_presentation.rs`
-437. `crates/graphcal-wasm/tests/playground_examples.rs`
-438. `crates/graphcal-wasm/tests/playground_experiments.rs`
-439. `crates/graphcal-plugin-host/tests/runtime.rs`
-440. `crates/graphcal-plugin-host/tests/project_eval.rs`
-441. `crates/graphcal-fmt/tests/todo.rs`
-442. `crates/graphcal-fmt/tests/format_tests.rs`
-443. `crates/graphcal-cli/tests/todo.rs`
-444. `crates/graphcal-cli/tests/cli.rs`
-445. `crates/graphcal-cli/tests/plugin_cmd.rs`
-446. `crates/graphcal-cli/tests/plugin_e2e.rs`
-447. `crates/graphcal-cli/tests/dump.rs`
-448. `crates/graphcal-cli/tests/presentation.rs`
-449. `crates/graphcal-cli/tests/report_engine.rs`
-450. `crates/graphcal-cli/tests/output_golden.rs`
+414. `crates/graphcal-cli/src/plugin.rs`
+415. `crates/graphcal-ast-derive/tests/format_equivalent.rs`
+416. `crates/graphcal-ast-derive/tests/phase_lift.rs`
+417. `crates/graphcal-plugin/tests/expansion.rs`
+418. `crates/graphcal-plugin/tests/prelude_drift.rs`
+419. `crates/graphcal-plugin/tests/abi_memory.rs`
+420. `crates/graphcal-eval/tests/todo.rs`
+421. `crates/graphcal-eval/tests/declaration_order.rs`
+422. `crates/graphcal-eval/tests/edge_case_bugs.rs`
+423. `crates/graphcal-eval/tests/phase0_regressions.rs`
+424. `crates/graphcal-eval/tests/error_snapshots.rs`
+425. `crates/graphcal-eval/tests/generated_projects.rs`
+426. `crates/graphcal-eval/tests/chunk5_regressions.rs`
+427. `crates/graphcal-eval/tests/chunk6_regressions.rs`
+428. `crates/graphcal-eval/tests/namespace_formal_conformance.rs`
+429. `crates/graphcal-eval/tests/phase1_regressions.rs`
+430. `crates/graphcal-eval/tests/phase4_regressions.rs`
+431. `crates/graphcal-eval/tests/static_definition_regressions.rs`
+432. `crates/graphcal-report/tests/report.rs`
+433. `crates/graphcal-wasm/tests/tutorial_examples.rs`
+434. `crates/graphcal-wasm/tests/wasm_runtime.rs`
+435. `crates/graphcal-wasm/tests/wasm_presentation.rs`
+436. `crates/graphcal-wasm/tests/playground_examples.rs`
+437. `crates/graphcal-wasm/tests/playground_experiments.rs`
+438. `crates/graphcal-plugin-host/tests/runtime.rs`
+439. `crates/graphcal-plugin-host/tests/project_eval.rs`
+440. `crates/graphcal-fmt/tests/todo.rs`
+441. `crates/graphcal-fmt/tests/format_tests.rs`
+442. `crates/graphcal-cli/tests/todo.rs`
+443. `crates/graphcal-cli/tests/cli.rs`
+444. `crates/graphcal-cli/tests/plugin_cmd.rs`
+445. `crates/graphcal-cli/tests/plugin_e2e.rs`
+446. `crates/graphcal-cli/tests/dump.rs`
+447. `crates/graphcal-cli/tests/presentation.rs`
+448. `crates/graphcal-cli/tests/report_engine.rs`
+449. `crates/graphcal-cli/tests/output_golden.rs`
 
 <!-- END generated by `./internals/reading-order.py --write-guide` -->

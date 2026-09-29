@@ -1,6 +1,6 @@
-//! Runtime execution-plan selection from a sealed checked program.
+//! Runtime execution-plan preparation from a sealed checked program.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -8,13 +8,36 @@ use miette::NamedSource;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
-use crate::constant_pools::ConstantPools;
-use crate::declaration_locations::DeclarationLocations;
-use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
-use graphcal_compiler::resolved_name::ResolvedDeclName;
+use crate::execution_plan::{
+    CallablePlan, DeclarationBody, ExecPlan, PlannedDeclaration, PreparedConstantImport,
+    PreparedImports,
+};
+
+self_cell::self_cell!(
+    /// A sealed program together with the execution plan prepared from it.
+    pub struct PreparedPlan {
+        owner: CheckedProgram,
+
+        #[covariant]
+        dependent: ExecPlan,
+    }
+);
+
+impl PreparedPlan {
+    /// The prepared plan.
+    pub fn plan(&self) -> &ExecPlan<'_> {
+        self.borrow_dependent()
+    }
+}
+
+impl std::fmt::Debug for PreparedPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.plan().fmt(formatter)
+    }
+}
 
 /// Check a TIR and select its root execution plan.
 ///
@@ -26,9 +49,9 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 /// Returns a [`GraphcalError`] when execution checking or plan selection fails.
 #[cfg(test)]
 pub fn compile(
-    tir: &CheckedTir,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
-) -> Result<ExecPlan, GraphcalError> {
+) -> Result<PreparedPlan, GraphcalError> {
     compile_with_cancellation(
         tir,
         src,
@@ -44,10 +67,10 @@ pub fn compile(
 /// Returns a [`GraphcalError`] for an invalid plan or cancellation.
 #[cfg(test)]
 pub fn compile_with_cancellation(
-    tir: &CheckedTir,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ExecPlan, GraphcalError> {
+) -> Result<PreparedPlan, GraphcalError> {
     let program = crate::project_compiler::seal_checked_program_with_cancellation(
         tir.clone(),
         src,
@@ -61,139 +84,166 @@ pub fn compile_checked_with_cancellation(
     program: CheckedProgram,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ExecPlan, GraphcalError> {
-    cancellation.checkpoint()?;
-    let tir = program.tir();
-    let declaration_locations = prepare_declaration_locations(tir, src)?;
-    let root = prepare_callable_plan(
-        &program,
-        tir.root(),
-        &declaration_locations,
-        src,
-        cancellation,
-    )?;
-    let callables = tir
-        .dag_registry()
-        .values()
-        .filter(|dag| dag.dag_id() != tir.root_dag_id())
-        .map(|dag| {
-            prepare_callable_plan(&program, dag, &declaration_locations, src, cancellation)
-                .map(|plan| (plan.owner.clone(), plan))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    let has_unfinished_definitions = tir
-        .dag_registry()
-        .values()
-        .any(|dag| dag.nodes().any(|node| node.definition.todo().is_some()));
-    Ok(ExecPlan {
-        has_unfinished_definitions,
-        declaration_locations,
-        root,
-        callables,
-        program,
-    })
+) -> Result<PreparedPlan, GraphcalError> {
+    PreparedPlan::try_new(program, |program| prepare(program, src, cancellation))
 }
 
-fn prepare_callable_plan(
-    program: &CheckedProgram,
-    body: &CheckedDag,
-    declaration_locations: &DeclarationLocations,
+fn invalid(message: impl Into<String>, src: &NamedSource<Arc<String>>) -> GraphcalError {
+    GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile)
+}
+
+fn prepare<'p>(
+    program: &'p CheckedProgram,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CallablePlan, GraphcalError> {
+) -> Result<ExecPlan<'p>, GraphcalError> {
     cancellation.checkpoint()?;
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
-    let root = sealed_dag(program, body.dag_id(), src)?;
-    let src = root.source();
-    let invalid =
-        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
-    let schedule = body.runtime_schedule();
-    let semantic_dags = schedule
-        .execution_dags()
-        .iter()
+    let tir = program.tir();
+    let scopes = tir
+        .dag_registry()
+        .keys()
         .map(|owner| {
-            program.dag(owner).ok_or_else(|| {
-                invalid(format!(
-                    "semantic runtime instance `{owner}` has no compiled DAG"
-                ))
-            })
+            program
+                .dag(owner)
+                .map(|scope| (owner, scope))
+                .ok_or_else(|| invalid(format!("DAG `{owner}` has no compiled body"), src))
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let has_instances = semantic_dags.len() > 1;
-    let const_values = ConstantPools::try_new(
-        semantic_dags
-            .iter()
-            .map(|dag| Arc::clone(dag.const_values())),
-    )
-    .map_err(|error| invalid(error.to_string()))?;
-    let domain_constraints = if has_instances {
-        Arc::new(
-            semantic_dags
-                .iter()
-                .flat_map(|dag| dag.domain_constraints().iter())
-                .map(|(key, constraint)| (key.clone(), constraint.clone()))
-                .collect(),
-        )
-    } else {
-        Arc::clone(root.domain_constraints())
-    };
-    validate_schedule_locations(
-        schedule.order().as_slice(),
-        declaration_locations,
-        &semantic_dags.iter().map(|dag| dag.dag().dag_id()).collect(),
-        src,
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    let declarations =
+        prepare_declarations(tir.dag_registry().keys().map(|owner| scopes[owner]), src)?;
+    let root = prepare_callable_plan(
+        &scopes,
+        scopes[tir.root_dag_id()],
+        &declarations,
+        cancellation,
     )?;
-    for (_, reads) in schedule.steps() {
-        for dependency in reads {
-            declaration_locations
-                .body_for(dependency)
-                .map_err(|error| invalid(error.to_string()))?;
-        }
-    }
-
-    Ok(CallablePlan {
-        owner: body.dag_id().clone(),
-        execution_dags: semantic_dags
-            .iter()
-            .map(|dag| dag.dag().dag_id().clone())
-            .collect(),
-        const_values,
-        imports: prepare_imports(&semantic_dags, declaration_locations, src)?,
-        schedule: schedule.clone(),
-        assumes_map: merge_assumes_maps(semantic_dags.iter().map(|dag| dag.dag().assumes_map())),
-        expected_fail: semantic_dags
-            .iter()
-            .flat_map(|dag| dag.dag().expected_fail_entries())
-            .map(|(assertion, expected)| (assertion.clone(), expected.clone()))
-            .collect(),
-        domain_constraints,
-    })
+    let others = tir
+        .dag_registry()
+        .keys()
+        .filter(|owner| *owner != tir.root_dag_id())
+        .map(|owner| prepare_callable_plan(&scopes, scopes[owner], &declarations, cancellation))
+        .collect::<Result<Vec<_>, _>>()?;
+    ExecPlan::new(program, declarations, root, others)
+        .map_err(|error| invalid(error.to_string(), src))
 }
 
-/// Merge per-DAG `#[assumes]` tables keyed by runtime identity.
-///
-/// One assertion can be assumed both inside its semantic instance and by the
-/// importer through a projection, so tables of different DAGs share keys.
-fn merge_assumes_maps<'a>(
-    maps: impl IntoIterator<Item = &'a HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>>,
-) -> HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
-    let mut merged = HashMap::<ResolvedDeclName, Vec<ResolvedDeclName>>::new();
-    for (assertion, assumers) in maps.into_iter().flatten() {
-        let entry = merged.entry(assertion.clone()).or_default();
-        for assumer in assumers {
-            if !entry.contains(assumer) {
-                entry.push(assumer.clone());
+/// Plan every value declaration of every DAG once: its body, the
+/// declarations it reads and its domain constraint.
+fn prepare_declarations<'p>(
+    scopes: impl IntoIterator<Item = SealedDag<'p>>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>, GraphcalError> {
+    let mut declarations = HashMap::<&ResolvedDeclName, PlannedDeclaration<'p>>::new();
+    for scope in scopes {
+        let dag = scope.dag();
+        for key in dag.value_declaration_identities() {
+            let body = match (dag.todo(key), dag.runtime_expr(key)) {
+                (Some(_), _) => DeclarationBody::Todo,
+                (None, Some(root)) => DeclarationBody::Expression {
+                    root,
+                    tree: dag.bodies().executable_value(root.id()),
+                },
+                // Required ports have no default; constants are pooled.
+                (None, None) => DeclarationBody::Supplied,
+            };
+            let reads = match (&body, dag.runtime_schedule().dependencies_of(key)) {
+                (_, Some(reads)) => reads,
+                (DeclarationBody::Supplied, None) => &[],
+                (DeclarationBody::Todo | DeclarationBody::Expression { .. }, None) => {
+                    return Err(invalid(
+                        format!("checked declaration `{key}` has no dependencies"),
+                        scope.source(),
+                    ));
+                }
+            };
+            let planned = PlannedDeclaration::new(
+                key,
+                scope,
+                body,
+                reads,
+                scope.domain_constraints().get(key),
+            );
+            if let Some(first) = declarations.insert(key, planned) {
+                return Err(invalid(
+                    format!(
+                        "declaration `{key}` has duplicate physical locations in `{}` and `{}`",
+                        first.scope().dag().dag_id(),
+                        dag.dag_id()
+                    ),
+                    src,
+                ));
             }
         }
     }
-    merged
+    Ok(declarations)
+}
+
+fn prepare_callable_plan<'p>(
+    scopes: &HashMap<&DagId, SealedDag<'p>>,
+    body: SealedDag<'p>,
+    declarations: &HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CallablePlan<'p>, GraphcalError> {
+    cancellation.checkpoint()?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
+    let src = body.source();
+    let schedule = body.dag().runtime_schedule();
+    let execution_dags = schedule
+        .execution_dags()
+        .iter()
+        .map(|owner| {
+            scopes.get(owner).copied().ok_or_else(|| {
+                invalid(
+                    format!("semantic runtime instance `{owner}` has no compiled DAG"),
+                    src,
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let scheduled = schedule
+        .order()
+        .iter()
+        .map(|declaration| {
+            let planned = located(declarations, declaration, src)?;
+            let physical = planned.scope().dag().dag_id();
+            if !schedule.execution_dags().contains(physical) {
+                return Err(invalid(
+                    format!(
+                        "scheduled declaration `{declaration}` is physically in `{physical}`, outside its callable closure"
+                    ),
+                    src,
+                ));
+            }
+            for dependency in planned.reads() {
+                located(declarations, dependency, src)?;
+            }
+            Ok(planned.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let imports = prepare_imports(&execution_dags, declarations, src)?;
+    CallablePlan::new(body, execution_dags, imports, scheduled)
+        .map_err(|error| invalid(error.to_string(), src))
+}
+
+/// The planned declaration `key` denotes.
+fn located<'a, 'p>(
+    declarations: &'a HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
+    key: &ResolvedDeclName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a PlannedDeclaration<'p>, GraphcalError> {
+    declarations.get(key).ok_or_else(|| {
+        invalid(
+            format!("declaration `{key}` has no prepared physical location"),
+            src,
+        )
+    })
 }
 
 /// Select the imports of a callable's execution DAGs: the constants the
 /// program resolved when it was sealed, and the explicit runtime imports.
 fn prepare_imports(
     dags: &[SealedDag<'_>],
-    locations: &DeclarationLocations,
+    declarations: &HashMap<&ResolvedDeclName, PlannedDeclaration<'_>>,
     source: &NamedSource<Arc<String>>,
 ) -> Result<PreparedImports, GraphcalError> {
     use graphcal_compiler::ir::imported_binding::ImportedValueKind;
@@ -216,65 +266,11 @@ fn prepare_imports(
             .filter(|binding| matches!(binding.kind(), ImportedValueKind::Runtime))
         {
             let target = binding.target();
-            locations.body_for(target).map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    source,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+            located(declarations, target, source)?;
             result.runtime.push(target.clone());
         }
     }
     Ok(result)
-}
-
-fn prepare_declaration_locations(
-    tir: &CheckedTir,
-    src: &NamedSource<Arc<String>>,
-) -> Result<DeclarationLocations, GraphcalError> {
-    DeclarationLocations::try_new(tir.dag_registry().values().flat_map(|dag| {
-        dag.value_declaration_identities()
-            .map(|identity| (identity.clone(), dag.dag_id().clone()))
-    }))
-    .map_err(|error| {
-        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-    })
-}
-
-fn validate_schedule_locations(
-    order: &[ResolvedDeclName],
-    locations: &DeclarationLocations,
-    allowed_bodies: &HashSet<&DagId>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    order.iter().try_for_each(|declaration| {
-        let body = locations.body_for(declaration).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
-        if !allowed_bodies.contains(body) {
-            return Err(GraphcalError::internal_error(
-                format!("scheduled declaration `{declaration}` is physically in `{body}`, outside its callable closure"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
-        Ok(())
-    })
-}
-
-fn sealed_dag<'a>(
-    program: &'a CheckedProgram,
-    owner: &DagId,
-    src: &NamedSource<Arc<String>>,
-) -> Result<SealedDag<'a>, GraphcalError> {
-    program.dag(owner).ok_or_else(|| {
-        GraphcalError::internal_error(
-            format!("DAG `{owner}` has no compiled body"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
 }
 
 #[cfg(test)]
@@ -287,12 +283,13 @@ mod tests {
     use graphcal_compiler::syntax::decl_name::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::ProjectTypeStore;
+    use std::collections::HashSet;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
-    fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
+    fn compile_source(source: &str) -> Result<PreparedPlan, GraphcalError> {
         let (tir, src) = checked_tir_from_source(source)?;
         compile(&tir, &src)
     }
@@ -354,40 +351,168 @@ mod tests {
         .map(|tir| (tir, src.clone()))
     }
 
-    #[test]
-    fn prepared_locations_include_parameters_without_defaults() {
-        let (tir, src) = tir_from_source(
-            "param input: Dimensionless; node doubled: Dimensionless = 2.0 * @input;",
-        );
-        let plan = compile(&tir, &src).unwrap();
-        let input = resolved_key("input");
-        assert!(tir.root().runtime_expr(&input).is_none());
-        assert_eq!(
-            plan.declaration_locations.body_for(&input).unwrap(),
-            tir.root_dag_id()
-        );
+    /// The runtime identities of the root callable's steps, in order.
+    fn root_order<'a>(plan: &'a ExecPlan<'_>) -> Vec<&'a ResolvedDeclName> {
+        plan.root()
+            .steps()
+            .map(|step| step.declaration().key())
+            .collect()
+    }
+
+    fn root_constant<'a>(plan: &'a ExecPlan<'_>, key: &ResolvedDeclName) -> &'a RuntimeValue {
+        plan.root().scope().const_values().get(key).unwrap()
     }
 
     #[test]
-    fn schedules_reject_missing_and_out_of_closure_locations() {
-        let src = make_src("");
-        let owner = test_dag_id();
-        let other = DagId::from_virtual_relative_path(std::path::Path::new("other.gcl")).unwrap();
-        let key = resolved_key("x");
-        for locations in [
-            DeclarationLocations::try_new([]).unwrap(),
-            DeclarationLocations::try_new([(key.clone(), other)]).unwrap(),
+    fn prepared_declarations_include_parameters_without_defaults() {
+        let (tir, src) = tir_from_source(
+            "param input: Dimensionless; node doubled: Dimensionless = 2.0 * @input;",
+        );
+        let prepared = compile(&tir, &src).unwrap();
+        let input = resolved_key("input");
+        assert!(tir.root().runtime_expr(&input).is_none());
+        let declaration = prepared.plan().declaration(&input).unwrap();
+        assert_eq!(declaration.scope().dag().dag_id(), tir.root_dag_id());
+        assert!(matches!(declaration.body(), DeclarationBody::Supplied));
+    }
+
+    #[test]
+    fn plan_debug_output_names_bodies_by_kind() {
+        let prepared = compile_source(
+            "const node BASE: Dimensionless = 1.0;\n\
+             param input: Dimensionless;\n\
+             node done: Dimensionless = @input + @BASE;\n\
+             node pending: Dimensionless = todo { @done };",
+        )
+        .unwrap();
+        let debug = format!("{prepared:?}");
+        assert!(debug.starts_with("ExecPlan {"), "{debug}");
+        for kind in ["\"executable\"", "\"supplied\"", "\"todo\""] {
+            assert!(debug.contains(kind), "{kind} in {debug}");
+        }
+        assert!(prepared.plan().has_unfinished_definitions());
+    }
+
+    #[test]
+    fn steps_depend_on_earlier_scheduled_reads_only() {
+        let (tir, src) = tir_from_source(
+            "const node BASE: Dimensionless = 1.0;\n\
+             param input: Dimensionless = @BASE;\n\
+             node doubled: Dimensionless = 2.0 * @input + @BASE;\n\
+             node independent: Dimensionless = 3.0;",
+        );
+        let prepared = compile(&tir, &src).unwrap();
+        let root = prepared.plan().root();
+        let deps_of = |name: &str| {
+            let step = root
+                .steps()
+                .find(|step| step.declaration().key().as_str() == name)
+                .unwrap();
+            step.deps()
+                .iter()
+                .map(|dep| root.step(*dep).declaration().key().as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(deps_of("doubled"), ["input"]);
+        assert!(deps_of("input").is_empty());
+        assert!(deps_of("independent").is_empty());
+    }
+
+    /// Index `scheduled` as the steps of a copy of `root`.
+    fn index<'p>(
+        root: &CallablePlan<'p>,
+        scheduled: Vec<PlannedDeclaration<'p>>,
+    ) -> Result<CallablePlan<'p>, crate::execution_plan::StepIndexError> {
+        CallablePlan::new(
+            root.scope(),
+            root.execution_dags().to_vec(),
+            PreparedImports::default(),
+            scheduled,
+        )
+    }
+
+    #[test]
+    fn step_indexing_rejects_duplicate_and_unordered_schedules() {
+        let (tir, src) = tir_from_source(
+            "node a: Dimensionless = 1.0;\n\
+             node b: Dimensionless = @a + 1.0;",
+        );
+        let prepared = compile(&tir, &src).unwrap();
+        let plan = prepared.plan();
+        let root = plan.root();
+        let a = plan.declaration(&resolved_key("a")).unwrap().clone();
+        let b = plan.declaration(&resolved_key("b")).unwrap().clone();
+        assert!(index(root, vec![a.clone(), b.clone()]).is_ok());
+        assert!(matches!(
+            index(root, vec![b, a.clone()]),
+            Err(crate::execution_plan::StepIndexError::Unordered { .. })
+        ));
+        assert!(matches!(
+            index(root, vec![a.clone(), a]),
+            Err(crate::execution_plan::StepIndexError::Duplicate(_))
+        ));
+    }
+
+    #[test]
+    fn callables_reject_missing_and_out_of_closure_locations() {
+        let source = "dag helper { pub node out: Dimensionless = 1.0; }\n\
+                      node x: Dimensionless = @helper()::out;";
+        let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
+        let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
+            .check()
+            .unwrap();
+        let tir = checked.tir();
+        let prepared = compile(tir, &make_src(source)).unwrap();
+        let plan = prepared.plan();
+        let program = plan.program();
+        let scopes = tir
+            .dag_registry()
+            .keys()
+            .map(|owner| (owner, program.dag(owner).unwrap()))
+            .collect::<HashMap<_, _>>();
+        let root = scopes[tir.root_dag_id()];
+        let helper = *scopes
+            .values()
+            .find(|scope| scope.dag().dag_id() != tir.root_dag_id())
+            .unwrap();
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let x = plan.declaration(&resolved_key("x")).unwrap();
+        let misplaced =
+            PlannedDeclaration::new(x.key(), helper, x.body().clone(), x.reads(), x.domain());
+        for (declarations, expected) in [
+            (HashMap::new(), "has no prepared physical location"),
+            (
+                HashMap::from([(x.key(), misplaced)]),
+                "outside its callable closure",
+            ),
         ] {
+            let error =
+                prepare_callable_plan(&scopes, root, &declarations, &cancellation).unwrap_err();
             assert!(
-                validate_schedule_locations(
-                    std::slice::from_ref(&key),
-                    &locations,
-                    &HashSet::from([&owner]),
-                    &src,
-                )
-                .is_err()
+                matches!(&error, GraphcalError::InternalError { message, .. } if message.contains(expected)),
+                "{error:?}"
             );
         }
+    }
+
+    #[test]
+    fn plans_reject_two_callables_of_one_body() {
+        let (tir, src) = tir_from_source("node a: Dimensionless = 1.0;");
+        let prepared = compile(&tir, &src).unwrap();
+        let plan = prepared.plan();
+        let root = || {
+            CallablePlan::new(
+                plan.root().scope(),
+                plan.root().execution_dags().to_vec(),
+                PreparedImports::default(),
+                Vec::new(),
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            ExecPlan::new(plan.program(), HashMap::new(), root(), vec![root()]),
+            Err(crate::execution_plan::ExecPlanError::DuplicateCallable(_))
+        ));
     }
 
     fn quantity(rv: &RuntimeValue) -> f64 {
@@ -409,43 +534,23 @@ mod tests {
     }
 
     #[test]
-    fn constant_pool_views_reject_duplicates() {
-        let key = resolved_key("constant");
-        let pool = Arc::new(HashMap::from([(
-            key.clone(),
-            RuntimeValue::quantity(2.0).unwrap(),
-        )]));
-        assert!(matches!(
-            ConstantPools::try_new([Arc::clone(&pool), Arc::clone(&pool)]),
-            Err(crate::constant_pools::ConstantPoolError::Duplicate(_))
-        ));
-        let pools = ConstantPools::try_new([Arc::clone(&pool)]).unwrap();
-        assert!(std::ptr::eq(
-            pools.get(&key).unwrap(),
-            pool.get(&key).unwrap()
-        ));
-        assert!(pools.get(&resolved_key("absent")).is_none());
-    }
-
-    #[test]
     fn compile_simple_const() {
-        let plan = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
+        let prepared = compile_source("const node g0: Dimensionless = 9.80665;").unwrap();
+        let plan = prepared.plan();
         assert!(
-            (quantity(plan.root.const_values.get(&resolved_key("g0")).unwrap()) - 9.80665).abs()
-                < f64::EPSILON
+            (quantity(root_constant(plan, &resolved_key("g0"))) - 9.80665).abs() < f64::EPSILON
         );
-        assert!(plan.root.schedule.order().is_empty());
+        assert!(root_order(plan).is_empty());
     }
 
     #[test]
     fn compile_const_chain() {
-        let plan = compile_source(
+        let prepared = compile_source(
             "const node g0: Dimensionless = 9.80665;\nconst node two_g0: Dimensionless = 2.0 * @g0;",
         )
         .unwrap();
         assert!(
-            (quantity(plan.root.const_values.get(&resolved_key("two_g0")).unwrap()) - 19.6133)
-                .abs()
+            (quantity(root_constant(prepared.plan(), &resolved_key("two_g0"))) - 19.6133).abs()
                 < 1e-10
         );
     }
@@ -456,17 +561,19 @@ mod tests {
             "const node lower: Dimensionless = 1.0;\n\
              param x: Dimensionless(min: @lower, max: 3.0) = 2.0;",
         );
-        let plan = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, &src).unwrap();
+        let plan = prepared.plan();
         let root = plan.program().dag(tir.root_dag_id()).unwrap();
 
         let key = resolved_key("lower");
         assert!(std::ptr::eq(
             root.const_values().get(&key).unwrap(),
-            plan.root.const_values.get(&key).unwrap()
+            root_constant(plan, &key)
         ));
-        assert!(Arc::ptr_eq(
-            root.domain_constraints(),
-            &plan.root.domain_constraints
+        let x = resolved_key("x");
+        assert!(std::ptr::eq(
+            root.domain_constraints().get(&x).unwrap(),
+            plan.domain_constraint(&x).unwrap()
         ));
     }
 
@@ -482,10 +589,21 @@ mod tests {
             .unwrap();
         let tir = checked.tir();
         let src = make_src(source);
-        let plan = compile(tir, &src).unwrap();
+        let prepared = compile(tir, &src).unwrap();
+        let plan = prepared.plan();
         let schedule = tir.root().runtime_schedule();
-        assert_eq!(plan.root.schedule, *schedule);
-        assert_eq!(plan.root.execution_dags, schedule.execution_dags());
+        assert_eq!(
+            root_order(plan),
+            schedule.order().iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            plan.root()
+                .execution_dags()
+                .iter()
+                .map(|scope| scope.dag().dag_id().clone())
+                .collect::<Vec<_>>(),
+            schedule.execution_dags()
+        );
         assert_eq!(schedule.execution_dags().len(), 2);
         let position = |name: &str| {
             schedule
@@ -504,8 +622,8 @@ mod tests {
         let (tir, src) = tir_from_source(
             "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node item: Bounded = Bounded(value: 2.0);",
         );
-        let plan = compile(&tir, &src).unwrap();
-        let field_constraints = plan.program().facts().struct_field_constraints();
+        let prepared = compile(&tir, &src).unwrap();
+        let field_constraints = prepared.plan().program().facts().struct_field_constraints();
         assert_eq!(field_constraints.len(), 1);
         let mut applications = Vec::new();
         for (_, body) in tir.root().bodies().roots() {
@@ -543,31 +661,13 @@ mod tests {
 
     #[test]
     fn compile_runtime_dag() {
-        let plan = compile_source(
+        let prepared = compile_source(
             "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;\nnode z: Dimensionless = @y * 2.0;",
         )
         .unwrap();
-        let x_pos = plan
-            .root
-            .schedule
-            .order()
-            .iter()
-            .position(|n| n.as_str() == "x")
-            .unwrap();
-        let y_pos = plan
-            .root
-            .schedule
-            .order()
-            .iter()
-            .position(|n| n.as_str() == "y")
-            .unwrap();
-        let z_pos = plan
-            .root
-            .schedule
-            .order()
-            .iter()
-            .position(|n| n.as_str() == "z")
-            .unwrap();
+        let order = root_order(prepared.plan());
+        let position = |name: &str| order.iter().position(|n| n.as_str() == name).unwrap();
+        let (x_pos, y_pos, z_pos) = (position("x"), position("y"), position("z"));
         assert!(x_pos < y_pos);
         assert!(y_pos < z_pos);
     }
@@ -595,17 +695,12 @@ mod tests {
             "const node a: Dimensionless = 1.0;\n\
              const node b: Dimensionless = @a + 1.0;",
         );
-        let plan = compile(&tir, &src).unwrap();
+        let prepared = compile(&tir, &src).unwrap();
         assert!(
-            (quantity(
-                plan.root
-                    .const_values
-                    .get(&ResolvedDeclName::for_test(
-                        tir.root_dag_id().clone(),
-                        DeclName::expect_valid("b")
-                    ))
-                    .unwrap()
-            ) - 2.0)
+            (quantity(root_constant(
+                prepared.plan(),
+                &ResolvedDeclName::for_test(tir.root_dag_id().clone(), DeclName::expect_valid("b"))
+            )) - 2.0)
                 .abs()
                 < 1e-10
         );
@@ -617,29 +712,26 @@ mod tests {
             "node a: Dimensionless = 1.0;\n\
              node b: Dimensionless = @a + 1.0;",
         );
-        let plan = compile(&tir, &src).unwrap();
-        let a_pos = plan
-            .root
-            .schedule
-            .order()
+        let prepared = compile(&tir, &src).unwrap();
+        let order = root_order(prepared.plan());
+        let a_pos = order
             .iter()
             .position(|name| {
-                name == &ResolvedDeclName::for_test(
-                    tir.root_dag_id().clone(),
-                    DeclName::expect_valid("a"),
-                )
+                *name
+                    == &ResolvedDeclName::for_test(
+                        tir.root_dag_id().clone(),
+                        DeclName::expect_valid("a"),
+                    )
             })
             .unwrap();
-        let b_pos = plan
-            .root
-            .schedule
-            .order()
+        let b_pos = order
             .iter()
             .position(|name| {
-                name == &ResolvedDeclName::for_test(
-                    tir.root_dag_id().clone(),
-                    DeclName::expect_valid("b"),
-                )
+                *name
+                    == &ResolvedDeclName::for_test(
+                        tir.root_dag_id().clone(),
+                        DeclName::expect_valid("b"),
+                    )
             })
             .unwrap();
         assert!(a_pos < b_pos);

@@ -9,7 +9,6 @@
 pub(crate) mod assertion_eval;
 pub(crate) mod checked_program;
 pub(crate) mod constant_pools;
-pub(crate) mod declaration_locations;
 pub mod dependency_ordered;
 pub(crate) mod domain_check;
 pub(crate) mod domain_constraint;

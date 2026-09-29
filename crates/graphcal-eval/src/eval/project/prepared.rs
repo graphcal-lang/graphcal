@@ -251,7 +251,7 @@ struct ProjectOutputAssembly {
 /// A checked, value-independent Graphcal project ready for repeated evaluation.
 pub struct PreparedProject {
     plan_id: u64,
-    plan: crate::execution_plan::ExecPlan,
+    plan: crate::exec_plan::PreparedPlan,
     source: NamedSource<Arc<String>>,
     host_fns: crate::host_fns::HostFunctionRegistry,
     module_resolver: ModuleResolver,
@@ -275,8 +275,13 @@ impl std::fmt::Debug for PreparedProject {
 
 impl PreparedProject {
     /// The checked TIR this project evaluates.
-    const fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
-        self.plan.tir()
+    fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
+        self.plan().tir()
+    }
+
+    /// The execution plan prepared for this project.
+    fn plan(&self) -> &crate::execution_plan::ExecPlan<'_> {
+        self.plan.plan()
     }
 
     /// Source-visible index spelling for closed entry bindings, when available.
@@ -303,10 +308,11 @@ impl PreparedProject {
             output_surface,
             include_debug_names,
         } = compiled;
-        let plan =
+        let prepared_plan =
             crate::exec_plan::compile_checked_with_cancellation(program, &source, cancellation)?;
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
 
+        let plan = prepared_plan.plan();
         let tir = plan.tir();
         let imported_values = plan
             .program()
@@ -324,7 +330,7 @@ impl PreparedProject {
             .collect();
         let mut schema_builder = ModelSchemaGraphBuilder::new(tir, &source);
         let parameter_ports =
-            build_parameter_ports(plan_id, &entry_interface, &plan, &mut schema_builder)?;
+            build_parameter_ports(plan_id, &entry_interface, plan, &mut schema_builder)?;
         let parameter_lookup = parameter_ports
             .iter()
             .enumerate()
@@ -335,7 +341,7 @@ impl PreparedProject {
 
         Ok(Self {
             plan_id,
-            plan,
+            plan: prepared_plan,
             source,
             host_fns,
             module_resolver,
@@ -383,7 +389,7 @@ impl PreparedProject {
     /// compatibility guarantee.
     #[must_use]
     pub fn debug_plan(&self) -> impl std::fmt::Debug + '_ {
-        &self.plan
+        self.plan()
     }
 
     /// Evaluate one validated row and assemble the normal Graphcal result view.
@@ -408,7 +414,7 @@ impl PreparedProject {
         self.validate_row_identity(row)?;
         let eval_result =
             super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
-                &self.plan,
+                self.plan(),
                 &row.bindings,
                 &self.source,
                 &self.host_fns,
@@ -441,7 +447,7 @@ impl PreparedProject {
         self.validate_row_identity(row)?;
         Ok(
             super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
-                &self.plan,
+                self.plan(),
                 &row.bindings,
                 &self.source,
                 &self.host_fns,

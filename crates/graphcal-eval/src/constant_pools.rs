@@ -3,7 +3,7 @@
 //! A [`ConstPool`] is built only by evaluating a checked TIR's constants in
 //! the checker's [`ConstSchedule`](graphcal_compiler::tir::schedule::ConstSchedule),
 //! so it covers every constant of every DAG exactly once. Its per-DAG pools are
-//! immutable and shared: callable plans view them through [`ConstantPools`] and
+//! immutable and shared: callable plans view them through their sealed DAGs and
 //! imports through a [`ConstantReference`], without copying constant payloads.
 
 use std::collections::{HashMap, HashSet};
@@ -20,8 +20,6 @@ pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 
 #[derive(Debug, Error)]
 pub enum ConstantPoolError {
-    #[error("constant `{0}` occurs in multiple prepared pools")]
-    Duplicate(ResolvedDeclName),
     #[error("DAG `{0}` is neither scheduled by this check nor inherited from a checked module")]
     Uncovered(DagId),
     #[error("DAG `{0}` is scheduled by this check but was inherited from a checked module")]
@@ -154,47 +152,6 @@ impl ConstPool {
             pool: Arc::clone(pool),
             key: key.clone(),
         })
-    }
-}
-
-/// The constants of one callable's execution DAGs, viewed without copying.
-#[derive(Debug)]
-pub struct ConstantPools {
-    pools: Vec<Arc<RuntimeValueMap>>,
-    locations: HashMap<ResolvedDeclName, Arc<RuntimeValueMap>>,
-}
-
-impl ConstantPools {
-    pub fn try_new(
-        pools: impl IntoIterator<Item = Arc<RuntimeValueMap>>,
-    ) -> Result<Self, ConstantPoolError> {
-        pools.into_iter().try_fold(
-            Self {
-                pools: Vec::new(),
-                locations: HashMap::new(),
-            },
-            |mut result, pool| {
-                for key in pool.keys() {
-                    if result
-                        .locations
-                        .insert(key.clone(), Arc::clone(&pool))
-                        .is_some()
-                    {
-                        return Err(ConstantPoolError::Duplicate(key.clone()));
-                    }
-                }
-                result.pools.push(pool);
-                Ok(result)
-            },
-        )
-    }
-
-    pub fn get(&self, key: &ResolvedDeclName) -> Option<&RuntimeValue> {
-        self.locations.get(key).and_then(|pool| pool.get(key))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&ResolvedDeclName, &RuntimeValue)> {
-        self.pools.iter().flat_map(|pool| pool.iter())
     }
 }
 

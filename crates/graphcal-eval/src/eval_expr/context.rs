@@ -14,9 +14,11 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, StructFieldConstraintKey};
 use miette::NamedSource;
 
+use crate::checked_program::SealedDag;
 use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::execution_plan::ExecPlan;
+use crate::execution_frame::ScheduledDeclaration;
+use crate::execution_plan::{CallablePlan, ExecPlan};
 use crate::host_fns::HostFunctionRegistry;
 use crate::presentation_evidence::PresentationInstanceMap;
 
@@ -28,7 +30,7 @@ enum Capabilities<'a> {
     ProvisionalConstants,
     /// Field validation is mandatory; callable access is explicitly supplied.
     Checked {
-        plan: &'a ExecPlan,
+        plan: &'a ExecPlan<'a>,
         host: &'a HostFunctionRegistry,
     },
 }
@@ -117,30 +119,22 @@ impl<'a> EvalContext<'a> {
         })
     }
 
-    /// Select a checked runtime scope. Field constraints cannot be omitted or
-    /// supplied independently of the selected checked project facts.
+    /// Select the checked runtime scope of `callable`'s own body. Field
+    /// constraints cannot be omitted or supplied independently of the
+    /// selected checked project facts.
+    #[must_use]
     pub fn checked(
-        plan: &'a ExecPlan,
-        owner: &DagId,
+        plan: &'a ExecPlan<'a>,
+        callable: &'a CallablePlan<'a>,
         src: &'a NamedSource<Arc<String>>,
         host: &'a HostFunctionRegistry,
         cancellation: CancellationToken,
-    ) -> Result<Self, GraphcalError> {
-        plan.callable(owner).map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
-        let dag = plan.program().dag(owner).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("DAG `{owner}` has no compiled body"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        Ok(Self {
+    ) -> Self {
+        Self {
             environment: Self::environment(plan.tir(), src, cancellation),
-            dag: dag.dag(),
+            dag: callable.scope().dag(),
             capabilities: Capabilities::Checked { plan, host },
-        })
+        }
     }
 
     /// The executable tree of one of the current body's expression roots.
@@ -176,7 +170,7 @@ impl<'a> EvalContext<'a> {
         Err(self.internal_error(message, root.span))
     }
 
-    pub fn execution_plan(&self) -> Result<&'a ExecPlan, GraphcalError> {
+    pub fn execution_plan(&self) -> Result<&'a ExecPlan<'a>, GraphcalError> {
         match self.capabilities {
             Capabilities::ProvisionalConstants => Err(self.internal_error(
                 "provisional constant evaluation has no callable execution plans",
@@ -238,7 +232,7 @@ impl<'a> EvalContext<'a> {
             Capabilities::Checked { plan, .. } => Some(plan),
         };
         if self.unavailable.is_none_or(HashMap::is_empty)
-            && plan.is_none_or(|plan| !plan.has_unfinished_definitions)
+            && plan.is_none_or(|plan| !plan.has_unfinished_definitions())
         {
             return Ok(None);
         }
@@ -257,7 +251,6 @@ impl<'a> EvalContext<'a> {
             for expression in expressions {
                 dependencies.extend(crate::static_incompleteness::collect(
                     expression,
-                    self.tir,
                     plan,
                     self.src,
                     &self.cancellation,
@@ -348,23 +341,46 @@ impl<'a> EvalContext<'a> {
                     )
                 })?
             }
-            Capabilities::Checked { plan, .. } => {
-                plan.callable(dag.dag_id()).map_err(|error| {
-                    context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
-                })?;
-                plan.program()
-                    .dag(dag.dag_id())
-                    .ok_or_else(|| {
-                        context.internal_error(
-                            format!("DAG `{}` has no compiled body", dag.dag_id()),
-                            DiagnosticAnchor::WholeFile,
-                        )
-                    })?
-                    .dag()
-            }
+            Capabilities::Checked { plan, .. } => plan
+                .program()
+                .dag(dag.dag_id())
+                .ok_or_else(|| {
+                    context.internal_error(
+                        format!("DAG `{}` has no compiled body", dag.dag_id()),
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?
+                .dag(),
         };
         context.environment.current_decl = None;
         Ok(context)
+    }
+
+    /// Re-select one of `callable`'s execution DAGs, preserving capabilities
+    /// and enclosing work.
+    #[must_use]
+    pub fn for_execution_dag<'b>(&'b self, scope: SealedDag<'b>) -> EvalContext<'b>
+    where
+        'a: 'b,
+    {
+        let mut context = self.with_src(scope.source());
+        context.dag = scope.dag();
+        context.environment.current_decl = None;
+        context
+    }
+
+    /// Select the scope and declaration of one scheduled step, preserving
+    /// capabilities and enclosing work. The step chooses its own scope.
+    #[must_use]
+    pub fn for_declaration<'b>(&'b self, step: &ScheduledDeclaration<'b>) -> EvalContext<'b>
+    where
+        'a: 'b,
+    {
+        let scope = step.scope();
+        let mut context = self.with_src(scope.source());
+        context.dag = scope.dag();
+        context.environment.current_decl = Some(step.key().clone());
+        context
     }
 
     pub fn for_checked_decl<'b>(
