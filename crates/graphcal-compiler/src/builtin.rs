@@ -261,10 +261,10 @@ pub struct DisplaySignature {
     pub generics: &'static [SignatureGeneric],
     /// Runtime parameters, in call order.
     pub params: &'static [SignatureParam],
-    /// Result type, spelled as in source.
-    pub result: &'static str,
-    /// Optional `where` clause, without the keyword.
-    pub constraint: Option<&'static str>,
+    /// Result type.
+    pub result: SignatureType,
+    /// Optional `where` clause.
+    pub constraint: Option<SignatureConstraint>,
 }
 
 /// One generic parameter of a [`DisplaySignature`].
@@ -301,8 +301,194 @@ impl GenericParamKind {
 pub struct SignatureParam {
     /// Parameter name.
     pub name: &'static str,
-    /// Parameter type, spelled as in source.
-    pub ty: &'static str,
+    /// Parameter type.
+    pub ty: SignatureType,
+}
+
+/// A prelude dimension named by a [`DisplaySignature`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureNamedDim {
+    Angle,
+    Dimensionless,
+}
+
+impl SignatureNamedDim {
+    /// Source spelling of the dimension.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Angle => "Angle",
+            Self::Dimensionless => "Dimensionless",
+        }
+    }
+}
+
+/// A dimension of a [`DisplaySignature`], spelled over its generic
+/// parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureDim {
+    /// A `Dim` generic parameter, e.g. `D`.
+    Param(SignatureGeneric),
+    /// A prelude dimension, e.g. `Angle`.
+    Named(SignatureNamedDim),
+    /// The product of two `Dim` parameters, `D1 * D2`.
+    Product(SignatureGeneric, SignatureGeneric),
+    /// The quotient of two `Dim` parameters, `D2 / D1`.
+    Quotient(SignatureGeneric, SignatureGeneric),
+    /// The reciprocal of a `Dim` parameter, `D^-1`.
+    Reciprocal(SignatureGeneric),
+    /// A `Dim` parameter raised to an `Index` parameter's cardinality, `D^|I|`.
+    CardinalityPower(SignatureGeneric, SignatureGeneric),
+}
+
+impl SignatureDim {
+    /// Whether the dimension is a binary product or quotient, which needs
+    /// parentheses before an index suffix.
+    const fn is_binary(self) -> bool {
+        matches!(self, Self::Product(..) | Self::Quotient(..))
+    }
+
+    /// Generic parameters this dimension mentions, with the sort each
+    /// position requires.
+    #[cfg(test)]
+    fn generics(self) -> impl Iterator<Item = (SignatureGeneric, GenericParamKind)> {
+        let (first, second) = match self {
+            Self::Param(dim) | Self::Reciprocal(dim) => (Some((dim, GenericParamKind::Dim)), None),
+            Self::Named(_) => (None, None),
+            Self::Product(lhs, rhs) | Self::Quotient(lhs, rhs) => (
+                Some((lhs, GenericParamKind::Dim)),
+                Some((rhs, GenericParamKind::Dim)),
+            ),
+            Self::CardinalityPower(dim, index) => (
+                Some((dim, GenericParamKind::Dim)),
+                Some((index, GenericParamKind::Index)),
+            ),
+        };
+        first.into_iter().chain(second)
+    }
+}
+
+impl std::fmt::Display for SignatureDim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Param(dim) => f.write_str(dim.name),
+            Self::Named(named) => f.write_str(named.as_str()),
+            Self::Product(lhs, rhs) => write!(f, "{} * {}", lhs.name, rhs.name),
+            Self::Quotient(lhs, rhs) => write!(f, "{} / {}", lhs.name, rhs.name),
+            Self::Reciprocal(dim) => write!(f, "{}^-1", dim.name),
+            Self::CardinalityPower(dim, index) => write!(f, "{}^|{}|", dim.name, index.name),
+        }
+    }
+}
+
+/// A scalar value type of a [`DisplaySignature`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureValue {
+    /// A quantity of the given dimension.
+    Quantity(SignatureDim),
+    /// A complex quantity, `Complex<D>`.
+    Complex(SignatureDim),
+    /// `Int`.
+    Int,
+    /// A key of an `Index` parameter, `Key<I>`.
+    Key(SignatureGeneric),
+    /// A `Type` generic parameter, e.g. `T`.
+    TypeParam(SignatureGeneric),
+}
+
+impl SignatureValue {
+    /// Generic parameters this value type mentions, with the sort each
+    /// position requires.
+    #[cfg(test)]
+    fn generics(self) -> impl Iterator<Item = (SignatureGeneric, GenericParamKind)> {
+        let (dimension, generic) = match self {
+            Self::Quantity(dimension) | Self::Complex(dimension) => (Some(dimension), None),
+            Self::Int => (None, None),
+            Self::Key(index) => (None, Some((index, GenericParamKind::Index))),
+            Self::TypeParam(ty) => (None, Some((ty, GenericParamKind::Type))),
+        };
+        dimension
+            .into_iter()
+            .flat_map(SignatureDim::generics)
+            .chain(generic)
+    }
+}
+
+impl std::fmt::Display for SignatureValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Quantity(dimension) => dimension.fmt(f),
+            Self::Complex(dimension) => write!(f, "Complex<{dimension}>"),
+            Self::Int => f.write_str("Int"),
+            Self::Key(index) => write!(f, "Key<{}>", index.name),
+            Self::TypeParam(ty) => f.write_str(ty.name),
+        }
+    }
+}
+
+/// A parameter or result type of a [`DisplaySignature`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureType {
+    /// A scalar value type.
+    Value(SignatureValue),
+    /// A value type indexed by `Index` parameters, outermost first, e.g. `D[I, J]`.
+    Indexed(SignatureValue, &'static [SignatureGeneric]),
+    /// Either of two value types, e.g. `D | Complex<D>`.
+    Either(SignatureValue, SignatureValue),
+}
+
+impl SignatureType {
+    /// Generic parameters this type mentions, with the sort each position
+    /// requires.
+    #[cfg(test)]
+    fn generics(self) -> impl Iterator<Item = (SignatureGeneric, GenericParamKind)> {
+        let (value, axes, alternative): (_, &'static [SignatureGeneric], _) = match self {
+            Self::Value(value) => (value, &[], None),
+            Self::Indexed(value, axes) => (value, axes, None),
+            Self::Either(value, alternative) => (value, &[], Some(alternative)),
+        };
+        value
+            .generics()
+            .chain(alternative.into_iter().flat_map(SignatureValue::generics))
+            .chain(axes.iter().map(|axis| (*axis, GenericParamKind::Index)))
+    }
+}
+
+impl std::fmt::Display for SignatureType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(value) => value.fmt(f),
+            Self::Indexed(value, axes) => {
+                match value {
+                    SignatureValue::Quantity(dimension) if dimension.is_binary() => {
+                        write!(f, "({dimension})")?;
+                    }
+                    _ => value.fmt(f)?,
+                }
+                let axes = axes.iter().map(|axis| axis.name).collect::<Vec<_>>();
+                write!(f, "[{}]", axes.join(", "))
+            }
+            Self::Either(value, alternative) => write!(f, "{value} | {alternative}"),
+        }
+    }
+}
+
+/// A `where` clause of a [`DisplaySignature`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureConstraint {
+    /// An `Index` parameter has a fixed cardinality, `|I| = 3`.
+    Cardinality {
+        index: SignatureGeneric,
+        size: usize,
+    },
+}
+
+impl std::fmt::Display for SignatureConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cardinality { index, size } => write!(f, "|{}| = {size}", index.name),
+        }
+    }
 }
 
 impl DisplaySignature {
@@ -312,7 +498,7 @@ impl DisplaySignature {
         self.params.len()
     }
 
-    const fn where_clause(self, constraint: &'static str) -> Self {
+    const fn where_clause(self, constraint: SignatureConstraint) -> Self {
         Self {
             constraint: Some(constraint),
             ..self
@@ -348,6 +534,20 @@ impl DisplaySignature {
             self.result
         )
     }
+
+    /// Generic parameters mentioned by the parameter, result, and constraint
+    /// types, with the sort each position requires.
+    #[cfg(test)]
+    fn referenced_generics(&self) -> impl Iterator<Item = (SignatureGeneric, GenericParamKind)> {
+        let constraint = self.constraint.map(|constraint| match constraint {
+            SignatureConstraint::Cardinality { index, .. } => (index, GenericParamKind::Index),
+        });
+        self.params
+            .iter()
+            .flat_map(|param| param.ty.generics())
+            .chain(self.result.generics())
+            .chain(constraint)
+    }
 }
 
 const fn dim(name: &'static str) -> SignatureGeneric {
@@ -364,17 +564,17 @@ const fn index(name: &'static str) -> SignatureGeneric {
     }
 }
 
-/// A `'static` slice of [`SignatureParam`]s written as `name: "type"` pairs.
+/// A `'static` slice of [`SignatureParam`]s written as `name: type` pairs.
 macro_rules! params {
-    ($($name:ident: $ty:literal),* $(,)?) => {
-        &[$(SignatureParam { name: stringify!($name), ty: $ty }),*]
+    ($($name:ident: $ty:expr),* $(,)?) => {
+        &const { [$(SignatureParam { name: stringify!($name), ty: $ty }),*] }
     };
 }
 
 const fn sig(
     generics: &'static [SignatureGeneric],
     params: &'static [SignatureParam],
-    result: &'static str,
+    result: SignatureType,
 ) -> DisplaySignature {
     DisplaySignature {
         generics,
@@ -394,6 +594,30 @@ const G_T: SignatureGeneric = SignatureGeneric {
     name: "T",
     kind: GenericParamKind::Type,
 };
+
+/// A quantity of a `Dim` parameter, e.g. `D`.
+const fn quantity(dim: SignatureGeneric) -> SignatureValue {
+    SignatureValue::Quantity(SignatureDim::Param(dim))
+}
+
+/// A complex quantity of a `Dim` parameter, `Complex<D>`.
+const fn complex(dim: SignatureGeneric) -> SignatureValue {
+    SignatureValue::Complex(SignatureDim::Param(dim))
+}
+
+/// A scalar signature type.
+const fn value(value: SignatureValue) -> SignatureType {
+    SignatureType::Value(value)
+}
+
+/// A quantity of a `Dim` parameter indexed by `Index` parameters, e.g. `D[I, J]`.
+const fn indexed(dim: SignatureGeneric, axes: &'static [SignatureGeneric]) -> SignatureType {
+    SignatureType::Indexed(quantity(dim), axes)
+}
+
+const ANGLE: SignatureValue =
+    SignatureValue::Quantity(SignatureDim::Named(SignatureNamedDim::Angle));
+const DIMENSIONLESS: SignatureDim = SignatureDim::Named(SignatureNamedDim::Dimensionless);
 
 /// A built-in function other than `epoch<S>`.
 ///
@@ -527,27 +751,65 @@ impl ComplexFn {
     #[must_use]
     pub const fn signature(self) -> &'static DisplaySignature {
         match self {
-            Self::Rectangular => &const { sig(&[G_D], params![re: "D", im: "D"], "Complex<D>") },
+            Self::Rectangular => {
+                &const {
+                    sig(
+                        &[G_D],
+                        params![re: value(quantity(G_D)), im: value(quantity(G_D))],
+                        value(complex(G_D)),
+                    )
+                }
+            }
             Self::Polar => {
                 &const {
                     sig(
                         &[G_D],
-                        params![magnitude: "D", phase: "Angle"],
-                        "Complex<D>",
+                        params![magnitude: value(quantity(G_D)), phase: value(ANGLE)],
+                        value(complex(G_D)),
                     )
                 }
             }
-            Self::ToComplex => &const { sig(&[G_D], params![x: "D"], "Complex<D>") },
-            Self::Real | Self::Imaginary => &const { sig(&[G_D], params![z: "Complex<D>"], "D") },
-            Self::Phase => &const { sig(&[G_D], params![z: "Complex<D>"], "Angle") },
-            Self::Conjugate => &const { sig(&[G_D], params![z: "Complex<D>"], "Complex<D>") },
-            Self::Absolute => &const { sig(&[G_D], params![x: "D | Complex<D>"], "D") },
+            Self::ToComplex => {
+                &const {
+                    sig(
+                        &[G_D],
+                        params![x: value(quantity(G_D))],
+                        value(complex(G_D)),
+                    )
+                }
+            }
+            Self::Real | Self::Imaginary => {
+                &const {
+                    sig(
+                        &[G_D],
+                        params![z: value(complex(G_D))],
+                        value(quantity(G_D)),
+                    )
+                }
+            }
+            Self::Phase => &const { sig(&[G_D], params![z: value(complex(G_D))], value(ANGLE)) },
+            Self::Conjugate => {
+                &const { sig(&[G_D], params![z: value(complex(G_D))], value(complex(G_D))) }
+            }
+            Self::Absolute => {
+                &const {
+                    sig(
+                        &[G_D],
+                        params![x: SignatureType::Either(quantity(G_D), complex(G_D))],
+                        value(quantity(G_D)),
+                    )
+                }
+            }
             Self::Exponential => {
+                const DIMENSIONLESS_OR_COMPLEX: SignatureType = SignatureType::Either(
+                    SignatureValue::Quantity(DIMENSIONLESS),
+                    SignatureValue::Complex(DIMENSIONLESS),
+                );
                 &const {
                     sig(
                         &[],
-                        params![x: "Dimensionless | Complex<Dimensionless>"],
-                        "Dimensionless | Complex<Dimensionless>",
+                        params![x: DIMENSIONLESS_OR_COMPLEX],
+                        DIMENSIONLESS_OR_COMPLEX,
                     )
                 }
             }
@@ -605,15 +867,43 @@ impl AggregationFn {
                 | ValueAggregation::Maximum
                 | ValueAggregation::Mean
                 | ValueAggregation::RootSumSquare,
-            ) => &const { sig(&[G_D, G_I], params![values: "D[I]"], "D") },
+            ) => {
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![values: indexed(G_D, &[G_I])],
+                        value(quantity(G_D)),
+                    )
+                }
+            }
             Self::Value(ValueAggregation::Product) => {
-                &const { sig(&[G_D, G_I], params![values: "D[I]"], "D^|I|") }
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![values: indexed(G_D, &[G_I])],
+                        value(SignatureValue::Quantity(SignatureDim::CardinalityPower(
+                            G_D, G_I,
+                        ))),
+                    )
+                }
             }
             Self::Value(ValueAggregation::Count) => {
-                &const { sig(&[G_T, G_I], params![values: "T[I]"], "Int") }
+                &const {
+                    sig(
+                        &[G_T, G_I],
+                        params![values: SignatureType::Indexed(SignatureValue::TypeParam(G_T), &[G_I])],
+                        value(SignatureValue::Int),
+                    )
+                }
             }
             Self::Key(KeyAggregation::Argmin | KeyAggregation::Argmax) => {
-                &const { sig(&[G_D, G_I], params![values: "D[I]"], "Key<I>") }
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![values: indexed(G_D, &[G_I])],
+                        value(SignatureValue::Key(G_I)),
+                    )
+                }
             }
         }
     }
@@ -646,14 +936,18 @@ impl LinearAlgebraFn {
 
     /// Source-like signature used at LSP/display boundaries.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per function of a static signature table"
+    )]
     pub const fn signature(self) -> &'static DisplaySignature {
         match self {
             Self::Dot => {
                 &const {
                     sig(
                         &[G_D1, G_D2, G_I],
-                        params![a: "D1[I]", b: "D2[I]"],
-                        "D1 * D2",
+                        params![a: indexed(G_D1, &[G_I]), b: indexed(G_D2, &[G_I])],
+                        value(SignatureValue::Quantity(SignatureDim::Product(G_D1, G_D2))),
                     )
                 }
             }
@@ -661,30 +955,66 @@ impl LinearAlgebraFn {
                 &const {
                     sig(
                         &[G_D1, G_D2, G_I, G_J, G_K],
-                        params![a: "D1[I, J]", b: "D2[J, K]"],
-                        "(D1 * D2)[I, K]",
+                        params![a: indexed(G_D1, &[G_I, G_J]), b: indexed(G_D2, &[G_J, G_K])],
+                        SignatureType::Indexed(
+                            SignatureValue::Quantity(SignatureDim::Product(G_D1, G_D2)),
+                            &[G_I, G_K],
+                        ),
                     )
                 }
             }
-            Self::Transpose => &const { sig(&[G_D, G_I, G_J], params![a: "D[I, J]"], "D[J, I]") },
-            Self::Trace => &const { sig(&[G_D, G_I], params![a: "D[I, I]"], "D") },
-            Self::Norm => &const { sig(&[G_D, G_I], params![v: "D[I]"], "D") },
+            Self::Transpose => {
+                &const {
+                    sig(
+                        &[G_D, G_I, G_J],
+                        params![a: indexed(G_D, &[G_I, G_J])],
+                        indexed(G_D, &[G_J, G_I]),
+                    )
+                }
+            }
+            Self::Trace => {
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![a: indexed(G_D, &[G_I, G_I])],
+                        value(quantity(G_D)),
+                    )
+                }
+            }
+            Self::Norm => {
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![v: indexed(G_D, &[G_I])],
+                        value(quantity(G_D)),
+                    )
+                }
+            }
             Self::Cross => {
                 &const {
                     sig(
                         &[G_D1, G_D2, G_I],
-                        params![a: "D1[I]", b: "D2[I]"],
-                        "(D1 * D2)[I]",
+                        params![a: indexed(G_D1, &[G_I]), b: indexed(G_D2, &[G_I])],
+                        SignatureType::Indexed(
+                            SignatureValue::Quantity(SignatureDim::Product(G_D1, G_D2)),
+                            &[G_I],
+                        ),
                     )
-                    .where_clause("|I| = 3")
+                    .where_clause(SignatureConstraint::Cardinality {
+                        index: G_I,
+                        size: 3,
+                    })
                 }
             }
             Self::Outer => {
                 &const {
                     sig(
                         &[G_D1, G_D2, G_I, G_J],
-                        params![a: "D1[I]", b: "D2[J]"],
-                        "(D1 * D2)[I, J]",
+                        params![a: indexed(G_D1, &[G_I]), b: indexed(G_D2, &[G_J])],
+                        SignatureType::Indexed(
+                            SignatureValue::Quantity(SignatureDim::Product(G_D1, G_D2)),
+                            &[G_I, G_J],
+                        ),
                     )
                 }
             }
@@ -692,13 +1022,37 @@ impl LinearAlgebraFn {
                 &const {
                     sig(
                         &[G_D1, G_D2, G_I],
-                        params![a: "D1[I, I]", b: "D2[I]"],
-                        "(D2 / D1)[I]",
+                        params![a: indexed(G_D1, &[G_I, G_I]), b: indexed(G_D2, &[G_I])],
+                        SignatureType::Indexed(
+                            SignatureValue::Quantity(SignatureDim::Quotient(G_D2, G_D1)),
+                            &[G_I],
+                        ),
                     )
                 }
             }
-            Self::Inverse => &const { sig(&[G_D, G_I], params![a: "D[I, I]"], "D^-1[I, I]") },
-            Self::Determinant => &const { sig(&[G_D, G_I], params![a: "D[I, I]"], "D^|I|") },
+            Self::Inverse => {
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![a: indexed(G_D, &[G_I, G_I])],
+                        SignatureType::Indexed(
+                            SignatureValue::Quantity(SignatureDim::Reciprocal(G_D)),
+                            &[G_I, G_I],
+                        ),
+                    )
+                }
+            }
+            Self::Determinant => {
+                &const {
+                    sig(
+                        &[G_D, G_I],
+                        params![a: indexed(G_D, &[G_I, G_I])],
+                        value(SignatureValue::Quantity(SignatureDim::CardinalityPower(
+                            G_D, G_I,
+                        ))),
+                    )
+                }
+            }
         }
     }
 }
@@ -1185,6 +1539,25 @@ mod tests {
             &["a: D[I, I]"],
         ),
     ];
+
+    /// Every type variable a documented signature mentions is one of its own
+    /// generic parameters, used at the sort that parameter declares.
+    #[test]
+    fn display_signatures_mention_only_their_own_generics() {
+        for function in BuiltinFn::all() {
+            let BuiltinEntry::Signature(signature) = function.entry() else {
+                continue;
+            };
+            for (generic, kind) in signature.referenced_generics() {
+                assert_eq!(generic.kind, kind, "`{function}` uses `{}`", generic.name);
+                assert!(
+                    signature.generics.contains(&generic),
+                    "`{function}` mentions undeclared `{}`",
+                    generic.name
+                );
+            }
+        }
+    }
 
     /// The rendered signatures are user-visible (LSP signature help); they
     /// must match the source-like text exactly.
