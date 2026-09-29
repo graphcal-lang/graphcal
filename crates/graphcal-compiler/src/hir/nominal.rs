@@ -563,9 +563,8 @@ fn lower_nominal_field(
 ) -> Result<NominalField, GraphcalError> {
     super::diagnostics::validate_type_annotation(field.type_ann(), ctx.src)?;
     let scope = super::ModuleScope::new(identity.owner(), ctx.resolver, generic_scope);
-    let decl_type = super::lower_decl_type(field.type_ann(), scope).map_err(|error| {
-        super::diagnostics::type_lower_error_to_graphcal(&error, field.type_ann(), ctx.src)
-    })?;
+    let decl_type = super::lower_decl_type(field.type_ann(), scope)
+        .map_err(|error| super::diagnostics::type_lower_error_to_graphcal(&error, ctx.src))?;
     let expr_ctx = super::ExprLoweringContext::with_overlay(
         scope,
         &ctx.registry.time_zones,

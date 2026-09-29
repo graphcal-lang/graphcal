@@ -327,6 +327,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["hir", "diagnostics", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["hir", "closed_expr"]
 role = "contracts"
 

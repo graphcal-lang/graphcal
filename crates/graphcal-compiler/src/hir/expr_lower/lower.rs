@@ -348,7 +348,7 @@ impl ExprLowerer<'_> {
                 };
                 let resolved = constructor.into_resolved();
                 let lowered_args = lower_generic_args(
-                    resolved.as_str(),
+                    crate::hir::lower::GenericApplicationTarget::Constructor(resolved.clone()),
                     constructor.kind().generic_params(),
                     generic_args,
                     expr.span,
