@@ -5,7 +5,7 @@ use crate::dimension::Dimension;
 use crate::hir::expr::{CheckedExpr, Draft, Expr, ExprKind};
 use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::{ConstructorMatch, ContextualOperand, StaticIndexRequirement};
+use crate::tir::static_index::StaticIndexRequirement;
 
 fn integer(value: i64, offset: usize) -> Expr<Draft> {
     Expr::new(ExprKind::Integer(value), Span::new(offset, 1))
@@ -115,10 +115,7 @@ fn contextual_literals_are_never_values() {
         pending.record_value(&literal, dimensionless(), &no_facts(&matches)),
         Err(AssemblyError::ContextualValue(literal.id().clone()))
     );
-    assert_eq!(
-        pending.record_contextual(&literal),
-        Ok(ContextualOperand::String)
-    );
+    assert_eq!(pending.record_contextual(&literal), Ok(()));
 
     let negated = finished(Expr::new(
         ExprKind::UnaryOp {
@@ -165,7 +162,7 @@ fn a_static_position_must_belong_to_a_selector_of_its_node() {
         ))
         .to_symbolic(),
         position: 1,
-        usage: crate::tir::expression_facts::StaticIndexUse::Selection,
+        usage: crate::tir::static_index::StaticIndexUse::Selection,
     };
     assert_eq!(
         pending.record_value(
@@ -237,17 +234,6 @@ fn deep_typed_trees_clone_and_drop_without_overflow() {
     drop(node);
 }
 
-use crate::body_revision::BodyRevision;
-use crate::dag_id::DagId;
-use crate::tir::expression_facts::{
-    CheckedExpressionFacts, CheckedExpressionRecord, CheckingEnvironment, ExpressionFact, ValueFact,
-};
-use crate::tir::texpr::fact_agreement::{FactDisagreement, check};
-
-fn owner() -> DagId {
-    DagId::from_virtual_relative_path(std::path::Path::new("agreement.gcl")).unwrap()
-}
-
 fn negated_integer() -> CheckedExpr {
     finished(Expr::new(
         ExprKind::UnaryOp {
@@ -258,69 +244,53 @@ fn negated_integer() -> CheckedExpr {
     ))
 }
 
-fn facts(root: &Expr) -> CheckedExpressionFacts {
-    let revision = BodyRevision::fresh();
-    let environment = CheckingEnvironment::new(owner(), revision.clone());
-    let mut records = HashMap::new();
-    crate::hir::expr::visit_expr(root, &mut |expr| {
-        records.insert(
-            expr.id().clone(),
-            CheckedExpressionRecord::new(
-                expr,
-                ExpressionFact::Symbolic(ValueFact {
-                    checked_type: CheckedType::Int,
-                    constructor: None,
-                }),
-                std::sync::Arc::clone(&environment),
-            ),
-        );
-    });
-    CheckedExpressionFacts::publish(owner(), revision, &[root], records, &|_| Ok(None)).unwrap()
-}
-
-fn typed(roots: &[&Expr], nodes: &[&Expr], ty: &CheckedType<Symbolic>) -> CheckedBodies {
+fn typed(
+    roots: &[&Expr],
+    nodes: &[&Expr],
+    nominal_uses: HashMap<crate::expression_id::ExprId, std::sync::Arc<[NominalObservation]>>,
+) -> CheckedBodies {
     let matches = HashMap::new();
     let mut pending = PendingNodes::default();
     for node in nodes {
         pending
-            .record_value(node, ty.clone(), &no_facts(&matches))
+            .record_value(node, CheckedType::Int, &no_facts(&matches))
             .unwrap();
     }
-    CheckedBodies::discharge(claim_roots(roots, pending).unwrap(), &|_| Ok(None)).unwrap()
+    CheckedBodies::discharge(claim_roots(roots, pending).unwrap(), nominal_uses, &|_| {
+        Ok(None)
+    })
+    .unwrap()
 }
 
 #[test]
-fn typed_trees_agree_with_the_facts_of_the_same_pass() {
+fn published_trees_cover_their_roots_and_keep_only_their_nominal_uses() {
     let expr = negated_integer();
     let operand = children(&expr)[0];
-    let facts = facts(&expr);
-    assert_eq!(
-        check(
-            &typed(&[&expr], &[operand, &expr], &CheckedType::Int),
-            &facts
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        check(
-            &typed(&[&expr], &[operand, &expr], &dimensionless()),
-            &facts
-        ),
-        Err(FactDisagreement::Type(expr.id().clone()))
-    );
-    assert_eq!(
-        check(&typed(&[operand], &[operand], &CheckedType::Int), &facts),
-        Err(FactDisagreement::Coverage { typed: 1, facts: 2 })
-    );
     let other = negated_integer();
-    let other_operand = children(&other)[0];
-    assert_eq!(
-        check(
-            &typed(&[&other], &[other_operand, &other], &CheckedType::Int),
-            &facts
-        ),
-        Err(FactDisagreement::MissingFact(other.id().clone()))
+    let observation =
+        NominalObservation::TypeArgument(crate::resolved_name::ResolvedStructTypeName::for_test(
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("uses.gcl"))
+                .unwrap(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Used"),
+        ));
+    let uses: std::sync::Arc<[NominalObservation]> = vec![observation.clone()].into();
+    let bodies = typed(
+        &[&expr],
+        &[operand, &expr],
+        HashMap::from([
+            (expr.id().clone(), std::sync::Arc::clone(&uses)),
+            (other.id().clone(), uses),
+        ]),
     );
+    assert!(bodies.cover([&*expr]));
+    assert!(bodies.cover([&*expr, &*expr]));
+    assert!(!bodies.cover([&*other]));
+    assert!(!bodies.cover([&*expr, &*other]));
+    assert!(!bodies.cover(std::iter::empty()));
+    assert_eq!(bodies.nominal_uses(expr.id()), [observation]);
+    assert!(bodies.nominal_uses(other.id()).is_empty());
+    assert!(bodies.shared_nominal_uses(other.id()).is_none());
+    assert!(bodies.executable_value(expr.id()).is_ok());
 }
 
 fn key_node(
@@ -351,7 +321,7 @@ fn key_node(
             static_position: Some(StaticPosition {
                 axis,
                 position,
-                usage: crate::tir::expression_facts::StaticIndexUse::Key,
+                usage: crate::tir::static_index::StaticIndexUse::Key,
             }),
         },
     )
@@ -439,6 +409,7 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
             (ready_id.clone(), TBody::Value(Box::new(ready))),
             (literal_id.clone(), TBody::Contextual(literal)),
         ],
+        HashMap::new(),
         &known(3),
     )
     .unwrap();
@@ -455,6 +426,7 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
     );
     let deferred = CheckedBodies::discharge(
         vec![(waiting_id.clone(), TBody::Value(Box::new(waiting)))],
+        HashMap::new(),
         &|_| Ok(None),
     )
     .unwrap();
@@ -469,11 +441,8 @@ fn type_maps_keep_structure_and_rewrite_every_carried_type() {
     let mut ids = crate::expression_id::ExprIds::default();
     let tree = key_node(&mut ids, fin(3), 1);
     let concrete = tree.map_types(&mut map::ToConcrete).unwrap();
-    let back = concrete
-        .map_types(&mut map::ToSymbolic)
-        .unwrap_or_else(|never| match never {});
-    assert_eq!(back.ty(), tree.ty());
-    assert_eq!(back.id(), tree.id());
+    assert_eq!(concrete.ty().to_symbolic(), *tree.ty());
+    assert_eq!(concrete.id(), tree.id());
     let (
         TExprKind::Key {
             static_position: Some(before),
@@ -485,10 +454,14 @@ fn type_maps_keep_structure_and_rewrite_every_carried_type() {
             arg: after_arg,
             ..
         },
-    ) = (tree.kind(), back.kind())
+    ) = (tree.kind(), concrete.kind())
     else {
         panic!("a map keeps the key form and its proof");
     };
-    assert_eq!(before, after);
+    assert_eq!(after.axis.to_symbolic(), before.axis);
+    assert_eq!(
+        (after.position, after.usage),
+        (before.position, before.usage)
+    );
     assert_eq!(before_arg.id(), after_arg.id());
 }

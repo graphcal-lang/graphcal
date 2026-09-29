@@ -14,9 +14,9 @@ use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
-use crate::tir::expression_facts::{
-    ConstructorApplication, ConstructorMatch, ContextualOperand, StaticIndexUse,
-};
+use crate::tir::static_index::StaticIndexUse;
+
+use super::nominal::{ConstructorApplication, ConstructorMatch};
 
 /// One checked value expression.
 #[derive(Debug)]
@@ -80,6 +80,19 @@ impl<V: Concreteness> TExpr<V> {
     #[must_use]
     pub const fn kind(&self) -> &TExprKind<V> {
         &self.kind
+    }
+
+    /// The constructor application this node makes, if it applies one.
+    #[must_use]
+    pub const fn application(&self) -> Option<&ConstructorApplication<V>> {
+        match &self.kind {
+            TExprKind::Construct { application, .. }
+            | TExprKind::Const(Spanned {
+                value: TConstRef::Constructor(application),
+                ..
+            }) => Some(application),
+            _ => None,
+        }
     }
 
     /// Visit this node's typed children in structural order.
@@ -333,20 +346,6 @@ pub enum ContextualLiteral {
     CivilDateTime(CivilDateTimeLiteral),
     ZonedDateTime(ZonedDateTimeLiteral),
     TimeZone(IanaTimeZoneId),
-}
-
-impl ContextualLiteral {
-    /// The contextual role this literal plays.
-    #[must_use]
-    pub const fn operand(&self) -> ContextualOperand {
-        match self {
-            Self::String(_) => ContextualOperand::String,
-            Self::OffsetDateTime(_) => ContextualOperand::OffsetDateTime,
-            Self::CivilDateTime(_) => ContextualOperand::CivilDateTime,
-            Self::ZonedDateTime(_) => ContextualOperand::ZonedDateTime,
-            Self::TimeZone(_) => ContextualOperand::TimeZone,
-        }
-    }
 }
 
 /// A checked constructor field initializer, in written order.

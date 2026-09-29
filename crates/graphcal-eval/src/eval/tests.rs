@@ -91,9 +91,43 @@ fn write_pipeline_project(
     (directory, source_root.join(root))
 }
 
+/// One node of a checked tree: its span, and its concrete type when the tree
+/// is executable and the node is a value.
+type CheckedNodeSummary = (
+    graphcal_compiler::syntax::span::Span,
+    Option<graphcal_compiler::registry::checked_type::CheckedType>,
+    bool,
+);
+
+/// Every node of every checked tree of `dag`, by occurrence.
+fn checked_nodes(
+    dag: &graphcal_compiler::tir::typed::CheckedDag,
+) -> HashMap<graphcal_compiler::expression_id::ExprId, CheckedNodeSummary> {
+    use graphcal_compiler::tir::texpr::{CheckedBody, TNodeRef, visit_tnodes};
+    let mut nodes = HashMap::new();
+    for (_, body) in dag.bodies().roots() {
+        match body {
+            CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
+                let summary = match node {
+                    TNodeRef::Value(expr) => (expr.span(), Some(expr.ty().clone()), false),
+                    TNodeRef::Contextual(literal) => (literal.span(), None, true),
+                };
+                nodes.insert(node.id().clone(), summary);
+            }),
+            CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
+                let summary = match node {
+                    TNodeRef::Value(expr) => (expr.span(), None, false),
+                    TNodeRef::Contextual(literal) => (literal.span(), None, true),
+                };
+                nodes.insert(node.id().clone(), summary);
+            }),
+        }
+    }
+    nodes
+}
+
 #[test]
 fn generated_checked_expression_coverage_includes_every_owned_root_family() {
-    use graphcal_compiler::tir::expression_facts::ExpressionFact;
     let template = r#"
 const node factor: Dimensionless = 2.0;
 param scale: Dimensionless(min: 1.0) = @factor;
@@ -118,27 +152,25 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
             .unwrap();
             let checked = ProjectCompiler::new(&project).check().unwrap();
             let dag = checked.tir().root();
-            let facts = dag.expression_facts();
+            let nodes = checked_nodes(dag);
             let mut ids = std::collections::HashSet::new();
             dag.owned_expression_roots().for_each(|root| {
                 graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
                     let id = expr.id();
-                    assert_eq!(facts.span(id).unwrap(), expr.span);
-                    facts.get(id).unwrap();
+                    assert_eq!(nodes[id].0, expr.span);
                     ids.insert(id.clone());
                 });
             });
-            assert_eq!(ids.len(), facts.records().count());
+            assert_eq!(ids.len(), nodes.len());
             assert!(
                 ids.len() > 20,
                 "coverage fixture must not become vacuous: {} rows",
                 ids.len()
             );
-            assert!(old_ids.iter().all(|id| facts.get(id).is_err()));
+            assert!(old_ids.iter().all(|id| !nodes.contains_key(id)));
             let tir = checked.tir();
-            assert!(facts.records().any(|(_, record)| {
-                matches!(&record.fact, ExpressionFact::Executable(value) if value
-                    .checked_type
+            assert!(nodes.values().any(|(_, ty, _)| {
+                matches!(ty, Some(checked_type) if checked_type
                     .materialized_shape(|axis| {
                         Ok::<_, graphcal_compiler::tir::materialized_shape::MaterializedShapeError>(
                             tir.index_def(axis).and_then(|index| index.concrete_cardinality()),
@@ -148,11 +180,7 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
                     .is_some_and(|shape| shape.total().get() == size))
             }));
             assert_eq!(dag.semantic().dynamic_unit_scales.len(), 1);
-            assert!(
-                facts
-                    .records()
-                    .any(|(_, record)| matches!(record.fact, ExpressionFact::Contextual(_)))
-            );
+            assert!(nodes.values().any(|(_, _, contextual)| *contextual));
             old_ids = ids.into_iter().collect();
             let prepared = checked
                 .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())
@@ -178,18 +206,32 @@ node packet: Packet = Packet(value: @first);
     let project = crate::loader::LoadedProject::from_source(source, "metrics.gcl").unwrap();
     let ((prepared, retained_constructors), preparation) = crate::pipeline_metrics::measure(|| {
         let checked = ProjectCompiler::new(&project).check().unwrap();
-        let retained = checked
-            .tir()
-            .dag_registry()
-            .values()
-            .flat_map(|dag| dag.expression_facts().records())
-            .filter(|(_, record)| {
-                record
-                    .fact
-                    .symbolic_value()
-                    .is_some_and(|value| value.constructor.is_some())
-            })
-            .count();
+        let mut retained = 0_usize;
+        for dag in checked.tir().dag_registry().values() {
+            for (_, body) in dag.bodies().roots() {
+                let mut count = |applies: bool| retained += usize::from(applies);
+                match body {
+                    graphcal_compiler::tir::texpr::CheckedBody::Executable(body) => {
+                        graphcal_compiler::tir::texpr::visit_tnodes(body.as_node(), &mut |node| {
+                            count(matches!(
+                                node,
+                                graphcal_compiler::tir::texpr::TNodeRef::Value(expr)
+                                    if expr.application().is_some()
+                            ));
+                        });
+                    }
+                    graphcal_compiler::tir::texpr::CheckedBody::Deferred(body) => {
+                        graphcal_compiler::tir::texpr::visit_tnodes(body.as_node(), &mut |node| {
+                            count(matches!(
+                                node,
+                                graphcal_compiler::tir::texpr::TNodeRef::Value(expr)
+                                    if expr.application().is_some()
+                            ));
+                        });
+                    }
+                }
+            }
+        }
         (
             checked
                 .prepare_with_host_fns(&crate::host_fns::HostFunctionRegistry::new())

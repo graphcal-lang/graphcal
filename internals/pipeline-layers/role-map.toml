@@ -262,11 +262,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["body_revision"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["fresh_identity"]
 role = "contracts"
 
@@ -1422,7 +1417,7 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "dim_check", "expression_facts"]
+path = ["tir", "dim_check", "instance_bodies"]
 role = "checking"
 
 [[module]]
@@ -1442,16 +1437,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "expression_facts"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["tir", "expression_facts", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["tir", "static_index"]
 role = "contracts"
 
@@ -1467,12 +1452,12 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "texpr", "fact_agreement"]
+path = ["tir", "texpr", "model"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "texpr", "model"]
+path = ["tir", "texpr", "nominal"]
 role = "contracts"
 
 [[module]]

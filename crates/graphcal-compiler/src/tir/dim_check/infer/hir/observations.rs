@@ -1,15 +1,16 @@
 //! The single observation sink of one body-checking pass.
 //!
 //! Inference records everything it learns about a body exactly once, while it
-//! checks that body: each expression's checked fact, the static index proofs an
-//! expression relies on, and the nominal uses a checked root makes. Consumers
-//! (fact publication, template-closure validation, override-dependency
-//! summaries) read these observations instead of inferring the body again.
+//! checks that body: each expression's typed node (assembled bottom-up into the
+//! body's typed tree), the static index proofs an expression relies on, and the
+//! nominal uses a checked root makes. Consumers (tree publication,
+//! template-closure validation, override-dependency summaries) read these
+//! observations instead of inferring the body again.
 
 use crate::hir::expr::{ConstRef, Expr, ExprKind, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -18,11 +19,11 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::expression_id::ExprId;
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::{
-    CheckedExpressionRecord, ConstructorApplication, ConstructorMatch, ExpressionFact,
-    NominalObservation, StaticIndexRequirement, ValueFact,
+use crate::tir::static_index::StaticIndexRequirement;
+use crate::tir::texpr::{
+    AssemblyError, ConstructorApplication, ConstructorMatch, NodeFacts, NominalObservation,
+    PendingNodes,
 };
-use crate::tir::texpr::{AssemblyError, NodeFacts, PendingNodes};
 
 use crate::registry::checked_type::{CheckedType, Symbolic};
 
@@ -71,99 +72,64 @@ impl NominalUse {
 ///
 /// Every expression is recorded at most once, after its children: a second
 /// record for the same expression is an internal error, because each body is
-/// inferred exactly once. Each record is kept twice while the evaluator still
-/// reads expression facts: as the retained fact, and as a node of the body's
-/// typed tree ([`crate::tir::texpr`]).
+/// inferred exactly once.
+#[derive(Default)]
 pub(in crate::tir::dim_check) struct BodyObservations {
-    environment: Arc<crate::tir::expression_facts::CheckingEnvironment>,
-    records: RefCell<HashMap<ExprId, Box<CheckedExpressionRecord>>>,
+    recorded: RefCell<HashSet<ExprId>>,
     typed: RefCell<PendingNodes>,
     nominal_uses: RefCell<HashMap<ExprId, Vec<NominalUse>>>,
     static_indexes: RefCell<HashMap<ExprId, Vec<StaticIndexRequirement>>>,
 }
 
-/// The result of one checking pass: the retained facts and the typed trees.
+/// The result of one checking pass: the typed trees of the checked roots and
+/// the nominal uses each root makes.
 pub(in crate::tir::dim_check) struct FinishedObservations {
-    pub(in crate::tir::dim_check) records: HashMap<ExprId, Box<CheckedExpressionRecord>>,
     pub(in crate::tir::dim_check) typed: PendingNodes,
+    pub(in crate::tir::dim_check) nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
 }
 
 /// Why one checking pass's results cannot be published.
 #[derive(Debug, thiserror::Error)]
 pub(in crate::tir::dim_check) enum PublicationError {
     #[error(transparent)]
-    Facts(#[from] crate::tir::expression_facts::ExpressionFactsError),
-    #[error(transparent)]
     TypedBodies(#[from] crate::tir::texpr::TypedBodiesError),
     #[error(transparent)]
     Discharge(#[from] crate::tir::texpr::DischargeError),
-    #[error(transparent)]
-    Disagreement(#[from] crate::tir::texpr::fact_agreement::FactDisagreement),
 }
 
 impl FinishedObservations {
-    /// Publish the facts and the typed trees of `roots`, requiring that both
-    /// cover exactly these roots and agree on every expression.
+    /// Publish the checked tree of each of `roots`, requiring that the trees
+    /// cover exactly these roots.
     pub(in crate::tir::dim_check) fn publish(
         self,
-        owner: crate::dag_id::DagId,
-        revision: crate::body_revision::BodyRevision,
         roots: &[&Expr],
-        cardinality: &crate::tir::expression_facts::AxisCardinality<'_>,
-    ) -> Result<
-        (
-            crate::tir::expression_facts::CheckedExpressionFacts,
-            crate::tir::texpr::CheckedBodies,
-        ),
-        PublicationError,
-    > {
-        let facts = crate::tir::expression_facts::CheckedExpressionFacts::publish(
-            owner,
-            revision,
-            roots,
-            self.records,
-            cardinality,
-        )?;
-        let typed = crate::tir::texpr::CheckedBodies::discharge(
+        cardinality: &crate::tir::static_index::AxisCardinality<'_>,
+    ) -> Result<crate::tir::texpr::CheckedBodies, PublicationError> {
+        Ok(crate::tir::texpr::CheckedBodies::discharge(
             crate::tir::texpr::claim_roots(roots, self.typed)?,
+            self.nominal_uses,
             cardinality,
-        )?;
-        crate::tir::texpr::fact_agreement::check(&typed, &facts)?;
-        Ok((facts, typed))
+        )?)
     }
 }
 
 impl BodyObservations {
-    pub(in crate::tir::dim_check) fn new(dag: &crate::tir::typed::DagTIR) -> Self {
-        Self {
-            environment: crate::tir::expression_facts::CheckingEnvironment::new(
-                dag.dag_id().clone(),
-                dag.body_revision().clone(),
-            ),
-            records: RefCell::default(),
-            typed: RefCell::default(),
-            nominal_uses: RefCell::default(),
-            static_indexes: RefCell::default(),
-        }
-    }
-
-    /// The checked expression records, each root carrying its nominal uses,
-    /// and the typed trees of the checked roots.
+    /// The typed trees of the checked roots and the nominal uses each makes.
     pub(in crate::tir::dim_check) fn finish(self) -> FinishedObservations {
-        let mut records = self.records.into_inner();
-        for (id, uses) in self.nominal_uses.into_inner() {
-            if let Some(record) = records.get_mut(&id) {
-                record.nominal_observations = Some(
-                    uses.into_iter()
-                        .map(|nominal_use| nominal_use.observation)
-                        .collect::<Vec<_>>()
-                        .into(),
-                );
-            }
-        }
         FinishedObservations {
-            records,
             typed: self.typed.into_inner(),
+            nominal_uses: self
+                .nominal_uses
+                .into_inner()
+                .into_iter()
+                .map(|(root, uses)| {
+                    let uses = uses
+                        .into_iter()
+                        .map(|nominal_use| nominal_use.observation)
+                        .collect::<Vec<_>>();
+                    (root, uses.into())
+                })
+                .collect(),
         }
     }
 
@@ -208,7 +174,7 @@ impl BodyObservations {
             .push(requirement);
     }
 
-    /// Record one checked expression: its retained fact and its typed node.
+    /// Record one checked expression's typed node.
     fn insert(
         &self,
         expr: &Expr,
@@ -226,7 +192,7 @@ impl BodyObservations {
 
     fn try_insert(&self, expr: &Expr, node: CheckedNode) -> Result<(), AssemblyError> {
         let id = expr.id();
-        if self.records.borrow().contains_key(id) {
+        if !self.recorded.borrow_mut().insert(id.clone()) {
             return Err(AssemblyError::CheckedTwice(id.clone()));
         }
         let static_indexes = self
@@ -236,32 +202,22 @@ impl BodyObservations {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        let (fact, constructor_matches) = match node {
-            CheckedNode::Contextual => {
-                let operand = self.typed.borrow_mut().record_contextual(expr)?;
-                (ExpressionFact::Contextual(operand), HashMap::new())
-            }
+        match node {
+            CheckedNode::Contextual => self.typed.borrow_mut().record_contextual(expr),
             CheckedNode::Value {
-                value,
+                checked_type,
+                constructor,
                 constructor_matches,
-            } => {
-                self.typed.borrow_mut().record_value(
-                    expr,
-                    value.checked_type.clone(),
-                    &NodeFacts {
-                        constructor: value.constructor.as_deref(),
-                        constructor_matches: &constructor_matches,
-                        static_indexes: &static_indexes,
-                    },
-                )?;
-                (ExpressionFact::Symbolic(value), constructor_matches)
-            }
-        };
-        let mut record = CheckedExpressionRecord::new(expr, fact, Arc::clone(&self.environment));
-        record.constructor_matches = constructor_matches;
-        record.static_indexes = static_indexes;
-        self.records.borrow_mut().insert(id.clone(), record);
-        Ok(())
+            } => self.typed.borrow_mut().record_value(
+                expr,
+                checked_type,
+                &NodeFacts {
+                    constructor: constructor.as_deref(),
+                    constructor_matches: &constructor_matches,
+                    static_indexes: &static_indexes,
+                },
+            ),
+        }
     }
 
     /// Record a contextual literal accepted by the construct that consumes it.
@@ -338,7 +294,7 @@ impl BodyObservations {
                     let target = resolved_constructor(name)?;
                     Ok((
                         name.clone(),
-                        crate::tir::expression_facts::ConstructorMatch {
+                        ConstructorMatch {
                             definition: target.owning_type().clone(),
                             runtime_type: dag.frame().struct_type(target.owning_type()),
                             constructor: target.name(),
@@ -351,10 +307,8 @@ impl BodyObservations {
         self.insert(
             expr,
             CheckedNode::Value {
-                value: ValueFact {
-                    checked_type,
-                    constructor: constructor.map(Box::new),
-                },
+                checked_type,
+                constructor: constructor.map(Box::new),
                 constructor_matches,
             },
             src,
@@ -366,7 +320,8 @@ impl BodyObservations {
 enum CheckedNode {
     Contextual,
     Value {
-        value: ValueFact<Symbolic>,
+        checked_type: CheckedType<Symbolic>,
+        constructor: Option<Box<ConstructorApplication<Symbolic>>>,
         constructor_matches: HashMap<ResolvedConstructorName, ConstructorMatch>,
     },
 }

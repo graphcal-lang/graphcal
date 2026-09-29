@@ -418,7 +418,7 @@ fn eval_const_ref(
 }
 
 fn nullary_constructor(
-    application: &graphcal_compiler::tir::expression_facts::ConstructorApplication,
+    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
 ) -> RuntimeValue {
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     RuntimeValue::Struct {
@@ -1730,7 +1730,7 @@ fn eval_field_access(
 }
 
 fn eval_constructor_call(
-    application: &graphcal_compiler::tir::expression_facts::ConstructorApplication,
+    application: &graphcal_compiler::tir::texpr::ConstructorApplication,
     fields: &[TFieldInit],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,

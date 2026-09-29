@@ -325,11 +325,6 @@ fn check_rigid_unit_bodies(
     Ok(())
 }
 
-type ExpressionRecords = std::collections::HashMap<
-    crate::expression_id::ExprId,
-    Box<crate::tir::expression_facts::CheckedExpressionRecord>,
->;
-
 /// Check every source-authored executable body of `template` in the view
 /// where the optional dimension `ports` are rigid, checking the template's
 /// plots with `plots`. Returns `plots`'s result and what the rigid inference
@@ -351,7 +346,7 @@ fn check_in_rigid_view<R>(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let observations = infer::hir::BodyObservations::new(rigid_dag);
+    let observations = infer::hir::BodyObservations::default();
     let rigid_ctx = DimCheckContext {
         env: infer::hir::InferEnv {
             dag: rigid_dag,
@@ -389,33 +384,28 @@ fn check_rigid_dimension_port(
     .map(drop)
 }
 
-/// A template's checked facts in the view where the optional dimension
+/// A template's checked trees in the view where the optional dimension
 /// ports an instance binds are rigid.
-pub(super) struct PortGenericFacts {
-    /// Facts of the template's executable bodies.
-    pub(super) records: ExpressionRecords,
+pub(super) struct PortGenericTrees {
     /// Typed trees of the bodies the rigid inference checked, by root.
-    pub(super) bodies: std::collections::HashMap<
-        crate::expression_id::ExprId,
-        crate::tir::texpr::TBody<crate::registry::checked_type::Symbolic>,
-    >,
+    pub(super) trees: super::body_specialization::DerivedTrees,
     /// Channel shapes of the template's own plots.
     pub(super) plot_channels: super::plot::CheckedPlotChannelShapes,
 }
 
-/// Facts of `template` in the view where the bound optional dimension
+/// Trees of `template` in the view where the bound optional dimension
 /// `ports` are rigid: what an instance binding these ports specializes,
-/// since the template's own facts saw their defaults.
+/// since the template's own trees saw their defaults.
 ///
 /// The closure check has accepted every body with each port rigid, so any
 /// failure here is reported unchanged.
-pub(super) fn port_generic_facts(
+pub(super) fn port_generic_trees(
     tir: &crate::tir::typed::UncheckedTir,
     template: &crate::tir::typed::DagTIR,
     ports: &[crate::resolved_name::ResolvedDimName],
     src: &miette::NamedSource<std::sync::Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<PortGenericFacts, GraphcalError> {
+) -> Result<PortGenericTrees, GraphcalError> {
     let (plot_channels, finished) = check_in_rigid_view(
         tir,
         template,
@@ -433,9 +423,11 @@ pub(super) fn port_generic_facts(
                 .collect()
         },
     )?;
-    Ok(PortGenericFacts {
-        records: finished.records,
-        bodies: finished.typed.into_roots(),
+    Ok(PortGenericTrees {
+        trees: super::body_specialization::DerivedTrees {
+            bodies: finished.typed.into_roots(),
+            nominal_uses: finished.nominal_uses,
+        },
         plot_channels,
     })
 }

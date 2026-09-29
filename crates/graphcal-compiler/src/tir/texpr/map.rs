@@ -8,9 +8,9 @@
 
 use std::borrow::Cow;
 
+use super::nominal::{ConstructorApplication, ConstructorMatch};
 use crate::registry::checked_type::{CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic};
 use crate::syntax::span::{Span, Spanned};
-use crate::tir::expression_facts::{ConstructorApplication, ConstructorMatch};
 
 use super::model::{
     StaticPosition, TArg, TBody, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMapEntry,
@@ -118,54 +118,6 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete {
     ) -> Result<StaticPosition<Concrete>, NotConcrete> {
         Ok(StaticPosition {
             axis: position.axis.to_concrete().ok_or(NotConcrete)?,
-            position: position.position,
-            usage: position.usage,
-        })
-    }
-
-    fn match_target(&mut self, target: &ConstructorMatch) -> ConstructorMatch {
-        target.clone()
-    }
-}
-
-/// View a concrete tree at the symbolic level.
-pub struct ToSymbolic;
-
-impl TypeMap<Concrete, Symbolic> for ToSymbolic {
-    type Error = std::convert::Infallible;
-
-    fn node_type(
-        &mut self,
-        ty: &CheckedType<Concrete>,
-        _span: Span,
-    ) -> Result<CheckedType<Symbolic>, Self::Error> {
-        Ok(ty.to_symbolic())
-    }
-
-    fn application(
-        &mut self,
-        application: &ConstructorApplication<Concrete>,
-        _ty: &CheckedType<Symbolic>,
-        _span: Span,
-    ) -> Result<ConstructorApplication<Symbolic>, Self::Error> {
-        Ok(ConstructorApplication {
-            constructor: application.constructor.clone(),
-            runtime_type: application.runtime_type.clone(),
-            generic_args: application
-                .generic_args
-                .iter()
-                .map(crate::registry::checked_type::CheckedGenericArg::to_symbolic)
-                .collect(),
-        })
-    }
-
-    fn static_position(
-        &mut self,
-        position: &StaticPosition<Concrete>,
-        _span: Span,
-    ) -> Result<StaticPosition<Symbolic>, Self::Error> {
-        Ok(StaticPosition {
-            axis: position.axis.to_symbolic(),
             position: position.position,
             usage: position.usage,
         })

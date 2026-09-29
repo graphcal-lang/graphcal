@@ -261,11 +261,6 @@ impl TirDraft {
         let mut tir = self.finish();
         specialization::instantiate_semantic_edges(&mut tir, src)?;
         overrides.reconcile(&mut tir);
-        // Each instantiation is one semantic revision of its local bodies:
-        // the facts its check publishes belong to exactly these bodies.
-        tir.dags
-            .values_mut()
-            .for_each(|dag| dag.body_revision = crate::body_revision::BodyRevision::fresh());
         Ok(InstantiatedTir { tir })
     }
 }
@@ -1680,7 +1675,6 @@ impl DagTIRSeed {
 
         let mut dag = DagTIR {
             dag_id: self.dag_id,
-            body_revision: crate::body_revision::BodyRevision::fresh(),
             decls: self.decls,
             included_plots,
             semantic,

@@ -23,14 +23,13 @@ pub mod body_specialization;
 mod builtins;
 mod concrete_obligations;
 mod expression_axes;
-pub mod expression_facts;
 mod helpers;
 #[expect(
     clippy::too_many_lines,
     reason = "large match on ExprKind variants is inherently long"
 )]
 mod infer;
-use expression_facts::instance_expression_facts;
+mod instance_bodies;
 mod model_schema;
 mod plot;
 mod presentation;
@@ -642,7 +641,7 @@ impl crate::tir::typed::InstantiatedTir {
     /// For each const/param/node, infers the dimension of the RHS expression
     /// and verifies it matches the checked type carried by its declaration
     /// record. Canonical bodies are inferred once; semantic instances
-    /// specialize their template's facts.
+    /// specialize their template's checked trees.
     ///
     /// # Errors
     ///
@@ -657,15 +656,15 @@ impl crate::tir::typed::InstantiatedTir {
         let schedules = schedules::ScheduleBuilder::build(&tir, src)?;
         detect_cross_dag_cycles(&tir, src)?;
 
-        // Canonical bodies are checked once. Instance facts are specialized
-        // below from the canonical facts; only independently lowered bindings
+        // Canonical bodies are checked once. Instance trees are specialized
+        // below from the canonical trees; only independently lowered bindings
         // infer.
         let checked_dag_facts = tir
             .local_dags()
             .filter(|(_, dag)| !dag.is_semantic_instance())
             .map(|(dag_id, dag)| {
                 cancellation.checkpoint()?;
-                let observations = infer::hir::BodyObservations::new(dag);
+                let observations = infer::hir::BodyObservations::default();
                 let plot_shapes =
                     check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
                 Ok((dag_id, dag, observations, plot_shapes))
@@ -678,15 +677,12 @@ impl crate::tir::typed::InstantiatedTir {
         check_field_domain_constraint_targets(&tir, src)?;
         check_field_domain_constraint_dimensions(&tir, src, cancellation, &sinks)?;
         drop(sinks);
-        let mut facts = HashMap::new();
         let mut bodies = HashMap::new();
         let mut checked_plot_shapes = HashMap::new();
         for (dag_id, dag, observations, plot_shapes) in checked_dag_facts {
-            let (published, checked_bodies) = observations
+            let checked_bodies = observations
                 .finish()
                 .publish(
-                    dag_id.clone(),
-                    dag.body_revision().clone(),
                     &dag.owned_expression_roots().collect::<Vec<_>>(),
                     &|index| expression_axes::checked_index_cardinality(&tir, index),
                 )
@@ -697,23 +693,20 @@ impl crate::tir::typed::InstantiatedTir {
                         DiagnosticAnchor::WholeFile,
                     )
                 })?;
-            facts.insert(dag_id.clone(), published);
             bodies.insert(dag_id.clone(), checked_bodies);
             checked_plot_shapes.insert(dag_id.clone(), plot_shapes);
         }
 
-        let instances = instance_expression_facts(&tir, &facts, &bodies, src, cancellation)?;
-        facts.extend(instances.facts);
+        let instances = instance_bodies::instance_bodies(&tir, &bodies, src, cancellation)?;
         bodies.extend(instances.bodies);
         let checking = crate::tir::typed::CheckingTir {
             tir: &tir,
-            facts: &facts,
             bodies: &bodies,
         };
         concrete_obligations::validate_project(&checking, src, cancellation)?;
 
         // Field targets and dimensions were checked before publication;
-        // specializing instance expression facts does not change their nominal
+        // specializing instance trees does not change their nominal
         // definitions.
         cancellation.checkpoint()?;
         let mut presentation = presentation::collect_presentation_facts(
@@ -730,7 +723,6 @@ impl crate::tir::typed::InstantiatedTir {
         )?;
         tir.into_checked(
             crate::tir::typed::CheckedParts {
-                expression_facts: facts,
                 bodies,
                 presentation,
                 schedules: schedules.into_parts(),
@@ -776,25 +768,25 @@ pub fn collect_override_dependency_summary_with_cancellation(
 
     for (_, dag) in tir.local_dags() {
         cancellation.checkpoint()?;
-        let facts = dag.expression_facts();
+        let bodies = dag.bodies();
         for param in dag.params() {
             let Some(default) = &param.default else {
                 continue;
             };
             cancellation.checkpoint()?;
             let owner = param.identity();
-            let record = facts.get(default.id()).map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
+            if bodies.get(default.id()).is_none() {
+                return Err(GraphcalError::internal_error(
+                    format!("missing checked expression: {:?}", default.id()),
                     src,
                     DiagnosticAnchor::Source(default.span),
-                )
-            })?;
-            let mut dependencies: HashSet<_> = record
-                .nominal_observations()
+                ));
+            }
+            let mut dependencies: HashSet<_> = bodies
+                .nominal_uses(default.id())
                 .iter()
                 .filter_map(|observation| {
-                    use crate::tir::expression_facts::NominalObservation;
+                    use crate::tir::texpr::NominalObservation;
                     match observation {
                         NominalObservation::Field { identity, .. }
                         | NominalObservation::Constructor { identity, .. }
@@ -852,7 +844,7 @@ pub fn check_external_value_expr_type(
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
-    let observations = infer::hir::BodyObservations::new(tir.root());
+    let observations = infer::hir::BodyObservations::default();
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
         tir,
@@ -874,17 +866,13 @@ pub fn check_external_value_expr_type(
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if expected.to_symbolic() == inferred {
-        // The independent binding's typed tree is checked against its facts.
         observations
             .finish()
-            .publish(
-                tir.root_dag_id().clone(),
-                tir.root().body_revision().clone(),
-                &[expr],
-                &|index| expression_axes::checked_index_cardinality(tir, index),
-            )
+            .publish(&[expr], &|index| {
+                expression_axes::checked_index_cardinality(tir, index)
+            })
             .map_err(|error| error.to_string())
-            .and_then(|(_, bodies)| {
+            .and_then(|bodies| {
                 bodies
                     .executable_value(expr.id())
                     .cloned()

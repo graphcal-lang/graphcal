@@ -16,7 +16,6 @@ use crate::registry::types::{FormattingRegistry, IndexDef, UnitInfo};
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
 };
-use crate::tir::expression_facts::CheckedExpressionFacts;
 use crate::tir::presentation::DagPresentationFacts;
 use crate::tir::schedule::{ConstSchedule, RuntimeSchedule};
 use crate::tir::texpr::CheckedBodies;
@@ -25,21 +24,20 @@ use super::model::{
     CheckedDeclType, DagRegistry, DagTIR, ProjectTypeStore, TirCore, TirRead, UncheckedTir,
 };
 
-/// A DAG body together with everything its check published: expression facts,
-/// the checked tree of every expression root, presentation facts, and its
-/// runtime schedule as a callable.
+/// A DAG body together with everything its check published: the checked tree
+/// of every expression root, presentation facts, and its runtime schedule as a
+/// callable.
 ///
 /// A canonical body's trees are the ones its inference emitted; a semantic
 /// instance's are its template's, specialized with the instance's Static
 /// substitution (their types differ per instance, so they cannot be shared).
 ///
 /// Created only when an [`InstantiatedTir`](super::model::InstantiatedTir) is
-/// checked, so its facts are always present and always belong to this body
-/// and revision.
+/// checked, so its checked trees are always present and cover exactly this
+/// body's expression roots.
 #[derive(Debug, Clone)]
 pub struct CheckedDag {
     body: DagTIR,
-    expression_facts: CheckedExpressionFacts,
     bodies: CheckedBodies,
     presentation: DagPresentationFacts,
     runtime_schedule: RuntimeSchedule,
@@ -47,7 +45,6 @@ pub struct CheckedDag {
 
 /// The facts one check published for one local body.
 struct PublishedDag {
-    expression_facts: CheckedExpressionFacts,
     bodies: CheckedBodies,
     presentation: DagPresentationFacts,
     runtime_schedule: RuntimeSchedule,
@@ -67,13 +64,13 @@ impl CheckedDag {
                 DiagnosticAnchor::WholeFile,
             )
         };
-        published
-            .expression_facts
-            .validate_environment(body.dag_id(), body.body_revision())
-            .map_err(|error| internal(error.to_string()))?;
+        if !published.bodies.cover(body.owned_expression_roots()) {
+            return Err(internal(
+                "typed bodies do not cover exactly its expression roots".to_owned(),
+            ));
+        }
         Ok(Self {
             body,
-            expression_facts: published.expression_facts,
             bodies: published.bodies,
             presentation: published.presentation,
             runtime_schedule: published.runtime_schedule,
@@ -90,12 +87,6 @@ impl CheckedDag {
     #[must_use]
     pub const fn runtime_schedule(&self) -> &RuntimeSchedule {
         &self.runtime_schedule
-    }
-
-    /// The checked expression facts of every expression this body owns.
-    #[must_use]
-    pub const fn expression_facts(&self) -> &CheckedExpressionFacts {
-        &self.expression_facts
     }
 
     /// Checked structured display and plot-channel presentation facts.
@@ -316,7 +307,6 @@ impl UncheckedTir {
         src: &NamedSource<Arc<String>>,
     ) -> Result<CheckedTir, GraphcalError> {
         let CheckedParts {
-            mut expression_facts,
             mut bodies,
             mut presentation,
             schedules,
@@ -336,9 +326,6 @@ impl UncheckedTir {
                 )
             };
             let published = PublishedDag {
-                expression_facts: expression_facts
-                    .remove(body.dag_id())
-                    .ok_or_else(|| missing("expression facts"))?,
                 bodies: bodies
                     .remove(body.dag_id())
                     .ok_or_else(|| missing("typed bodies"))?,
@@ -379,7 +366,6 @@ pub(crate) struct CheckedSchedules {
 /// body; paired with the bodies only by
 /// [`UncheckedTir::into_checked`].
 pub(crate) struct CheckedParts {
-    pub(crate) expression_facts: HashMap<DagId, CheckedExpressionFacts>,
     /// The checked trees of every local body.
     pub(crate) bodies: HashMap<DagId, CheckedBodies>,
     pub(crate) presentation: HashMap<DagId, DagPresentationFacts>,
@@ -573,10 +559,6 @@ impl TirRead for CheckedTir {
 
     fn dag_bodies(&self) -> Box<dyn Iterator<Item = &DagTIR> + '_> {
         Box::new(self.dags.values().map(|dag| &dag.body))
-    }
-
-    fn expression_facts(&self, dag_id: &DagId) -> Option<&CheckedExpressionFacts> {
-        self.dags.get(dag_id).map(CheckedDag::expression_facts)
     }
 
     fn checked_bodies(&self, dag_id: &DagId) -> Option<&CheckedBodies> {

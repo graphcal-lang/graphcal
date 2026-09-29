@@ -1640,41 +1640,11 @@ fn instantiate_for_test(draft: TirDraft, src: &NamedSource<Arc<String>>) -> Inst
         .unwrap()
 }
 
-#[test]
-fn each_instantiation_checks_a_fresh_revision_of_the_same_bodies() {
-    let source = "node x: Dimensionless = 1.0;";
-    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-    let draft = parse_and_type_resolve_builder(source).unwrap();
-    let first = check_draft(draft.clone(), &src).unwrap();
-    let second = check_draft(draft, &src).unwrap();
-    let formula = |tir: &CheckedTir| {
-        tir.root()
-            .nodes()
-            .next()
-            .unwrap()
-            .definition
-            .formula()
-            .unwrap()
-            .id()
-            .clone()
-    };
-    assert_eq!(formula(&first), formula(&second));
-    assert_ne!(first.root().body_revision(), second.root().body_revision());
-    assert!(
-        first
-            .root()
-            .expression_facts()
-            .validate_environment(first.root_dag_id(), first.root().body_revision())
-            .is_ok()
-    );
-}
-
 /// Everything `tir` published for its root, to pair with another check's body.
 fn root_parts(tir: &CheckedTir) -> CheckedParts {
     let owner = tir.root_dag_id().clone();
     let root = tir.root();
     CheckedParts {
-        expression_facts: HashMap::from([(owner.clone(), root.expression_facts().clone())]),
         bodies: HashMap::from([(owner.clone(), root.bodies().clone())]),
         presentation: HashMap::from([(owner.clone(), root.presentation().clone())]),
         schedules: CheckedSchedules {
@@ -1704,10 +1674,6 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
         );
     };
     fails_with(
-        pair(&|parts| parts.expression_facts.clear()),
-        "no checked expression facts",
-    );
-    fails_with(
         pair(&|parts| parts.presentation.clear()),
         "no checked presentation facts",
     );
@@ -1719,6 +1685,18 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
         pair(&|parts| parts.bodies.clear()),
         "no checked typed bodies",
     );
-    // Every part belongs to the other check's revision of the same body.
-    fails_with(pair(&|_| {}), "another semantic environment");
+    // Another check of the same body publishes trees of the same roots.
+    assert!(pair(&|_| {}).is_ok());
+    // Trees of another body do not cover this one's expression roots.
+    let unrelated = check_draft(
+        parse_and_type_resolve_builder("node x: Dimensionless = 2.0;").unwrap(),
+        &src,
+    )
+    .unwrap();
+    fails_with(
+        pair(&|parts| {
+            parts.bodies = root_parts(&unrelated).bodies;
+        }),
+        "do not cover exactly its expression roots",
+    );
 }
