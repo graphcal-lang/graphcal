@@ -16,22 +16,20 @@ mod conversion_calls;
 mod dag_call;
 mod dispatch;
 mod extern_call;
-mod facts;
 mod generics;
 mod indexing;
 mod map_literal;
 mod match_expr;
 mod nat_forms;
 mod nominal;
+mod observations;
 mod operators;
 mod override_deps;
 mod recurrence;
 mod refs;
 
 pub(in crate::tir::dim_check) use context::InferEnv;
-#[cfg(test)]
-pub(in crate::tir::dim_check) use facts::CONTEXTUAL_VISITS;
-pub(in crate::tir::dim_check) use facts::ExpressionFactCollector;
 pub(in crate::tir::dim_check) use generics::{
     concrete_generic_substitutions, resolved_field_type, resolved_type_field_key,
 };
+pub(in crate::tir::dim_check) use observations::BodyObservations;

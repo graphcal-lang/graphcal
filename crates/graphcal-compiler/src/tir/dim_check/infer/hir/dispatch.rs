@@ -7,7 +7,7 @@ use crate::registry::error::GraphcalError;
 
 use crate::registry::checked_type::CheckedType;
 
-use super::context::Infer;
+use super::context::{Infer, PrecheckedArgs};
 use super::override_deps::IndexNominalUse;
 use super::refs::infer_hir_quantity_literal;
 
@@ -19,7 +19,7 @@ impl Infer<'_> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
-        crate::stack::with_stack_growth(|| self.infer_hir_type_inner(expr))
+        crate::stack::with_stack_growth(|| self.outside_call().infer_hir_type_inner(expr))
     }
 
     fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
@@ -83,12 +83,18 @@ impl Infer<'_> {
                         .contains_key(owner)
                 }) {
                     // Function inference has several specialized signature paths.
-                    // Check each argument once with the declaration identity intact
-                    // before those paths infer it for their own type rule.
-                    args.iter()
-                        .try_for_each(|arg| self.infer_hir_type(arg).map(|_| ()))?;
+                    // Check each argument once with the declaration identity intact;
+                    // those paths then reuse the checked argument types.
+                    let types = args
+                        .iter()
+                        .map(|arg| self.infer_hir_type(arg))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let prechecked = PrecheckedArgs::new(args, types);
+                    self.with_prechecked_args(&prechecked)
+                        .infer_hir_fn_call(callee, args)?
+                } else {
+                    self.infer_hir_fn_call(callee, args)?
                 }
-                self.infer_hir_fn_call(callee, args)?
             }
             ExprKind::ForComp { bindings, body } => self.infer_hir_for_comp(bindings, body)?,
             ExprKind::IndexAccess { expr: inner, args } => {
@@ -151,9 +157,13 @@ impl Infer<'_> {
                 output,
             } => self.infer_hir_dag_call(expr, target, args, static_bindings, output)?,
         };
-        if let Some((collector, _)) = &self.control.expression_facts {
-            collector.record(expr, &inferred, self.env.dag, self.env.tir, self.env.src)?;
-        }
+        self.control.observations().record(
+            expr,
+            &inferred,
+            self.env.dag,
+            self.env.tir,
+            self.env.src,
+        )?;
         Ok(inferred)
     }
 }

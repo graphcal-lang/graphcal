@@ -121,51 +121,42 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     (tir, src)
 }
 
+fn count_contextual(facts: &crate::tir::expression_facts::CheckedExpressionFacts) -> usize {
+    facts
+        .records()
+        .filter(|(_, record)| {
+            matches!(
+                record.fact,
+                crate::tir::expression_facts::ExpressionFact::Contextual(_)
+            )
+        })
+        .count()
+}
+
 #[test]
-fn contextual_completion_visits_each_owned_or_independent_root_once() {
-    let measurements = [0, 8, 16, 32].map(|depth| {
+fn one_checking_pass_records_every_expression_once() {
+    for depth in [0, 8, 16, 32] {
         let source = format!(
             "node value: Dimensionless = {}1.0{};",
             "-(".repeat(depth),
             ")".repeat(depth)
         );
         let (mut tir, src) = module_aware_tir(&source);
-        infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
         check_dimensions_tir(&mut tir, &src).unwrap();
-        let visits = infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get);
         assert_eq!(
             tir.root().expression_facts().unwrap().records().count(),
             depth + 1
         );
-        eprintln!(
-            "unary depth {depth}: {} expressions, {visits} contextual visits",
-            depth + 1
-        );
-        (depth + 1, visits)
-    });
-    assert_eq!(
-        measurements.map(|(_, visits)| visits),
-        measurements.map(|(nodes, _)| nodes)
-    );
+    }
+}
+
+#[test]
+fn consuming_rules_record_contextual_literals() {
     let (mut tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
-    infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
     check_dimensions_tir(&mut tir, &src).unwrap();
-    let count_contextual = |facts: &crate::tir::expression_facts::CheckedExpressionFacts| {
-        facts
-            .records()
-            .filter(|(_, record)| {
-                matches!(
-                    record.fact,
-                    crate::tir::expression_facts::ExpressionFact::Contextual(_)
-                )
-            })
-            .count()
-    };
-    assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
     assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
     let node = tir.root().nodes().next().unwrap();
-    infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
     let independent = check_external_value_expr_type(
         &tir,
         node.definition.formula().unwrap(),
@@ -173,8 +164,81 @@ fn contextual_completion_visits_each_owned_or_independent_root_once() {
         &src,
     )
     .unwrap();
-    assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
     assert_eq!(count_contextual(&independent), 1);
+
+    let (mut tir, src) = module_aware_tir(
+        "node zoned: Datetime<UTC> = datetime(\"2026-01-01T09:00:00\", \"Asia/Tokyo\");\n\
+         node civil: Datetime<TAI> = epoch<TAI>(\"2026-01-01T00:00:00\");\n\
+         index S = { A, B };\n\
+         node xs: Dimensionless[S] = { S#A: 1.0, S#B: 2.0 };\n\
+         plot p = {\n\
+             mark: point,\n\
+             encode: { x: @xs, y: @xs, color: \"red\" },\n\
+             title: \"Values\",\n\
+         };",
+    );
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    // Two zoned-datetime arguments, one civil literal, the string encoding,
+    // and the string property.
+    assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 5);
+}
+
+#[test]
+fn body_observations_reject_a_second_record_of_one_expression() {
+    let source = "node value: Dimensionless = 1.0;";
+    let (tir, src) = module_aware_tir(source);
+    let observations = infer::hir::BodyObservations::new(tir.root());
+    let expr = tir
+        .root()
+        .nodes()
+        .next()
+        .unwrap()
+        .definition
+        .formula()
+        .unwrap();
+    let ty = CheckedType::Quantity(Dimension::dimensionless());
+    observations
+        .record(expr, &ty, tir.root(), &tir, &src)
+        .unwrap();
+    assert!(matches!(
+        observations.record(expr, &ty, tir.root(), &tir, &src),
+        Err(GraphcalError::InternalError { .. })
+    ));
+}
+
+#[test]
+fn string_plot_channel_does_not_depend_on_a_rigid_dimension_port() {
+    let source = r#"
+dag lib {
+    pub(bind) dim Q = Length;
+    param q: Q = 1.0 m;
+    index S = { A, B };
+    node xs: Q[S] = { S#A: @q, S#B: @q };
+    plot p = {
+        mark: point,
+        encode: { x: @xs, y: @xs, color: "red" },
+    };
+}
+"#;
+    check(source).unwrap();
+}
+
+#[test]
+fn template_closure_reports_the_first_observed_type_definition_use() {
+    let source = "pub(bind) type Record { Record(x: Dimensionless) }\n\
+                  param r: Record;\n\
+                  pub node plain: Dimensionless = 1.0;\n\
+                  pub node read: Dimensionless = @r.x + @r.x;";
+    let (mut tir, src) = module_aware_tir(source);
+    let error = check_dimensions_tir(&mut tir, &src).unwrap_err();
+    let GraphcalError::TemplateBodyDependsOnStaticDefault {
+        body_name, span, ..
+    } = error
+    else {
+        panic!("expected V007, got {error:?}");
+    };
+    assert_eq!(body_name.as_str(), "read");
+    assert_eq!(span.offset(), source.find("@r.x").unwrap() + "@r.".len());
 }
 
 fn model_port_application(
@@ -3766,4 +3830,23 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
             assert!(tir.root().runtime_schedule().is_none());
         }
     }
+}
+
+#[test]
+fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
+    let source = "node value: Dimensionless = sqrt(4.0) + sqrt(9.0);";
+    let (mut tir, src) = module_aware_tir(source);
+    let owner = root_decl("value");
+    let reconciliation = crate::ir::override_reconciliation::OverrideReconciliation::new(
+        root_decl("value"),
+        &crate::ir::static_substitution::StaticSubstitution::default(),
+        src.clone(),
+        Span::new(0, 0),
+    );
+    tir.root_mut()
+        .semantic
+        .override_reconciliations
+        .insert(owner, vec![reconciliation]);
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    assert_eq!(tir.root().expression_facts().unwrap().records().count(), 5);
 }

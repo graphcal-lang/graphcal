@@ -1502,7 +1502,7 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "dim_check", "infer", "hir", "facts"]
+path = ["tir", "dim_check", "infer", "hir", "observations"]
 role = "checking"
 
 [[module]]

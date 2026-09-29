@@ -212,6 +212,11 @@ fn check_plot_encodings(
             ctx.checkpoint()?;
             check_ineffective_conversions(expr, true, ctx.env.src)?;
             if matches!(expr.kind(), ExprKind::StringLiteral(_)) {
+                ctx.observations.record_contextual(
+                    expr,
+                    crate::tir::expression_facts::ContextualOperand::String,
+                    ctx.env.src,
+                )?;
                 return Ok(PlotChannelShape::new(
                     Vec::new(),
                     PlotLeafKind::ContextualString,
@@ -340,7 +345,11 @@ pub(super) fn check_property_value(
     match expected {
         PlotPropertyType::String => {
             if is_string_literal {
-                Ok(())
+                ctx.observations.record_contextual(
+                    &field.value,
+                    crate::tir::expression_facts::ContextualOperand::String,
+                    ctx.env.src,
+                )
             } else {
                 // No expression other than a literal can produce a string —
                 // graphcal has no runtime string values.

@@ -1,6 +1,6 @@
 //! The inference environment, operation-scoped control state, and inference position.
 
-use crate::hir::expr::{ConstRef, Expr, ExprKind, LocalEnv, MatchPattern, visit_expr};
+use crate::hir::expr::{Expr, LocalEnv};
 use crate::resolved_name::ResolvedDeclName;
 use std::sync::Arc;
 
@@ -13,10 +13,7 @@ use crate::registry::types::FormattingRegistry;
 
 use crate::registry::checked_type::CheckedType;
 
-use super::facts::{
-    ExpressionFactCollector, TypeDefinitionDependency, TypeDefinitionDependencyCollector,
-    TypeDefinitionDependencyTracking,
-};
+use super::observations::BodyObservations;
 
 /// Read-only inputs every inference rule consults while checking one DAG body.
 #[derive(Clone, Copy)]
@@ -46,64 +43,53 @@ impl<'a> InferEnv<'a> {
             })
     }
 
-    /// Infer an expression's type, recording checked facts for every visited node.
-    pub(in crate::tir::dim_check) fn infer_with_expression_facts(
+    /// Infer the type of the checked root `expr`, recording every
+    /// observation of its subtree in `observations`.
+    pub(in crate::tir::dim_check) fn infer_root(
         self,
         expr: &Expr,
         owner: Option<&ResolvedDeclName>,
         cancellation: &crate::cancellation::CancellationToken,
-        collector: ExpressionFactCollector,
+        observations: &BodyObservations,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let control = InferenceControl {
-            cancellation: cancellation.clone(),
-            type_definition_dependencies: TypeDefinitionDependencyTracking::Disabled,
-            expression_facts: Some((collector, expr.id().clone())),
+            cancellation,
+            observations,
+            root: expr.id(),
         };
-        Infer::root(self, owner, &control).infer_hir_type(expr)
-    }
-
-    /// Collect uses that inspect nominal type definitions while inferring a whole body.
-    ///
-    /// Running through the ordinary inference recursion preserves every lexical
-    /// local environment instead of speculatively inferring detached subexpressions.
-    /// Bodies without a definition-observing operation need no inference; this is
-    /// important for context-typed leaves such as plot label strings.
-    pub(in crate::tir::dim_check) fn collect_type_definition_dependencies(
-        self,
-        expr: &Expr,
-        owner: Option<&ResolvedDeclName>,
-        cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<Vec<TypeDefinitionDependency>, GraphcalError> {
-        if !contains_type_definition_observation(expr) {
-            return Ok(Vec::new());
-        }
-        let collector = TypeDefinitionDependencyCollector::default();
-        let control = InferenceControl {
-            cancellation: cancellation.clone(),
-            type_definition_dependencies: TypeDefinitionDependencyTracking::Collect(
-                collector.clone(),
-            ),
-            expression_facts: None,
-        };
-        Infer::root(self, owner, &control).infer_hir_type(expr)?;
-        Ok(collector.snapshot())
+        Infer::root(self, owner, control).infer_hir_type(expr)
     }
 }
 
 /// Operation-scoped policy shared by every recursive inference step.
 ///
-/// Keeping cancellation, nominal-use tracking, and expression-fact recording in
-/// one value that [`Infer`] always carries prevents nested helpers from
-/// silently dropping any policy.
-pub(super) struct InferenceControl {
-    pub(super) cancellation: crate::cancellation::CancellationToken,
-    pub(super) type_definition_dependencies: TypeDefinitionDependencyTracking,
-    pub(super) expression_facts: Option<(ExpressionFactCollector, ExprId)>,
+/// Keeping cancellation and the observation sink in one value that [`Infer`]
+/// always carries prevents nested helpers from silently dropping either.
+#[derive(Clone, Copy)]
+pub(super) struct InferenceControl<'a> {
+    cancellation: &'a crate::cancellation::CancellationToken,
+    observations: &'a BodyObservations,
+    /// The checked root whose nominal uses this pass observes.
+    root: &'a ExprId,
 }
 
-impl InferenceControl {
+impl InferenceControl<'_> {
     pub(super) fn checkpoint(&self) -> Result<(), GraphcalError> {
         self.cancellation.checkpoint().map_err(GraphcalError::from)
+    }
+
+    pub(super) const fn observations(&self) -> &BodyObservations {
+        self.observations
+    }
+
+    /// Record one nominal use of the checked root.
+    pub(super) fn observe_nominal(
+        &self,
+        observation: crate::tir::expression_facts::NominalObservation,
+        definition_span: Option<crate::syntax::span::Span>,
+    ) {
+        self.observations
+            .observe_nominal(self.root, observation, definition_span);
     }
 
     pub(super) fn retain_static_index(
@@ -114,19 +100,39 @@ impl InferenceControl {
         position: u64,
         usage: crate::tir::expression_facts::StaticIndexUse,
     ) {
-        if let Some((collector, _)) = &self.expression_facts {
-            collector
-                .static_indexes
-                .borrow_mut()
-                .entry(expr.id().clone())
-                .or_default()
-                .push(crate::tir::expression_facts::StaticIndexRequirement {
-                    operand: operand.id().clone(),
-                    axis: axis.clone(),
-                    position,
-                    usage,
-                });
-        }
+        self.observations.retain_static_index(
+            expr.id(),
+            crate::tir::expression_facts::StaticIndexRequirement {
+                operand: operand.id().clone(),
+                axis: axis.clone(),
+                position,
+                usage,
+            },
+        );
+    }
+}
+
+/// A call's arguments already inferred with the owning declaration intact.
+///
+/// When the owning declaration reconciles include overrides, every argument
+/// of a function call is checked once with that identity before the call's
+/// own signature rule runs; the rule then reuses these types instead of
+/// inferring the arguments a second time.
+pub(super) struct PrecheckedArgs<'e> {
+    args: &'e [Expr],
+    types: Vec<CheckedType<Symbolic>>,
+}
+
+impl<'e> PrecheckedArgs<'e> {
+    pub(super) const fn new(args: &'e [Expr], types: Vec<CheckedType<Symbolic>>) -> Self {
+        Self { args, types }
+    }
+
+    fn get(&self, arg: &Expr) -> Option<&CheckedType<Symbolic>> {
+        self.args
+            .iter()
+            .zip(&self.types)
+            .find_map(|(candidate, ty)| (candidate.id() == arg.id()).then_some(ty))
     }
 }
 
@@ -138,7 +144,9 @@ pub(super) struct Infer<'a> {
     pub(super) env: InferEnv<'a>,
     pub(super) owner: Option<&'a ResolvedDeclName>,
     pub(super) locals: &'a LocalEnv<'a, CheckedType<Symbolic>>,
-    pub(super) control: &'a InferenceControl,
+    pub(super) control: InferenceControl<'a>,
+    /// The enclosing call's already checked arguments, if any.
+    prechecked_args: Option<&'a PrecheckedArgs<'a>>,
 }
 
 /// The empty lexical scope every inference operation starts from.
@@ -148,13 +156,14 @@ impl<'a> Infer<'a> {
     const fn root(
         env: InferEnv<'a>,
         owner: Option<&'a ResolvedDeclName>,
-        control: &'a InferenceControl,
+        control: InferenceControl<'a>,
     ) -> Self {
         Self {
             env,
             owner,
             locals: ROOT_LOCALS,
             control,
+            prechecked_args: None,
         }
     }
 
@@ -171,6 +180,7 @@ impl<'a> Infer<'a> {
             owner: self.owner,
             locals,
             control: self.control,
+            prechecked_args: self.prechecked_args,
         }
     }
 
@@ -181,24 +191,40 @@ impl<'a> Infer<'a> {
             ..self
         }
     }
-}
 
-fn contains_type_definition_observation(expr: &Expr) -> bool {
-    let mut found = false;
-    visit_expr(expr, &mut |candidate| {
-        if found {
-            return;
+    /// Leave the enclosing call: its prechecked arguments no longer apply.
+    pub(super) const fn outside_call(self) -> Self {
+        Self {
+            prechecked_args: None,
+            ..self
         }
-        found = match candidate.kind() {
-            ExprKind::FieldAccess { .. } | ExprKind::ConstructorCall { .. } => true,
-            ExprKind::ConstRef(target) => {
-                matches!(&target.value, ConstRef::Constructor(_))
-            }
-            ExprKind::Match { arms, .. } => arms
-                .iter()
-                .any(|arm| matches!(&arm.pattern, MatchPattern::Constructor { .. })),
-            _ => false,
-        };
-    });
-    found
+    }
+
+    /// Continue with the call arguments `prechecked` already inferred.
+    pub(super) const fn with_prechecked_args<'b>(
+        self,
+        prechecked: &'b PrecheckedArgs<'b>,
+    ) -> Infer<'b>
+    where
+        'a: 'b,
+    {
+        Infer {
+            env: self.env,
+            owner: self.owner,
+            locals: self.locals,
+            control: self.control,
+            prechecked_args: Some(prechecked),
+        }
+    }
+
+    /// The type of an argument of the enclosing call, inferred outside the
+    /// owning declaration's override checks unless it was already checked.
+    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
+        self.prechecked_args
+            .and_then(|prechecked| prechecked.get(arg))
+            .map_or_else(
+                || self.without_owner().infer_hir_type(arg),
+                |checked| Ok(checked.clone()),
+            )
+    }
 }

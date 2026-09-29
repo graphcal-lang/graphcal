@@ -4,6 +4,7 @@ use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
 use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
+use crate::tir::expression_facts::ContextualOperand;
 
 use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
@@ -181,6 +182,17 @@ impl Infer<'_> {
                         span: span.into(),
                     });
                 }
+                match args {
+                    [instant] => {
+                        self.record_contextual_arg(instant, ContextualOperand::OffsetDateTime)?;
+                    }
+                    [civil, time_zone] => {
+                        self.record_contextual_arg(civil, ContextualOperand::ZonedDateTime)?;
+                        self.record_contextual_arg(time_zone, ContextualOperand::TimeZone)?;
+                    }
+                    // Rejected above: only one or two literal arguments are valid.
+                    _ => {}
+                }
                 Ok(CheckedType::Datetime(
                     crate::registry::time_scale::TimeScale::UTC,
                 ))
@@ -196,6 +208,7 @@ impl Infer<'_> {
                         span: args[0].span.into(),
                     });
                 }
+                self.record_contextual_arg(&args[0], ContextualOperand::CivilDateTime)?;
                 epoch_scale
                     .map(CheckedType::Datetime)
                     .ok_or_else(|| GraphcalError::InternalError {
@@ -206,6 +219,17 @@ impl Infer<'_> {
                     })
             }
         }
+    }
+
+    /// Record a contextual literal argument a datetime constructor accepted.
+    fn record_contextual_arg(
+        &self,
+        arg: &Expr,
+        operand: ContextualOperand,
+    ) -> Result<(), GraphcalError> {
+        self.control
+            .observations()
+            .record_contextual(arg, operand, self.env.src)
     }
 
     pub(super) fn infer_hir_datetime_unary(
