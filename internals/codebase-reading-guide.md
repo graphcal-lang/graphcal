@@ -91,12 +91,12 @@ Read the pipeline as a sequence of practical questions:
    checker orders it once: one constant schedule for the file's local DAGs and
    one runtime schedule per callable DAG and its include closure.
 7. **ExecPlan: what exact work should runtime evaluation do?**
-   Project checking evaluates constants in the checked constant schedule and
-   retains per-DAG constraints, publishing execution facts only after mandatory
-   checks finish.
-   Preparation validates body/fact ownership and coverage before selecting the
-   entry plan. `CheckedExecutionScope` pairs a selected DAG with its own facts;
-   it is not a substitute for completing static checks.
+   Project checking evaluates constants in the checked constant schedule
+   (`ConstPool::build` calls the interpreter once per constant, in order) and
+   seals the checked TIR with them and the per-DAG constraints into a
+   `CheckedProgram`, resolving every imported constant once. Sealing is the
+   only way to obtain a `CheckedProgram`, so preparation selects a DAG and
+   its own facts from one value instead of validating separate stores.
 
 Some names in this pipeline can sound misleading if read too literally:
 
@@ -701,12 +701,11 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval/project/tenax_model.rs`     | Generic model and strict Tenax-v2 projection                    |
 | `eval/project/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
-| `execution_facts.rs`              | Per-DAG checked constants, constraints, and source              |
+| `checked_program.rs`             | Checked TIR sealed with its constants, constraints, and resolved imports |
 | `presentation_evidence.rs`        | Selected value-shaped display data and typed presentation diagnostics |
-| `execution_scope.rs`              | Validated borrowed selection of a canonical DAG and its own facts |
 | `runtime_presentation.rs`         | Atomic interpreter transport of values and selected evidence |
 | `declaration_locations.rs` | Validated declaration-to-physical-body index prepared from body records |
-| `constant_pools.rs` | Shared constant-pool views and validated imported references |
+| `constant_pools.rs` | Constant pools built in the checker's schedule, shared views, and imported references |
 | `execution_plan.rs`     | Immutable root/callable plans and fail-closed plan selection |
 | `execution_frame.rs` | Shared binding, dependency, domain, and insertion machine with fixed frame policy |
 | `assertion_eval.rs` | Assertion semantics over an expression callback, independent of root/call reporting |
@@ -1183,7 +1182,7 @@ ExecPlan
   declaration_locations: DeclarationLocations  // physical body, not semantic owner
   root: CallablePlan
   callables: HashMap<DagId, CallablePlan>  // excludes root
-  checked_execution_facts: CheckedExecutionFacts
+  program: CheckedProgram  // the sealed TIR and facts every plan was prepared from
 
 CallablePlan
   owner: DagId
@@ -1201,13 +1200,13 @@ Preparation derives physical locations from each body's authoritative
 rejects duplicate locations and schedule entries absent from the index or outside
 the selected semantic closure for every callable. Root and call execution require
 those locations and do not scan bodies to find scheduled declarations. Checked
-contexts require prepared plans as well as matching body/fact scopes; missing or
-misowned callable plans fail closed. Calls no longer traverse include graphs or
+contexts require prepared plans and select bodies from the plan's own sealed
+program; missing or misowned callable plans fail closed. Calls no longer traverse include graphs or
 construct schedules. Independent plugin invocation order remains unspecified.
 
 Preparation retains canonical constant pools for both singleton and multi-body
-closures, resolves imported constants to validated pool references, and selects
-runtime-import keys and lexical shadows once. Runtime imports cannot override
+closures, reuses the imported-constant pool references resolved when the program
+was sealed, and selects runtime-import keys and lexical shadows once. Runtime imports cannot override
 supplied values or checked constants. Frame initialization still copies selected
 values into a mutable invocation map; this is not a zero-allocation evaluator.
 
@@ -1829,67 +1828,67 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 277. `crates/graphcal-eval/src/pipeline_metrics.rs`
 278. `crates/graphcal-eval/src/declaration_locations.rs`
 279. `crates/graphcal-eval/src/presentation_evidence.rs`
-280. `crates/graphcal-eval/src/execution_facts.rs`
-281. `crates/graphcal-eval/src/runtime_presentation.rs`
-282. `crates/graphcal-eval/src/eval/bindings.rs`
-283. `crates/graphcal-eval/src/execution_scope.rs`
-284. `crates/graphcal-eval/src/constant_pools.rs`
-285. `crates/graphcal-eval/src/execution_plan.rs`
-286. `crates/graphcal-eval/src/static_incompleteness.rs`
-287. `crates/graphcal-eval/src/execution_frame.rs`
-288. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
-289. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-290. `crates/graphcal-eval/src/host_abi.rs`
-291. `crates/graphcal-eval/src/eval_expr/complex.rs`
-292. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-293. `crates/graphcal-eval/src/eval/types.rs`
-294. `crates/graphcal-eval/src/loader/inline_dags.rs`
-295. `crates/graphcal-eval/src/inline_dag.rs`
-296. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
-297. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
-298. `crates/graphcal-eval/src/exec_plan.rs`
-299. `crates/graphcal-eval/src/eval/plot_data.rs`
-300. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-301. `crates/graphcal-eval/src/assertion_eval.rs`
-302. `crates/graphcal-eval/src/eval/display.rs`
-303. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-304. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
-305. `crates/graphcal-eval/src/project_compiler/model.rs`
-306. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
-307. `crates/graphcal-eval/src/eval/project/output.rs`
-308. `crates/graphcal-eval/src/eval_expr/presentation.rs`
-309. `crates/graphcal-eval/src/loader/source_snapshot.rs`
-310. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-311. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
-312. `crates/graphcal-eval/src/host_fns.rs`
-313. `crates/graphcal-eval/src/eval_expr/context.rs`
-314. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-315. `crates/graphcal-eval/src/loader/source_authority.rs`
-316. `crates/graphcal-eval/src/loader/build.rs`
-317. `crates/graphcal-eval/src/eval/public_projection.rs`
-318. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-319. `crates/graphcal-eval/src/loader.rs`
-320. `crates/graphcal-eval/src/project_compiler/session.rs`
-321. `crates/graphcal-eval/src/eval/runtime.rs`
-322. `crates/graphcal-eval/src/eval/project/prepared.rs`
-323. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-324. `crates/graphcal-eval/src/eval_expr/mod.rs`
-325. `crates/graphcal-eval/src/eval/project/mod.rs`
-326. `crates/graphcal-eval/src/project_compiler/mod.rs`
-327. `crates/graphcal-eval/src/eval/mod.rs`
-328. `crates/graphcal-eval/src/project_compiler/imports.rs`
-329. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
-330. `crates/graphcal-eval/src/project_compiler/checking.rs`
-331. `crates/graphcal-eval/src/eval/project/binding_compile.rs`
-332. `crates/graphcal-eval/src/eval/project/tenax_model.rs`
-333. `crates/graphcal-eval/src/eval/tests.rs`
-334. `crates/graphcal-eval/src/graph_ir/mod.rs`
-335. `crates/graphcal-eval/src/graph_ir/dot.rs`
-336. `crates/graphcal-eval/src/eval/tests/checked_expressions.rs`
-337. `crates/graphcal-eval/src/eval/tests/presentation_evidence.rs`
-338. `crates/graphcal-eval/src/eval/runtime/tests.rs`
-339. `crates/graphcal-eval/src/project_compiler/execution_check/const_eval.rs`
-340. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
+280. `crates/graphcal-eval/src/runtime_presentation.rs`
+281. `crates/graphcal-eval/src/eval/bindings.rs`
+282. `crates/graphcal-eval/src/constant_pools.rs`
+283. `crates/graphcal-eval/src/checked_program.rs`
+284. `crates/graphcal-eval/src/execution_plan.rs`
+285. `crates/graphcal-eval/src/static_incompleteness.rs`
+286. `crates/graphcal-eval/src/execution_frame.rs`
+287. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
+288. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+289. `crates/graphcal-eval/src/host_abi.rs`
+290. `crates/graphcal-eval/src/eval_expr/complex.rs`
+291. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+292. `crates/graphcal-eval/src/eval/types.rs`
+293. `crates/graphcal-eval/src/loader/inline_dags.rs`
+294. `crates/graphcal-eval/src/inline_dag.rs`
+295. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
+296. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+297. `crates/graphcal-eval/src/exec_plan.rs`
+298. `crates/graphcal-eval/src/eval/plot_data.rs`
+299. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+300. `crates/graphcal-eval/src/assertion_eval.rs`
+301. `crates/graphcal-eval/src/eval/display.rs`
+302. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+303. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
+304. `crates/graphcal-eval/src/project_compiler/model.rs`
+305. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
+306. `crates/graphcal-eval/src/eval/project/output.rs`
+307. `crates/graphcal-eval/src/eval_expr/presentation.rs`
+308. `crates/graphcal-eval/src/loader/source_snapshot.rs`
+309. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+310. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
+311. `crates/graphcal-eval/src/host_fns.rs`
+312. `crates/graphcal-eval/src/eval_expr/context.rs`
+313. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+314. `crates/graphcal-eval/src/loader/source_authority.rs`
+315. `crates/graphcal-eval/src/loader/build.rs`
+316. `crates/graphcal-eval/src/eval/public_projection.rs`
+317. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+318. `crates/graphcal-eval/src/loader.rs`
+319. `crates/graphcal-eval/src/project_compiler/session.rs`
+320. `crates/graphcal-eval/src/eval/runtime.rs`
+321. `crates/graphcal-eval/src/eval/project/prepared.rs`
+322. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+323. `crates/graphcal-eval/src/eval_expr/mod.rs`
+324. `crates/graphcal-eval/src/eval/project/mod.rs`
+325. `crates/graphcal-eval/src/project_compiler/mod.rs`
+326. `crates/graphcal-eval/src/eval/mod.rs`
+327. `crates/graphcal-eval/src/project_compiler/imports.rs`
+328. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
+329. `crates/graphcal-eval/src/project_compiler/checking.rs`
+330. `crates/graphcal-eval/src/eval/project/binding_compile.rs`
+331. `crates/graphcal-eval/src/eval/project/tenax_model.rs`
+332. `crates/graphcal-eval/src/eval/tests.rs`
+333. `crates/graphcal-eval/src/graph_ir/mod.rs`
+334. `crates/graphcal-eval/src/graph_ir/dot.rs`
+335. `crates/graphcal-eval/src/eval/tests/checked_expressions.rs`
+336. `crates/graphcal-eval/src/eval/tests/presentation_evidence.rs`
+337. `crates/graphcal-eval/src/eval/runtime/tests.rs`
+338. `crates/graphcal-eval/src/project_compiler/execution_check/const_eval.rs`
+339. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
+340. `crates/graphcal-eval/src/eval/tests/sealed_program.rs`
 341. `crates/graphcal-report/src/lib.rs`
 342. `crates/graphcal-report/src/escape.rs`
 343. `crates/graphcal-report/src/vega_assets.rs`

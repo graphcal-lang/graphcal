@@ -175,13 +175,13 @@ impl RuntimeEvaluation {
 pub(super) fn run_eval_loop_with_bindings(
     plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     cancellation.checkpoint()?;
+    let tir = plan.tir();
     let empty_hir_locals = HirLocalValueMap::root();
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
     let mut frame =
@@ -196,14 +196,13 @@ pub(super) fn run_eval_loop_with_bindings(
                 .insert(key.clone(), binding.presentation.clone());
         }
     }
-    frame.run(tir, src, cancellation, |entry, frame| {
+    frame.run(src, cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
         // share this context's budget through immutable scope reselection.
         let context = EvalContext::checked(
-            tir,
             plan,
             entry.scope.dag().dag_id(),
-            entry.scope.facts().source(),
+            entry.scope.source(),
             host_fns,
             cancellation.clone(),
         )?
@@ -255,7 +254,6 @@ fn checked_declared_type<'a>(
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
 pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
     plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     src: &NamedSource<Arc<String>>,
@@ -263,26 +261,20 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, GraphcalError> {
     cancellation.checkpoint()?;
+    let tir = plan.tir();
 
     let EvalLoopResult {
         unfinished_calls,
         values,
         presentation_instances,
         errors,
-    } = run_eval_loop_with_bindings(plan, bindings, tir, src, host_fns, cancellation)?;
+    } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
 
     cancellation.checkpoint()?;
-    let ctx = EvalContext::checked(
-        tir,
-        plan,
-        tir.root_dag_id(),
-        src,
-        host_fns,
-        cancellation.clone(),
-    )?
-    .with_roots(&values, Some(&presentation_instances))
-    .with_unavailable(&errors)
-    .with_unfinished_calls(&unfinished_calls);
+    let ctx = EvalContext::checked(plan, tir.root_dag_id(), src, host_fns, cancellation.clone())?
+        .with_roots(&values, Some(&presentation_instances))
+        .with_unavailable(&errors)
+        .with_unfinished_calls(&unfinished_calls);
     let presentation_instances = presentation_instances
         .iter()
         .map(|(key, evidence)| {
@@ -384,12 +376,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 )
             })?;
         let instance_src = plan
-            .checked_execution_facts
-            .for_dag(instance_dag.dag_id())
-            .map_or(
-                src,
-                crate::execution_facts::CheckedDagExecutionFacts::source,
-            );
+            .program()
+            .facts()
+            .source(instance_dag.dag_id())
+            .unwrap_or(src);
         for projection in &record.output_projections {
             if tir
                 .root()

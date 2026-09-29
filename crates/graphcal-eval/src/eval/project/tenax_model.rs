@@ -182,7 +182,7 @@ impl PreparedProject {
             }
             let Some(port) = self.output_ports.iter().find(|port| &port.name == name) else {
                 let actual_kind = self
-                    .tir
+                    .tir()
                     .root()
                     .decls()
                     .iter()
@@ -225,7 +225,7 @@ impl PreparedProject {
             if port.declared_type != CheckedType::Bool {
                 return Err(ModelDefinitionError::UnsupportedOutputType {
                     name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir.registry().dimensions),
+                    actual: port.declared_type.format(&self.tir().registry().dimensions),
                 });
             }
         }
@@ -281,7 +281,6 @@ impl PreparedProject {
         } = run_eval_loop_with_bindings(
             &self.plan,
             &row.bindings,
-            &self.tir,
             &self.source,
             &self.host_fns,
             &cancellation,
@@ -292,9 +291,8 @@ impl PreparedProject {
         }
 
         let ctx = EvalContext::checked(
-            &self.tir,
             &self.plan,
-            self.tir.root_dag_id(),
+            self.tir().root_dag_id(),
             &self.source,
             &self.host_fns,
             cancellation,
@@ -304,7 +302,7 @@ impl PreparedProject {
         .with_unavailable(&errors)
         .with_unfinished_calls(&unfinished_calls);
         let first_failed_assertion =
-            evaluate_assertions(&self.tir, &self.plan, &self.source, &ctx, &values, &errors)?
+            evaluate_assertions(self.tir(), &self.plan, &self.source, &ctx, &values, &errors)?
                 .into_iter()
                 .find_map(|(name, result, _)| match result {
                     AssertResult::Pass => None,
@@ -352,7 +350,7 @@ impl PreparedProject {
                     ))
                 })?;
                 crate::eval::public_projection::EvaluatedValue::new(runtime, &output.declared_type)
-                    .project(&self.tir, &self.source)
+                    .project(self.tir(), &self.source)
                     .map_err(ModelExecutionError::from)
             })
             .collect()
@@ -369,7 +367,7 @@ impl PreparedProject {
         &self,
         errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
     ) -> Result<Option<ModelRowFailure>, ModelExecutionError> {
-        let exposed = root_source_names(&self.tir, &self.source)?
+        let exposed = root_source_names(self.tir(), &self.source)?
             .into_iter()
             .find_map(|(key, name)| {
                 errors.get(&key).map(|error| {
@@ -417,7 +415,7 @@ impl PreparedProject {
         {
             return Err(ModelDefinitionError::RecursiveInputTypeUnsupported {
                 name: port.name.clone(),
-                actual: port.declared_type.format(&self.tir.registry().dimensions),
+                actual: port.declared_type.format(&self.tir().registry().dimensions),
             });
         }
         let kind = match (&port.declared_type, &port.domain) {
@@ -442,7 +440,7 @@ impl PreparedProject {
                     Some(
                         crate::eval::types::default_unit_label(
                             dimension,
-                            &self.tir.registry().dimensions.base_unit_symbols(),
+                            &self.tir().registry().dimensions.base_unit_symbols(),
                         )
                         .ok_or_else(|| {
                             ModelDefinitionError::MissingCanonicalUnit {
@@ -467,17 +465,17 @@ impl PreparedProject {
                 TenaxV2InputKind::Integer { lower, upper }
             }
             (CheckedType::Key(index), None) => {
-                let Some(definition) = index_def_for_ref(index, &self.tir) else {
+                let Some(definition) = index_def_for_ref(index, self.tir()) else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir.registry().dimensions),
+                        actual: port.declared_type.format(&self.tir().registry().dimensions),
                     });
                 };
                 let IndexKind::Concrete(ConcreteIndexKind::Named { variants }) = &definition.kind
                 else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir.registry().dimensions),
+                        actual: port.declared_type.format(&self.tir().registry().dimensions),
                     });
                 };
                 if variants.len().get() > i32::MAX as usize {
@@ -493,7 +491,7 @@ impl PreparedProject {
             _ => {
                 return Err(ModelDefinitionError::UnsupportedInputType {
                     name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir.registry().dimensions),
+                    actual: port.declared_type.format(&self.tir().registry().dimensions),
                 });
             }
         };

@@ -1833,6 +1833,11 @@ role = "facade"
 
 [[module]]
 package = "eval"
+path = ["eval", "tests", "sealed_program"]
+role = "facade"
+
+[[module]]
+package = "eval"
 path = ["eval", "tests", "prop"]
 role = "facade"
 
@@ -1968,12 +1973,7 @@ role = "checking"
 
 [[module]]
 package = "eval"
-path = ["execution_facts"]
-role = "contracts"
-
-[[module]]
-package = "eval"
-path = ["execution_scope"]
+path = ["checked_program"]
 role = "contracts"
 
 [[module]]

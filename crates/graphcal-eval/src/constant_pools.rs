@@ -1,20 +1,163 @@
-//! Immutable constant-pool views. Preparing closures never copies constant payloads.
+//! Evaluated constant pools.
+//!
+//! A [`ConstPool`] is built only by evaluating a checked TIR's constants in
+//! the checker's [`ConstSchedule`](graphcal_compiler::tir::schedule::ConstSchedule),
+//! so it covers every constant of every DAG exactly once. Its per-DAG pools are
+//! immutable and shared: callable plans view them through [`ConstantPools`] and
+//! imports through a [`ConstantReference`], without copying constant payloads.
 
-use crate::execution_facts::RuntimeValueMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::hir::expr::Expr;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use std::collections::HashMap;
-use std::sync::Arc;
+use graphcal_compiler::tir::typed::checked::{CheckedDag, CheckedTir};
 use thiserror::Error;
+
+pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 
 #[derive(Debug, Error)]
 pub enum ConstantPoolError {
     #[error("constant `{0}` occurs in multiple prepared pools")]
     Duplicate(ResolvedDeclName),
-    #[error("constant `{0}` is absent from its retained pool")]
-    Missing(ResolvedDeclName),
+    #[error("DAG `{0}` is neither scheduled by this check nor inherited from a checked module")]
+    Uncovered(DagId),
+    #[error("DAG `{0}` is scheduled by this check but was inherited from a checked module")]
+    Rescheduled(DagId),
+    #[error("scheduled DAG `{0}` has no checked body")]
+    MissingDag(DagId),
+    #[error("constant schedule references missing declaration `{0}`")]
+    MissingDeclaration(ResolvedDeclName),
 }
 
+/// Why a [`ConstPool`] could not be built.
+#[derive(Debug)]
+pub enum ConstPoolBuildError<E> {
+    /// The evaluation of one scheduled constant failed.
+    Evaluation(E),
+    /// The schedule or the inherited pools do not match the checked TIR.
+    Invalid(ConstantPoolError),
+}
+
+/// One scheduled constant, handed to the evaluation closure of
+/// [`ConstPool::build`] after every constant it reads.
+pub struct ConstStep<'a> {
+    /// The checked TIR being evaluated.
+    pub tir: &'a CheckedTir,
+    /// The checked DAG that owns the constant.
+    pub dag: &'a CheckedDag,
+    pub key: &'a ResolvedDeclName,
+    pub expression: &'a Expr,
+    /// Every constant evaluated so far, inherited ones included.
+    pub visible: &'a RuntimeValueMap,
+}
+
+/// The evaluated constants of every DAG of one checked TIR, one immutable
+/// pool per DAG.
+#[derive(Debug, Clone, Default)]
+pub struct ConstPool {
+    by_dag: HashMap<DagId, Arc<RuntimeValueMap>>,
+}
+
+impl ConstPool {
+    /// Evaluate the constants of `tir`'s scheduled DAGs, calling `evaluate`
+    /// exactly once per constant in the checker's constant schedule; every
+    /// other DAG of `tir` shares its pool from `inherited`.
+    ///
+    /// The result covers exactly the DAGs of `tir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first evaluation error, or [`ConstantPoolError`] when a DAG
+    /// of `tir` is neither scheduled nor inherited, or both.
+    pub fn build<E>(
+        tir: &CheckedTir,
+        inherited: &Self,
+        mut evaluate: impl FnMut(ConstStep<'_>) -> Result<RuntimeValue, E>,
+    ) -> Result<Self, ConstPoolBuildError<E>> {
+        let invalid = |error| Err(ConstPoolBuildError::Invalid(error));
+        let schedule = tir.const_schedule();
+        let scheduled = schedule.dags().iter().collect::<HashSet<_>>();
+        if let Some(missing) = schedule
+            .dags()
+            .iter()
+            .find(|dag_id| tir.dag_registry().get(dag_id).is_none())
+        {
+            return invalid(ConstantPoolError::MissingDag(missing.clone()));
+        }
+        let mut by_dag = HashMap::new();
+        let mut fresh = HashMap::new();
+        for dag_id in tir.dag_registry().keys() {
+            match (scheduled.contains(dag_id), inherited.by_dag.get(dag_id)) {
+                (true, None) => {
+                    fresh.insert(dag_id.clone(), RuntimeValueMap::new());
+                }
+                (false, Some(pool)) => {
+                    by_dag.insert(dag_id.clone(), Arc::clone(pool));
+                }
+                (true, Some(_)) => return invalid(ConstantPoolError::Rescheduled(dag_id.clone())),
+                (false, None) => return invalid(ConstantPoolError::Uncovered(dag_id.clone())),
+            }
+        }
+        let mut visible = by_dag
+            .values()
+            .flat_map(|pool| pool.iter())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<RuntimeValueMap>();
+        for key in schedule.order() {
+            let (Some(dag), Some(pool)) = (
+                tir.dag_registry().get(key.owner()),
+                fresh.get_mut(key.owner()),
+            ) else {
+                return invalid(ConstantPoolError::MissingDeclaration(key.clone()));
+            };
+            let Some(expression) = dag.const_expr(key) else {
+                return invalid(ConstantPoolError::MissingDeclaration(key.clone()));
+            };
+            let value = evaluate(ConstStep {
+                tir,
+                dag,
+                key,
+                expression,
+                visible: &visible,
+            })
+            .map_err(ConstPoolBuildError::Evaluation)?;
+            visible.insert(key.clone(), value.clone());
+            pool.insert(key.clone(), value);
+        }
+        by_dag.extend(
+            fresh
+                .into_iter()
+                .map(|(dag_id, pool)| (dag_id, Arc::new(pool))),
+        );
+        Ok(Self { by_dag })
+    }
+
+    /// The evaluated constants of one DAG.
+    #[must_use]
+    pub fn for_dag(&self, dag_id: &DagId) -> Option<&Arc<RuntimeValueMap>> {
+        self.by_dag.get(dag_id)
+    }
+
+    /// The DAGs this pool covers.
+    pub fn dags(&self) -> impl Iterator<Item = &DagId> {
+        self.by_dag.keys()
+    }
+
+    /// A reference to one evaluated constant in its defining DAG's pool.
+    #[must_use]
+    pub fn reference(&self, key: &ResolvedDeclName) -> Option<ConstantReference> {
+        let pool = self.by_dag.get(key.owner())?;
+        pool.contains_key(key).then(|| ConstantReference {
+            pool: Arc::clone(pool),
+            key: key.clone(),
+        })
+    }
+}
+
+/// The constants of one callable's execution DAGs, viewed without copying.
 #[derive(Debug)]
 pub struct ConstantPools {
     pools: Vec<Arc<RuntimeValueMap>>,
@@ -55,27 +198,24 @@ impl ConstantPools {
     }
 }
 
-/// A validated import into its defining body's immutable pool, not a copied value.
-#[derive(Debug)]
+/// One evaluated constant in its defining DAG's immutable pool, not a copied
+/// value. Only [`ConstPool::reference`] creates one, so it always resolves.
+#[derive(Debug, Clone)]
 pub struct ConstantReference {
     pool: Arc<RuntimeValueMap>,
     key: ResolvedDeclName,
 }
 
 impl ConstantReference {
-    pub fn try_new(
-        pool: Arc<RuntimeValueMap>,
-        key: ResolvedDeclName,
-    ) -> Result<Self, ConstantPoolError> {
-        if !pool.contains_key(&key) {
-            return Err(ConstantPoolError::Missing(key));
-        }
-        Ok(Self { pool, key })
+    /// The referenced constant's identity.
+    #[must_use]
+    pub const fn key(&self) -> &ResolvedDeclName {
+        &self.key
     }
 
-    pub fn value(&self) -> Result<&RuntimeValue, ConstantPoolError> {
-        self.pool
-            .get(&self.key)
-            .ok_or_else(|| ConstantPoolError::Missing(self.key.clone()))
+    /// The referenced constant's value.
+    #[must_use]
+    pub fn value(&self) -> &RuntimeValue {
+        &self.pool[&self.key]
     }
 }

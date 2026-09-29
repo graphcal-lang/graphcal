@@ -97,7 +97,7 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
             graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
         .unwrap();
-        let values = crate::execution_facts::RuntimeValueMap::new();
+        let values = crate::constant_pools::RuntimeValueMap::new();
         let locals = crate::eval_expr::HirLocalValueMap::root();
         let result = crate::eval_expr::eval_hir_expr(bound, &values, &locals, &context);
         assert!(
@@ -194,7 +194,7 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
     .unwrap();
     let result = crate::eval_expr::eval_hir_expr(
         &bound.value,
-        &crate::execution_facts::RuntimeValueMap::new(),
+        &crate::constant_pools::RuntimeValueMap::new(),
         &crate::eval_expr::HirLocalValueMap::root(),
         &context,
     );
@@ -237,22 +237,16 @@ node control: Dimensionless = probe::tick() + 1.0;
     let tir = checked.tir();
     let src = miette::NamedSource::new("host-readiness.gcl", Arc::new(source.to_string()));
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let execution =
-        crate::project_compiler::check_execution_facts_with_cancellation(tir, &src, &cancellation)
-            .unwrap();
-    let plan =
-        crate::exec_plan::compile_checked_with_cancellation(tir, &execution, &src, &cancellation)
-            .unwrap();
+    let plan = crate::exec_plan::compile_with_cancellation(tir, &src, &cancellation).unwrap();
     let worker = tir
         .dag_registry()
         .values()
         .find(|dag| dag.bound_decl_identity(&scoped_name("pending")).is_some())
         .unwrap();
-    let values = crate::execution_facts::RuntimeValueMap::new();
+    let values = crate::constant_pools::RuntimeValueMap::new();
     let locals = crate::eval_expr::HirLocalValueMap::root();
     let context = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
         crate::eval_expr::EvalContext::checked(
-            tir,
             &plan,
             dag.dag_id(),
             &src,

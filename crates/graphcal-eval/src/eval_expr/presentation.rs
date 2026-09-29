@@ -8,7 +8,7 @@ use graphcal_compiler::registry::format::format_unit_terms_canonical;
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
 
 use super::context::EvalContext;
-use crate::execution_facts::RuntimeValueMap;
+use crate::constant_pools::RuntimeValueMap;
 use crate::presentation_evidence::{PendingDisplayUnit, PresentationFailure, PresentationInstance};
 
 pub(super) fn pending(unit: &ResolvedUnitExpr, ctx: &EvalContext<'_>) -> PresentationInstance {

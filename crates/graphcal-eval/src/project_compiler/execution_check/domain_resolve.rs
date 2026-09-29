@@ -14,12 +14,12 @@ use graphcal_compiler::tir::typed::{
     CheckedDag, CheckedTir, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey,
 };
 
+use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
-use crate::execution_facts::RuntimeValueMap;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.

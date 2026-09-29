@@ -539,7 +539,7 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
             graphcal_compiler::syntax::dimension::UnitName::expect_valid("missing"),
         ),
     );
-    let values = crate::execution_facts::RuntimeValueMap::new();
+    let values = crate::constant_pools::RuntimeValueMap::new();
     assert!(matches!(
         crate::eval_expr::presentation::resolve(
             evidence(unknown),
@@ -574,7 +574,7 @@ fn presentation_invariants_and_cancellation_are_never_notices() {
             unit: target.clone(),
         }))
     };
-    let values = crate::execution_facts::RuntimeValueMap::new();
+    let values = crate::constant_pools::RuntimeValueMap::new();
     let context = crate::eval_expr::EvalContext::provisional_constants(
         &tir,
         tir.root_dag_id(),

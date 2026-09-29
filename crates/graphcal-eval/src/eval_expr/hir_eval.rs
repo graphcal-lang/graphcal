@@ -2595,10 +2595,16 @@ fn eval_hir_dag_call(
     let callable = plan
         .callable(&target.value)
         .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
-    let checked = &plan.checked_execution_facts;
-    let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, &target.value)
-        .map_err(|error| ctx.internal_error(error.to_string(), target.span))?;
-    let dag_facts = scope.facts();
+    let dag_source = plan
+        .program()
+        .dag(&target.value)
+        .ok_or_else(|| {
+            ctx.internal_error(
+                format!("DAG `{}` has no compiled body", target.value),
+                target.span,
+            )
+        })?
+        .source();
 
     let mut frame = crate::execution_frame::ExecutionFrame::new(
         plan,
@@ -2631,24 +2637,19 @@ fn eval_hir_dag_call(
     );
 
     let empty_hir_locals = HirLocalValueMap::root();
-    let evaluated = frame.run(
-        ctx.tir,
-        dag_facts.source(),
-        &ctx.cancellation,
-        |entry, frame| {
-            let context = ctx
-                .for_dag(entry.scope.dag(), entry.scope.facts().source())?
-                .with_unavailable(&frame.errors)
-                .for_decl(entry.key);
-            eval_hir_expr_with_presentation(
-                entry.expression,
-                &frame.values,
-                &frame.presentations,
-                &empty_hir_locals,
-                &context,
-            )
-        },
-    );
+    let evaluated = frame.run(dag_source, &ctx.cancellation, |entry, frame| {
+        let context = ctx
+            .for_dag(entry.scope.dag(), entry.scope.source())?
+            .with_unavailable(&frame.errors)
+            .for_decl(entry.key);
+        eval_hir_expr_with_presentation(
+            entry.expression,
+            &frame.values,
+            &frame.presentations,
+            &empty_hir_locals,
+            &context,
+        )
+    });
     if let Some(calls) = ctx.unfinished_calls {
         calls
             .borrow_mut()
@@ -2753,11 +2754,12 @@ fn check_inline_plan_asserts(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
-    let checked = &ctx.execution_plan()?.checked_execution_facts;
+    let program = ctx.execution_plan()?.program();
     owners.iter().try_for_each(|owner| {
-        let scope = crate::execution_scope::CheckedExecutionScope::new(ctx.tir, checked, owner)
-            .map_err(|error| ctx.internal_error(error.to_string(), span))?;
-        let context = ctx.for_dag(scope.dag(), scope.facts().source())?;
+        let scope = program.dag(owner).ok_or_else(|| {
+            ctx.internal_error(format!("DAG `{owner}` has no compiled body"), span)
+        })?;
+        let context = ctx.for_dag(scope.dag(), scope.source())?;
         check_inline_dag_asserts(scope.dag(), values, &context, target, span, ctx)
     })
 }

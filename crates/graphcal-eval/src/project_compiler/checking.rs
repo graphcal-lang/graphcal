@@ -72,34 +72,6 @@ fn resolve_imported_bindings(
         .collect()
 }
 
-fn checked_imported_values(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
-    facts: &crate::execution_facts::CheckedExecutionFacts,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, (RuntimeValue, CheckedType)>, CompileError> {
-    tir.root()
-        .imported_bindings()
-        .iter()
-        .try_fold(HashMap::new(), |mut values, (name, binding)| {
-            if let Some(value) = crate::execution_scope::checked_imported_constant(
-                tir, facts, binding,
-            )
-            .map_err(|error| {
-                CompileError::Eval(GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ))
-            })? {
-                values.insert(
-                    name.clone(),
-                    (value.clone(), binding.declared_type().clone()),
-                );
-            }
-            Ok(values)
-        })
-}
-
 struct ResolvedFileSignatures {
     root: graphcal_compiler::tir::typed::SignatureResolvedHirDag,
     inline: Vec<graphcal_compiler::tir::typed::SignatureResolvedHirDag>,
@@ -166,7 +138,7 @@ fn checked_dependency_overrides(
 pub(super) fn check_hir_file(
     hir: HirFile,
     module_artifacts: &ModuleArtifactStore,
-    inherited_execution_facts: &crate::execution_facts::CheckedExecutionFacts,
+    inherited_execution_facts: &crate::checked_program::ExecutionFacts,
     exported_runtime_units: &HashMap<
         graphcal_compiler::dag_id::DagId,
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
@@ -237,27 +209,24 @@ pub(super) fn check_hir_file(
 
     lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
     let tir = finish_module_assembly(tir, module_artifacts, file_src, cancellation)?;
-    let checked_execution_facts = execution_check::check_execution_facts_with_inherited(
-        &tir,
+    #[cfg(test)]
+    observe_shared_artifacts(&tir, project_types, module_artifacts);
+    let program = execution_check::seal_checked_program(
+        tir,
         inherited_execution_facts,
         file_src,
         cancellation,
     )?;
     let entry_interface = entry_interface::build_checked_entry_interface(
         &source_declarations,
-        &tir,
+        program.tir(),
         &entry_external_surface,
         file_src,
     )?;
-    let imported_values = checked_imported_values(&tir, &checked_execution_facts, file_src)?;
-    #[cfg(test)]
-    observe_shared_artifacts(&tir, project_types, module_artifacts);
 
     Ok(CompiledFile {
-        tir,
-        checked_execution_facts,
+        program,
         entry_interface,
-        imported_values,
         imported_source_order: hir.imported_source_order,
         output_surface: hir.output_surface,
         include_debug_names: hir.include_debug_names,

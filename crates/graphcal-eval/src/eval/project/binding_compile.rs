@@ -123,7 +123,7 @@ impl PreparedProject {
         let expr = self.structured_binding_expr(
             value,
             &port.value_schema,
-            self.tir.root_dag_id(),
+            self.tir().root_dag_id(),
             &mut Vec::new(),
         )?;
         self.compile_parameter_value(position, &expr)
@@ -185,7 +185,7 @@ impl PreparedProject {
         let hir = graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir)
             .map_err(|message| structured_error(path, message.to_string()))?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
-            &self.tir,
+            self.tir(),
             &hir,
             &expected.declared_type(),
             &self.source,
@@ -435,7 +435,7 @@ impl PreparedProject {
     fn parameter_index(&self, name: &DeclName) -> Result<usize, CompileError> {
         self.parameter_lookup.get(name).copied().ok_or_else(|| {
             let actual_kind = self
-                .tir
+                .tir()
                 .root()
                 .decls()
                 .iter()
@@ -484,7 +484,7 @@ impl PreparedProject {
         CompileError,
     > {
         let hir =
-            self.lower_closed_binding_expr(expr, &port.value_schema, self.tir.root_dag_id())?;
+            self.lower_closed_binding_expr(expr, &port.value_schema, self.tir().root_dag_id())?;
         let span = hir.span;
         let hir =
             graphcal_compiler::hir::closed_expr::ClosedExpr::try_new(hir).map_err(|message| {
@@ -498,7 +498,7 @@ impl PreparedProject {
                 })
             })?;
         let facts = graphcal_compiler::tir::dim_check::check_external_value_expr_type(
-            &self.tir,
+            self.tir(),
             &hir,
             &port.declared_type,
             &self.source,
@@ -719,7 +719,7 @@ impl PreparedProject {
         let scope = GenericScope::new();
         let context = ExprLoweringContext::new(
             ModuleScope::new(owner, &self.module_resolver, &scope),
-            &self.tir.registry().time_zones,
+            &self.tir().registry().time_zones,
         );
         graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
             CompileError::Eval(graphcal_compiler::hir::expr_lower_error_to_graphcal(
@@ -746,9 +746,8 @@ impl PreparedProject {
         let locals = HirLocalValueMap::root();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext::checked(
-            &self.tir,
             &self.plan,
-            self.tir.root_dag_id(),
+            self.tir().root_dag_id(),
             &self.source,
             &self.host_fns,
             cancellation,
@@ -771,7 +770,7 @@ impl PreparedProject {
             &format!(
                 "cannot bind {actual} to `{}` of type `{}`",
                 port.name,
-                port.declared_type.format(&self.tir.registry().dimensions)
+                port.declared_type.format(&self.tir().registry().dimensions)
             ),
         )
     }
