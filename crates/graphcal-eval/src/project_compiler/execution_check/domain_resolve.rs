@@ -10,7 +10,9 @@ use graphcal_compiler::registry::checked_type::{CheckedGenericArg, CheckedType, 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
-use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::{
+    DagTIR, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey, TIR,
+};
 
 use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
@@ -80,7 +82,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
         let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
-            Some(strip_indexed(annotation.checked().resolved())),
+            Some(annotation.checked().resolved().element()),
             decl_span,
             constraint_src,
         )?;
@@ -523,7 +525,7 @@ fn resolve_application_field_constraints(
         let constraint_src = &first_bound.src;
         let target = resolve_constraint_target(
             &display_name,
-            Some(strip_indexed(field_semantics.resolved_type())),
+            Some(field_semantics.resolved_type().element()),
             bound_span,
             constraint_src,
         )?;
@@ -680,14 +682,9 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     Ok(())
 }
 
-fn struct_type_ref_from_resolved_type(
-    resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
-) -> Option<StructTypeRef> {
-    match strip_indexed(resolved) {
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name, _)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name, .. } => {
-            Some(StructTypeRef::from_resolved(name.clone()))
-        }
+fn struct_type_ref_from_resolved_type(resolved: &ResolvedDeclType) -> Option<StructTypeRef> {
+    match resolved.element() {
+        ResolvedValueType::Struct { name, .. } => Some(StructTypeRef::from_resolved(name.clone())),
         _ => None,
     }
 }
@@ -800,27 +797,13 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
     }
 }
 
-/// Strip `Indexed` wrapper to get the base resolved type.
-fn strip_indexed(
-    resolved: &graphcal_compiler::tir::typed::ResolvedTypeExpr,
-) -> &graphcal_compiler::tir::typed::ResolvedTypeExpr {
-    match resolved {
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Indexed { base, .. } => {
-            strip_indexed(base)
-        }
-        other => other,
-    }
-}
-
 /// Resolve the typed constraint family selected by a declaration or field type.
 fn resolve_constraint_target(
     name: &str,
-    base_resolved: Option<&graphcal_compiler::tir::typed::ResolvedTypeExpr>,
+    base_resolved: Option<&ResolvedValueType>,
     decl_span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ConstraintTarget, GraphcalError> {
-    use graphcal_compiler::tir::typed::ResolvedTypeExpr;
-
     let Some(resolved) = base_resolved else {
         return Err(GraphcalError::InternalError {
             message: format!("domain constraint target `{name}` has no resolved type"),
@@ -829,42 +812,33 @@ fn resolve_constraint_target(
         });
     };
     match resolved {
-        ResolvedTypeExpr::Quantity(_)
-        | ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::GenericDimParam(_, _)
-        | ResolvedTypeExpr::GenericDimExpr { .. } => Ok(ConstraintTarget::Quantity),
-        ResolvedTypeExpr::Int => Ok(ConstraintTarget::Int),
-        ResolvedTypeExpr::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
-        ResolvedTypeExpr::Bool => Err(GraphcalError::InvalidDomainTarget {
+        ResolvedValueType::Quantity(_) => Ok(ConstraintTarget::Quantity),
+        ResolvedValueType::Int => Ok(ConstraintTarget::Int),
+        ResolvedValueType::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
+        ResolvedValueType::Bool => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Bool".to_string(),
             src: src.clone(),
             span: decl_span.into(),
         }),
-        ResolvedTypeExpr::Complex { .. } => Err(GraphcalError::InvalidDomainTarget {
+        ResolvedValueType::Complex { .. } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Complex".to_string(),
             src: src.clone(),
             span: decl_span.into(),
         }),
-        ResolvedTypeExpr::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
+        ResolvedValueType::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: "Key".to_string(),
             src: src.clone(),
             span: decl_span.into(),
         }),
-        ResolvedTypeExpr::Struct(struct_name, _)
-        | ResolvedTypeExpr::GenericStruct {
+        ResolvedValueType::Struct {
             name: struct_name, ..
         } => Err(GraphcalError::InvalidDomainTarget {
             type_kind: format!("struct `{}`", struct_name.as_str()),
             src: src.clone(),
             span: decl_span.into(),
         }),
-        ResolvedTypeExpr::GenericTypeParam(param, _) => Err(GraphcalError::InvalidDomainTarget {
+        ResolvedValueType::GenericTypeParam(param, _) => Err(GraphcalError::InvalidDomainTarget {
             type_kind: format!("generic Type parameter `{param}`"),
-            src: src.clone(),
-            span: decl_span.into(),
-        }),
-        ResolvedTypeExpr::Indexed { .. } => Err(GraphcalError::InternalError {
-            message: format!("domain constraint target `{name}` was not reduced to its base type"),
             src: src.clone(),
             span: decl_span.into(),
         }),

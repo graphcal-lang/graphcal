@@ -1608,8 +1608,13 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "typed", "ops"]
-role = "checking"
+path = ["tir", "typed", "resolved_type"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "resolved_type", "tests"]
+role = "contracts"
 
 [[module]]
 package = "compiler"

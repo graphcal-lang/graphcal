@@ -1099,16 +1099,10 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
             continue;
         };
 
-        let expected = match strip_indexed(annotation.checked().resolved()) {
-            crate::tir::typed::ResolvedTypeExpr::Quantity(dim) => {
-                ExpectedBound::Quantity(dim.clone())
-            }
-            crate::tir::typed::ResolvedTypeExpr::Dimensionless => {
-                ExpectedBound::Quantity(Dimension::dimensionless())
-            }
-            crate::tir::typed::ResolvedTypeExpr::Int => ExpectedBound::Int,
-            crate::tir::typed::ResolvedTypeExpr::Datetime(scale) => ExpectedBound::Datetime(*scale),
-            _ => continue,
+        let Some(expected) =
+            expected_bound_from_resolved(annotation.checked().resolved().element())
+        else {
+            continue;
         };
 
         for bound in bounds {
@@ -1175,27 +1169,22 @@ fn check_domain_constraint_targets_dag(
     Ok(())
 }
 
-fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) -> Option<String> {
-    use crate::tir::typed::ResolvedTypeExpr;
+fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedDeclType) -> Option<String> {
+    use crate::tir::typed::ResolvedValueType;
 
-    match resolved {
-        ResolvedTypeExpr::Indexed { base, .. } => invalid_domain_target_kind(base),
-        ResolvedTypeExpr::Bool => Some("Bool".to_string()),
-        ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
-        ResolvedTypeExpr::Key { .. } => Some("Key".to_string()),
-        ResolvedTypeExpr::Struct(struct_name, _)
-        | ResolvedTypeExpr::GenericStruct {
+    match resolved.element() {
+        ResolvedValueType::Bool => Some("Bool".to_string()),
+        ResolvedValueType::Complex { .. } => Some("Complex".to_string()),
+        ResolvedValueType::Key { .. } => Some("Key".to_string()),
+        ResolvedValueType::Struct {
             name: struct_name, ..
         } => Some(format!("struct `{}`", struct_name.as_str())),
-        ResolvedTypeExpr::GenericTypeParam(param, _) => {
+        ResolvedValueType::GenericTypeParam(param, _) => {
             Some(format!("generic Type parameter `{param}`"))
         }
-        ResolvedTypeExpr::Quantity(_)
-        | ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::Int
-        | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::GenericDimParam(_, _)
-        | ResolvedTypeExpr::GenericDimExpr { .. } => None,
+        ResolvedValueType::Quantity(_)
+        | ResolvedValueType::Int
+        | ResolvedValueType::Datetime(_) => None,
     }
 }
 
@@ -1339,12 +1328,13 @@ fn check_field_domain_constraint_dimensions(
                     src: diagnostic_src.clone(),
                     span: diagnostic_span.into(),
                 })?;
-            let resolved_target = strip_indexed(field_semantics.resolved_type());
+            let resolved_target = field_semantics.resolved_type().element();
             let expected = expected_bound_from_resolved(resolved_target);
             let deferred_generic_quantity = matches!(
                 resolved_target,
-                crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
-                    | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
+                crate::tir::typed::ResolvedValueType::Quantity(
+                    crate::tir::typed::ResolvedDim::Symbolic { .. }
+                )
             );
             if expected.is_none() && !deferred_generic_quantity {
                 return Err(GraphcalError::InternalError {
@@ -1408,19 +1398,16 @@ fn check_field_domain_constraint_dimensions(
 }
 
 fn expected_bound_from_resolved(
-    resolved: &crate::tir::typed::ResolvedTypeExpr,
+    resolved: &crate::tir::typed::ResolvedValueType,
 ) -> Option<ExpectedBound> {
+    use crate::tir::typed::{ResolvedDim, ResolvedValueType};
+
     match resolved {
-        crate::tir::typed::ResolvedTypeExpr::Quantity(dimension) => {
+        ResolvedValueType::Quantity(ResolvedDim::Concrete(dimension)) => {
             Some(ExpectedBound::Quantity(dimension.clone()))
         }
-        crate::tir::typed::ResolvedTypeExpr::Dimensionless => {
-            Some(ExpectedBound::Quantity(Dimension::dimensionless()))
-        }
-        crate::tir::typed::ResolvedTypeExpr::Int => Some(ExpectedBound::Int),
-        crate::tir::typed::ResolvedTypeExpr::Datetime(scale) => {
-            Some(ExpectedBound::Datetime(*scale))
-        }
+        ResolvedValueType::Int => Some(ExpectedBound::Int),
+        ResolvedValueType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
         _ => None,
     }
 }
@@ -1440,7 +1427,7 @@ fn expected_bound_from_inferred(inferred: &CheckedType) -> Option<ExpectedBound>
 
 fn check_deferred_generic_quantity_bound(
     display_name: &str,
-    resolved_target: &crate::tir::typed::ResolvedTypeExpr,
+    resolved_target: &crate::tir::typed::ResolvedValueType,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &CheckedType,
     registry: &FormattingRegistry,
@@ -1517,16 +1504,6 @@ fn check_one_bound_with_display_name(
                 span: bound.span.into(),
             })
         }
-    }
-}
-
-/// Strip `Indexed` wrappers to get the base resolved type.
-fn strip_indexed(
-    resolved: &crate::tir::typed::ResolvedTypeExpr,
-) -> &crate::tir::typed::ResolvedTypeExpr {
-    match resolved {
-        crate::tir::typed::ResolvedTypeExpr::Indexed { base, .. } => strip_indexed(base),
-        other => other,
     }
 }
 

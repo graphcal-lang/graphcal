@@ -194,14 +194,6 @@ reason = "Observed compiler::tir::typed::model -> compiler::resolve (production)
 
 [[exception]]
 from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
-to_path = ["tir", "typed", "ops"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::tir::typed::ops (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:1563 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["tir", "typed", "specialization"]
 to_package = "compiler"
 to_path = ["hir"]

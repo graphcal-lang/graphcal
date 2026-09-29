@@ -2,7 +2,7 @@
 //!
 //! A [`Substitution`] binds owner-qualified [`GenericParamId`]s, one map per
 //! generic sort, and [`Substitution::apply`] is the single fold that replaces
-//! them in a symbolic [`ResolvedTypeExpr`]. Every generic instantiation uses
+//! them in a symbolic [`ResolvedDeclType`]. Every generic instantiation uses
 //! it: nominal defaults that name earlier parameters, concrete field types of
 //! a nominal application, and the Nat parameters of a generic bound. A
 //! binding may itself be symbolic, and an unbound parameter stays symbolic;
@@ -26,15 +26,18 @@ use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
-use super::{ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
+use super::{
+    ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
+    ResolvedValueType,
+};
 
 /// Bindings of generic parameters, one map per generic sort.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Substitution {
-    dims: HashMap<GenericParamId, ResolvedDimArg>,
+    dims: HashMap<GenericParamId, ResolvedDim>,
     indexes: HashMap<GenericParamId, ResolvedIndex>,
     nats: HashMap<GenericParamId, NatPolyForm>,
-    types: HashMap<GenericParamId, ResolvedTypeExpr>,
+    types: HashMap<GenericParamId, ResolvedValueType>,
 }
 
 /// Arithmetic failure while folding a substituted type.
@@ -128,7 +131,7 @@ impl Substitution {
         }
     }
 
-    /// Replace every bound parameter in `type_expr`.
+    /// Replace every bound parameter in a declaration or field type.
     ///
     /// # Errors
     ///
@@ -136,34 +139,50 @@ impl Substitution {
     /// dimensions or Nat forms overflows.
     pub fn apply(
         &self,
-        type_expr: &ResolvedTypeExpr,
-    ) -> Result<ResolvedTypeExpr, SubstitutionError> {
-        Ok(match type_expr {
-            ResolvedTypeExpr::Key { index, span } => ResolvedTypeExpr::Key {
+        decl_type: &ResolvedDeclType,
+    ) -> Result<ResolvedDeclType, SubstitutionError> {
+        Ok(match decl_type {
+            ResolvedDeclType::Value(value_type) => {
+                ResolvedDeclType::Value(self.apply_value(value_type)?)
+            }
+            ResolvedDeclType::Indexed { element, indexes } => ResolvedDeclType::Indexed {
+                element: self.apply_value(element)?,
+                indexes: indexes.try_map_ref(|index| self.apply_index(index))?,
+            },
+        })
+    }
+
+    /// Replace every bound parameter in a value type.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SubstitutionError`] on arithmetic overflow.
+    pub fn apply_value(
+        &self,
+        value_type: &ResolvedValueType,
+    ) -> Result<ResolvedValueType, SubstitutionError> {
+        Ok(match value_type {
+            ResolvedValueType::Key { index, span } => ResolvedValueType::Key {
                 index: self.apply_index(index)?,
                 span: *span,
             },
-            ResolvedTypeExpr::GenericDimParam(param, _) => self.dims.get(param).map_or_else(
-                || type_expr.clone(),
-                |replacement| dim_arg_as_type(replacement.clone()),
-            ),
-            ResolvedTypeExpr::GenericTypeParam(param, _) => self
+            ResolvedValueType::GenericTypeParam(param, _) => self
                 .types
                 .get(param)
                 .cloned()
-                .unwrap_or_else(|| type_expr.clone()),
-            ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-                dim_arg_as_type(self.apply_dim_terms(terms, *span)?)
+                .unwrap_or_else(|| value_type.clone()),
+            ResolvedValueType::Quantity(dimension) => {
+                ResolvedValueType::Quantity(self.apply_dim_arg(dimension)?)
             }
-            ResolvedTypeExpr::Complex { dimension, span } => ResolvedTypeExpr::Complex {
+            ResolvedValueType::Complex { dimension, span } => ResolvedValueType::Complex {
                 dimension: self.apply_dim_arg(dimension)?,
                 span: *span,
             },
-            ResolvedTypeExpr::GenericStruct {
+            ResolvedValueType::Struct {
                 name,
                 generic_args,
                 span,
-            } => ResolvedTypeExpr::GenericStruct {
+            } => ResolvedValueType::Struct {
                 name: name.clone(),
                 generic_args: generic_args
                     .iter()
@@ -171,19 +190,9 @@ impl Substitution {
                     .collect::<Result<_, _>>()?,
                 span: *span,
             },
-            ResolvedTypeExpr::Indexed { base, indexes } => ResolvedTypeExpr::Indexed {
-                base: Box::new(self.apply(base)?),
-                indexes: indexes
-                    .iter()
-                    .map(|index| self.apply_index(index))
-                    .collect::<Result<_, _>>()?,
-            },
-            ResolvedTypeExpr::Dimensionless
-            | ResolvedTypeExpr::Bool
-            | ResolvedTypeExpr::Int
-            | ResolvedTypeExpr::Datetime(_)
-            | ResolvedTypeExpr::Quantity(_)
-            | ResolvedTypeExpr::Struct(_, _) => type_expr.clone(),
+            ResolvedValueType::Bool | ResolvedValueType::Int | ResolvedValueType::Datetime(_) => {
+                value_type.clone()
+            }
         })
     }
 
@@ -202,7 +211,9 @@ impl Substitution {
             ResolvedGenericArg::Nat(form, span) => {
                 ResolvedGenericArg::Nat(self.apply_nat(form, *span)?, *span)
             }
-            ResolvedGenericArg::Type(type_expr) => ResolvedGenericArg::Type(self.apply(type_expr)?),
+            ResolvedGenericArg::Type(value_type) => {
+                ResolvedGenericArg::Type(self.apply_value(value_type)?)
+            }
         })
     }
 
@@ -303,13 +314,15 @@ impl Substitution {
         }
     }
 
-    fn apply_dim_arg(&self, arg: &ResolvedDimArg) -> Result<ResolvedDimArg, SubstitutionError> {
+    fn apply_dim_arg(&self, arg: &ResolvedDim) -> Result<ResolvedDim, SubstitutionError> {
+        // A lone parameter is replaced verbatim, keeping the replacement's own
+        // spelling and span.
+        if let Some((param, _)) = arg.lone_generic_param() {
+            return Ok(self.dims.get(param).cloned().unwrap_or_else(|| arg.clone()));
+        }
         match arg {
-            ResolvedDimArg::GenericParam(param, _) => {
-                Ok(self.dims.get(param).cloned().unwrap_or_else(|| arg.clone()))
-            }
-            ResolvedDimArg::Expr { terms, span } => self.apply_dim_terms(terms, *span),
-            ResolvedDimArg::Dimensionless | ResolvedDimArg::Concrete(_) => Ok(arg.clone()),
+            ResolvedDim::Symbolic { terms, span } => self.apply_dim_terms(terms, *span),
+            ResolvedDim::Concrete(_) => Ok(arg.clone()),
         }
     }
 
@@ -319,7 +332,7 @@ impl Substitution {
         &self,
         terms: &[ResolvedDimTerm],
         span: Span,
-    ) -> Result<ResolvedDimArg, SubstitutionError> {
+    ) -> Result<ResolvedDim, SubstitutionError> {
         let overflow = |_| SubstitutionError::DimensionOverflow { span };
         let mut substituted = Vec::with_capacity(terms.len());
         for term in terms {
@@ -342,24 +355,18 @@ impl Substitution {
 /// Embed one dimension argument, with its outer power and operator, into a
 /// dimension product.
 fn expand_dim_arg(
-    arg: &ResolvedDimArg,
+    arg: &ResolvedDim,
     outer_power: Rational,
     outer_op: MulDivOp,
 ) -> Result<Vec<ResolvedDimTerm>, crate::ratio::RatioError> {
     match arg {
-        ResolvedDimArg::Dimensionless => Ok(Vec::new()),
-        ResolvedDimArg::Concrete(dim) => Ok(vec![ResolvedDimTerm::Concrete {
+        ResolvedDim::Concrete(dim) if dim.is_dimensionless() => Ok(Vec::new()),
+        ResolvedDim::Concrete(dim) => Ok(vec![ResolvedDimTerm::Concrete {
             dim: dim.clone(),
             power: outer_power,
             op: outer_op,
         }]),
-        ResolvedDimArg::GenericParam(name, span) => Ok(vec![ResolvedDimTerm::GenericParam {
-            name: name.clone(),
-            power: outer_power,
-            op: outer_op,
-            span: *span,
-        }]),
-        ResolvedDimArg::Expr { terms, .. } => terms
+        ResolvedDim::Symbolic { terms, .. } => terms
             .iter()
             .map(|term| match term {
                 ResolvedDimTerm::Concrete { dim, power, op } => Ok(ResolvedDimTerm::Concrete {
@@ -399,7 +406,7 @@ const fn combine_dim_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
 fn collapse_dim_terms(
     terms: Vec<ResolvedDimTerm>,
     span: Span,
-) -> Result<ResolvedDimArg, crate::ratio::RatioError> {
+) -> Result<ResolvedDim, crate::ratio::RatioError> {
     let concrete = terms
         .iter()
         .map(|term| match term {
@@ -408,7 +415,7 @@ fn collapse_dim_terms(
         })
         .collect::<Option<Vec<_>>>();
     let Some(concrete) = concrete else {
-        return Ok(ResolvedDimArg::Expr { terms, span });
+        return Ok(ResolvedDim::Symbolic { terms, span });
     };
     let dimension = concrete.into_iter().try_fold(
         Dimension::dimensionless(),
@@ -420,20 +427,7 @@ fn collapse_dim_terms(
             }
         },
     )?;
-    Ok(if dimension.is_dimensionless() {
-        ResolvedDimArg::Dimensionless
-    } else {
-        ResolvedDimArg::Concrete(dimension)
-    })
-}
-
-fn dim_arg_as_type(arg: ResolvedDimArg) -> ResolvedTypeExpr {
-    match arg {
-        ResolvedDimArg::Dimensionless => ResolvedTypeExpr::Dimensionless,
-        ResolvedDimArg::Concrete(dim) => ResolvedTypeExpr::Quantity(dim),
-        ResolvedDimArg::GenericParam(name, span) => ResolvedTypeExpr::GenericDimParam(name, span),
-        ResolvedDimArg::Expr { terms, span } => ResolvedTypeExpr::GenericDimExpr { terms, span },
-    }
+    Ok(ResolvedDim::Concrete(dimension))
 }
 
 #[cfg(test)]

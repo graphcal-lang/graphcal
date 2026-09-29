@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
-use crate::dimension::{Dimension, Rational};
+use crate::dimension::Dimension;
 use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
 use crate::registry::error::GraphcalError;
@@ -15,8 +15,8 @@ use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
 use super::{
-    ModuleTypeContext, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
-    ResolvedIndex, ResolvedTypeExpr, Substitution,
+    ModuleTypeContext, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm,
+    ResolvedGenericArg, ResolvedIndex, ResolvedValueType, Substitution,
 };
 
 // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ pub fn resolve_hir_decl_type(
     decl_type: &hir::DeclType,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedDeclType, GraphcalError> {
     resolve_hir_decl_type_with_project_types(decl_type, src, module_ctx.types)
 }
 
@@ -72,46 +72,47 @@ pub(super) fn resolve_hir_decl_type_with_project_types(
     decl_type: &hir::DeclType,
     src: &NamedSource<Arc<String>>,
     project_types: &ProjectTypeStore,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedDeclType, GraphcalError> {
     let ctx = HirTypeResolutionContext { src, project_types };
     match decl_type {
-        hir::DeclType::Value(value_type) => resolve_hir_value_type(value_type, ctx),
+        hir::DeclType::Value(value_type) => {
+            resolve_hir_value_type(value_type, ctx).map(ResolvedDeclType::Value)
+        }
         hir::DeclType::Indexed {
             element, indexes, ..
-        } => {
-            let resolved_base = resolve_hir_value_type(element, ctx)?;
-            let resolved_indexes = indexes
-                .iter()
-                .map(|index| resolve_hir_index_ref(index, ctx))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(ResolvedTypeExpr::Indexed {
-                base: Box::new(resolved_base),
-                indexes: resolved_indexes,
-            })
-        }
+        } => Ok(ResolvedDeclType::Indexed {
+            element: resolve_hir_value_type(element, ctx)?,
+            indexes: indexes.try_map_ref(|index| resolve_hir_index_ref(index, ctx))?,
+        }),
     }
 }
 
 fn resolve_hir_value_type(
     value_type: &hir::ValueType,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedValueType, GraphcalError> {
     match &value_type.kind {
         hir::ValueTypeKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
-        hir::ValueTypeKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
-        hir::ValueTypeKind::Complex(dimension) => Ok(ResolvedTypeExpr::Complex {
+        hir::ValueTypeKind::DimExpr(dim_expr) => {
+            resolve_hir_dim_expr(dim_expr, ctx).map(ResolvedValueType::Quantity)
+        }
+        hir::ValueTypeKind::Complex(dimension) => Ok(ResolvedValueType::Complex {
             dimension: resolve_hir_dim_arg(dimension, ctx)?,
             span: value_type.span,
         }),
-        hir::ValueTypeKind::Key(index) => Ok(ResolvedTypeExpr::Key {
+        hir::ValueTypeKind::Key(index) => Ok(ResolvedValueType::Key {
             index: resolve_hir_index_ref(index, ctx)?,
             span: value_type.span,
         }),
         hir::ValueTypeKind::Struct(name) => {
             hir_struct_type_def(&name.value, name.span, ctx)?;
-            Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
+            Ok(ResolvedValueType::Struct {
+                name: name.value.clone(),
+                generic_args: Vec::new(),
+                span: name.span,
+            })
         }
-        hir::ValueTypeKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
+        hir::ValueTypeKind::GenericTypeParam(param) => Ok(ResolvedValueType::GenericTypeParam(
             param.value.clone(),
             param.span,
         )),
@@ -121,12 +122,14 @@ fn resolve_hir_value_type(
     }
 }
 
-const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedTypeExpr {
+const fn resolve_hir_builtin_type(builtin: hir::BuiltinType) -> ResolvedValueType {
     match builtin {
-        hir::BuiltinType::Dimensionless => ResolvedTypeExpr::Dimensionless,
-        hir::BuiltinType::Bool => ResolvedTypeExpr::Bool,
-        hir::BuiltinType::Int => ResolvedTypeExpr::Int,
-        hir::BuiltinType::Datetime(scale) => ResolvedTypeExpr::Datetime(scale),
+        hir::BuiltinType::Dimensionless => {
+            ResolvedValueType::Quantity(ResolvedDim::dimensionless())
+        }
+        hir::BuiltinType::Bool => ResolvedValueType::Bool,
+        hir::BuiltinType::Int => ResolvedValueType::Int,
+        hir::BuiltinType::Datetime(scale) => ResolvedValueType::Datetime(scale),
     }
 }
 
@@ -178,31 +181,18 @@ fn hir_struct_type_def<'a>(
 fn resolve_hir_dim_expr(
     dim_expr: &hir::DimExpr,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedDim, GraphcalError> {
     let terms = dim_expr
         .terms
         .iter()
         .map(|item| resolve_hir_dim_expr_item(item, ctx))
         .collect::<Result<Vec<_>, _>>()?;
 
-    if let [
-        ResolvedDimTerm::GenericParam {
-            name,
-            power,
-            op: MulDivOp::Mul,
-            span,
-        },
-    ] = terms.as_slice()
-        && *power == Rational::ONE
-    {
-        return Ok(ResolvedTypeExpr::GenericDimParam(name.clone(), *span));
-    }
-
     let has_generic = terms
         .iter()
         .any(|term| matches!(term, ResolvedDimTerm::GenericParam { .. }));
     if has_generic {
-        return Ok(ResolvedTypeExpr::GenericDimExpr {
+        return Ok(ResolvedDim::Symbolic {
             terms,
             span: dim_expr.span,
         });
@@ -230,7 +220,7 @@ fn resolve_hir_dim_expr(
             }
         },
     )?;
-    Ok(ResolvedTypeExpr::Quantity(result))
+    Ok(ResolvedDim::Concrete(result))
 }
 
 fn resolve_hir_dim_expr_item(
@@ -310,7 +300,7 @@ fn resolve_hir_type_application(
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
     generic_args: &[hir::GenericArg],
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedValueType, GraphcalError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
     check_type_application_arity(
         name.value.as_str(),
@@ -343,7 +333,7 @@ fn resolve_hir_type_application(
         resolved_args.push(instantiated);
     }
 
-    Ok(ResolvedTypeExpr::GenericStruct {
+    Ok(ResolvedValueType::Struct {
         name: name.value.clone(),
         generic_args: resolved_args,
         span: type_ann.span,
@@ -398,23 +388,9 @@ fn resolve_hir_generic_arg_for_param(
 fn resolve_hir_dim_arg(
     arg: &hir::DimArg,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedDimArg, GraphcalError> {
+) -> Result<ResolvedDim, GraphcalError> {
     match arg {
-        hir::DimArg::Dimensionless(_) => Ok(ResolvedDimArg::Dimensionless),
-        hir::DimArg::Expr(dim_expr) => match resolve_hir_dim_expr(dim_expr, ctx)? {
-            ResolvedTypeExpr::Dimensionless => Ok(ResolvedDimArg::Dimensionless),
-            ResolvedTypeExpr::Quantity(dim) => Ok(ResolvedDimArg::Concrete(dim)),
-            ResolvedTypeExpr::GenericDimParam(name, span) => {
-                Ok(ResolvedDimArg::GenericParam(name, span))
-            }
-            ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-                Ok(ResolvedDimArg::Expr { terms, span })
-            }
-            other => Err(internal_error(
-                format!("dimension argument resolved to non-dimension type {other:?}"),
-                ctx.src,
-                arg.span(),
-            )),
-        },
+        hir::DimArg::Dimensionless(_) => Ok(ResolvedDim::dimensionless()),
+        hir::DimArg::Expr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
     }
 }

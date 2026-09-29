@@ -56,19 +56,22 @@ fn generic_substitution_prefix(
         });
     }
 
-    // A validated concrete argument, embedded into the symbolic form.
-    let bound =
-        |arg: &CheckedGenericArg| crate::tir::typed::declared_to_resolved_generic_arg(arg, span);
+    // A validated concrete argument, embedded into the symbolic form. An
+    // indexed type is not a value type and so cannot bind a `Type` parameter.
+    let bound = |param: &NominalGenericParam, arg: &CheckedGenericArg| {
+        crate::tir::typed::declared_to_resolved_generic_arg(arg, span)
+            .ok_or_else(|| generic_arg_internal_sort_error(param, src, span))
+    };
     let mut subs = Substitution::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint() {
             GenericConstraint::Dim => match arg {
-                CheckedGenericArg::Dim(_) => subs.bind(param.id().clone(), bound(arg)),
+                CheckedGenericArg::Dim(_) => subs.bind(param.id().clone(), bound(param, arg)?),
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Index => match arg {
                 CheckedGenericArg::Index(index) if inferred_index_is_concrete(index) => {
-                    subs.bind(param.id().clone(), bound(arg));
+                    subs.bind(param.id().clone(), bound(param, arg)?);
                 }
                 CheckedGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
@@ -82,7 +85,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Nat => match arg {
                 CheckedGenericArg::Nat(form) if form.is_constant() => {
-                    subs.bind(param.id().clone(), bound(arg));
+                    subs.bind(param.id().clone(), bound(param, arg)?);
                 }
                 CheckedGenericArg::Nat(form) => {
                     return Err(non_concrete_generic_argument(
@@ -96,7 +99,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Type => match arg {
                 CheckedGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
-                    subs.bind(param.id().clone(), bound(arg));
+                    subs.bind(param.id().clone(), bound(param, arg)?);
                 }
                 CheckedGenericArg::Type(type_expr) => {
                     return Err(non_concrete_generic_argument(
@@ -219,7 +222,7 @@ impl ConcreteGenericSubstitutions {
 
     pub(in crate::tir::dim_check) fn field_type(
         &self,
-        resolved: &crate::tir::typed::ResolvedTypeExpr,
+        resolved: &crate::tir::typed::ResolvedDeclType,
         src: &NamedSource<Arc<String>>,
     ) -> Result<CheckedType, GraphcalError> {
         instantiate_concrete_type(resolved, &self.substitution, src)
@@ -229,14 +232,14 @@ impl ConcreteGenericSubstitutions {
 /// Instantiate a symbolic type whose every generic parameter `substitution`
 /// binds to a concrete argument.
 pub(super) fn instantiate_concrete_type(
-    resolved: &crate::tir::typed::ResolvedTypeExpr,
+    resolved: &crate::tir::typed::ResolvedDeclType,
     substitution: &Substitution,
     src: &NamedSource<Arc<String>>,
 ) -> Result<CheckedType, GraphcalError> {
     let instantiated = substitution
         .apply(resolved)
         .map_err(|error| error.into_graphcal(src))?;
-    crate::tir::typed::resolved_to_declared_type(&instantiated, src)
+    instantiated.to_checked_type(src)
 }
 
 fn instantiate_concrete_generic_arg(

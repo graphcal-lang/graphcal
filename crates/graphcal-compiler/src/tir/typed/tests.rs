@@ -6,6 +6,7 @@ use crate::registry::types::FormattingRegistry;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::parser::Parser;
 use crate::syntax::type_name::{GenericParamName, StructTypeName};
 
@@ -26,7 +27,7 @@ fn resolve_source_type(
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
     nat_params: &[GenericParamName],
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedDeclType, GraphcalError> {
     let params = dim_params
         .iter()
         .map(|name| format!("{name}: Dim"))
@@ -58,21 +59,36 @@ fn resolve_source_type(
         })
 }
 
-fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedTypeExpr, GraphcalError> {
+fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, GraphcalError> {
     let tir = parse_and_type_resolve(program)?;
     Ok(root_decl_type(&tir, name).clone())
 }
 
 /// The checked type of a root declaration written as `name`, if any.
-fn root_decl_type_opt<'a>(tir: &'a TIR, name: &str) -> Option<&'a ResolvedTypeExpr> {
+fn root_decl_type_opt<'a>(tir: &'a TIR, name: &str) -> Option<&'a ResolvedDeclType> {
     let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
     let identity = tir.root().bound_decl_identity(&written)?;
     tir.decl_type(identity).map(CheckedDeclType::resolved)
 }
 
 /// The checked type of a root declaration written as `name`.
-fn root_decl_type<'a>(tir: &'a TIR, name: &str) -> &'a ResolvedTypeExpr {
+fn root_decl_type<'a>(tir: &'a TIR, name: &str) -> &'a ResolvedDeclType {
     root_decl_type_opt(tir, name).unwrap_or_else(|| panic!("`{name}` has no checked type"))
+}
+
+/// The value type of a scalar declaration type.
+fn scalar(resolved: ResolvedDeclType) -> ResolvedValueType {
+    match resolved {
+        ResolvedDeclType::Value(value_type) => value_type,
+        indexed @ ResolvedDeclType::Indexed { .. } => {
+            panic!("expected a scalar type, got {indexed:?}")
+        }
+    }
+}
+
+/// A concrete scalar quantity type.
+fn concrete_quantity(dimension: Dimension) -> ResolvedValueType {
+    ResolvedValueType::Quantity(ResolvedDim::Concrete(dimension))
 }
 
 #[test]
@@ -86,18 +102,22 @@ fn value_declaration_records_carry_their_checked_types() {
         crate::dimension::PreludeBaseDimension::Length,
     ));
     for (name, resolved, declared) in [
-        ("k", ResolvedTypeExpr::Int, CheckedType::Int),
+        ("k", ResolvedValueType::Int, CheckedType::Int),
         (
             "p",
-            ResolvedTypeExpr::Quantity(length.clone()),
+            concrete_quantity(length.clone()),
             CheckedType::Quantity(length),
         ),
-        ("n", ResolvedTypeExpr::Bool, CheckedType::Bool),
+        ("n", ResolvedValueType::Bool, CheckedType::Bool),
     ] {
         let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
         let identity = tir.root().bound_decl_identity(&written).unwrap();
         let checked = tir.decl_type(identity).unwrap();
-        assert_eq!(checked.resolved(), &resolved, "{name}");
+        assert_eq!(
+            checked.resolved(),
+            &ResolvedDeclType::Value(resolved),
+            "{name}"
+        );
         assert_eq!(checked.declared(), &declared, "{name}");
         assert_eq!(tir.root().value_decl_type(identity), Some(checked));
         assert_eq!(
@@ -132,9 +152,13 @@ fn decl_type_rejects_identities_owned_by_unknown_dags() {
 #[test]
 fn checked_decl_type_requires_a_concrete_type() {
     let src = NamedSource::new("test.gcl", Arc::new(String::new()));
-    let generic = ResolvedTypeExpr::GenericTypeParam(type_param("T"), Span::new(0, 0));
+    let generic = ResolvedDeclType::Value(ResolvedValueType::GenericTypeParam(
+        type_param("T"),
+        Span::new(0, 0),
+    ));
     assert!(CheckedDeclType::new(generic, &src).is_err());
-    let checked = CheckedDeclType::new(ResolvedTypeExpr::Int, &src).unwrap();
+    let checked =
+        CheckedDeclType::new(ResolvedDeclType::Value(ResolvedValueType::Int), &src).unwrap();
     assert_eq!(checked.declared(), &CheckedType::Int);
 }
 
@@ -173,27 +197,30 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
 #[test]
 fn resolve_dimensionless() {
     let resolved = resolve_source_type("Dimensionless", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Dimensionless);
+    assert_eq!(
+        scalar(resolved),
+        concrete_quantity(Dimension::dimensionless())
+    );
 }
 
 #[test]
 fn resolve_bool() {
     let resolved = resolve_source_type("Bool", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Bool);
+    assert_eq!(scalar(resolved), ResolvedValueType::Bool);
 }
 
 #[test]
 fn resolve_int() {
     let resolved = resolve_source_type("Int", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Int);
+    assert_eq!(scalar(resolved), ResolvedValueType::Int);
 }
 
 #[test]
 fn resolve_concrete_dimension() {
     let resolved = resolve_source_type("Length", &[], &[], &[]).unwrap();
     assert_eq!(
-        resolved,
-        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+        scalar(resolved),
+        concrete_quantity(Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length
         )))
     );
@@ -210,7 +237,7 @@ fn resolve_compound_dimension() {
     .pow(2)
     .unwrap())
     .unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
+    assert_eq!(scalar(resolved), concrete_quantity(expected));
 }
 
 #[test]
@@ -220,26 +247,33 @@ fn resolve_struct_type() {
         "x",
     )
     .unwrap();
-    assert!(
-        matches!(resolved, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
-    );
+    assert!(matches!(
+        scalar(resolved),
+        ResolvedValueType::Struct { name, generic_args, .. }
+            if name.as_str() == "TransferResult" && generic_args.is_empty()
+    ));
 }
 
 #[test]
 fn resolve_generic_dim_param() {
     let dim_params = vec![GenericParamName::expect_valid("D")];
     let resolved = resolve_source_type("D", &dim_params, &[], &[]).unwrap();
-    assert!(
-        matches!(resolved, ResolvedTypeExpr::GenericDimParam(name, _) if name.name.as_str() == "D")
-    );
+    let ResolvedValueType::Quantity(dimension) = scalar(resolved) else {
+        panic!("expected a quantity type");
+    };
+    assert!(matches!(dimension.lone_generic_param(), Some((name, _)) if name.name.as_str() == "D"));
 }
 
 #[test]
 fn resolve_generic_dim_expr_with_power() {
     let dim_params = vec![GenericParamName::expect_valid("D")];
     let resolved = resolve_source_type("D^2", &dim_params, &[], &[]).unwrap();
-    match resolved {
-        ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
+    match scalar(resolved) {
+        ResolvedValueType::Quantity(dimension @ ResolvedDim::Symbolic { .. }) => {
+            assert_eq!(dimension.lone_generic_param(), None);
+            let ResolvedDim::Symbolic { terms, .. } = dimension else {
+                panic!("expected a symbolic quantity");
+            };
             assert_eq!(terms.len(), 1);
             match &terms[0] {
                 ResolvedDimTerm::GenericParam { name, power, .. } => {
@@ -249,7 +283,7 @@ fn resolve_generic_dim_expr_with_power() {
                 ResolvedDimTerm::Concrete { .. } => panic!("expected GenericParam term"),
             }
         }
-        _ => panic!("expected GenericDimExpr"),
+        _ => panic!("expected a symbolic quantity"),
     }
 }
 
@@ -257,15 +291,15 @@ fn resolve_generic_dim_expr_with_power() {
 fn resolve_mixed_generic_concrete() {
     let dim_params = vec![GenericParamName::expect_valid("D")];
     let resolved = resolve_source_type("D * Length", &dim_params, &[], &[]).unwrap();
-    match resolved {
-        ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
+    match scalar(resolved) {
+        ResolvedValueType::Quantity(ResolvedDim::Symbolic { terms, .. }) => {
             assert_eq!(terms.len(), 2);
             assert!(
                 matches!(&terms[0], ResolvedDimTerm::GenericParam { name, .. } if name.name.as_str() == "D")
             );
             assert!(matches!(&terms[1], ResolvedDimTerm::Concrete { .. }));
         }
-        _ => panic!("expected GenericDimExpr, got {resolved:?}"),
+        other => panic!("expected a symbolic quantity, got {other:?}"),
     }
 }
 
@@ -277,10 +311,10 @@ fn resolve_concrete_indexed() {
     )
     .unwrap();
     match resolved {
-        ResolvedTypeExpr::Indexed { base, indexes } => {
+        ResolvedDeclType::Indexed { element, indexes } => {
             assert_eq!(
-                *base,
-                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+                element,
+                concrete_quantity(Dimension::base(BaseDimId::Prelude(
                     crate::dimension::PreludeBaseDimension::Length,
                 )))
             );
@@ -289,7 +323,7 @@ fn resolve_concrete_indexed() {
                 matches!(&indexes[0], ResolvedIndex::Concrete(name, _) if name.as_str() == "Maneuver")
             );
         }
-        _ => panic!("expected Indexed"),
+        ResolvedDeclType::Value(_) => panic!("expected Indexed"),
     }
 }
 
@@ -299,16 +333,18 @@ fn resolve_generic_indexed() {
     let index_params = vec![GenericParamName::expect_valid("I")];
     let resolved = resolve_source_type("D[I]", &dim_params, &index_params, &[]).unwrap();
     match resolved {
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            assert!(
-                matches!(*base, ResolvedTypeExpr::GenericDimParam(ref name, _) if name.name.as_str() == "D")
-            );
+        ResolvedDeclType::Indexed { element, indexes } => {
+            assert!(matches!(
+                element,
+                ResolvedValueType::Quantity(ref dimension)
+                    if matches!(dimension.lone_generic_param(), Some((name, _)) if name.name.as_str() == "D")
+            ));
             assert_eq!(indexes.len(), 1);
             assert!(
                 matches!(&indexes[0], ResolvedIndex::GenericParam(name, _) if name.name.as_str() == "I")
             );
         }
-        _ => panic!("expected Indexed"),
+        ResolvedDeclType::Value(_) => panic!("expected Indexed"),
     }
 }
 
@@ -354,7 +390,7 @@ fn resolve_velocity_derived_dimension() {
         crate::dimension::PreludeBaseDimension::Time,
     )))
     .unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
+    assert_eq!(scalar(resolved), concrete_quantity(expected));
 }
 
 // --- module-aware type resolution integration tests ---
@@ -871,7 +907,7 @@ fn type_resolve_indexed() {
     let tir = parse_and_type_resolve(source).unwrap();
     // delta_v should be Velocity[Maneuver]
     let dv_type = root_decl_type(&tir, "delta_v");
-    assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
+    assert!(matches!(dv_type, ResolvedDeclType::Indexed { .. }));
 }
 
 #[test]
@@ -881,15 +917,17 @@ fn type_resolve_complex() {
 
     assert!(matches!(
         root_decl_type(&tir, "a"),
-        ResolvedTypeExpr::Complex {
-            dimension: ResolvedDimArg::Concrete(dimension),
+        ResolvedDeclType::Value(ResolvedValueType::Complex {
+            dimension: ResolvedDim::Concrete(dimension),
             ..
-        } if *dimension == Dimension::base(BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length))
+        }) if *dimension == Dimension::base(BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length))
     ));
     assert!(matches!(
         root_decl_type(&tir, "series"),
-        ResolvedTypeExpr::Indexed { base, .. }
-            if matches!(base.as_ref(), ResolvedTypeExpr::Complex { .. })
+        ResolvedDeclType::Indexed {
+            element: ResolvedValueType::Complex { .. },
+            ..
+        }
     ));
 }
 
@@ -932,32 +970,32 @@ pub type Wrap<I: Index> {
 fn type_resolve_generics() {
     let source = include_str!("../../../../../tests/fixtures/valid/generics.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
-    // pos_eci should be a GenericStruct with type args
+    // pos_eci should be a struct application with type args
     let pos_type = root_decl_type(&tir, "pos_eci");
     match pos_type {
-        ResolvedTypeExpr::GenericStruct {
+        ResolvedDeclType::Value(ResolvedValueType::Struct {
             name, generic_args, ..
-        } => {
+        }) => {
             assert_eq!(name.as_str(), "Vec3");
             assert_eq!(generic_args.len(), 2);
             assert_eq!(
                 generic_args[0],
-                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                ResolvedGenericArg::Dim(ResolvedDim::Concrete(Dimension::base(
                     BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
-                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Eci")
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedValueType::Struct { name: n, .. }) if n.as_str() == "Eci")
             );
         }
-        other => panic!("expected GenericStruct, got {other:?}"),
+        other => panic!("expected a struct application, got {other:?}"),
     }
     // x_pos should be quantity Length
     assert_eq!(
         *root_decl_type(&tir, "x_pos"),
-        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+        ResolvedDeclType::Value(concrete_quantity(Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length
-        )))
+        ))))
     );
 }
 
@@ -969,105 +1007,78 @@ fn type_resolve_default_type_params() {
     // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
     let pos3_eci = root_decl_type(&tir, "pos3_eci");
     match pos3_eci {
-        ResolvedTypeExpr::GenericStruct {
+        ResolvedDeclType::Value(ResolvedValueType::Struct {
             name, generic_args, ..
-        } => {
+        }) => {
             assert_eq!(name.as_str(), "Pos3");
             assert_eq!(generic_args.len(), 2);
             assert_eq!(
                 generic_args[0],
-                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                ResolvedGenericArg::Dim(ResolvedDim::Concrete(Dimension::base(
                     BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
-                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Eci")
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedValueType::Struct { name: n, .. }) if n.as_str() == "Eci")
             );
         }
-        other => panic!("expected GenericStruct, got {other:?}"),
+        other => panic!("expected a struct application, got {other:?}"),
     }
 
     // pos3_default: Pos3<Length> — default fills in Unframed
     let pos3_default = root_decl_type(&tir, "pos3_default");
     match pos3_default {
-        ResolvedTypeExpr::GenericStruct {
+        ResolvedDeclType::Value(ResolvedValueType::Struct {
             name, generic_args, ..
-        } => {
+        }) => {
             assert_eq!(name.as_str(), "Pos3");
             assert_eq!(generic_args.len(), 2);
             assert_eq!(
                 generic_args[0],
-                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                ResolvedGenericArg::Dim(ResolvedDim::Concrete(Dimension::base(
                     BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
-                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Unframed"),
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedValueType::Struct { name: n, .. }) if n.as_str() == "Unframed"),
                 "expected Struct(Unframed), got {:?}",
                 generic_args[1]
             );
         }
-        other => panic!("expected GenericStruct, got {other:?}"),
+        other => panic!("expected a struct application, got {other:?}"),
     }
 }
 
-// --- resolved_to_declared_type() tests ---
+// --- to_checked_type() tests ---
 
 use crate::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 
 #[test]
 fn generic_index_substitution_preserves_resolved_owner() {
-    use crate::registry::checked_type::CheckedType;
-    use crate::registry::checked_type::IndexTypeRef;
-
     let src = make_src();
-    let registry = make_registry();
     let owner = crate::dag_id::DagId::root_in_package("test", "a");
     let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase"));
     let generic = type_param("I");
-    let resolved_type = ResolvedTypeExpr::Indexed {
-        base: Box::new(ResolvedTypeExpr::Dimensionless),
-        indexes: vec![ResolvedIndex::GenericParam(
+    let resolved_type = ResolvedDeclType::Indexed {
+        element: concrete_quantity(Dimension::dimensionless()),
+        indexes: NonEmpty::singleton(ResolvedIndex::GenericParam(
             generic.clone(),
             Span::new(0, 0),
-        )],
+        )),
     };
-    let actual = CheckedType::Indexed {
-        element: Box::new(CheckedType::Quantity(Dimension::dimensionless())),
-        index: IndexTypeRef::from_resolved(resolved_index.clone()),
-    };
-    let mut dim_sub = HashMap::new();
-    let mut index_sub = HashMap::new();
-    let mut nat_sub = HashMap::new();
-
-    unify_resolved_type(
-        &resolved_type,
-        &actual,
-        &mut dim_sub,
-        &mut index_sub,
-        &mut nat_sub,
-        &registry,
-        &src,
-        Span::new(0, 0),
-    )
-    .unwrap();
-    assert_eq!(
-        index_sub[&generic].declared_resolved(),
-        Some(&resolved_index)
-    );
-
     let mut substitution = Substitution::default();
-    for (param, index) in &index_sub {
-        substitution.bind(
-            param.clone(),
-            ResolvedGenericArg::Index(ResolvedIndex::Concrete(
-                index.declared_resolved().unwrap().clone(),
-                Span::new(0, 0),
-            )),
-        );
-    }
-    let substituted =
-        resolved_to_declared_type(&substitution.apply(&resolved_type).unwrap(), &src).unwrap();
+    substitution.bind(
+        generic,
+        ResolvedGenericArg::Index(ResolvedIndex::Concrete(
+            resolved_index.clone(),
+            Span::new(0, 0),
+        )),
+    );
+    let substituted = substitution
+        .apply(&resolved_type)
+        .unwrap()
+        .to_checked_type(&src)
+        .unwrap();
     let CheckedType::Indexed { index, .. } = substituted else {
         panic!("expected indexed type after substitution");
     };
@@ -1076,19 +1087,23 @@ fn generic_index_substitution_preserves_resolved_owner() {
 
 #[test]
 fn convert_dimensionless() {
-    let dt = resolved_to_declared_type(&ResolvedTypeExpr::Dimensionless, &make_src()).unwrap();
+    let dt = concrete_quantity(Dimension::dimensionless())
+        .to_checked_type(&make_src())
+        .unwrap();
     assert_eq!(dt, CheckedType::Quantity(Dimension::dimensionless()));
 }
 
 #[test]
 fn convert_bool() {
-    let dt = resolved_to_declared_type(&ResolvedTypeExpr::Bool, &make_src()).unwrap();
+    let dt = ResolvedValueType::Bool
+        .to_checked_type(&make_src())
+        .unwrap();
     assert_eq!(dt, CheckedType::Bool);
 }
 
 #[test]
 fn convert_int() {
-    let dt = resolved_to_declared_type(&ResolvedTypeExpr::Int, &make_src()).unwrap();
+    let dt = ResolvedValueType::Int.to_checked_type(&make_src()).unwrap();
     assert_eq!(dt, CheckedType::Int);
 }
 
@@ -1097,8 +1112,9 @@ fn convert_quantity() {
     let dim = Dimension::base(BaseDimId::Prelude(
         crate::dimension::PreludeBaseDimension::Length,
     ));
-    let dt =
-        resolved_to_declared_type(&ResolvedTypeExpr::Quantity(dim.clone()), &make_src()).unwrap();
+    let dt = concrete_quantity(dim.clone())
+        .to_checked_type(&make_src())
+        .unwrap();
     assert_eq!(dt, CheckedType::Quantity(dim));
 }
 
@@ -1106,10 +1122,12 @@ fn convert_quantity() {
 fn convert_struct() {
     let owner = crate::dag_id::DagId::root_in_package("test", "test");
     let resolved = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Foo"));
-    let dt = resolved_to_declared_type(
-        &ResolvedTypeExpr::Struct(resolved.clone(), Span::new(0, 0)),
-        &make_src(),
-    )
+    let dt = ResolvedValueType::Struct {
+        name: resolved.clone(),
+        generic_args: Vec::new(),
+        span: Span::new(0, 0),
+    }
+    .to_checked_type(&make_src())
     .unwrap();
     assert_eq!(
         dt,
@@ -1121,18 +1139,16 @@ fn convert_struct() {
 fn convert_indexed() {
     let owner = crate::dag_id::DagId::root_in_package("test", "test");
     let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("M"));
-    let dt = resolved_to_declared_type(
-        &ResolvedTypeExpr::Indexed {
-            base: Box::new(ResolvedTypeExpr::Quantity(Dimension::base(
-                BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length),
-            ))),
-            indexes: vec![ResolvedIndex::Concrete(
-                resolved_index.clone(),
-                Span::new(0, 0),
-            )],
-        },
-        &make_src(),
-    )
+    let dt = ResolvedDeclType::Indexed {
+        element: concrete_quantity(Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length,
+        ))),
+        indexes: NonEmpty::singleton(ResolvedIndex::Concrete(
+            resolved_index.clone(),
+            Span::new(0, 0),
+        )),
+    }
+    .to_checked_type(&make_src())
     .unwrap();
     assert_eq!(
         dt,
@@ -1147,26 +1163,44 @@ fn convert_indexed() {
 
 #[test]
 fn convert_generic_dim_param_fails() {
-    let err = resolved_to_declared_type(
-        &ResolvedTypeExpr::GenericDimParam(type_param("D"), Span::new(0, 0)),
-        &make_src(),
-    )
-    .unwrap_err();
-    assert!(matches!(err, GraphcalError::EvalError { .. }));
+    let span = Span::new(0, 0);
+    let dimension = |power: i16| ResolvedDim::Symbolic {
+        terms: vec![ResolvedDimTerm::GenericParam {
+            name: type_param("D"),
+            power: Rational::from(power),
+            op: crate::desugar::desugared_ast::MulDivOp::Mul,
+            span,
+        }],
+        span,
+    };
+    let err = ResolvedValueType::Quantity(dimension(1))
+        .to_checked_type(&make_src())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::EvalError { ref message, .. }
+            if message == "cannot use generic dimension parameter `D` as a concrete type"
+    ));
+    let err = ResolvedValueType::Quantity(dimension(2))
+        .to_checked_type(&make_src())
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::EvalError { ref message, .. }
+            if message == "cannot use generic dimension expression as a concrete type"
+    ));
 }
 
 #[test]
 fn convert_generic_index_fails() {
-    let err = resolved_to_declared_type(
-        &ResolvedTypeExpr::Indexed {
-            base: Box::new(ResolvedTypeExpr::Dimensionless),
-            indexes: vec![ResolvedIndex::GenericParam(
-                type_param("I"),
-                Span::new(0, 0),
-            )],
-        },
-        &make_src(),
-    )
+    let err = ResolvedDeclType::Indexed {
+        element: concrete_quantity(Dimension::dimensionless()),
+        indexes: NonEmpty::singleton(ResolvedIndex::GenericParam(
+            type_param("I"),
+            Span::new(0, 0),
+        )),
+    }
+    .to_checked_type(&make_src())
     .unwrap_err();
     assert!(matches!(err, GraphcalError::EvalError { .. }));
 }
@@ -1176,31 +1210,43 @@ fn convert_generic_index_fails() {
 #[test]
 fn resolve_bare_datetime() {
     let resolved = resolve_source_type("Datetime", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
+    assert_eq!(
+        scalar(resolved),
+        ResolvedValueType::Datetime(TimeScale::UTC)
+    );
 }
 
 #[test]
 fn resolve_datetime_utc() {
     let resolved = resolve_source_type("Datetime<UTC>", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
+    assert_eq!(
+        scalar(resolved),
+        ResolvedValueType::Datetime(TimeScale::UTC)
+    );
 }
 
 #[test]
 fn resolve_datetime_tt() {
     let resolved = resolve_source_type("Datetime<TT>", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TT));
+    assert_eq!(scalar(resolved), ResolvedValueType::Datetime(TimeScale::TT));
 }
 
 #[test]
 fn resolve_datetime_tai() {
     let resolved = resolve_source_type("Datetime<TAI>", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TAI));
+    assert_eq!(
+        scalar(resolved),
+        ResolvedValueType::Datetime(TimeScale::TAI)
+    );
 }
 
 #[test]
 fn resolve_datetime_gpst() {
     let resolved = resolve_source_type("Datetime<GPST>", &[], &[], &[]).unwrap();
-    assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::GPST));
+    assert_eq!(
+        scalar(resolved),
+        ResolvedValueType::Datetime(TimeScale::GPST)
+    );
 }
 
 #[test]
@@ -1211,15 +1257,17 @@ fn resolve_datetime_unknown_scale_error() {
 
 #[test]
 fn convert_datetime_utc() {
-    let dt = resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::UTC), &make_src())
+    let dt = ResolvedValueType::Datetime(TimeScale::UTC)
+        .to_checked_type(&make_src())
         .unwrap();
     assert_eq!(dt, CheckedType::Datetime(TimeScale::UTC));
 }
 
 #[test]
 fn convert_datetime_tt() {
-    let dt =
-        resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::TT), &make_src()).unwrap();
+    let dt = ResolvedValueType::Datetime(TimeScale::TT)
+        .to_checked_type(&make_src())
+        .unwrap();
     assert_eq!(dt, CheckedType::Datetime(TimeScale::TT));
 }
 
@@ -1347,7 +1395,7 @@ fn resolved_index_display_renders_source_spelling() {
     assert_eq!(generic.to_string(), "I");
     assert_eq!(finite.to_string(), "Fin(N + 1)");
     assert_eq!(
-        ResolvedTypeExpr::Key {
+        ResolvedValueType::Key {
             index: finite,
             span
         }
@@ -1465,29 +1513,6 @@ fn nat_mul_overflow_errors() {
     let a = NatPolyForm::from_constant(u64::MAX);
     let b = NatPolyForm::from_constant(2);
     assert!(a.mul(&b).is_err());
-}
-
-#[test]
-fn nat_unify_substituted_term_overflow_errors() {
-    // Regression: `unify_nat_poly_form` multiplied a term coefficient by
-    // a substituted binding without overflow checking (debug panic,
-    // release wraparound). `2 * N` with N bound near u64::MAX must report
-    // a mismatch instead.
-    let form = NatPolyForm::from_constant(2)
-        .mul(&NatPolyForm::from_var(type_param("N")))
-        .unwrap();
-    let mut nat_sub = HashMap::new();
-    nat_sub.insert(type_param("N"), u64::MAX / 2 + 1);
-    let src = NamedSource::new("<test>", Arc::new(String::new()));
-    let result = unify_nat_poly_form(
-        &form,
-        4,
-        &mut nat_sub,
-        &crate::registry::checked_type::IndexDisplayName::Finite(NatPolyForm::from_constant(4)),
-        &src,
-        Span::new(0, 0),
-    );
-    assert!(result.is_err());
 }
 
 #[test]

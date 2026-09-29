@@ -38,7 +38,7 @@ impl Infer<'_> {
         let mut required_param_keys = std::collections::HashSet::new();
         let param_decl_types_by_key: HashMap<
             ResolvedDeclName,
-            &crate::tir::typed::ResolvedTypeExpr,
+            &crate::tir::typed::ResolvedDeclType,
         > = dag_tir
             .params()
             .map(|param| {
@@ -51,7 +51,7 @@ impl Infer<'_> {
             .collect();
         let node_decl_types_by_key: HashMap<
             ResolvedDeclName,
-            &crate::tir::typed::ResolvedTypeExpr,
+            &crate::tir::typed::ResolvedDeclType,
         > = dag_tir
             .nodes()
             .map(|node| (node.identity(), node.type_ann.checked().resolved()))
@@ -79,7 +79,8 @@ impl Infer<'_> {
             )?;
             // A parameter type that still mentions a generic parameter has no
             // checked type and therefore matches no argument.
-            if !crate::tir::typed::resolved_to_declared_type(&expected, self.env.src)
+            if !expected
+                .to_checked_type(self.env.src)
                 .is_ok_and(|expected| expected == found)
             {
                 return Err(GraphcalError::DagArgTypeMismatch {
@@ -135,6 +136,6 @@ impl Infer<'_> {
             self.env.tir.project_type_store(),
             self.env.src,
         )?;
-        crate::tir::typed::resolved_to_declared_type(&output_decl, self.env.src)
+        output_decl.to_checked_type(self.env.src)
     }
 }

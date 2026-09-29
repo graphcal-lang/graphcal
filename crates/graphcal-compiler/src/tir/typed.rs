@@ -29,6 +29,8 @@ use crate::syntax::module_name::ScopedName;
 
 pub mod model;
 pub use model::*;
+pub mod resolved_type;
+pub use resolved_type::*;
 
 impl DagTIR {
     /// Populate the values that callers may project from this DAG.
@@ -636,7 +638,7 @@ fn resolve_instance_decl_type(
     view: &ProjectTypeStore,
     types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
+) -> Result<ResolvedDeclType, GraphcalError> {
     let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
     specialization::specialize_type(&template_type, substitution, types, src)
 }
@@ -834,7 +836,7 @@ fn collect_resolved_type_defs<'a>(
     }
     for annotation in annotations {
         collect_struct_type_defs_from_resolved_type(
-            annotation.checked().resolved(),
+            annotation.checked().resolved().element(),
             ctx,
             &mut defs,
         )?;
@@ -1111,15 +1113,12 @@ fn collect_struct_type_defs_from_declared_type(
 }
 
 fn collect_struct_type_defs_from_resolved_type(
-    resolved: &ResolvedTypeExpr,
+    resolved: &ResolvedValueType,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match resolved {
-        ResolvedTypeExpr::Struct(name, _) => {
-            record_resolved_struct_type_def(name, ctx, defs)?;
-        }
-        ResolvedTypeExpr::GenericStruct {
+        ResolvedValueType::Struct {
             name, generic_args, ..
         } => {
             record_resolved_struct_type_def(name, ctx, defs)?;
@@ -1129,19 +1128,13 @@ fn collect_struct_type_defs_from_resolved_type(
                 }
             }
         }
-        ResolvedTypeExpr::Indexed { base, indexes: _ } => {
-            collect_struct_type_defs_from_resolved_type(base, ctx, defs)?;
-        }
-        ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::Complex { .. }
-        | ResolvedTypeExpr::Key { .. }
-        | ResolvedTypeExpr::Bool
-        | ResolvedTypeExpr::Int
-        | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Quantity(_)
-        | ResolvedTypeExpr::GenericDimParam(_, _)
-        | ResolvedTypeExpr::GenericTypeParam(_, _)
-        | ResolvedTypeExpr::GenericDimExpr { .. } => {}
+        ResolvedValueType::Complex { .. }
+        | ResolvedValueType::Key { .. }
+        | ResolvedValueType::Bool
+        | ResolvedValueType::Int
+        | ResolvedValueType::Datetime(_)
+        | ResolvedValueType::Quantity(_)
+        | ResolvedValueType::GenericTypeParam(_, _) => {}
     }
     Ok(())
 }
@@ -1214,7 +1207,7 @@ fn record_resolved_struct_type_def(
                         src: definition_src.clone(),
                     })
                     .collect();
-                collect_struct_type_defs_from_resolved_type(&resolved, ctx, defs)?;
+                collect_struct_type_defs_from_resolved_type(resolved.element(), ctx, defs)?;
                 defs.insert_field(key, ResolvedStructFieldSemantics::new(resolved, bounds));
             }
         }
@@ -1791,11 +1784,6 @@ pub(crate) fn rigid_dimension_view(
 }
 
 // ---------------------------------------------------------------------------
-mod ops;
-pub use ops::resolved_to_declared_type;
-pub(crate) use ops::{declared_to_resolved_generic_arg, resolved_generic_arg_to_declared};
-#[cfg(test)]
-use ops::{unify_nat_poly_form, unify_resolved_type};
 
 // ---------------------------------------------------------------------------
 pub(crate) mod specialization;
