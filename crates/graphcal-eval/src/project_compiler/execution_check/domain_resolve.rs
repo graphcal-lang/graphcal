@@ -19,7 +19,7 @@ use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
-use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_texpr};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
@@ -239,11 +239,10 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     let evaluated = bounds
         .iter()
         .map(|bound| {
-            let facts = graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+            let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
                 ctx.evaluation.tir, ctx.evaluation.current_dag, &bound.value, ctx.bindings, &bound.src,
             )?;
-            let bound_ctx = ctx.evaluation.clone().with_expression_facts(&facts)?;
-            let runtime_value = eval_hir_expr(&bound.value, values, &empty_locals, &bound_ctx)?;
+            let runtime_value = eval_texpr(&tree, values, &empty_locals, ctx.evaluation)?;
             let value = convert(&runtime_value, bound)?;
             let display = format_display(&bound.value, &value);
             Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
@@ -555,18 +554,8 @@ fn collect_field_constraint_applications(
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
     }
     for dag in tir.dag_registry().values() {
-        let facts = dag.expression_facts();
-        for (_, record) in facts.records() {
-            if let Some(graphcal_compiler::tir::expression_facts::ValueFact {
-                constructor: Some(application),
-                ..
-            }) = record.fact.concrete_value()
-            {
-                applications.insert(ConcreteNominalApplication {
-                    identity: StructTypeRef::from_resolved(application.definition().clone()),
-                    generic_args: application.generic_args.clone(),
-                });
-            }
+        for (_, body) in dag.bodies().roots() {
+            collect_constructor_applications(body, &mut applications);
         }
         for (identity, type_def) in &dag.semantic().type_defs.struct_types {
             if type_def.generic_params().is_empty() {
@@ -578,6 +567,59 @@ fn collect_field_constraint_applications(
         }
     }
     Ok(applications)
+}
+
+/// Every concrete constructor application a checked tree makes, including
+/// the concretely typed nodes of a tree that still awaits bindings.
+fn collect_constructor_applications(
+    body: &graphcal_compiler::tir::texpr::CheckedBody,
+    applications: &mut HashSet<ConcreteNominalApplication>,
+) {
+    use graphcal_compiler::tir::texpr::{
+        CheckedBody, TConstRef, TExprKind, TNodeRef, visit_tnodes,
+    };
+    let mut insert = |definition: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
+                      generic_args: Vec<CheckedGenericArg>| {
+        applications.insert(ConcreteNominalApplication {
+            identity: StructTypeRef::from_resolved(definition.clone()),
+            generic_args,
+        });
+    };
+    match body {
+        CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
+            if let TNodeRef::Value(expr) = node {
+                match expr.kind() {
+                    TExprKind::Construct { application, .. }
+                    | TExprKind::Const(graphcal_compiler::syntax::span::Spanned {
+                        value: TConstRef::Constructor(application),
+                        ..
+                    }) => insert(application.definition(), application.generic_args.clone()),
+                    _ => {}
+                }
+            }
+        }),
+        CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
+            if let TNodeRef::Value(expr) = node {
+                let (TExprKind::Construct { application, .. }
+                | TExprKind::Const(graphcal_compiler::syntax::span::Spanned {
+                    value: TConstRef::Constructor(application),
+                    ..
+                })) = expr.kind()
+                else {
+                    return;
+                };
+                // Only a concretely typed application is one a value can have.
+                let generic_args = application
+                    .generic_args
+                    .iter()
+                    .map(graphcal_compiler::registry::checked_type::CheckedGenericArg::to_concrete)
+                    .collect::<Option<Vec<_>>>();
+                if let (Some(_), Some(generic_args)) = (expr.ty().to_concrete(), generic_args) {
+                    insert(application.definition(), generic_args);
+                }
+            }
+        }),
+    }
 }
 
 pub(super) fn resolve_struct_field_constraints_for_dags(

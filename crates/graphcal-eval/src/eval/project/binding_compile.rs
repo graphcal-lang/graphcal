@@ -88,8 +88,8 @@ impl PreparedProject {
                         span: expr.span.into(),
                     })
                 })?;
-        let (hir, facts) = self.lower_closed_binding(port, &normalized)?;
-        let (value, presentation) = self.evaluate_closed_binding(&hir, &facts)?.into_parts();
+        let tree = self.check_closed_binding(port, &normalized)?;
+        let (value, presentation) = self.evaluate_closed_binding(&tree)?.into_parts();
         Ok(ParameterValue {
             plan_id: self.plan_id,
             position,
@@ -472,17 +472,12 @@ impl PreparedProject {
         })
     }
 
-    fn lower_closed_binding(
+    /// Lower and check one closed binding value; returns its executable tree.
+    fn check_closed_binding(
         &self,
         port: &ParameterPort,
         expr: &Expr,
-    ) -> Result<
-        (
-            graphcal_compiler::hir::closed_expr::ClosedExpr,
-            graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
-        ),
-        CompileError,
-    > {
+    ) -> Result<graphcal_compiler::tir::texpr::TExpr, CompileError> {
         let hir =
             self.lower_closed_binding_expr(expr, &port.value_schema, self.tir().root_dag_id())?;
         let span = hir.span;
@@ -497,13 +492,13 @@ impl PreparedProject {
                     span: span.into(),
                 })
             })?;
-        let facts = graphcal_compiler::tir::dim_check::check_external_value_expr_type(
+        graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             self.tir(),
             &hir,
             &port.declared_type,
             &self.source,
-        )?;
-        Ok((hir, facts))
+        )
+        .map_err(CompileError::from)
     }
 
     /// Lower a closed boundary value against its canonical recursive schema.
@@ -739,8 +734,7 @@ impl PreparedProject {
 
     fn evaluate_closed_binding(
         &self,
-        expr: &graphcal_compiler::hir::closed_expr::ClosedExpr,
-        facts: &graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
+        tree: &graphcal_compiler::tir::texpr::TExpr,
     ) -> Result<crate::runtime_presentation::EvaluatedRuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
@@ -752,10 +746,9 @@ impl PreparedProject {
             &self.host_fns,
             cancellation,
         )?
-        .with_roots(&values, None)
-        .with_expression_facts(facts)?;
-        crate::eval_expr::eval_hir_expr_with_presentation(
-            expr,
+        .with_roots(&values, None);
+        crate::eval_expr::eval_texpr_with_presentation(
+            tree,
             &values,
             &crate::presentation_evidence::PresentationInstanceMap::new(),
             &locals,

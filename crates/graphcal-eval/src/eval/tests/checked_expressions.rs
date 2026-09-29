@@ -1,7 +1,7 @@
 use super::*;
 use graphcal_compiler::resolved_name::ResolvedStructTypeName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
-use graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts;
+use graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression;
 
 #[test]
 fn field_access_rejects_forged_constructor_in_the_retained_type() {
@@ -43,8 +43,8 @@ fn field_access_rejects_forged_constructor_in_the_retained_type() {
         )
         .unwrap()
         .with_roots(&values, None);
-        let result = crate::eval_expr::eval_hir_expr(
-            expr,
+        let result = crate::eval_expr::eval_texpr(
+            context.executable(expr).unwrap(),
             &values,
             &crate::eval_expr::HirLocalValueMap::root(),
             &context,
@@ -99,14 +99,16 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
         .unwrap();
         let values = crate::constant_pools::RuntimeValueMap::new();
         let locals = crate::eval_expr::HirLocalValueMap::root();
-        let result = crate::eval_expr::eval_hir_expr(bound, &values, &locals, &context);
+        let result = context
+            .executable(bound)
+            .and_then(|tree| crate::eval_expr::eval_texpr(tree, &values, &locals, &context));
         assert!(
             matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
             "prototype executed: {result:?}"
         );
         for n in [0, 1] {
             assert!(
-                specialize_bound_expression_facts(
+                specialize_bound_expression(
                     &tir,
                     tir.root(),
                     bound,
@@ -118,7 +120,7 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
             );
         }
         for n in 2..=5 {
-            let facts = specialize_bound_expression_facts(
+            let tree = specialize_bound_expression(
                 &tir,
                 tir.root(),
                 bound,
@@ -126,13 +128,7 @@ fn scalar_prototypes_require_discharge_and_invalid_membership_never_publishes() 
                 &src,
             )
             .unwrap();
-            let result = crate::eval_expr::eval_hir_expr(
-                bound,
-                &values,
-                &locals,
-                &context.clone().with_expression_facts(&facts).unwrap(),
-            )
-            .unwrap();
+            let result = crate::eval_expr::eval_texpr(&tree, &values, &locals, &context).unwrap();
             assert!(
                 matches!(result, crate::eval_expr::RuntimeValue::Int(1)),
                 "{result:?}"
@@ -192,12 +188,14 @@ fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap();
-    let result = crate::eval_expr::eval_hir_expr(
-        &bound.value,
-        &crate::constant_pools::RuntimeValueMap::new(),
-        &crate::eval_expr::HirLocalValueMap::root(),
-        &context,
-    );
+    let result = context.executable(&bound.value).and_then(|tree| {
+        crate::eval_expr::eval_texpr(
+            tree,
+            &crate::constant_pools::RuntimeValueMap::new(),
+            &crate::eval_expr::HirLocalValueMap::root(),
+            &context,
+        )
+    });
     assert!(
         matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
         "earlier sibling ran before readiness check: {result:?}"
@@ -258,7 +256,10 @@ node control: Dimensionless = probe::tick() + 1.0;
     let pending = worker
         .value_expr(worker.bound_decl_identity(&scoped_name("pending")).unwrap())
         .unwrap();
-    let result = crate::eval_expr::eval_hir_expr(pending, &values, &locals, &context(worker));
+    let worker_context = context(worker);
+    let result = worker_context
+        .executable(pending)
+        .and_then(|tree| crate::eval_expr::eval_texpr(tree, &values, &locals, &worker_context));
     assert!(
         matches!(result, Err(GraphcalError::InternalError { ref message, .. }) if message.contains("undischarged static obligations")),
         "{result:?}"
@@ -276,7 +277,14 @@ node control: Dimensionless = probe::tick() + 1.0;
                 .unwrap(),
         )
         .unwrap();
-    crate::eval_expr::eval_hir_expr(control, &values, &locals, &context(tir.root())).unwrap();
+    let root_context = context(tir.root());
+    crate::eval_expr::eval_texpr(
+        root_context.executable(control).unwrap(),
+        &values,
+        &locals,
+        &root_context,
+    )
+    .unwrap();
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,

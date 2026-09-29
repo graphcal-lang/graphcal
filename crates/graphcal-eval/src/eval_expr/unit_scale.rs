@@ -10,7 +10,7 @@ use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;
-use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_hir_expr};
+use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_texpr};
 
 /// Build a quantity runtime value after validating that it is finite.
 pub(in crate::eval_expr) fn checked_finite_quantity(
@@ -80,7 +80,12 @@ fn resolve_dynamic_unit_scale(
         ));
     }
     let empty_locals = HirLocalValueMap::root();
-    let scale_val = eval_hir_expr(&scale_hir.expr, values, &empty_locals, &scale_ctx)?;
+    let scale_val = eval_texpr(
+        scale_ctx.executable(&scale_hir.expr)?,
+        values,
+        &empty_locals,
+        &scale_ctx,
+    )?;
     let RuntimeValue::Quantity(scale_f64) = scale_val else {
         return Err(scale_ctx.internal_error(
             "dynamic unit scale expression must evaluate to a quantity",

@@ -6,14 +6,18 @@ use graphcal_compiler::builtin::{
     DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
 };
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
+use graphcal_compiler::hir::{self, FunctionRef};
 use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::{Span, Spanned};
+use graphcal_compiler::tir::texpr::{
+    ContextualLiteral, TArg, TConstRef, TExpr, TExprKind, TFieldInit, TIndexArg, TMatchArm,
+    TMatchPattern, TParamBinding,
+};
 use graphcal_compiler::tir::typed::checked::CheckedDag;
 use indexmap::IndexMap;
 use miette::NamedSource;
@@ -53,40 +57,38 @@ fn take_presentation_instance(
     }
 }
 
-/// Evaluate an already-lowered HIR expression.
+/// Evaluate a checked, executable expression tree.
 ///
-/// Module-aware TIR construction stores HIR for const/default/node expressions.
-/// This evaluator consumes canonical declaration, constructor, index-variant,
-/// inline-DAG, local, and built-in references directly instead of consulting
-/// span-keyed syntax-AST metadata.
-pub fn eval_hir_expr(
-    expr: &hir::Expr,
+/// Checking published the tree only once every type in it was concrete and
+/// every static obligation discharged, so evaluation reads each node's checked
+/// type and nominal facts from the node itself. Declaration, constructor,
+/// index-variant, inline-DAG, local, and built-in references are canonical.
+pub fn eval_texpr(
+    expr: &TExpr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    ctx.expression_fact(expr)?;
     ctx.check_dependencies(expr)?;
-    eval_hir_expr_evaluated(expr, values, None, local_values, ctx)
+    eval_texpr_evaluated(expr, values, None, local_values, ctx)
         .map(EvaluatedRuntimeValue::into_value)
 }
 
-/// Evaluate one HIR expression while preserving concrete presentation-call
+/// Evaluate one checked tree while preserving concrete presentation-call
 /// identities through value-preserving expression forms.
-pub fn eval_hir_expr_with_presentation(
-    expr: &hir::Expr,
+pub fn eval_texpr_with_presentation(
+    expr: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    ctx.expression_fact(expr)?;
     ctx.check_dependencies(expr)?;
-    eval_hir_expr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
+    eval_texpr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
 }
 
-fn eval_hir_expr_evaluated(
-    expr: &hir::Expr,
+fn eval_texpr_evaluated(
+    expr: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
@@ -96,140 +98,165 @@ fn eval_hir_expr_evaluated(
     // Recursion choke point: evaluation recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| {
-        eval_hir_expr_inner(expr, values, presentation_values, local_values, ctx)
+        eval_texpr_inner(expr, values, presentation_values, local_values, ctx)
     })
 }
 
-#[expect(clippy::too_many_lines, reason = "exhaustive HIR ExprKind evaluation")]
-fn eval_hir_expr_inner(
-    expr: &hir::Expr,
+/// A function argument the callee evaluates as a value.
+fn value_arg<'a>(arg: &'a TArg, ctx: &EvalContext<'_>) -> Result<&'a TExpr, GraphcalError> {
+    match arg {
+        TArg::Value(value) => Ok(value),
+        TArg::Contextual(literal) => Err(ctx.internal_error(
+            format!(
+                "contextual metadata is not an executable value: {:?}",
+                literal.id()
+            ),
+            literal.span(),
+        )),
+    }
+}
+
+/// The source span of a function argument.
+const fn arg_span(arg: &TArg) -> Span {
+    match arg {
+        TArg::Value(value) => value.span(),
+        TArg::Contextual(literal) => literal.span(),
+    }
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive typed expression evaluation"
+)]
+fn eval_texpr_inner(
+    expr: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    // Reject missing, contextual, or deferred facts before any operand work.
-    ctx.expression_fact(expr)?;
+    let span = expr.span();
     match expr.kind() {
-        hir::ExprKind::Error(no_error) => no_error.absurd(),
-        hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx)
+        TExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", span, ctx)
             .map(EvaluatedRuntimeValue::plain),
-        hir::ExprKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(*n))),
-        hir::ExprKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(*b))),
-        hir::ExprKind::StringLiteral(_)
-        | hir::ExprKind::OffsetDateTimeLiteral(_)
-        | hir::ExprKind::CivilDateTimeLiteral(_)
-        | hir::ExprKind::ZonedDateTimeLiteral(_)
-        | hir::ExprKind::IanaTimeZoneLiteral(_) => Err(ctx.eval_error(
-            "unexpected contextual literal in evaluation context",
-            expr.span,
-        )),
-        hir::ExprKind::TypeSystemRef(name) => Err(ctx.eval_error(
-            format!(
-                "unexpected type-system name `{:?}` in evaluation context",
-                name.value
-            ),
-            name.span,
-        )),
-        hir::ExprKind::QuantityLiteral { value, unit } => {
+        TExprKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(*n))),
+        TExprKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(*b))),
+        TExprKind::Quantity { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
-            let value = checked_unit_scaled_value(*value, scale, expr.span, ctx)?;
+            let value = checked_unit_scaled_value(*value, scale, span, ctx)?;
             let presentation = super::presentation::scaled(unit, scale, ctx);
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
-        hir::ExprKind::GraphRef(target) => {
+        TExprKind::GraphRef(target) => {
             let key = ctx.resolve(&target.value);
-            let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
+            let value = resolve_graph_ref(&target.value, target.span, values, ctx)?;
             let presentation = presentation_instance_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
-                clone_hir_graph_ref_value(value),
+                clone_graph_ref_value(value),
                 presentation,
             ))
         }
-        hir::ExprKind::ConstRef(target) => {
-            let value = eval_hir_const_ref(expr, target, values, local_values, ctx)?;
+        TExprKind::Const(target) => {
+            let value = eval_const_ref(target, values, ctx)?;
             let presentation = match &target.value {
-                ConstRef::Decl(target) => {
+                TConstRef::Decl(target) => {
                     presentation_instance_for(presentation_values, &ctx.resolve(target))
                 }
-                ConstRef::Builtin(_) | ConstRef::Constructor(_) => PresentationInstance::None,
+                TConstRef::Builtin(_) | TConstRef::Constructor(_) => PresentationInstance::None,
             };
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
-        hir::ExprKind::LocalRef(local) => local_values
+        TExprKind::Local(local) => local_values
             .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
-        hir::ExprKind::BinOp { op, lhs, rhs } => {
-            eval_hir_binop(expr.span, *op, lhs, rhs, values, local_values, ctx)
+        TExprKind::Binary { op, lhs, rhs } => {
+            eval_binop(span, *op, lhs, rhs, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
         }
-        hir::ExprKind::UnaryOp { op, operand } => {
-            eval_hir_unary(expr.span, *op, operand, values, local_values, ctx)
+        TExprKind::Unary { op, operand } => {
+            eval_unary(span, *op, operand, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
         }
-        hir::ExprKind::FnCall { callee, args, .. } => {
-            eval_hir_fn_call(expr, callee, args, values, local_values, ctx)
+        TExprKind::Call { callee, args } => {
+            eval_fn_call(span, callee, args, values, local_values, ctx)
                 .map(EvaluatedRuntimeValue::plain)
         }
-        hir::ExprKind::If {
+        TExprKind::If {
             condition,
             then_branch,
             else_branch,
         } => {
-            let cond = eval_hir_expr(condition, values, local_values, ctx)?
+            let cond = eval_texpr(condition, values, local_values, ctx)?
                 .expect_bool("if condition")
-                .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
+                .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             if cond {
-                eval_hir_expr_evaluated(then_branch, values, presentation_values, local_values, ctx)
+                eval_texpr_evaluated(then_branch, values, presentation_values, local_values, ctx)
             } else {
-                eval_hir_expr_evaluated(else_branch, values, presentation_values, local_values, ctx)
+                eval_texpr_evaluated(else_branch, values, presentation_values, local_values, ctx)
             }
         }
-        hir::ExprKind::Convert {
+        TExprKind::Convert {
             expr: inner,
             target,
         } => {
-            let value = eval_hir_expr(inner, values, local_values, ctx)?;
+            let value = eval_texpr(inner, values, local_values, ctx)?;
             Ok(EvaluatedRuntimeValue::new(
                 value,
                 super::presentation::pending(target, ctx),
             ))
         }
-        hir::ExprKind::DisplayTimezone {
+        TExprKind::DisplayTimezone {
             expr: inner,
             timezone,
         } => {
-            let value = eval_hir_expr(inner, values, local_values, ctx)?;
+            let value = eval_texpr(inner, values, local_values, ctx)?;
             Ok(EvaluatedRuntimeValue::new(
                 value,
                 PresentationInstance::Timezone(timezone.clone()),
             ))
         }
-        hir::ExprKind::FieldAccess { expr: inner, field } => {
+        TExprKind::Field { expr: inner, field } => {
             let inner_val =
-                eval_hir_expr_evaluated(inner, values, presentation_values, local_values, ctx)?;
+                eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             let (inner_val, presentation) = inner_val.into_parts();
-            let value = eval_hir_field_access(inner_val, inner, field, ctx)?;
+            let value = eval_field_access(inner_val, inner, field, ctx)?;
             let presentation = presentation
                 .project_field(&field.value)
                 .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
-        hir::ExprKind::ConstructorCall { fields, .. } => {
-            eval_hir_constructor_call(expr, fields, values, presentation_values, local_values, ctx)
-        }
-        hir::ExprKind::MapLiteral { entries } => eval_hir_map_literal(
-            checked_value_type(expr, ctx)?,
-            expr.span,
-            entries,
+        TExprKind::Construct {
+            application,
+            fields,
+        } => eval_constructor_call(
+            application,
+            fields,
             values,
             presentation_values,
             local_values,
             ctx,
         ),
-        hir::ExprKind::ForComp { bindings, body } => eval_hir_for_comp(
-            expr,
+        TExprKind::Map { entries } => {
+            let entries = entries
+                .iter()
+                .map(|entry| {
+                    let (first, rest) = entry.keys.split_first();
+                    (first, rest, &entry.value)
+                })
+                .collect::<Vec<_>>();
+            eval_map_literal(
+                expr.ty(),
+                span,
+                &entries,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )
+        }
+        TExprKind::For { bindings, body } => eval_for_comp_bindings(
+            expr.ty(),
             bindings,
             body,
             values,
@@ -237,8 +264,8 @@ fn eval_hir_expr_inner(
             local_values,
             ctx,
         ),
-        hir::ExprKind::IndexAccess { expr: inner, args } => eval_hir_index_access(
-            expr.span,
+        TExprKind::Index { expr: inner, args } => eval_index_access(
+            span,
             inner,
             args.as_slice(),
             values,
@@ -246,13 +273,13 @@ fn eval_hir_expr_inner(
             local_values,
             ctx,
         ),
-        hir::ExprKind::Scan {
+        TExprKind::Scan {
             source,
             init,
             acc,
             val,
             body,
-        } => eval_hir_scan(
+        } => eval_scan(
             source,
             init,
             acc,
@@ -263,21 +290,18 @@ fn eval_hir_expr_inner(
             local_values,
             ctx,
         ),
-        hir::ExprKind::Unfold { .. } => {
-            eval_hir_unfold(expr, values, presentation_values, local_values, ctx)
+        TExprKind::Unfold { .. } => {
+            eval_unfold(expr, values, presentation_values, local_values, ctx)
         }
-        hir::ExprKind::KeyForm { kind, arg, .. } => eval_hir_key_form(
-            *kind,
-            checked_key_axis(expr, ctx)?,
-            arg,
-            expr.span,
-            values,
-            local_values,
-            ctx,
-        )
-        .map(EvaluatedRuntimeValue::plain),
-        hir::ExprKind::Match { scrutinee, arms } => eval_hir_match(
-            expr,
+        TExprKind::Key { kind, arg, .. } => {
+            let CheckedType::Key(axis) = expr.ty() else {
+                return Err(ctx.internal_error("key expression has no retained axis", span));
+            };
+            eval_key_form(*kind, axis, arg, span, values, local_values, ctx)
+                .map(EvaluatedRuntimeValue::plain)
+        }
+        TExprKind::Match { scrutinee, arms } => eval_match(
+            span,
             scrutinee,
             arms,
             values,
@@ -285,16 +309,16 @@ fn eval_hir_expr_inner(
             local_values,
             ctx,
         ),
-        hir::ExprKind::VariantLiteral(variant) => Ok(EvaluatedRuntimeValue::plain(
+        TExprKind::Variant(variant) => Ok(EvaluatedRuntimeValue::plain(
             RuntimeValue::resolved_label(&variant.variant),
         )),
-        hir::ExprKind::DagCall {
+        TExprKind::DagCall {
             target,
             args,
             output,
             ..
-        } => eval_hir_dag_call(
-            expr,
+        } => eval_dag_call(
+            span,
             target,
             args,
             output,
@@ -306,7 +330,7 @@ fn eval_hir_expr_inner(
     }
 }
 
-fn resolve_hir_graph_ref<'a>(
+fn resolve_graph_ref<'a>(
     target: &hir::LocalDecl,
     target_span: Span,
     values: &'a RuntimeValueMap,
@@ -321,21 +345,21 @@ fn resolve_hir_graph_ref<'a>(
     })
 }
 
-fn clone_hir_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
+fn clone_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
     #[cfg(test)]
-    record_hir_cloned_runtime_nodes(value);
+    record_cloned_runtime_nodes(value);
     value.clone()
 }
 
-fn clone_hir_index_access_result(value: &RuntimeValue) -> RuntimeValue {
+fn clone_index_access_result(value: &RuntimeValue) -> RuntimeValue {
     #[cfg(test)]
-    record_hir_cloned_runtime_nodes(value);
+    record_cloned_runtime_nodes(value);
     value.clone()
 }
 
 #[cfg(test)]
-fn record_hir_cloned_runtime_nodes(value: &RuntimeValue) {
-    HIR_CLONED_RUNTIME_NODES.with(|count| {
+fn record_cloned_runtime_nodes(value: &RuntimeValue) {
+    CLONED_RUNTIME_NODES.with(|count| {
         count.set(
             count
                 .get()
@@ -346,7 +370,7 @@ fn record_hir_cloned_runtime_nodes(value: &RuntimeValue) {
 
 #[cfg(test)]
 std::thread_local! {
-    static HIR_CLONED_RUNTIME_NODES: std::cell::Cell<usize> = const {
+    static CLONED_RUNTIME_NODES: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
@@ -367,122 +391,74 @@ fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
 }
 
 #[cfg(test)]
-fn reset_hir_cloned_runtime_node_count() {
-    HIR_CLONED_RUNTIME_NODES.with(|count| count.set(0));
+fn reset_cloned_runtime_node_count() {
+    CLONED_RUNTIME_NODES.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-fn take_hir_cloned_runtime_node_count() -> usize {
-    HIR_CLONED_RUNTIME_NODES.with(|count| count.replace(0))
+fn take_cloned_runtime_node_count() -> usize {
+    CLONED_RUNTIME_NODES.with(|count| count.replace(0))
 }
 
-fn eval_hir_const_ref(
-    expr: &hir::Expr,
-    target: &graphcal_compiler::syntax::span::Spanned<ConstRef>,
+fn eval_const_ref(
+    target: &Spanned<TConstRef>,
     values: &RuntimeValueMap,
-    _local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match &target.value {
-        ConstRef::Decl(resolved) => values
+        TConstRef::Decl(resolved) => values
             .get(&ctx.resolve(resolved))
             .cloned()
             .ok_or_else(|| ctx.eval_error(format!("undefined constant `{resolved}`"), target.span)),
-        ConstRef::Constructor(_) => eval_hir_nullary_constructor(expr, ctx),
-        ConstRef::Builtin(builtin) => {
+        TConstRef::Constructor(application) => Ok(nullary_constructor(application)),
+        TConstRef::Builtin(builtin) => {
             checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
     }
 }
 
-fn checked_value_type<'a>(
-    expr: &hir::Expr,
-    ctx: &'a EvalContext<'_>,
-) -> Result<&'a CheckedType, GraphcalError> {
-    match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
-            graphcal_compiler::tir::expression_facts::ValueFact { checked_type, .. },
-        ) => Ok(checked_type),
-        _ => Err(ctx.internal_error("expression has no retained value type", expr.span)),
-    }
-}
-
-fn checked_key_axis<'a>(
-    expr: &hir::Expr,
-    ctx: &'a EvalContext<'_>,
-) -> Result<&'a IndexTypeRef, GraphcalError> {
-    match checked_value_type(expr, ctx)? {
-        CheckedType::Key(index) => Ok(index),
-        _ => Err(ctx.internal_error("key expression has no retained axis", expr.span)),
-    }
-}
-
-fn checked_constructor<'a>(
-    expr: &hir::Expr,
-    ctx: &'a EvalContext<'_>,
-) -> Result<&'a graphcal_compiler::tir::expression_facts::ConstructorApplication, GraphcalError> {
-    match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
-            graphcal_compiler::tir::expression_facts::ValueFact {
-                constructor: Some(application),
-                ..
-            },
-        ) => {
-            crate::pipeline_metrics::record(
-                crate::pipeline_metrics::Event::ConstructorFactConsumption,
-            );
-            Ok(application)
-        }
-        _ => Err(ctx.internal_error(
-            "constructor expression has no retained application",
-            expr.span,
-        )),
-    }
-}
-
-fn eval_hir_nullary_constructor(
-    expr: &hir::Expr,
-    ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let application = checked_constructor(expr, ctx)?;
-    Ok(RuntimeValue::Struct {
+fn nullary_constructor(
+    application: &graphcal_compiler::tir::expression_facts::ConstructorApplication,
+) -> RuntimeValue {
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
+    RuntimeValue::Struct {
         type_name: application.runtime_type.clone(),
         constructor: application.constructor.name(),
         generic_args: application.generic_args.clone(),
         fields: IndexMap::new(),
-    })
+    }
 }
 
-fn eval_hir_binop(
+fn eval_binop(
     span: Span,
     op: graphcal_compiler::desugar::desugared_ast::BinOp,
-    lhs: &hir::Expr,
-    rhs: &hir::Expr,
+    lhs: &TExpr,
+    rhs: &TExpr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     let compare = |comparison| {
-        let l = eval_hir_expr(lhs, values, local_values, ctx)?;
-        let r = eval_hir_expr(rhs, values, local_values, ctx)?;
+        let l = eval_texpr(lhs, values, local_values, ctx)?;
+        let r = eval_texpr(rhs, values, local_values, ctx)?;
         super::arithmetic::eval_comparison_values(comparison, &l, &r, ctx, span)
     };
     match op {
         BinOp::And => {
-            let l = eval_hir_expr(lhs, values, local_values, ctx)?
+            let l = eval_texpr(lhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_hir_expr(rhs, values, local_values, ctx)?
+            let r = eval_texpr(rhs, values, local_values, ctx)?
                 .expect_bool("AND operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(l && r))
         }
         BinOp::Or => {
-            let l = eval_hir_expr(lhs, values, local_values, ctx)?
+            let l = eval_texpr(lhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            let r = eval_hir_expr(rhs, values, local_values, ctx)?
+            let r = eval_texpr(rhs, values, local_values, ctx)?
                 .expect_bool("OR operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(l || r))
@@ -493,10 +469,10 @@ fn eval_hir_binop(
         BinOp::Gt => compare(Comparison::Ord(OrderingOp::Gt)),
         BinOp::Le => compare(Comparison::Ord(OrderingOp::Le)),
         BinOp::Ge => compare(Comparison::Ord(OrderingOp::Ge)),
-        BinOp::Pow(exponent) => eval_hir_power(span, exponent, lhs, rhs, values, local_values, ctx),
+        BinOp::Pow(exponent) => eval_power(span, exponent, lhs, rhs, values, local_values, ctx),
         _ => {
-            let l = eval_hir_expr(lhs, values, local_values, ctx)?;
-            let r = eval_hir_expr(rhs, values, local_values, ctx)?;
+            let l = eval_texpr(lhs, values, local_values, ctx)?;
+            let r = eval_texpr(rhs, values, local_values, ctx)?;
             if let (RuntimeValue::Int(li), RuntimeValue::Int(ri)) = (&l, &r) {
                 return super::arithmetic::eval_int_binop(op, *li, *ri, ctx, span)
                     .map(RuntimeValue::Int);
@@ -558,11 +534,11 @@ fn eval_hir_binop(
     }
 }
 
-fn eval_hir_power(
+fn eval_power(
     span: Span,
     exponent: graphcal_compiler::syntax::ast::PowerExponent,
-    base: &hir::Expr,
-    exponent_expr: &hir::Expr,
+    base: &TExpr,
+    exponent_expr: &TExpr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
@@ -570,7 +546,7 @@ fn eval_hir_power(
     use graphcal_compiler::desugar::desugared_ast::BinOp;
     use graphcal_compiler::syntax::ast::PowerExponent;
 
-    let base = eval_hir_expr(base, values, local_values, ctx)?;
+    let base = eval_texpr(base, values, local_values, ctx)?;
     let op = BinOp::Pow(exponent);
     match (base, exponent) {
         (RuntimeValue::Int(base), PowerExponent::Exact(exact)) => {
@@ -584,7 +560,7 @@ fn eval_hir_power(
                 .map(RuntimeValue::Int)
         }
         (RuntimeValue::Int(base), _) => {
-            let runtime_exponent = eval_hir_expr(exponent_expr, values, local_values, ctx)?;
+            let runtime_exponent = eval_texpr(exponent_expr, values, local_values, ctx)?;
             let RuntimeValue::Int(runtime_exponent) = runtime_exponent else {
                 return Err(
                     ctx.internal_error("non-Int exponent reached Int power evaluation", span)
@@ -598,7 +574,7 @@ fn eval_hir_power(
                 .and_then(|value| checked_finite_quantity(value, "quantity power", span, ctx))
         }
         (RuntimeValue::Quantity(base), _) => {
-            let runtime_exponent = eval_hir_expr(exponent_expr, values, local_values, ctx)?
+            let runtime_exponent = eval_texpr(exponent_expr, values, local_values, ctx)?
                 .expect_quantity("power exponent")
                 .map_err(|error| ctx.internal_error(error.to_string(), span))?;
             super::arithmetic::eval_quantity_binop(op, base.get(), runtime_exponent, ctx, span)
@@ -611,17 +587,17 @@ fn eval_hir_power(
     }
 }
 
-fn eval_hir_unary(
+fn eval_unary(
     span: Span,
     op: graphcal_compiler::desugar::desugared_ast::UnaryOp,
-    operand: &hir::Expr,
+    operand: &TExpr,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match op {
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg => {
-            let v = eval_hir_expr(operand, values, local_values, ctx)?;
+            let v = eval_texpr(operand, values, local_values, ctx)?;
             match v {
                 RuntimeValue::Int(i) => i
                     .checked_neg()
@@ -640,7 +616,7 @@ fn eval_hir_unary(
             }
         }
         graphcal_compiler::desugar::desugared_ast::UnaryOp::Not => {
-            let v = eval_hir_expr(operand, values, local_values, ctx)?
+            let v = eval_texpr(operand, values, local_values, ctx)?
                 .expect_bool("logical NOT")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
             Ok(RuntimeValue::Bool(!v))
@@ -648,9 +624,9 @@ fn eval_hir_unary(
     }
 }
 
-fn expect_hir_builtin_arity(
+fn expect_builtin_arity(
     function: BuiltinFn,
-    args: &[hir::Expr],
+    args: &[TArg],
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
@@ -671,10 +647,10 @@ fn expect_hir_builtin_arity(
     clippy::too_many_lines,
     reason = "function dispatch handles all built-in call forms"
 )]
-fn eval_hir_fn_call(
-    expr: &hir::Expr,
-    callee: &graphcal_compiler::syntax::span::Spanned<FunctionRef>,
-    args: &[hir::Expr],
+fn eval_fn_call(
+    span: Span,
+    callee: &Spanned<FunctionRef>,
+    args: &[TArg],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
@@ -683,28 +659,28 @@ fn eval_hir_fn_call(
         FunctionRef::Builtin(builtin) => (builtin.function(), None),
         FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
         FunctionRef::External(ext) => {
-            return eval_hir_extern_fn(expr, ext, args, values, local_values, ctx);
+            return eval_extern_fn(span, ext, args, values, local_values, ctx);
         }
     };
     // The single arity re-check for every built-in family; family kernels
     // below rely on the accepted argument count.
-    expect_hir_builtin_arity(name, args, callee.span, ctx)?;
+    expect_builtin_arity(name, args, callee.span, ctx)?;
     match name {
         BuiltinFn::Complex(function) => {
             let arguments = args
                 .iter()
-                .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
+                .map(|argument| eval_texpr(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             super::complex::evaluate_builtin(function, &arguments).map_err(|error| {
                 if error.is_internal_invariant() {
-                    ctx.internal_error(error.to_string(), expr.span)
+                    ctx.internal_error(error.to_string(), span)
                 } else {
-                    ctx.eval_error(error.to_string(), expr.span)
+                    ctx.eval_error(error.to_string(), span)
                 }
             })
         }
         BuiltinFn::Aggregation(kind) => {
-            let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Indexed {
                 index_name,
                 entries,
@@ -712,30 +688,30 @@ fn eval_hir_fn_call(
             else {
                 return Err(ctx.internal_error(
                     format!("{}() received a non-indexed argument", name.as_str()),
-                    args[0].span,
+                    arg_span(&args[0]),
                 ));
             };
             match kind {
                 AggregationFn::Key(function) => {
-                    eval_hir_extremum_key(function, &index_name, &entries, expr.span, ctx)
+                    eval_extremum_key(function, &index_name, &entries, span, ctx)
                 }
                 AggregationFn::Value(function) => {
-                    eval_hir_aggregation_fn(function, &entries, expr.span, ctx.src)
+                    eval_aggregation_fn(function, &entries, span, ctx.src)
                 }
             }
         }
         BuiltinFn::LinearAlgebra(function) => {
             let arguments = args
                 .iter()
-                .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
+                .map(|argument| eval_texpr(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             super::linear_algebra::evaluate(function, arguments, ctx).map_err(|error| {
                 error.cancellation().map_or_else(
                     || {
                         if error.is_internal_invariant() {
-                            ctx.internal_error(error.to_string(), expr.span)
+                            ctx.internal_error(error.to_string(), span)
                         } else {
-                            ctx.eval_error(error.to_string(), expr.span)
+                            ctx.eval_error(error.to_string(), span)
                         }
                     },
                     GraphcalError::from,
@@ -743,14 +719,14 @@ fn eval_hir_fn_call(
             })
         }
         BuiltinFn::Conversion(kind) => {
-            eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
+            eval_conversion_fn(kind, span, args, values, local_values, ctx)
         }
         BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    args[0].span,
+                    arg_span(&args[0]),
                 ));
             };
             Ok(RuntimeValue::Datetime(
@@ -758,20 +734,20 @@ fn eval_hir_fn_call(
             ))
         }
         BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => {
-            eval_hir_datetime_constructor(kind, epoch_scale, expr.span, args, ctx.src)
+            eval_datetime_constructor(kind, epoch_scale, span, args, ctx.src)
         }
         BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
-            let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    args[0].span,
+                    arg_span(&args[0]),
                 ));
             };
             let fields = super::datetime::GregorianFields::from_epoch(epoch).map_err(|error| {
                 ctx.internal_error(
                     format!("invalid declared-scale Gregorian fields: {error}"),
-                    args[0].span,
+                    arg_span(&args[0]),
                 )
             })?;
             let result = match kind {
@@ -787,16 +763,16 @@ fn eval_hir_fn_call(
             Ok(RuntimeValue::Int(result))
         }
         BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
-            let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let num = match arg_val {
                 RuntimeValue::Quantity(v) => v.get(),
                 RuntimeValue::Int(v) => {
-                    exact_numeric_datetime_arg(v, name.as_str(), args[0].span, ctx)?
+                    exact_numeric_datetime_arg(v, name.as_str(), arg_span(&args[0]), ctx)?
                 }
                 _ => {
                     return Err(ctx.internal_error(
                         format!("{}() received non-numeric argument", name.as_str()),
-                        args[0].span,
+                        arg_span(&args[0]),
                     ));
                 }
             };
@@ -807,14 +783,14 @@ fn eval_hir_fn_call(
             };
             super::datetime::checked_epoch_from_numeric(num, kind)
                 .map(RuntimeValue::Datetime)
-                .map_err(|error| ctx.eval_error(error.to_string(), args[0].span))
+                .map_err(|error| ctx.eval_error(error.to_string(), arg_span(&args[0])))
         }
         BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
-            let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg_val = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Datetime(epoch) = arg_val else {
                 return Err(ctx.internal_error(
                     format!("{}() received non-Datetime argument", name.as_str()),
-                    args[0].span,
+                    arg_span(&args[0]),
                 ));
             };
             let result = match kind {
@@ -822,10 +798,10 @@ fn eval_hir_fn_call(
                 DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
                 DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
             };
-            checked_finite_quantity(result, "datetime conversion", args[0].span, ctx)
+            checked_finite_quantity(result, "datetime conversion", arg_span(&args[0]), ctx)
         }
         BuiltinFn::Scalar(function) => {
-            eval_hir_builtin_fn(expr, function, args, values, local_values, ctx)
+            eval_builtin_fn(span, function, args, values, local_values, ctx)
         }
     }
 }
@@ -835,10 +811,10 @@ fn eval_hir_fn_call(
 /// `key` positions are proven in bounds by the checker; `fin_key` performs
 /// its runtime range check here; the coordinate searches scan the axis's
 /// coordinates with the documented policies.
-fn eval_hir_key_form(
+fn eval_key_form(
     kind: graphcal_compiler::syntax::ast::KeyFormKind,
     axis_ref: &IndexTypeRef,
-    arg: &hir::Expr,
+    arg: &TExpr,
     span: Span,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -846,18 +822,18 @@ fn eval_hir_key_form(
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::syntax::ast::KeyFormKind;
 
-    let arg_val = eval_hir_expr(arg, values, local_values, ctx)?;
+    let arg_val = eval_texpr(arg, values, local_values, ctx)?;
     match kind {
         KeyFormKind::Static => {
             // Bounds were discharged at compile time.
             let RuntimeValue::Int(position) = arg_val else {
-                return Err(ctx.internal_error("key() received a non-Int position", arg.span));
+                return Err(ctx.internal_error("key() received a non-Int position", arg.span()));
             };
             Ok(RuntimeValue::Int(position))
         }
         KeyFormKind::Fin => {
             let RuntimeValue::Int(position) = arg_val else {
-                return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span));
+                return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span()));
             };
             let finite = axis_ref.finite_index().ok_or_else(|| {
                 ctx.internal_error("fin_key() has no retained concrete Fin axis", span)
@@ -875,7 +851,7 @@ fn eval_hir_key_form(
         KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
             let quantity = arg_val
                 .expect_quantity("coordinate search argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?;
+                .map_err(|e| ctx.eval_error(e.to_string(), arg.span()))?;
             let definition = index_def_for_ref(axis_ref, ctx).ok_or_else(|| {
                 ctx.internal_error(
                     format!("index `{axis_ref}` has no registered definition"),
@@ -942,7 +918,7 @@ fn eval_hir_key_form(
 
 /// Evaluate `argmin`/`argmax`: find the extremum entry and reify its entry
 /// key as the matching key runtime value for the reduced axis.
-fn eval_hir_extremum_key(
+fn eval_extremum_key(
     kind: KeyAggregation,
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
@@ -1014,7 +990,7 @@ fn runtime_key_for_entry(
     }
 }
 
-fn eval_hir_aggregation_fn(
+fn eval_aggregation_fn(
     kind: ValueAggregation,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
     span: Span,
@@ -1038,30 +1014,30 @@ fn eval_hir_aggregation_fn(
     })
 }
 
-fn eval_hir_conversion_fn(
+fn eval_conversion_fn(
     kind: ConversionFn,
     span: Span,
-    args: &[hir::Expr],
+    args: &[TArg],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         ConversionFn::ToFloat => {
-            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::Int(i) = arg else {
                 return Err(
-                    ctx.internal_error("to_float() received non-Int argument", args[0].span)
+                    ctx.internal_error("to_float() received non-Int argument", arg_span(&args[0]))
                 );
             };
             #[expect(
                 clippy::cast_precision_loss,
                 reason = "explicit Int to float conversion"
             )]
-            checked_finite_quantity(i as f64, "to_float()", args[0].span, ctx)
+            checked_finite_quantity(i as f64, "to_float()", arg_span(&args[0]), ctx)
         }
         ConversionFn::ToInt => {
-            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             // A Fin-axis key is represented as its position integer: to_int()
             // on a key is the identity at runtime, checked at the type level.
             if let RuntimeValue::Int(position) = arg {
@@ -1085,11 +1061,11 @@ fn eval_hir_conversion_fn(
                 })
         }
         ConversionFn::Coord => {
-            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let arg = eval_texpr(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
             let RuntimeValue::CoordinateLabel { value, .. } = arg else {
                 return Err(ctx.internal_error(
                     "coord() received a non-coordinate-key argument",
-                    args[0].span,
+                    arg_span(&args[0]),
                 ));
             };
             Ok(RuntimeValue::Quantity(value))
@@ -1111,41 +1087,53 @@ fn exact_numeric_datetime_arg(
     })
 }
 
-fn eval_hir_datetime_constructor(
+/// The contextual literal a function argument consists of, if it is one.
+const fn contextual_literal(arg: &TArg) -> Option<&ContextualLiteral> {
+    match arg {
+        TArg::Contextual(literal) => Some(literal.literal()),
+        TArg::Value(_) => None,
+    }
+}
+
+fn eval_datetime_constructor(
     kind: DatetimeConstructorFn,
     epoch_scale: Option<TimeScale>,
     span: Span,
-    args: &[hir::Expr],
+    args: &[TArg],
     src: &NamedSource<Arc<String>>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         DatetimeConstructorFn::Datetime => {
             let epoch = match args {
                 [arg] => {
-                    let hir::ExprKind::OffsetDateTimeLiteral(datetime) = arg.kind() else {
+                    let Some(ContextualLiteral::OffsetDateTime(datetime)) = contextual_literal(arg)
+                    else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unparsed offset literal".to_string(),
                             src: src.clone(),
-                            span: arg.span.into(),
+                            span: arg_span(arg).into(),
                         });
                     };
                     super::datetime::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
-                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = datetime_arg.kind() else {
+                    let Some(ContextualLiteral::ZonedDateTime(datetime)) =
+                        contextual_literal(datetime_arg)
+                    else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unresolved zoned literal".to_string(),
                             src: src.clone(),
-                            span: datetime_arg.span.into(),
+                            span: arg_span(datetime_arg).into(),
                         });
                     };
-                    let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = timezone_arg.kind()
+                    let Some(ContextualLiteral::TimeZone(time_zone_id)) =
+                        contextual_literal(timezone_arg)
                     else {
                         return Err(GraphcalError::InternalError {
                             message: "datetime() received an unvalidated timezone argument"
                                 .to_string(),
                             src: src.clone(),
-                            span: timezone_arg.span.into(),
+                            span: arg_span(timezone_arg).into(),
                         });
                     };
                     if datetime.time_zone() != time_zone_id {
@@ -1153,7 +1141,7 @@ fn eval_hir_datetime_constructor(
                             message: "resolved datetime timezone does not match its argument"
                                 .to_string(),
                             src: src.clone(),
-                            span: timezone_arg.span.into(),
+                            span: arg_span(timezone_arg).into(),
                         });
                     }
                     super::datetime::datetime_from_zoned(datetime)
@@ -1179,11 +1167,11 @@ fn eval_hir_datetime_constructor(
                     span: span.into(),
                 });
             };
-            let hir::ExprKind::CivilDateTimeLiteral(datetime) = arg.kind() else {
+            let Some(ContextualLiteral::CivilDateTime(datetime)) = contextual_literal(arg) else {
                 return Err(GraphcalError::InternalError {
                     message: "epoch() received an unparsed civil literal".to_string(),
                     src: src.clone(),
-                    span: arg.span.into(),
+                    span: arg_span(arg).into(),
                 });
             };
             let Some(scale) = epoch_scale else {
@@ -1198,7 +1186,7 @@ fn eval_hir_datetime_constructor(
                     GraphcalError::InternalError {
                         message: format!("validated epoch literal failed evaluation: {error}"),
                         src: src.clone(),
-                        span: arg.span.into(),
+                        span: arg_span(arg).into(),
                     }
                 })?;
             Ok(RuntimeValue::Datetime(epoch))
@@ -1381,10 +1369,10 @@ fn rebuild_extern_array<T>(
     clippy::too_many_lines,
     reason = "single linear path: lookup, argument conversion, call, result conversion"
 )]
-fn eval_hir_extern_fn(
-    expr: &hir::Expr,
+fn eval_extern_fn(
+    span: Span,
     ext: &hir::ExternFnRef,
-    args: &[hir::Expr],
+    args: &[TArg],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
@@ -1400,7 +1388,7 @@ fn eval_hir_extern_fn(
     let Some(registry) = ctx.host_fns() else {
         return Err(ctx.eval_error(
             format!("extern function `{ext}` cannot be evaluated in this context (no host function registry)"),
-            expr.span,
+            span,
         ));
     };
     let key = ext.key();
@@ -1410,13 +1398,13 @@ fn eval_hir_extern_fn(
                 "extern function `{}` (plugin \"{}\") is not provided by the host",
                 ext.name, ext.plugin
             ),
-            expr.span,
+            span,
         ));
     };
     let Some(function) = ctx.tir.extern_functions().get(&key) else {
         return Err(ctx.internal_error(
             format!("extern function `{ext}` has no resolved signature after dimension checking"),
-            expr.span,
+            span,
         ));
     };
     let signature = &function.signature;
@@ -1427,7 +1415,7 @@ fn eval_hir_extern_fn(
                 signature.arity(),
                 args.len()
             ),
-            expr.span,
+            span,
         ));
     }
 
@@ -1437,19 +1425,20 @@ fn eval_hir_extern_fn(
     > = std::collections::HashMap::new();
     let mut arg_values: Vec<HostFnValue> = Vec::with_capacity(args.len());
     for (param, arg) in signature.params().iter().zip(args) {
-        let value = eval_hir_expr(arg, values, local_values, ctx)?;
+        let arg_span = arg_span(arg);
+        let value = eval_texpr(value_arg(arg, ctx)?, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
             (ParamKind::Scalar(ScalarValueKind::Quantity(_)), value) => {
                 let value = value
                     .expect_quantity("extern function argument")
-                    .map_err(|error| ctx.eval_error(error.to_string(), arg.span))?;
+                    .map_err(|error| ctx.eval_error(error.to_string(), arg_span))?;
                 let value = validate_quantity(value).map_err(|error| {
                     ctx.eval_error(
                         format!(
                             "extern function `{ext}` received an invalid quantity for parameter `{}`: {error}",
                             param.name
                         ),
-                        arg.span,
+                        arg_span,
                     )
                 })?;
                 HostFnValue::F64(value.get())
@@ -1461,7 +1450,7 @@ fn eval_hir_extern_fn(
                             "extern function `{ext}` received an invalid Int for parameter `{}`: {error}",
                             param.name
                         ),
-                        arg.span,
+                        arg_span,
                     )
                 })?;
                 HostFnValue::F64(value)
@@ -1470,7 +1459,7 @@ fn eval_hir_extern_fn(
                 HostFnValue::F64(encode_bool(value))
             }
             (ParamKind::Indexed { element, indexes }, value) => {
-                let flattened = flatten_extern_array(&value, element, ctx, arg.span)?;
+                let flattened = flatten_extern_array(&value, element, ctx, arg_span)?;
                 if flattened.axes.len() != indexes.len() {
                     return Err(ctx.internal_error(
                         format!(
@@ -1479,7 +1468,7 @@ fn eval_hir_extern_fn(
                             flattened.axes.len(),
                             indexes.len()
                         ),
-                        arg.span,
+                        arg_span,
                     ));
                 }
                 for (index, bound) in indexes.iter().zip(&flattened.axes) {
@@ -1494,7 +1483,7 @@ fn eval_hir_extern_fn(
                                 format!(
                                     "extern function `{ext}` received inconsistent typed axes for index variable `{index}` after dimension checking"
                                 ),
-                                arg.span,
+                                arg_span,
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(_) => {}
@@ -1514,7 +1503,7 @@ fn eval_hir_extern_fn(
                                         "extern function `{ext}` parameter `{}` has an invalid quantity at flat array index {index}: {error}",
                                         param.name
                                     ),
-                                    arg.span,
+                                    arg_span,
                                 )
                             })
                         })
@@ -1532,7 +1521,7 @@ fn eval_hir_extern_fn(
                                         "extern function `{ext}` parameter `{}` has an invalid Int at flat array index {index}: {error}",
                                         param.name
                                     ),
-                                    arg.span,
+                                    arg_span,
                                 )
                             })
                         })
@@ -1541,7 +1530,7 @@ fn eval_hir_extern_fn(
                 let array = HostArray::try_new(shape, encoded_values).map_err(|error| {
                     ctx.internal_error(
                         format!("failed to flatten extern array argument: {error}"),
-                        arg.span,
+                        arg_span,
                     )
                 })?;
                 HostFnValue::Array(array)
@@ -1552,7 +1541,7 @@ fn eval_hir_extern_fn(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
                         param.name
                     ),
-                    arg.span,
+                    arg_span,
                 ));
             }
         };
@@ -1565,14 +1554,14 @@ fn eval_hir_extern_fn(
                 "extern function `{}` (plugin \"{}\") failed: {}",
                 ext, ext.plugin, err.message
             ),
-            expr.span,
+            span,
         )
     })?;
 
     let decoded = decode_result(signature.result(), &result).map_err(|error| {
         ctx.eval_error(
             format!("extern function `{ext}` returned an invalid ABI result: {error}"),
-            expr.span,
+            span,
         )
     })?;
 
@@ -1590,7 +1579,7 @@ fn eval_hir_extern_fn(
                             format!(
                                 "extern function `{ext}` result index variable `{index}` was not bound by any argument"
                             ),
-                            expr.span,
+                            span,
                         )
                     })
                 })
@@ -1602,7 +1591,7 @@ fn eval_hir_extern_fn(
                         "extern function `{ext}` returned shape {:?}, expected {expected_shape:?}",
                         array.shape()
                     ),
-                    expr.span,
+                    span,
                 ));
             }
             match array.values() {
@@ -1611,21 +1600,21 @@ fn eval_hir_extern_fn(
                     values,
                     |value| RuntimeValue::Quantity(*value),
                     ctx,
-                    expr.span,
+                    span,
                 ),
                 ValidatedHostArrayValues::Bool(values) => rebuild_extern_array(
                     &axes,
                     values,
                     |value| RuntimeValue::Bool(*value),
                     ctx,
-                    expr.span,
+                    span,
                 ),
                 ValidatedHostArrayValues::Int(values) => rebuild_extern_array(
                     &axes,
                     values,
                     |value| RuntimeValue::Int(*value),
                     ctx,
-                    expr.span,
+                    span,
                 ),
             }
         }
@@ -1633,7 +1622,7 @@ fn eval_hir_extern_fn(
             let ResultKind::Struct(result_struct) = signature.result() else {
                 return Err(ctx.internal_error(
                     format!("extern function `{ext}` decoded a struct for a non-struct result"),
-                    expr.span,
+                    span,
                 ));
             };
             let fields = fields
@@ -1657,10 +1646,10 @@ fn eval_hir_extern_fn(
     }
 }
 
-fn eval_hir_builtin_fn(
-    expr: &hir::Expr,
+fn eval_builtin_fn(
+    span: Span,
     name: ScalarFn,
-    args: &[hir::Expr],
+    args: &[TArg],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
@@ -1669,28 +1658,26 @@ fn eval_hir_builtin_fn(
     let arg_values: Vec<f64> = args
         .iter()
         .map(|arg| {
-            let rv = eval_hir_expr(arg, values, local_values, ctx)?;
+            let rv = eval_texpr(value_arg(arg, ctx)?, values, local_values, ctx)?;
             rv.expect_quantity("function argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))
+                .map_err(|e| ctx.eval_error(e.to_string(), arg_span(arg)))
         })
         .collect::<Result<_, _>>()?;
     let result = builtin
         .eval(&arg_values)
-        .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), expr.span))?;
+        .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), span))?;
     checked_finite_quantity(
-        super::arithmetic::check_finite(result, name.as_str(), ctx, expr.span)?,
+        super::arithmetic::check_finite(result, name.as_str(), ctx, span)?,
         name.as_str(),
-        expr.span,
+        span,
         ctx,
     )
 }
 
-fn eval_hir_field_access(
+fn eval_field_access(
     inner_val: RuntimeValue,
-    inner: &hir::Expr,
-    field: &graphcal_compiler::syntax::span::Spanned<
-        graphcal_compiler::syntax::type_name::FieldName,
-    >,
+    inner: &TExpr,
+    field: &Spanned<graphcal_compiler::syntax::type_name::FieldName>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
@@ -1700,11 +1687,10 @@ fn eval_hir_field_access(
             generic_args,
             fields,
         } => {
-            let CheckedType::Struct(expected, expected_args) = checked_value_type(inner, ctx)?
-            else {
+            let CheckedType::Struct(expected, expected_args) = inner.ty() else {
                 return Err(ctx.internal_error(
                     "field access has no retained struct operand type",
-                    inner.span,
+                    inner.span(),
                 ));
             };
             let expected_runtime = ctx.current_dag.frame().struct_type(expected.resolved());
@@ -1716,7 +1702,7 @@ fn eval_hir_field_access(
                 .ok_or_else(|| {
                     ctx.internal_error(
                         "retained field operand has no nominal definition",
-                        inner.span,
+                        inner.span(),
                     )
                 })?;
             let exposes_field = definition.union_members().is_some_and(|members| {
@@ -1739,25 +1725,25 @@ fn eval_hir_field_access(
                     )
                 })
         }
-        _ => Err(ctx.eval_error("field access on non-struct value", inner.span)),
+        _ => Err(ctx.eval_error("field access on non-struct value", inner.span())),
     }
 }
 
-fn eval_hir_constructor_call(
-    expr: &hir::Expr,
-    fields: &[hir::expr::FieldInit],
+fn eval_constructor_call(
+    application: &graphcal_compiler::tir::expression_facts::ConstructorApplication,
+    fields: &[TFieldInit],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let application = checked_constructor(expr, ctx)?;
+    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ConstructorFactConsumption);
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
     let mut field_map = IndexMap::new();
     let mut field_presentations = HashMap::new();
     for field_init in fields {
-        let evaluated = eval_hir_expr_evaluated(
+        let evaluated = eval_texpr_evaluated(
             &field_init.value,
             values,
             presentation_values,
@@ -1765,7 +1751,7 @@ fn eval_hir_constructor_call(
             ctx,
         )?;
         let (val, presentation) = evaluated.into_parts();
-        if application.constructor.constrains(&field_init.name.value)
+        if application.constructor.constrains(&field_init.name)
             && let Some(field_constraints) = ctx.struct_field_constraints()
         {
             let key =
@@ -1773,30 +1759,30 @@ fn eval_hir_constructor_call(
                     owning_type.clone(),
                     application.generic_args.clone(),
                     constructor_name.clone(),
-                    field_init.name.value.clone(),
+                    field_init.name.clone(),
                 );
             let constraint = field_constraints.get(&key).ok_or_else(|| {
                 ctx.internal_error(
                     format!(
                         "required field constraint `{constructor_name}.{}` is missing",
-                        field_init.name.value
+                        field_init.name
                     ),
-                    field_init.value.span,
+                    field_init.value.span(),
                 )
             })?;
             if let Err(violation) = crate::domain_check::check_domain_constraint(&val, constraint) {
                 return Err(ctx.eval_error(
                     format!(
                         "field `{constructor_name}.{}` {}",
-                        field_init.name.value, violation.message
+                        field_init.name, violation.message
                     ),
-                    field_init.value.span,
+                    field_init.value.span(),
                 ));
             }
         }
-        field_map.insert(field_init.name.value.clone(), val);
+        field_map.insert(field_init.name.clone(), val);
         if !presentation.is_none() {
-            field_presentations.insert(field_init.name.value.clone(), presentation);
+            field_presentations.insert(field_init.name.clone(), presentation);
         }
     }
     Ok(EvaluatedRuntimeValue::new(
@@ -1864,14 +1850,18 @@ fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "recursive map evaluation keeps values and sparse presentation entries reordered atomically"
-)]
-fn eval_hir_map_literal(
+/// One map-literal entry still to place: its key on the current axis, its
+/// keys on the remaining axes, and its value.
+type MapLiteralEntry<'a> = (
+    &'a hir::expr::MapEntryKey,
+    &'a [hir::expr::MapEntryKey],
+    &'a TExpr,
+);
+
+fn eval_map_literal(
     checked_type: &CheckedType,
     map_span: Span,
-    entries: &[hir::expr::MapEntry],
+    entries: &[MapLiteralEntry<'_>],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
@@ -1880,8 +1870,8 @@ fn eval_hir_map_literal(
     let first = entries
         .first()
         .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
-    let first_key = first.keys.first();
-    let arity = first.keys.len();
+    let (first_key, first_rest, _) = first;
+    let arity = first_rest.len().saturating_add(1);
     let CheckedType::Indexed { element, index } = checked_type else {
         return Err(ctx.internal_error("map has no retained indexed type", map_span));
     };
@@ -1895,16 +1885,10 @@ fn eval_hir_map_literal(
             )
         })?;
         let mut evaluated = IndexMap::new();
-        for entry in entries {
-            let key = entry.keys.first();
+        for (key, _, value) in entries {
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
-            let value = eval_hir_expr_evaluated(
-                &entry.value,
-                values,
-                presentation_values,
-                local_values,
-                ctx,
-            )?;
+            let value =
+                eval_texpr_evaluated(value, values, presentation_values, local_values, ctx)?;
             evaluated.insert(variant, value);
         }
         let mut result = IndexMap::new();
@@ -1944,24 +1928,16 @@ fn eval_hir_map_literal(
     let mut presentations = IndexMap::new();
     for variant in &variants {
         let mut sub_entries = Vec::new();
-        for entry in entries {
-            let first_entry_key = entry.keys.first();
+        for (first_entry_key, rest, value) in entries {
             if map_entry_variant_for_axis(first_entry_key, &idx_name, ctx)? != *variant {
                 continue;
             }
-            let keys = graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(
-                entry.keys.as_slice()[1..].to_vec(),
-            )
-            .map_err(|_| {
-                ctx.internal_error(
-                    "multi-axis map literal entry lost all keys",
-                    entry.value.span,
-                )
-            })?;
-            sub_entries.push(hir::expr::MapEntry {
-                keys,
-                value: entry.value.clone(),
-            });
+            let Some((next_key, rest)) = rest.split_first() else {
+                return Err(
+                    ctx.internal_error("multi-axis map literal entry lost all keys", value.span())
+                );
+            };
+            sub_entries.push((next_key, rest, *value));
         }
         if sub_entries.is_empty() {
             return Err(ctx.internal_error(
@@ -1971,7 +1947,7 @@ fn eval_hir_map_literal(
                 map_span,
             ));
         }
-        let evaluated = eval_hir_map_literal(
+        let evaluated = eval_map_literal(
             element,
             map_span,
             &sub_entries,
@@ -1995,44 +1971,10 @@ fn eval_hir_map_literal(
     ))
 }
 
-fn eval_hir_for_comp(
-    expr: &hir::Expr,
-    bindings: &[hir::expr::ForBinding],
-    body: &hir::Expr,
-    values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalContext<'_>,
-) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    match &ctx.expression_fact(expr)?.fact {
-        graphcal_compiler::tir::expression_facts::ExpressionFact::Executable(
-            graphcal_compiler::tir::expression_facts::ValueFact {
-                checked_type: CheckedType::Indexed { .. },
-                ..
-            },
-        ) => {}
-        _ => {
-            return Err(ctx.internal_error(
-                "materialized expression has no concrete checked shape",
-                expr.span,
-            ));
-        }
-    }
-    eval_hir_for_comp_bindings(
-        checked_value_type(expr, ctx)?,
-        bindings,
-        body,
-        values,
-        presentation_values,
-        local_values,
-        ctx,
-    )
-}
-
-fn eval_hir_for_comp_bindings(
+fn eval_for_comp_bindings(
     checked_type: &CheckedType,
     bindings: &[hir::expr::ForBinding],
-    body: &hir::Expr,
+    body: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
@@ -2097,9 +2039,9 @@ fn eval_hir_for_comp_bindings(
             EvaluatedRuntimeValue::plain(binding_value),
         );
         let evaluated = if remaining.is_empty() {
-            eval_hir_expr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
+            eval_texpr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
         } else {
-            eval_hir_for_comp_bindings(
+            eval_for_comp_bindings(
                 element,
                 remaining,
                 body,
@@ -2129,22 +2071,22 @@ fn eval_hir_for_comp_bindings(
     clippy::single_match_else,
     reason = "single pattern dispatch keeps borrowed graph references and every index-argument category explicit"
 )]
-fn eval_hir_index_access(
+fn eval_index_access(
     span: Span,
-    inner: &hir::Expr,
-    args: &[hir::expr::IndexArg],
+    inner: &TExpr,
+    args: &[TIndexArg],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let (base_value, base_presentation) = match inner.kind() {
-        hir::ExprKind::GraphRef(target) => {
+        TExprKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
-            // `eval_hir_expr(inner, ...)` while retaining a reference to the
+            // `eval_texpr(inner, ...)` while retaining a reference to the
             // stored value instead of deep-cloning it before traversal.
             ctx.cancellation.checkpoint()?;
-            let value = std::borrow::Cow::Borrowed(resolve_hir_graph_ref(
+            let value = std::borrow::Cow::Borrowed(resolve_graph_ref(
                 &target.value,
                 target.span,
                 values,
@@ -2156,7 +2098,7 @@ fn eval_hir_index_access(
         }
         _ => {
             let evaluated =
-                eval_hir_expr_evaluated(inner, values, presentation_values, local_values, ctx)?;
+                eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             let (value, presentation) = evaluated.into_parts();
             (std::borrow::Cow::Owned(value), presentation)
         }
@@ -2172,7 +2114,7 @@ fn eval_hir_index_access(
             return Err(ctx.eval_error("indexing a non-indexed value", span));
         };
         let entry_key = match arg {
-            hir::expr::IndexArg::Variant(variant) => {
+            TIndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
                     index_name,
                     variant.variant.index(),
@@ -2181,7 +2123,7 @@ fn eval_hir_index_access(
                 )?;
                 IndexEntryKey::named(variant.variant.variant().clone())
             }
-            hir::expr::IndexArg::Var(local) => {
+            TIndexArg::Var(local) => {
                 let var_val = local_values
                     .get(local.value)
                     .ok_or_else(|| ctx.eval_error("undefined loop variable", local.span))?;
@@ -2229,8 +2171,11 @@ fn eval_hir_index_access(
                     _ => return Err(ctx.eval_error("value is not a loop variable", local.span)),
                 }
             }
-            hir::expr::IndexArg::Expr(index_expr) => {
-                let val = eval_hir_expr(index_expr, values, local_values, ctx)?;
+            TIndexArg::Expr {
+                operand: index_expr,
+                ..
+            } => {
+                let val = eval_texpr(index_expr, values, local_values, ctx)?;
                 match val {
                     // A key value selects the entry it names; the checker has
                     // already proven the axis identity.
@@ -2239,7 +2184,7 @@ fn eval_hir_index_access(
                         IndexEntryKey::position(u64::try_from(position).map_err(|_| {
                             ctx.internal_error(
                                 format!("coordinate key position {position} is unrepresentable"),
-                                index_expr.span,
+                                index_expr.span(),
                             )
                         })?)
                     }
@@ -2247,20 +2192,20 @@ fn eval_hir_index_access(
                         if n < 0 {
                             return Err(ctx.eval_error(
                                 format!("index expression evaluated to negative value: {n}"),
-                                index_expr.span,
+                                index_expr.span(),
                             ));
                         }
                         IndexEntryKey::position(u64::try_from(n).map_err(|_| {
                             ctx.eval_error(
                                 format!("index expression is too large: {n}"),
-                                index_expr.span,
+                                index_expr.span(),
                             )
                         })?)
                     }
                     _ => {
                         return Err(ctx.eval_error(
                             "index expression must evaluate to an integer or an index key",
-                            index_expr.span,
+                            index_expr.span(),
                         ));
                     }
                 }
@@ -2275,7 +2220,7 @@ fn eval_hir_index_access(
         .project_indexes(&selected_keys)
         .map_err(|error| ctx.internal_error(error.to_string(), span))?;
     Ok(EvaluatedRuntimeValue::new(
-        clone_hir_index_access_result(current),
+        clone_index_access_result(current),
         presentation,
     ))
 }
@@ -2284,26 +2229,25 @@ fn eval_hir_index_access(
     clippy::too_many_arguments,
     reason = "scan evaluation is called from expression destructuring"
 )]
-fn eval_hir_scan(
-    source: &hir::Expr,
-    init: &hir::Expr,
+fn eval_scan(
+    source: &TExpr,
+    init: &TExpr,
     acc: &hir::LocalDef,
     val: &hir::LocalDef,
-    body: &hir::Expr,
+    body: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let (source_val, source_presentation) =
-        eval_hir_expr_evaluated(source, values, presentation_values, local_values, ctx)?
-            .into_parts();
+        eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?.into_parts();
     let RuntimeValue::Indexed {
         index_name,
         entries: source_entries,
     } = source_val
     else {
-        return Err(ctx.eval_error("scan source must be an indexed value", source.span));
+        return Err(ctx.eval_error("scan source must be an indexed value", source.span()));
     };
     if source_entries
         .values()
@@ -2312,11 +2256,11 @@ fn eval_hir_scan(
     {
         return Err(ctx.internal_error(
             "multi-axis source reached scan evaluation after rank-one type checking",
-            source.span,
+            source.span(),
         ));
     }
     let evaluated_init =
-        eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
+        eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let (_, initial_presentation) = evaluated_init.clone().into_parts();
     let mut accumulated = evaluated_init;
     let mut result_entries = IndexMap::new();
@@ -2327,14 +2271,13 @@ fn eval_hir_scan(
         let item_presentation = source_presentation
             .project_indexes_ref(std::slice::from_ref(variant))
             .cloned()
-            .map_err(|error| ctx.internal_error(error.to_string(), source.span))?;
+            .map_err(|error| ctx.internal_error(error.to_string(), source.span()))?;
         scan_locals.bind(
             val.id,
             EvaluatedRuntimeValue::new(item.clone(), item_presentation),
         );
-        accumulated =
-            eval_hir_expr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
-                .with_default_presentation(&initial_presentation);
+        accumulated = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
+            .with_default_presentation(&initial_presentation);
         let (value, evidence) = accumulated.clone().into_parts();
         result_entries.insert(variant.clone(), value);
         if !evidence.is_none() {
@@ -2350,24 +2293,24 @@ fn eval_hir_scan(
     ))
 }
 
-fn eval_hir_unfold(
-    expr: &hir::Expr,
+fn eval_unfold(
+    expr: &TExpr,
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let hir::ExprKind::Unfold {
+    let TExprKind::Unfold {
         recurrence,
         init,
         body,
     } = expr.kind()
     else {
-        return Err(ctx.internal_error("unfold evaluator received another operation", expr.span));
+        return Err(ctx.internal_error("unfold evaluator received another operation", expr.span()));
     };
     let axis = &recurrence.axis;
-    let CheckedType::Indexed { index, .. } = checked_value_type(expr, ctx)? else {
-        return Err(ctx.internal_error("unfold has no retained indexed type", expr.span));
+    let CheckedType::Indexed { index, .. } = expr.ty() else {
+        return Err(ctx.internal_error("unfold has no retained indexed type", expr.span()));
     };
     let index_ref = index.clone();
     let idx_def = index_def_for_ref(&index_ref, ctx).ok_or_else(|| {
@@ -2386,7 +2329,7 @@ fn eval_hir_unfold(
         )
     })?;
     let evaluated_init =
-        eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
+        eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let mut previous_state = evaluated_init.clone();
     let (init_value, init_presentation) = evaluated_init.into_parts();
     let mut result_entries = IndexMap::new();
@@ -2425,7 +2368,7 @@ fn eval_hir_unfold(
             ),
         );
         previous_state =
-            eval_hir_expr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
+            eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
                 .with_default_presentation(&init_presentation);
         let (value, evidence) = previous_state.clone().into_parts();
         result_entries.insert(variant.clone(), value);
@@ -2464,19 +2407,17 @@ fn evaluated_match_field(
     Ok(EvaluatedRuntimeValue::new(value.clone(), evidence))
 }
 
-fn eval_hir_match(
-    expr: &hir::Expr,
-    scrutinee: &hir::Expr,
-    arms: &[hir::expr::MatchArm],
+fn eval_match(
+    span: Span,
+    scrutinee: &TExpr,
+    arms: &[TMatchArm],
     values: &RuntimeValueMap,
     presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let span = expr.span;
-    let constructor_matches = &ctx.expression_fact(expr)?.constructor_matches;
     let (scrutinee_val, scrutinee_presentation) =
-        eval_hir_expr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?
+        eval_texpr_evaluated(scrutinee, values, presentation_values, local_values, ctx)?
             .into_parts();
     match &scrutinee_val {
         RuntimeValue::Label {
@@ -2486,16 +2427,16 @@ fn eval_hir_match(
             let matched_arm = arms
                 .iter()
                 .find(|arm| match &arm.pattern {
-                    hir::expr::MatchPattern::IndexLabel { variant: pat, .. } => {
+                    TMatchPattern::IndexLabel(pat) => {
                         index_ref_matches_resolved(index_name, pat.variant.index())
                             && pat.variant.variant() == variant
                     }
-                    hir::expr::MatchPattern::Constructor { .. } => false,
+                    TMatchPattern::Constructor { .. } => false,
                 })
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), span)
                 })?;
-            eval_hir_expr_evaluated(
+            eval_texpr_evaluated(
                 &matched_arm.body,
                 values,
                 presentation_values,
@@ -2511,30 +2452,18 @@ fn eval_hir_match(
         } => {
             let matched_arm = arms
                 .iter()
-                .find_map(|arm| match &arm.pattern {
-                    hir::expr::MatchPattern::Constructor { constructor, .. } => {
-                        constructor_matches.get(&constructor.value).map_or_else(
-                            || {
-                                Some(Err(ctx.internal_error(
-                                    "match arm has no retained constructor target",
-                                    arm.span,
-                                )))
-                            },
-                            |target| {
-                                (*value_constructor == target.constructor
-                                    && *type_name == target.runtime_type)
-                                    .then_some(Ok(arm))
-                            },
-                        )
+                .find(|arm| match &arm.pattern {
+                    TMatchPattern::Constructor { target, .. } => {
+                        *value_constructor == target.constructor
+                            && *type_name == target.runtime_type
                     }
-                    hir::expr::MatchPattern::IndexLabel { .. } => None,
+                    TMatchPattern::IndexLabel(_) => false,
                 })
-                .transpose()?
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for variant `{type_name}`"), span)
                 })?;
             let mut arm_locals = local_values.child(Vec::new());
-            let hir::expr::MatchPattern::Constructor { bindings, .. } = &matched_arm.pattern else {
+            let TMatchPattern::Constructor { bindings, .. } = &matched_arm.pattern else {
                 return Err(
                     ctx.internal_error("matched non-constructor arm for struct", matched_arm.span)
                 );
@@ -2556,7 +2485,7 @@ fn eval_hir_match(
                     hir::expr::PatternBinding::Wildcard { .. } => {}
                 }
             }
-            eval_hir_expr_evaluated(
+            eval_texpr_evaluated(
                 &matched_arm.body,
                 values,
                 presentation_values,
@@ -2566,7 +2495,7 @@ fn eval_hir_match(
         }
         _ => Err(ctx.eval_error(
             "match scrutinee must be a label or tagged union",
-            scrutinee.span,
+            scrutinee.span(),
         )),
     }
 }
@@ -2575,17 +2504,16 @@ fn eval_hir_match(
     clippy::too_many_arguments,
     reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
 )]
-fn eval_hir_dag_call(
-    call: &hir::Expr,
-    target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
-    args: &[hir::expr::ParamBinding],
-    output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclName>,
+fn eval_dag_call(
+    call_span: Span,
+    target: &Spanned<graphcal_compiler::dag_id::DagId>,
+    args: &[TParamBinding],
+    output: &Spanned<ResolvedDeclName>,
     caller_values: &RuntimeValueMap,
     caller_presentations: Option<&PresentationInstanceMap>,
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
-    let call_span = call.span;
     let plan = ctx.execution_plan()?;
     let callable = plan
         .callable(&target.value)
@@ -2608,8 +2536,8 @@ fn eval_hir_dag_call(
     )
     .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
     for binding in args {
-        let key = &binding.target.value;
-        let (value, evidence) = eval_hir_expr_evaluated(
+        let key = &binding.target;
+        let (value, evidence) = eval_texpr_evaluated(
             &binding.value,
             caller_values,
             caller_presentations,
@@ -2617,7 +2545,7 @@ fn eval_hir_dag_call(
             ctx,
         )?
         .into_parts();
-        frame.bind(key, value, ctx.src, binding.value.span)?;
+        frame.bind(key, value, ctx.src, binding.value.span())?;
         if !evidence.is_none() {
             frame.presentations.insert(key.clone(), evidence);
         }
@@ -2637,8 +2565,8 @@ fn eval_hir_dag_call(
             .for_dag(entry.scope.dag(), entry.scope.source())?
             .with_unavailable(&frame.errors)
             .for_decl(entry.key);
-        eval_hir_expr_with_presentation(
-            entry.expression,
+        eval_texpr_with_presentation(
+            context.executable(entry.expression)?,
             &frame.values,
             &frame.presentations,
             &empty_hir_locals,
@@ -2745,7 +2673,7 @@ fn seed_inline_dag_imported_values(
 fn check_inline_plan_asserts(
     owners: &[graphcal_compiler::dag_id::DagId],
     values: &RuntimeValueMap,
-    target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
+    target: &Spanned<graphcal_compiler::dag_id::DagId>,
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
@@ -2771,7 +2699,7 @@ fn check_inline_dag_asserts(
     dag_tir: &CheckedDag,
     dag_values: &RuntimeValueMap,
     dag_ctx: &EvalContext<'_>,
-    target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
+    target: &Spanned<graphcal_compiler::dag_id::DagId>,
     call_span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
@@ -2795,7 +2723,13 @@ fn check_inline_dag_asserts(
         let ef = callable.expected_fail.get(&key);
         let result =
             crate::assertion_eval::evaluate_assert_with_expected_fail(body, ef, &mut |expr| {
-                eval_hir_expr(expr, dag_values, &empty_hir_locals, &dag_ctx.for_decl(&key))
+                let context = dag_ctx.for_decl(&key);
+                eval_texpr(
+                    context.executable(expr)?,
+                    dag_values,
+                    &empty_hir_locals,
+                    &context,
+                )
             });
         match result {
             crate::eval::types::AssertResult::Pass => {}
@@ -2838,7 +2772,7 @@ mod tests {
 
     #[test]
     fn indexed_graph_ref_borrows_collection_before_selecting_entry() {
-        reset_hir_cloned_runtime_node_count();
+        reset_cloned_runtime_node_count();
         let direct_copy = r"
 node source: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
     to_int(row) * 4 + to_int(column)
@@ -2847,7 +2781,7 @@ node copied: Int[Fin(4), Fin(4)] = @source;
 ";
         compile_and_eval(direct_copy).unwrap();
         assert_eq!(
-            take_hir_cloned_runtime_node_count(),
+            take_cloned_runtime_node_count(),
             21,
             "the clone observer must count the root, four rows, and 16 leaves"
         );
@@ -2862,7 +2796,7 @@ node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
 ";
         compile_and_eval(elementwise_copy).unwrap();
         assert_eq!(
-            take_hir_cloned_runtime_node_count(),
+            take_cloned_runtime_node_count(),
             16,
             "index traversal must clone only the 16 selected leaves"
         );
@@ -2882,8 +2816,7 @@ node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
             ValueAggregation::RootSumSquare,
             ValueAggregation::Count,
         ] {
-            let error =
-                eval_hir_aggregation_fn(function, &entries, Span::new(0, 0), &src).unwrap_err();
+            let error = eval_aggregation_fn(function, &entries, Span::new(0, 0), &src).unwrap_err();
             assert!(matches!(&error, GraphcalError::InternalError { .. }));
             let code = error.code().map(|code| code.to_string());
             assert_eq!(code.as_deref(), Some("graphcal::X001"));

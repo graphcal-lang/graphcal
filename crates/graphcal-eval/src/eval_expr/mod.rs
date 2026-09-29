@@ -17,7 +17,7 @@ use graphcal_compiler::registry::checked_type::IndexTypeRef;
 pub use crate::constant_pools::RuntimeValueMap;
 pub use context::EvalContext;
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
-pub use hir_eval::{HirLocalValueMap, eval_hir_expr, eval_hir_expr_with_presentation};
+pub use hir_eval::{HirLocalValueMap, eval_texpr, eval_texpr_with_presentation};
 pub use unit_scale::resolve_unit_scale;
 pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_scaled_value};
 

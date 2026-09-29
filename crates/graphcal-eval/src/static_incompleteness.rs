@@ -8,22 +8,71 @@ use std::sync::Arc;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::hir::expr::{Expr, ExprKind, visit_expr};
+use graphcal_compiler::hir::expr::{Expr, ExprKind, LocalDecl, visit_expr};
 use graphcal_compiler::node_unavailable::NodeUnavailable;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
+use graphcal_compiler::tir::texpr::{TExpr, TExprKind, TNodeRef, visit_tnodes};
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use miette::NamedSource;
 
 use crate::execution_plan::ExecPlan;
 
 type BoundParameters = BTreeSet<ResolvedDeclName>;
-type Query = (ResolvedDeclName, BoundParameters);
+/// A call output and the parameters its call binds explicitly.
+pub type Query = (ResolvedDeclName, BoundParameters);
 type Origins = BTreeSet<ResolvedDeclName>;
 
+/// The runtime dependencies an expression's availability depends on.
+pub trait ExpressionDependencies {
+    /// Declarations referenced through `@name`, including unselected branches.
+    fn graph_refs(&self) -> BTreeSet<LocalDecl>;
+    /// Every inline DAG call's output and explicitly bound parameters.
+    fn dag_calls(&self) -> Vec<Query>;
+}
+
+impl ExpressionDependencies for Expr {
+    fn graph_refs(&self) -> BTreeSet<LocalDecl> {
+        graphcal_compiler::hir::expr::collect_expr_dependencies(self).graph_refs
+    }
+
+    fn dag_calls(&self) -> Vec<Query> {
+        calls(self, &BoundParameters::new())
+    }
+}
+
+impl ExpressionDependencies for TExpr {
+    fn graph_refs(&self) -> BTreeSet<LocalDecl> {
+        let mut refs = BTreeSet::new();
+        visit_tnodes(TNodeRef::Value(self), &mut |node| {
+            if let TNodeRef::Value(expr) = node
+                && let TExprKind::GraphRef(target) = expr.kind()
+            {
+                refs.insert(target.value.clone());
+            }
+        });
+        refs
+    }
+
+    fn dag_calls(&self) -> Vec<Query> {
+        let mut calls = Vec::new();
+        visit_tnodes(TNodeRef::Value(self), &mut |node| {
+            if let TNodeRef::Value(expr) = node
+                && let TExprKind::DagCall { args, output, .. } = expr.kind()
+            {
+                calls.push((
+                    output.value.clone(),
+                    args.iter().map(|binding| binding.target.clone()).collect(),
+                ));
+            }
+        });
+        calls
+    }
+}
+
 pub fn collect(
-    expression: &Expr,
+    expression: &(impl ExpressionDependencies + ?Sized),
     tir: &CheckedTir,
     plan: &ExecPlan,
     source: &NamedSource<Arc<String>>,
@@ -40,7 +89,8 @@ pub fn collect(
         memo: HashMap::new(),
         active: HashSet::new(),
     };
-    calls(expression, &BoundParameters::new())
+    expression
+        .dag_calls()
         .into_iter()
         .try_fold(Vec::new(), |mut results, (output, bound)| {
             let origins = analysis.declaration(&output, &bound)?;

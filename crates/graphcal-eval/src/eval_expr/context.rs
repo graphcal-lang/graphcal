@@ -62,8 +62,6 @@ pub struct EvalEnvironment<'a> {
 pub struct EvalContext<'a> {
     environment: EvalEnvironment<'a>,
     capabilities: Capabilities<'a>,
-    independent_expressions:
-        Option<&'a graphcal_compiler::tir::expression_facts::CheckedExpressionFacts>,
 }
 
 impl<'a> Deref for EvalContext<'a> {
@@ -114,7 +112,6 @@ impl<'a> EvalContext<'a> {
         Ok(Self {
             environment: Self::environment(tir, dag, src, cancellation),
             capabilities: Capabilities::ProvisionalConstants,
-            independent_expressions: None,
         })
     }
 
@@ -140,59 +137,40 @@ impl<'a> EvalContext<'a> {
         Ok(Self {
             environment: Self::environment(plan.tir(), dag.dag(), src, cancellation),
             capabilities: Capabilities::Checked { plan, host },
-            independent_expressions: None,
         })
     }
 
-    pub fn with_expression_facts(
-        mut self,
-        facts: &'a graphcal_compiler::tir::expression_facts::CheckedExpressionFacts,
-    ) -> Result<Self, GraphcalError> {
-        facts
-            .validate_environment(self.current_dag.dag_id(), self.current_dag.body_revision())
-            .map_err(|error| self.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;
-        self.independent_expressions = Some(facts);
-        Ok(self)
+    /// The executable tree of one of the current body's expression roots.
+    pub fn executable(
+        &self,
+        root: &graphcal_compiler::hir::expr::Expr,
+    ) -> Result<&'a graphcal_compiler::tir::texpr::TExpr, GraphcalError> {
+        self.current_dag
+            .bodies()
+            .executable_value(root.id())
+            .map_err(|error| self.internal_error(error.to_string(), root.span))
     }
 
-    pub fn expression_fact(
+    /// The text of a root of the current body checked as a contextual string.
+    pub fn checked_string(
         &self,
-        expr: &graphcal_compiler::hir::expr::Expr,
-    ) -> Result<&graphcal_compiler::tir::expression_facts::CheckedExpressionRecord, GraphcalError>
-    {
-        self.expression_facts()
-            .executable_value(expr.id())
-            .map_err(|error| self.internal_error(error.to_string(), expr.span))
-    }
-
-    fn expression_facts(
-        &self,
-    ) -> &graphcal_compiler::tir::expression_facts::CheckedExpressionFacts {
-        self.independent_expressions
-            .unwrap_or_else(|| self.current_dag.expression_facts())
-    }
-
-    /// Contextual literals are checked operands, never executable runtime values.
-    pub fn validate_contextual_operand(
-        &self,
-        expr: &graphcal_compiler::hir::expr::Expr,
-        expected: graphcal_compiler::tir::expression_facts::ContextualOperand,
-    ) -> Result<(), GraphcalError> {
-        let record = self
-            .expression_facts()
-            .get(expr.id())
-            .map_err(|error| self.internal_error(error.to_string(), expr.span))?;
-        match record.fact {
-            graphcal_compiler::tir::expression_facts::ExpressionFact::Contextual(actual)
-                if actual == expected =>
-            {
-                Ok(())
-            }
-            _ => Err(self.internal_error(
-                format!("expected checked contextual operand {expected:?}"),
-                expr.span,
-            )),
-        }
+        root: &graphcal_compiler::hir::expr::Expr,
+    ) -> Result<&'a str, GraphcalError> {
+        use graphcal_compiler::tir::texpr::{CheckedBody, ContextualLiteral, TBody};
+        let message = match self.current_dag.bodies().get(root.id()) {
+            Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
+                ContextualLiteral::String(text) => return Ok(text),
+                ContextualLiteral::OffsetDateTime(_)
+                | ContextualLiteral::CivilDateTime(_)
+                | ContextualLiteral::ZonedDateTime(_)
+                | ContextualLiteral::TimeZone(_) => {
+                    "expected checked contextual operand String".to_owned()
+                }
+            },
+            Some(_) => "expected checked contextual operand String".to_owned(),
+            None => format!("missing checked expression: {:?}", root.id()),
+        };
+        Err(self.internal_error(message, root.span))
     }
 
     pub fn execution_plan(&self) -> Result<&'a ExecPlan, GraphcalError> {
@@ -245,9 +223,12 @@ impl<'a> EvalContext<'a> {
     }
 
     /// Static dependency availability, including references in unselected branches.
-    pub fn unavailable_dependencies<'e>(
+    pub fn unavailable_dependencies<
+        'e,
+        E: crate::static_incompleteness::ExpressionDependencies + 'e,
+    >(
         &self,
-        expressions: impl IntoIterator<Item = &'e graphcal_compiler::hir::expr::Expr>,
+        expressions: impl IntoIterator<Item = &'e E>,
     ) -> Result<Option<graphcal_compiler::node_unavailable::NodeUnavailable>, GraphcalError> {
         let plan = match self.capabilities {
             Capabilities::ProvisionalConstants => None,
@@ -261,9 +242,7 @@ impl<'a> EvalContext<'a> {
         let expressions = expressions.into_iter().collect::<Vec<_>>();
         let mut dependencies = expressions
             .iter()
-            .flat_map(|expression| {
-                graphcal_compiler::hir::expr::collect_expr_dependencies(expression).graph_refs
-            })
+            .flat_map(|expression| expression.graph_refs())
             .map(|reference| self.resolve(&reference))
             .filter_map(|key| {
                 self.unavailable
@@ -308,14 +287,14 @@ impl<'a> EvalContext<'a> {
 
     pub fn check_dependencies(
         &self,
-        expression: &graphcal_compiler::hir::expr::Expr,
+        expression: &graphcal_compiler::tir::texpr::TExpr,
     ) -> Result<(), GraphcalError> {
         self.unavailable_dependencies(std::iter::once(expression))?
             .map_or(Ok(()), |reason| {
                 Err(GraphcalError::EvaluationUnavailable {
                     reason,
                     src: self.src.clone(),
-                    span: expression.span.into(),
+                    span: expression.span().into(),
                 })
             })
     }
@@ -376,9 +355,6 @@ impl<'a> EvalContext<'a> {
             }
         };
         context.environment.current_decl = None;
-        // Unit/call bodies select their own canonical table, never a fallback
-        // from a closed input body's unrelated expression revision.
-        context.independent_expressions = None;
         Ok(context)
     }
 

@@ -13,8 +13,8 @@ use graphcal_compiler::syntax::span::Span;
 
 use crate::assertion_eval::evaluate_assert_with_expected_fail;
 use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
-    eval_hir_expr_with_presentation,
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_texpr,
+    eval_texpr_with_presentation,
 };
 use crate::execution_frame::eval_failed_node_error;
 use crate::presentation_evidence::{
@@ -210,8 +210,8 @@ pub(super) fn run_eval_loop_with_bindings(
         .with_unavailable(&frame.errors)
         .with_unfinished_calls(&unfinished_calls)
         .for_decl(entry.key);
-        eval_hir_expr_with_presentation(
-            entry.expression,
+        eval_texpr_with_presentation(
+            context.executable(entry.expression)?,
             &frame.values,
             &frame.presentations,
             &empty_hir_locals,
@@ -777,7 +777,12 @@ pub(super) fn evaluate_assertions(
                 .unwrap_or_else(|| {
                     let ef = plan.root.expected_fail.get(&owner);
                     evaluate_assert_with_expected_fail(&entry.body, ef, &mut |expr| {
-                        eval_hir_expr(expr, values, &empty_hir_locals, &entry_ctx)
+                        eval_texpr(
+                            entry_ctx.executable(expr)?,
+                            values,
+                            &empty_hir_locals,
+                            &entry_ctx,
+                        )
                     })
                 });
             Ok((
@@ -817,7 +822,12 @@ pub(super) fn evaluate_assertions(
                 let assertion_ctx = ctx.for_checked_decl(instance_dag, src, &owner)?;
                 let result =
                     evaluate_assert_with_expected_fail(&entry.body, expected, &mut |expr| {
-                        eval_hir_expr(expr, values, &empty_hir_locals, &assertion_ctx)
+                        eval_texpr(
+                            assertion_ctx.executable(expr)?,
+                            values,
+                            &empty_hir_locals,
+                            &assertion_ctx,
+                        )
                     });
                 assertions.push((
                     root_instance_name(
@@ -953,16 +963,15 @@ fn eval_plot_property(
     ctx: &EvalContext<'_>,
 ) -> Result<PlotFieldValue, PlotEvaluationError> {
     ctx.cancellation.checkpoint().map_err(GraphcalError::from)?;
-    if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = expr.kind() {
-        ctx.validate_contextual_operand(
-            expr,
-            graphcal_compiler::tir::expression_facts::ContextualOperand::String,
-        )
-        .map_err(PlotEvaluationError::from)?;
-        return Ok(PlotFieldValue::String(s.clone()));
+    if let graphcal_compiler::hir::ExprKind::StringLiteral(_) = expr.kind() {
+        let text = ctx
+            .checked_string(expr)
+            .map_err(PlotEvaluationError::from)?;
+        return Ok(PlotFieldValue::String(text.to_owned()));
     }
     let empty_locals = HirLocalValueMap::root();
-    eval_hir_expr(expr, values, &empty_locals, ctx)
+    ctx.executable(expr)
+        .and_then(|tree| eval_texpr(tree, values, &empty_locals, ctx))
         .map_err(PlotEvaluationError::from)
         .and_then(|rv| runtime_to_plot_field_value(&rv).map_err(PlotEvaluationError::from))
 }
@@ -1185,7 +1194,11 @@ fn evaluate_plot_channel(
             Vec::new(),
         ));
     }
-    let evaluated = eval_hir_expr_with_presentation(expr, values, presentation_values, locals, ctx)
+    let evaluated = ctx
+        .executable(expr)
+        .and_then(|tree| {
+            eval_texpr_with_presentation(tree, values, presentation_values, locals, ctx)
+        })
         .map_err(|error| classify_plot_channel_error(channel, error))?;
     let (runtime, presentation_instance) = evaluated.into_parts();
     let presentation_instance =
