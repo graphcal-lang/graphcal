@@ -614,13 +614,13 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
     unit.terms
         .iter()
         .try_fold(Dimension::dimensionless(), |dimension, item| {
-            let info = tir.unit_info(item.name.value.resolved()).ok_or_else(|| {
-                GraphcalError::UnknownUnit {
+            let info = tir
+                .unit_info(item.name.value.static_definition())
+                .ok_or_else(|| GraphcalError::UnknownUnit {
                     name: item.name.value.spelling().clone(),
                     src: src.clone(),
                     span: item.name.span.into(),
-                }
-            })?;
+                })?;
             let exponent = item.power;
             let term_dimension =
                 info.dimension

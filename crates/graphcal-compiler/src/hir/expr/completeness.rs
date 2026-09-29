@@ -6,11 +6,11 @@
 //! [`Expr<C>`](super::Expr) makes both distinctions types, mirroring the AST
 //! [`Phase`](crate::syntax::phase::Phase) technique:
 //!
-//! | Completeness | error node               | node identity | declaration reference |
-//! |--------------|--------------------------|---------------|-----------------------|
-//! | `Tolerant`   | diagnostic + children    | none          | source definition     |
-//! | [`Draft`]    | [`NoErrorNode`]          | none          | [`LocalDecl`]         |
-//! | [`Strict`]   | [`NoErrorNode`]          | `ExprId`      | [`LocalDecl`]         |
+//! | Completeness | error node               | node identity | declaration reference | unit reference        |
+//! |--------------|--------------------------|---------------|-----------------------|-----------------------|
+//! | `Tolerant`   | diagnostic + children    | none          | source definition     | source definition     |
+//! | [`Draft`]    | [`NoErrorNode`]          | none          | [`LocalDecl`]         | [`LocalUnit`]         |
+//! | [`Strict`]   | [`NoErrorNode`]          | `ExprId`      | [`LocalDecl`]         | [`LocalUnit`]         |
 //!
 //! `Tolerant` is defined beside the lowerer, because its error node carries
 //! a lowering diagnostic. Strict lowering refines `Tolerant` into [`Draft`];
@@ -23,6 +23,7 @@ use core::fmt::Debug;
 use core::hash::Hash;
 
 use super::local_decl::LocalDecl;
+use super::local_unit::LocalUnit;
 use super::model::Expr;
 use crate::expression_id::ExprId;
 
@@ -43,6 +44,10 @@ pub trait Completeness: 'static + Debug + Clone + Copy + sealed::Sealed + Sized 
     /// How a declaration reference names its target: the source definition
     /// in an IDE tree, a frame-relative [`LocalDecl`] in a complete tree.
     type DeclRef: Debug + Clone + PartialEq + Eq + Hash + Ord;
+
+    /// How a unit reference names its unit: the source definition in an IDE
+    /// tree, a frame-relative [`LocalUnit`] in a complete tree.
+    type UnitRef: Debug + Clone + PartialEq + Eq;
 
     /// Expression children retained under an error node, in source order.
     fn error_children(error: &Self::Error) -> &[Expr<Self>];
@@ -76,6 +81,7 @@ impl Completeness for Draft {
     type Id = ();
     type Error = NoErrorNode;
     type DeclRef = LocalDecl;
+    type UnitRef = LocalUnit;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         error.absurd()
@@ -99,6 +105,7 @@ impl Completeness for Strict {
     type Id = ExprId;
     type Error = NoErrorNode;
     type DeclRef = LocalDecl;
+    type UnitRef = LocalUnit;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         error.absurd()

@@ -2,6 +2,7 @@
 
 use super::completeness::{Draft, NoErrorNode, Strict};
 use super::local_decl::LocalDecl;
+use super::local_unit::LocalUnit;
 #[cfg(test)]
 use super::model::ExprKind;
 use super::model::{AssertBody, Expr};
@@ -143,6 +144,10 @@ impl Expr {
             fn decl_ref(&mut self, reference: LocalDecl) -> LocalDecl {
                 reference
             }
+
+            fn unit_ref(&mut self, reference: LocalUnit) -> LocalUnit {
+                reference
+            }
         }
         match refine_expr(self, &mut ForgetIds) {
             Ok(draft) => draft,
@@ -166,6 +171,10 @@ impl Refinement<Draft, Strict> for NumberNodes {
     }
 
     fn decl_ref(&mut self, reference: LocalDecl) -> LocalDecl {
+        reference
+    }
+
+    fn unit_ref(&mut self, reference: LocalUnit) -> LocalUnit {
         reference
     }
 }

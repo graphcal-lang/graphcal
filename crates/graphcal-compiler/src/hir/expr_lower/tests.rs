@@ -251,8 +251,8 @@ fn lowers_qualified_quantity_literal_to_canonical_owner() {
         panic!("expected one unit term, got {:?}", unit.terms);
     };
     assert_eq!(term.name.value.spelling().to_string(), "schema::credit");
-    assert_eq!(term.name.value.resolved().owner(), &lib_id);
-    assert_eq!(term.name.value.resolved().as_str(), "credit");
+    assert_eq!(term.name.value.static_definition().owner(), &lib_id);
+    assert_eq!(term.name.value.static_definition().as_str(), "credit");
 }
 
 #[test]

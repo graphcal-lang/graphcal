@@ -161,7 +161,10 @@ impl<'a> HirRefCollector<'a> {
             )
     }
 
-    fn collect_resolved_unit_expr_refs(unit: &hir::ResolvedUnitExpr, table: &mut SymbolTable) {
+    fn collect_resolved_unit_expr_refs(
+        unit: &hir::ResolvedUnitExpr<hir::ResolvedUnitRef>,
+        table: &mut SymbolTable,
+    ) {
         for item in &unit.terms {
             table.references.push(ReferenceInfo {
                 span: item.name.span,

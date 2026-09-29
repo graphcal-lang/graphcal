@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::{DagId, InstanceId};
-use crate::hir::expr::{LocalDecl, ResolvedUnitRef};
+use crate::hir::expr::{LocalDecl, LocalUnit};
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedName, ResolvedStructTypeName, ResolvedUnitName,
 };
@@ -123,8 +123,8 @@ impl InstanceFrame {
     /// holding it: the instance's own copy of a runtime unit it materializes,
     /// otherwise the unit definition itself.
     #[must_use]
-    pub fn resolve_unit(&self, unit: &ResolvedUnitRef) -> ResolvedUnitName {
-        let definition = unit.resolved();
+    pub fn resolve_unit(&self, unit: &LocalUnit) -> ResolvedUnitName {
+        let definition = unit.definition(FrameAccess(()));
         match &self.kind {
             FrameKind::Canonical => definition.clone(),
             FrameKind::Instance(binding) => {
@@ -349,7 +349,7 @@ mod tests {
         let definition = ResolvedUnitName::for_test(fixture.lib.clone(), unit.clone());
         let materialized = instance_declaration(&fixture.inst.id, unit);
         let reference = |resolved: ResolvedUnitName| {
-            ResolvedUnitRef::new(
+            LocalUnit::new(
                 crate::syntax::dimension::UnitRef::local(resolved.leaf().clone()),
                 resolved,
             )

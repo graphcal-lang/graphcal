@@ -124,7 +124,7 @@ impl<'a> ExprLowerer<'a> {
     pub(super) fn lower_unit_expr(
         &self,
         unit: &ast::UnitExpr,
-    ) -> Result<ResolvedUnitExpr, ExprLowerError> {
+    ) -> Result<ResolvedUnitExpr<ResolvedUnitRef>, ExprLowerError> {
         let terms = unit
             .terms
             .iter()

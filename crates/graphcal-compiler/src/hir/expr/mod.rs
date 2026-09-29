@@ -5,8 +5,10 @@
 //! module identities or lexical local IDs. Unit references retain their
 //! structured source spelling only for diagnostics and display labels,
 //! alongside a canonical resolved target; semantic lookup never uses that
-//! spelling. `super::expr_lower` produces these trees from the desugared
-//! syntax AST.
+//! spelling. In a complete tree, declaration and unit references are
+//! frame-relative handles ([`LocalDecl`], [`LocalUnit`]) that only the frame
+//! of the DAG running the body resolves. `super::expr_lower` produces these
+//! trees from the desugared syntax AST.
 //!
 //! - `completeness`: the [`Strict`] / tolerant parameter of every tree.
 //! - `model`: the node shapes and reference payloads.
@@ -19,6 +21,7 @@ mod checked;
 mod completeness;
 mod local_decl;
 mod local_env;
+mod local_unit;
 mod model;
 mod refine;
 mod visit;
@@ -28,6 +31,7 @@ pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
 pub use completeness::{Completeness, Draft, NoErrorNode, Strict};
 pub use local_decl::LocalDecl;
 pub use local_env::LocalEnv;
+pub use local_unit::LocalUnit;
 pub use model::{
     AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,
     FunctionRef, IndexArg, IndexVariantRef, LocalDef, LocalId, MapEntry, MapEntryKey, MatchArm,
