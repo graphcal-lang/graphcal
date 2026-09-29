@@ -20,9 +20,8 @@ use graphcal_compiler::resolved_name::{
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, GraphRef};
 use graphcal_compiler::syntax::phase::Desugared;
-use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
@@ -1866,21 +1865,22 @@ fn add_selective_aliases_inner(
     for alias in selective {
         let orig_name = &alias.original;
         let local_name = &alias.local;
-        // The alias points at the dep's prefixed declaration: a typed
-        // qualified `ScopedName`. No flat `prefix::orig_name` strings are
-        // built — the qualification stays structural through HIR.
-        let target = ScopedName::in_scope(prefix.clone(), orig_name.clone());
-
         let Some(declaration) = declarations.get(orig_name) else {
             continue;
         };
         let type_ann = declaration.type_ann.clone();
 
-        // Const and graph aliases share one typed graph reference; HIR
+        // The alias reads the instance's output through a synthesized,
+        // typed include-output reference (never a fabricated source path).
+        // Const and graph aliases share it; HIR
         // lowering binds it through the instance's merged entries, and a const
         // target keeps the alias const-evaluable.
         let alias_expr = Expr::new(
-            ExprKind::GraphRef(Spanned::new(target, import_span)),
+            ExprKind::GraphRef(GraphRef::IncludeOutput {
+                scope: prefix.clone(),
+                member: orig_name.clone(),
+                span: import_span,
+            }),
             import_span,
         );
 

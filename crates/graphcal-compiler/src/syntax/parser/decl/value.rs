@@ -1,10 +1,9 @@
 use crate::node_definition::NodeDefinition;
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, SlotKind,
-    Visibility,
+    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, IdentPath, NodeDecl, ParamDecl,
+    SlotKind, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
 
@@ -89,7 +88,7 @@ impl Parser<'_> {
     /// and identifiers named `todo` continue through ordinary expression parsing.
     fn parse_node_definition(
         &mut self,
-    ) -> Result<NodeDefinition<crate::syntax::ast::Expr, ScopedName>, ParseError> {
+    ) -> Result<NodeDefinition<crate::syntax::ast::Expr, IdentPath>, ParseError> {
         if self.lexer.peek() != Some(&Token::ContextualKeyword(ContextualKeyword::Todo))
             || self.lexer.peek_second() != Some(&Token::LBrace)
         {
@@ -100,8 +99,8 @@ impl Parser<'_> {
         let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
             let (_, at) = parser.expect(Token::At)?;
             let path = parser.parse_ident_path()?;
-            let name = ScopedName::classify_path(&path.to_name_path());
-            Ok(Spanned::new(name, at.merge(path.span())))
+            let span = at.merge(path.span());
+            Ok(Spanned::new(path, span))
         })?;
         let (_, end) = self.expect(Token::RBrace)?;
         Ok(NodeDefinition::Todo(Spanned::new(

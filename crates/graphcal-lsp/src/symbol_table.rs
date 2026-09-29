@@ -1649,11 +1649,9 @@ fn collect_node_decl(
         graphcal_compiler::node_definition::NodeDefinition::Todo(dependencies) => {
             table
                 .references
-                .extend(dependencies.value.iter().filter_map(|reference| {
-                    reference.value.to_name_path().map(|path| ReferenceInfo {
-                        span: reference.span,
-                        target: refs.declaration_target(&path),
-                    })
+                .extend(dependencies.value.iter().map(|reference| ReferenceInfo {
+                    span: reference.span,
+                    target: refs.declaration_target(&reference.value.to_name_path()),
                 }));
         }
     }

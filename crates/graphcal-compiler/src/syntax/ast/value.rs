@@ -11,7 +11,7 @@ use crate::syntax::fin_position::FinPosition;
 use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::local_name::LocalName;
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_name::{ScopeSegment, ScopedName};
 use crate::syntax::names::{NamePath, Qualified};
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::phase::{Desugared, Phase, Raw};
@@ -77,7 +77,7 @@ impl IdentPath {
 
     /// Drop per-segment spans while preserving the `::` boundary.
     #[must_use]
-    pub(crate) fn to_name_path(&self) -> NamePath {
+    pub fn to_name_path(&self) -> NamePath {
         self.map_ref(
             |ident| ident.name.atom().clone(),
             |ident| ident.name.atom().clone(),
@@ -122,6 +122,67 @@ impl UnresolvedRef {
         }
     }
 }
+
+/// The target of a `@` graph reference.
+///
+/// Source references keep the written path with per-segment spans; HIR
+/// lowering classifies the owner (local, `import` alias, or `include` alias)
+/// against the resolver. Include lowering synthesizes references to an
+/// included instance's outputs (the aliases a selective include introduces);
+/// those name the instance by its typed scope, which for a selective include
+/// is an anonymous identity with no source spelling.
+#[derive(Debug, Clone, FormatEquivalent)]
+pub enum GraphRef {
+    /// `@name` or `@module.child::name` as written. The span covers the `@`.
+    Source(Spanned<IdentPath>),
+    /// An output of an included DAG instance, synthesized by include
+    /// lowering. Never parsed; it resolves only through the owner's lexical
+    /// bindings of instance outputs.
+    IncludeOutput {
+        scope: ScopeSegment,
+        member: DeclName,
+        #[fe(skip)]
+        span: Span,
+    },
+}
+
+impl GraphRef {
+    /// Source span of the reference, including the `@` for a source path.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Source(path) => path.span,
+            Self::IncludeOutput { span, .. } => *span,
+        }
+    }
+
+    /// The referenced declaration as a module-scoped name.
+    ///
+    /// Used for diagnostics and lexical-binding keys: source owner segments
+    /// become module aliases, and an include output is qualified by its
+    /// instance scope.
+    #[must_use]
+    pub fn to_scoped_name(&self) -> ScopedName {
+        match self {
+            Self::Source(path) => ScopedName::classify_path(&path.value.to_name_path()),
+            Self::IncludeOutput { scope, member, .. } => {
+                ScopedName::in_scope(scope.clone(), member.clone())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for GraphRef {
+    /// The referenced name without the `@` sigil, for diagnostics and the
+    /// formatter.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Source(path) => std::fmt::Display::fmt(&path.value, f),
+            Self::IncludeOutput { .. } => std::fmt::Display::fmt(&self.to_scoped_name(), f),
+        }
+    }
+}
+
 /// Source category of one DAG input binding.
 ///
 /// Unmarked means exactly a Term parameter. There is intentionally no `param`
@@ -615,11 +676,8 @@ pub enum ExprKind<P: Phase = Raw> {
     Bool(bool),
     /// String literal: `"hello"` (classified contextually during HIR lowering).
     StringLiteral(String),
-    /// Graph reference: `@name` or `@alias.member`. The [`ScopedName`]
-    /// payload encodes qualification structurally — an empty qualifier for
-    /// bare `@name`, the alias segments for `@alias.member`. Producers never
-    /// invent or interpret a flat-string separator.
-    GraphRef(Spanned<ScopedName>),
+    /// Graph reference: `@name` or `@module.child::name` (see [`GraphRef`]).
+    GraphRef(GraphRef),
     /// Binary operation: `a + b`, `a * b`, `a ^ b`, `a && b`, etc.
     BinOp {
         op: BinOp,

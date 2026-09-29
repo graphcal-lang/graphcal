@@ -50,7 +50,7 @@ pub fn classify_unit_scale(expr: &ast::Expr) -> UnitScaleSource<'_> {
             if self.0.is_none()
                 && let ast::ExprKind::GraphRef(name) = &expr.kind
             {
-                self.0 = Some(name.clone());
+                self.0 = Some(Spanned::new(name.to_scoped_name(), name.span()));
             }
             Ok(())
         }
