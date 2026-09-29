@@ -4,12 +4,13 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
+use crate::registry::index::FiniteIndex;
 use crate::resolved_name::ResolvedName;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::index_name::{IndexName, IndexNameNamespace, IndexVariantName};
-use crate::syntax::names::{NameAtom, NameDef, NameNamespace};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{
@@ -217,6 +218,70 @@ pub struct ModuleSymbols {
         HashMap<IndexName, Symbol<IndexNameNamespace, HashMap<IndexVariantName, Span>>>,
     pub(super) constructors:
         HashMap<ConstructorName, Symbol<ConstructorNameNamespace, ConstructorSignature>>,
+    /// Definition sources of dimension symbols a selective include projects
+    /// as this module's own declarations; they have no source declaration.
+    pub(super) dimension_projections: HashMap<DimName, DimensionProjection>,
+    /// Index symbols a selective include projects as this module's own
+    /// declarations because their port is bound to a structural `Fin(N)`.
+    pub(super) finite_index_projections: HashMap<IndexName, FiniteIndex>,
+}
+
+/// A template dimension that a selective include specializes through its
+/// dimension bindings (`include lib(dim Q: Length)::{dim QR as R}`).
+///
+/// The projected symbol is owned by the including module: `QR = Q / Time`
+/// denotes a different dimension in every configured instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimensionProjection {
+    template: ResolvedName<DimNameNamespace>,
+    ports: Vec<DimensionPortBinding>,
+}
+
+impl DimensionProjection {
+    pub(super) const fn new(
+        template: ResolvedName<DimNameNamespace>,
+        ports: Vec<DimensionPortBinding>,
+    ) -> Self {
+        Self { template, ports }
+    }
+
+    /// The template's own dimension the projection specializes.
+    #[must_use]
+    pub const fn template(&self) -> &ResolvedName<DimNameNamespace> {
+        &self.template
+    }
+
+    /// The include's dimension bindings, as template port to importer path.
+    #[must_use]
+    pub fn ports(&self) -> &[DimensionPortBinding] {
+        &self.ports
+    }
+}
+
+/// One `dim Port: Target` binding of an include, with the target spelled in
+/// the including module's scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimensionPortBinding {
+    port: DimName,
+    target: NamePath,
+}
+
+impl DimensionPortBinding {
+    pub(super) const fn new(port: DimName, target: NamePath) -> Self {
+        Self { port, target }
+    }
+
+    /// The bound dimension port of the template.
+    #[must_use]
+    pub const fn port(&self) -> &DimName {
+        &self.port
+    }
+
+    /// The importer-side dimension the port is bound to, as written.
+    #[must_use]
+    pub const fn target(&self) -> &NamePath {
+        &self.target
+    }
 }
 
 impl ModuleSymbols {
@@ -256,6 +321,8 @@ impl ModuleSymbols {
             struct_types: HashMap::new(),
             indexes: HashMap::new(),
             constructors: HashMap::new(),
+            dimension_projections: HashMap::new(),
+            finite_index_projections: HashMap::new(),
         };
         let errors = declarations
             .iter()
@@ -298,6 +365,20 @@ impl ModuleSymbols {
         &self,
     ) -> &HashMap<IndexName, Symbol<IndexNameNamespace, HashMap<IndexVariantName, Span>>> {
         &self.indexes
+    }
+
+    /// The include projection a dimension symbol of this module denotes, when
+    /// it is a projected specialization rather than a source declaration.
+    #[must_use]
+    pub(crate) fn dimension_projection(&self, name: &DimName) -> Option<&DimensionProjection> {
+        self.dimension_projections.get(name)
+    }
+
+    /// The structural index an index symbol of this module denotes, when it
+    /// is an include projection of a port bound to `Fin(N)`.
+    #[must_use]
+    pub(crate) fn finite_index_projection(&self, name: &IndexName) -> Option<FiniteIndex> {
+        self.finite_index_projections.get(name).copied()
     }
 
     /// The local declaration occupying `(namespace, atom)`, if any.

@@ -4,7 +4,6 @@ use std::num::NonZeroUsize;
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::registry::aliased_table::AliasedTable;
 use crate::registry::unit::PositiveFiniteScale;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmptyUnique;
@@ -793,48 +792,6 @@ impl fmt::Display for IndexBindingTarget {
             Self::Declared(name) => name.fmt(formatter),
             Self::Finite(index) => index.fmt(formatter),
         }
-    }
-}
-
-/// Index registry: maps declared names and typed structural identities to
-/// definitions. Declared names may alias another declared name or a
-/// structural identity.
-#[derive(Debug, Clone)]
-pub struct IndexRegistry {
-    pub(crate) indexes: AliasedTable<IndexBindingTarget, IndexDef>,
-}
-
-impl IndexRegistry {
-    /// Look up a declared index definition by source-visible name, following
-    /// aliases.
-    #[must_use]
-    pub fn get_index(&self, name: &IndexName) -> Option<&IndexDef> {
-        self.indexes
-            .get(&IndexBindingTarget::Declared(name.clone()))
-    }
-
-    /// Look up a compiler-generated structural index by typed identity.
-    #[must_use]
-    pub fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
-        self.indexes.get_defined(&IndexBindingTarget::Finite(index))
-    }
-
-    /// Iterate over declared index definitions with their declared names.
-    pub fn declared_indexes(&self) -> impl Iterator<Item = (&IndexName, &IndexDef)> {
-        self.indexes
-            .iter()
-            .filter_map(|(key, definition)| match key {
-                IndexBindingTarget::Declared(name) => Some((name, definition)),
-                IndexBindingTarget::Finite(_) => None,
-            })
-    }
-
-    /// Iterate over compiler-generated structural index identities.
-    pub fn finite_indexes(&self) -> impl Iterator<Item = FiniteIndex> + '_ {
-        self.indexes.keys().filter_map(|key| match key {
-            IndexBindingTarget::Declared(_) => None,
-            IndexBindingTarget::Finite(index) => Some(*index),
-        })
     }
 }
 

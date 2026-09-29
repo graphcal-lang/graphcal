@@ -388,7 +388,7 @@ mod tests {
                 .unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
-        project_types.insert_local_hir(&ir).unwrap();
+        project_types.insert_module(ir.definitions()).unwrap();
         type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap()
     }
 

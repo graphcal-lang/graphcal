@@ -2,7 +2,6 @@
 
 pub mod aliased_table;
 pub mod builtins;
-pub mod dag;
 pub mod declared_type;
 pub mod dimension_table;
 pub mod error;

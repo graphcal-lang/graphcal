@@ -29,7 +29,7 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_hir(&ir).unwrap();
+    project_types.insert_module(ir.definitions()).unwrap();
     crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types))
 }
 

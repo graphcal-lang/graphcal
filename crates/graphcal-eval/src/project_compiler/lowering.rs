@@ -25,7 +25,19 @@ use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
-use super::registry_merge::{merge_registry_into_builder, seed_imported_type_system};
+use super::registry_merge::{merge_instance_types, seed_imported_types};
+
+/// Project-wide semantic services shared by every module lowering pass.
+pub(super) struct ProjectSemanticContext<'project, 'session> {
+    pub(super) project: &'project crate::loader::LoadedProject,
+    pub(super) module_resolver: &'project graphcal_compiler::resolve::ModuleResolver,
+    pub(super) module_templates: &'session mut ModuleTemplateStore,
+    /// Canonical dimensions, units, and indexes of every module, evaluated on demand.
+    pub(super) definitions:
+        &'session mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<
+            'project,
+        >,
+}
 
 struct DirectDagCallValidator<'a> {
     project: &'a crate::loader::LoadedProject,
@@ -253,7 +265,7 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
 /// It does not resolve checked declaration types, evaluate constants, verify
 /// host signatures, or construct TIR.
 pub(in crate::project_compiler) fn lower_file_to_hir(
-    semantic_context: ProjectSemanticContext<'_>,
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
     ctx: ImportContext<'_>,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
@@ -263,34 +275,36 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
     let file_ast = loaded_file.ast();
-    let ProjectSemanticContext {
-        project,
-        module_resolver,
-        module_templates,
-    } = semantic_context;
+    let project = semantic.project;
     let importer = loaded_file.module();
-    validate_direct_dag_calls(importer, project, file_dag_id, module_resolver, file_src)?;
+    validate_direct_dag_calls(
+        importer,
+        project,
+        file_dag_id,
+        semantic.module_resolver,
+        file_src,
+    )?;
     let include_debug_names = include_debug_name_map(&ctx);
 
-    let mut registry_seed = |builder: &mut RegistryBuilder| {
-        seed_imported_type_system(
-            builder,
+    let mut type_seed = |types: &mut TypeRegistry| {
+        seed_imported_types(
+            types,
             project,
-            &ctx.imported_type_system_names,
-            &ctx.frontend_registry_imports,
-            &ctx.projected_static_aliases,
-            module_artifacts,
+            &ctx.imported_types,
+            &ctx.frontend_type_imports,
+            &ctx.projected_type_aliases,
             file_src,
         )
     };
-    let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
+    let (mut types, mut unfrozen) =
+        graphcal_compiler::ir::lower::lower_to_types_with_imported_bindings_and_cancellation(
             file_ast,
             file_src,
             &ctx.imported_names,
             ctx.imported_bindings,
             file_dag_id,
-            Some(&mut registry_seed),
+            Some(&mut type_seed),
+            semantic.definitions,
             cancellation,
         )
         .map_err(|error| {
@@ -314,43 +328,31 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         .collect();
 
     elaborate_include_instances(
-        project,
+        semantic,
         file_dag_id,
         &ctx.include_instances,
         module_artifacts,
-        module_resolver,
-        module_templates,
         file_src,
         importer,
-        &mut builder,
+        &mut types,
         &mut unfrozen,
         cancellation,
     )?;
 
     cancellation.checkpoint()?;
-    let registry = builder.build();
-    let frontend_registry = registry.clone();
+    let frontend_types = types.clone();
     let root = store_and_freeze_module_template(
-        module_templates,
+        semantic,
         file_dag_id,
         unfrozen,
-        registry,
-        module_resolver,
+        types,
         file_src,
         cancellation,
     )?;
-    let inline_dags = lower_inline_dag_modules(
-        project,
-        loaded_file,
-        &frontend_registry,
-        module_artifacts,
-        module_resolver,
-        module_templates,
-        cancellation,
-    )?;
+    let inline_dags =
+        lower_inline_dag_modules(semantic, loaded_file, module_artifacts, cancellation)?;
 
-    let lowering_interface =
-        LoweringModuleInterface::new(frontend_registry, root.external_surface.clone());
+    let lowering_interface = LoweringModuleInterface::new(frontend_types, &root);
     Ok((
         HirFile {
             source: file_src.clone(),
@@ -455,13 +457,10 @@ pub(super) fn module_resolve_compile_error(
     }
 }
 
-fn lower_inline_dag_modules<'a>(
-    project: &'a crate::loader::LoadedProject,
+fn lower_inline_dag_modules(
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
-    parent_registry: &Registry,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    module_templates: &mut ModuleTemplateStore,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let file_src = loaded_file.named_source();
@@ -472,15 +471,12 @@ fn lower_inline_dag_modules<'a>(
             cancellation.checkpoint()?;
             let dag_body = loaded_dag.body(loaded_file);
             compile_loaded_dag_module_ir(
-                parent_registry,
-                project,
+                semantic,
                 loaded_file,
                 loaded_dag,
                 dag_body,
                 file_src,
                 module_artifacts,
-                module_resolver,
-                module_templates,
                 cancellation,
             )
         })
@@ -488,32 +484,30 @@ fn lower_inline_dag_modules<'a>(
 }
 
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "one template-lowering transaction threads project semantic services and cancellation"
 )]
-fn compile_loaded_dag_module_ir<'a>(
-    parent_registry: &Registry,
-    project: &'a crate::loader::LoadedProject,
+fn compile_loaded_dag_module_ir(
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     parent_loaded: &crate::loader::LoadedFile,
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    module_templates: &mut ModuleTemplateStore,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     cancellation.checkpoint()?;
-    if let Some(template) = module_templates.get(loaded_dag.dag_id()) {
+    if let Some(template) = semantic.module_templates.get(loaded_dag.dag_id()) {
         return freeze_inline_module_template(
             &template,
             loaded_dag.dag_id(),
-            module_resolver,
+            semantic.definitions,
             file_src,
             cancellation,
         );
     }
+    let project = semantic.project;
+    let module_resolver = semantic.module_resolver;
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         dag_body,
         loaded_dag.parent_dag_id(),
@@ -527,10 +521,10 @@ fn compile_loaded_dag_module_ir<'a>(
         imported_names: ImportedValueNames::default(),
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
-        imported_type_system_names: HashMap::new(),
-        projected_static_aliases: Vec::new(),
+        imported_types: HashMap::new(),
+        projected_type_aliases: Vec::new(),
         module_map: HashMap::new(),
-        frontend_registry_imports: Vec::new(),
+        frontend_type_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
@@ -571,51 +565,46 @@ fn compile_loaded_dag_module_ir<'a>(
         module_resolver,
         file_src,
     )?;
-    let mut registry_seed = |builder: &mut RegistryBuilder| {
-        seed_imported_type_system(
-            builder,
+    let mut type_seed = |types: &mut TypeRegistry| {
+        seed_imported_types(
+            types,
             project,
-            &ctx.imported_type_system_names,
-            &ctx.frontend_registry_imports,
-            &ctx.projected_static_aliases,
-            module_artifacts,
+            &ctx.imported_types,
+            &ctx.frontend_type_imports,
+            &ctx.projected_type_aliases,
             file_src,
         )
     };
-    let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
+    let (mut types, mut unfrozen) =
+        graphcal_compiler::ir::lower::lower_dag_module_to_types_with_imported_bindings_and_cancellation(
             &dag_ast,
-            Some(parent_registry),
             &ctx.imported_names,
             ctx.imported_bindings,
             file_src,
             loaded_dag.dag_id(),
-            Some(&mut registry_seed),
+            Some(&mut type_seed),
+            semantic.definitions,
             cancellation,
         )?;
 
     elaborate_include_instances(
-        project,
+        semantic,
         loaded_dag.dag_id(),
         &ctx.include_instances,
         module_artifacts,
-        module_resolver,
-        module_templates,
         file_src,
         loaded_dag.module(parent_loaded),
-        &mut builder,
+        &mut types,
         &mut unfrozen,
         cancellation,
     )?;
 
     cancellation.checkpoint()?;
-    let registry = builder.build();
     store_and_freeze_module_template(
-        module_templates,
+        semantic,
         loaded_dag.dag_id(),
         unfrozen,
-        registry,
-        module_resolver,
+        types,
         file_src,
         cancellation,
     )
@@ -624,37 +613,40 @@ fn compile_loaded_dag_module_ir<'a>(
 fn freeze_inline_module_template(
     template: &ElaboratedModuleTemplate,
     dag_id: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     Ok(template.unfrozen.clone().freeze_with_cancellation(
-        template.frontend_registry.clone(),
+        &template.frontend_types,
         dag_id,
-        module_resolver,
+        definitions,
         src,
         cancellation,
     )?)
 }
 
 fn store_and_freeze_module_template(
-    module_templates: &mut ModuleTemplateStore,
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     dag_id: &graphcal_compiler::dag_id::DagId,
     unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
-    registry: Registry,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    types: TypeRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     let template_unfrozen = unfrozen.clone();
-    let template_registry = registry.clone();
-    let frozen =
-        unfrozen.freeze_with_cancellation(registry, dag_id, module_resolver, src, cancellation)?;
-    module_templates.insert(
+    let frozen = unfrozen.freeze_with_cancellation(
+        &types,
+        dag_id,
+        semantic.definitions,
+        src,
+        cancellation,
+    )?;
+    semantic.module_templates.insert(
         dag_id.clone(),
         ElaboratedModuleTemplate {
             unfrozen: template_unfrozen,
-            frontend_registry: template_registry,
+            frontend_types: types,
         },
     );
     Ok(frozen)
@@ -1269,8 +1261,9 @@ fn record_semantic_instance(
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
 /// 2. Assemble the body with canonical imported targets set up.
-/// 3. Capture importer-owned index binding candidates, merge the body's registry,
-///    then validate every candidate against the body's effective typed contract.
+/// 3. Validate every index binding against the body's effective typed
+///    contract, with both sides resolved canonically, and compose the
+///    template's specialized nominal types.
 /// 4. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
 /// 5. Record a typed semantic instance edge without copying dependency bodies.
@@ -1281,21 +1274,21 @@ fn record_semantic_instance(
 )]
 #[expect(
     clippy::too_many_lines,
-    reason = "single cohesive include pipeline: source resolution, registry merge, validation, HIR merge"
+    reason = "single cohesive include pipeline: source resolution, type composition, validation, HIR merge"
 )]
 fn elaborate_include_instances(
-    project: &crate::loader::LoadedProject,
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer: crate::loader::LoadedModule<'_>,
-    builder: &mut RegistryBuilder,
+    types: &mut TypeRegistry,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
+    let project = semantic.project;
+    let module_resolver = semantic.module_resolver;
     let importer_external_surface = importer.interface().external_surface();
     let importer_local_type_names = collect_local_type_names(importer.declarations());
     for instance in include_instances {
@@ -1303,7 +1296,7 @@ fn elaborate_include_instances(
         // ---- 1. Resolve and assemble source body -----------------------------
         let template_id = instance.template.dag_id();
         let (template, dep_resolution_owner, body_decls_for_aliases) = match (
-            module_templates.get(template_id),
+            semantic.module_templates.get(template_id),
             instance.template,
         ) {
             (Some(template), template_module) => (
@@ -1318,10 +1311,10 @@ fn elaborate_include_instances(
                     imported_names: ImportedValueNames::default(),
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
-                    imported_type_system_names: HashMap::new(),
-                    projected_static_aliases: Vec::new(),
+                    imported_types: HashMap::new(),
+                    projected_type_aliases: Vec::new(),
                     module_map: HashMap::new(),
-                    frontend_registry_imports: Vec::new(),
+                    frontend_type_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 imports::process_file_body_declarations(
@@ -1340,45 +1333,42 @@ fn elaborate_include_instances(
                     module_resolver,
                     dep_src,
                 )?;
-                let mut registry_seed = |builder: &mut RegistryBuilder| {
-                    seed_imported_type_system(
-                        builder,
+                let mut type_seed = |types: &mut TypeRegistry| {
+                    seed_imported_types(
+                        types,
                         project,
-                        &body_ctx.imported_type_system_names,
-                        &body_ctx.frontend_registry_imports,
-                        &body_ctx.projected_static_aliases,
-                        module_artifacts,
+                        &body_ctx.imported_types,
+                        &body_ctx.frontend_type_imports,
+                        &body_ctx.projected_type_aliases,
                         dep_src,
                     )
                 };
-                let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
+                let (mut dep_types, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_types_with_imported_bindings_and_cancellation(
                                 dep_body,
                                 dep_src,
                                 &body_ctx.imported_names,
                                 body_ctx.imported_bindings,
                                 dep_dag_id,
-                                Some(&mut registry_seed),
+                                Some(&mut type_seed),
+                                semantic.definitions,
                                 cancellation,
                             )?;
                 elaborate_include_instances(
-                    project,
+                    semantic,
                     dep_dag_id,
                     &body_ctx.include_instances,
                     module_artifacts,
-                    module_resolver,
-                    module_templates,
                     dep_src,
                     dep_loaded.module(),
-                    &mut dep_builder,
+                    &mut dep_types,
                     &mut dep_unfrozen,
                     cancellation,
                 )?;
-                let dep_registry = dep_builder.build();
-                let template = module_templates.insert(
+                let template = semantic.module_templates.insert(
                     dep_dag_id.clone(),
                     ElaboratedModuleTemplate {
                         unfrozen: dep_unfrozen,
-                        frontend_registry: dep_registry,
+                        frontend_types: dep_types,
                     },
                 );
                 (
@@ -1410,10 +1400,10 @@ fn elaborate_include_instances(
                     imported_names: ImportedValueNames::default(),
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
-                    imported_type_system_names: HashMap::new(),
-                    projected_static_aliases: Vec::new(),
+                    imported_types: HashMap::new(),
+                    projected_type_aliases: Vec::new(),
                     module_map: HashMap::new(),
-                    frontend_registry_imports: Vec::new(),
+                    frontend_type_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 process_dag_body_import_declarations(
@@ -1453,100 +1443,80 @@ fn elaborate_include_instances(
                     importer_src,
                 )?;
 
-                let mut registry_seed = |builder: &mut RegistryBuilder| {
-                    seed_imported_type_system(
-                        builder,
+                let mut type_seed = |types: &mut TypeRegistry| {
+                    seed_imported_types(
+                        types,
                         project,
-                        &body_ctx.imported_type_system_names,
-                        &body_ctx.frontend_registry_imports,
-                        &body_ctx.projected_static_aliases,
-                        module_artifacts,
+                        &body_ctx.imported_types,
+                        &body_ctx.frontend_type_imports,
+                        &body_ctx.projected_type_aliases,
                         importer_src,
                     )
                 };
-                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
+                let (mut dag_types, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_types_with_imported_bindings_and_cancellation(
                                 &stripped_body,
-                                None,
                                 &body_ctx.imported_names,
                                 imported_bindings,
                                 importer_src,
                                 dag_id,
-                                Some(&mut registry_seed),
+                                Some(&mut type_seed),
+                                semantic.definitions,
                                 cancellation,
                             )?;
                 elaborate_include_instances(
-                    project,
+                    semantic,
                     dag_id,
                     &body_ctx.include_instances,
                     module_artifacts,
-                    module_resolver,
-                    module_templates,
                     importer_src,
                     loaded_inline.module(parent_loaded),
-                    &mut dag_builder,
+                    &mut dag_types,
                     &mut dag_unfrozen,
                     cancellation,
                 )?;
-                let dag_registry = dag_builder.build();
-                let template = module_templates.insert(
+                let template = semantic.module_templates.insert(
                     dag_id.clone(),
                     ElaboratedModuleTemplate {
                         unfrozen: dag_unfrozen,
-                        frontend_registry: dag_registry,
+                        frontend_types: dag_types,
                     },
                 );
                 (template, dag_id.clone(), inline_body)
             }
         };
         let dep_unfrozen = &template.unfrozen;
-        let dep_registry = &template.frontend_registry;
+        let dep_types = &template.frontend_types;
 
-        // Capture importer-owned candidates before the dependency registry is
-        // merged, so a dependency declaration with the same leaf name cannot
-        // accidentally satisfy its own binding.
-        let index_binding_candidates = capture_index_binding_candidates(
-            builder,
+        // ---- 2. Validate typed index binding contracts -------------------
+        validate_index_binding_contracts(
+            semantic.definitions,
+            &IndexBindingSites {
+                importer: importer_dag_id,
+                template: &dep_resolution_owner,
+                template_declarations: body_decls_for_aliases,
+                importer_src,
+                include_span: instance.include_span,
+            },
             &instance.index_bindings,
             &instance.index_binding_spans,
-            importer_src,
-            instance.include_span,
+            &instance.dim_bindings,
         )?;
 
-        // ---- 2. Merge the template's specialized type-system metadata. ----
-        merge_registry_into_builder(
-            builder,
-            dep_registry,
+        // ---- 3. Compose the template's specialized nominal types. -------
+        merge_instance_types(
+            types,
+            dep_types,
             &instance.index_bindings,
             &instance.type_bindings,
             &instance.dim_bindings,
-        )
-        .map_err(|conflict| {
-            CompileError::Eval(GraphcalError::ConflictingImportedUnit {
-                name: conflict.name,
-                src: importer_src.clone(),
-                span: instance.include_span.into(),
-            })
-        })?;
-
-        // ---- 3. Validate typed index binding contracts -------------------
-        validate_index_binding_contracts(
-            body_decls_for_aliases,
-            dep_registry,
-            &instance.index_bindings,
-            &instance.index_binding_spans,
-            &instance.dim_bindings,
-            &index_binding_candidates,
-            builder,
-            importer_src,
-            instance.include_span,
-        )?;
+        );
 
         // ---- 4. Validation checks -----------------------------------------
         let override_reconciliations = dep_unfrozen.include_override_reconciliations(
             &instance.bindings,
             &instance.index_bindings,
             &instance.type_bindings,
-            dep_registry,
+            dep_types,
             &dep_resolution_owner,
             importer_dag_id,
             importer_src,
@@ -1624,78 +1594,78 @@ fn index_binding_span(
     spans.get(dep_index).copied().unwrap_or(include_span)
 }
 
-/// Capture candidates from the importer before dependency declarations are merged.
-fn capture_index_binding_candidates(
-    builder: &mut RegistryBuilder,
-    bindings: &IndexBindings,
-    spans: &HashMap<IndexName, Span>,
-    importer_src: &NamedSource<Arc<String>>,
+/// The two modules one include's index bindings connect, with the
+/// diagnostic provenance of the include.
+struct IndexBindingSites<'a> {
+    importer: &'a graphcal_compiler::dag_id::DagId,
+    template: &'a graphcal_compiler::dag_id::DagId,
+    template_declarations: &'a [graphcal_compiler::desugar::desugared_ast::Declaration],
+    importer_src: &'a NamedSource<Arc<String>>,
     include_span: Span,
-) -> Result<HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>, CompileError> {
-    bindings
-        .iter()
-        .map(|(dep_index, target)| {
-            let candidate = match target {
-                IndexBindingTarget::Declared(importer_index) => {
-                    builder.get_index(importer_index).cloned().ok_or_else(|| {
-                        CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                            dep_index: dep_index.to_string(),
-                            value: target.to_string(),
-                            src: importer_src.clone(),
-                            span: index_binding_span(dep_index, spans, include_span).into(),
-                        })
-                    })?
-                }
-                IndexBindingTarget::Finite(finite) => {
-                    builder.ensure_finite_index(finite.cardinality());
-                    builder.get_finite_index(*finite).cloned().ok_or_else(|| {
-                        CompileError::Eval(GraphcalError::InternalError {
-                            message: format!(
-                                "registered structural index `{target}` is unavailable"
-                            ),
-                            src: importer_src.clone(),
-                            span: index_binding_span(dep_index, spans, include_span).into(),
-                        })
-                    })?
-                }
-            };
-            Ok((dep_index.clone(), candidate))
-        })
-        .collect()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "validation needs both module contracts, binding substitutions, candidates, and diagnostic provenance"
-)]
+/// The importer-side definition one index port binding names, resolved in
+/// the importer's own scope.
+fn index_binding_candidate(
+    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
+    sites: &IndexBindingSites<'_>,
+    dep_index: &IndexName,
+    target: &IndexBindingTarget,
+    span: Span,
+) -> Result<graphcal_compiler::registry::types::IndexDef, CompileError> {
+    match target {
+        IndexBindingTarget::Declared(importer_index) => {
+            let identity = definitions
+                .resolver()
+                .resolve_index_path(
+                    sites.importer,
+                    &graphcal_compiler::syntax::names::NamePath::local(
+                        importer_index.atom().clone(),
+                    ),
+                )
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+                .map_err(|_| {
+                    CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                        dep_index: dep_index.to_string(),
+                        value: target.to_string(),
+                        src: sites.importer_src.clone(),
+                        span: span.into(),
+                    })
+                })?;
+            Ok(definitions.index(&identity)?)
+        }
+        IndexBindingTarget::Finite(finite) => Ok(
+            graphcal_compiler::registry::types::IndexDef::finite(*finite),
+        ),
+    }
+}
+
 fn validate_index_binding_contracts(
-    dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-    dep_registry: &Registry,
+    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
+    sites: &IndexBindingSites<'_>,
     bindings: &IndexBindings,
     spans: &HashMap<IndexName, Span>,
     dim_bindings: &HashMap<DimName, DimName>,
-    candidates: &HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>,
-    builder: &RegistryBuilder,
-    importer_src: &NamedSource<Arc<String>>,
-    include_span: Span,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::registry::types::IndexBindingContractError;
 
+    let candidates = bindings
+        .iter()
+        .map(|(dep_index, target)| {
+            let span = index_binding_span(dep_index, spans, sites.include_span);
+            index_binding_candidate(definitions, sites, dep_index, target, span)
+                .map(|candidate| (dep_index, candidate))
+        })
+        .collect::<Result<HashMap<_, _>, CompileError>>()?;
+
     for (dep_index, target) in bindings {
-        let span = index_binding_span(dep_index, spans, include_span);
-        let contract = effective_index_binding_contract(
-            dep_index,
-            dep_declarations,
-            dep_registry,
-            dim_bindings,
-            builder,
-            importer_src,
-            span,
-        )?;
+        let span = index_binding_span(dep_index, spans, sites.include_span);
+        let contract =
+            effective_index_binding_contract(definitions, sites, dep_index, dim_bindings, span)?;
         let candidate = candidates.get(dep_index).ok_or_else(|| {
             CompileError::Eval(GraphcalError::InternalError {
                 message: format!("captured index binding candidate for `{dep_index}` was lost"),
-                src: importer_src.clone(),
+                src: sites.importer_src.clone(),
                 span: span.into(),
             })
         })?;
@@ -1708,7 +1678,7 @@ fn validate_index_binding_contracts(
                     dep_kind: expected.to_string(),
                     bound_index: target.to_string(),
                     bound_kind: found.to_string(),
-                    src: importer_src.clone(),
+                    src: sites.importer_src.clone(),
                     span: span.into(),
                 }));
             }
@@ -1716,10 +1686,10 @@ fn validate_index_binding_contracts(
                 return Err(CompileError::Eval(
                     GraphcalError::IndexBindingDimensionMismatch {
                         dep_index: dep_index.to_string(),
-                        expected_dim: builder.format_dimension(&expected),
+                        expected_dim: definitions.format_dimension(sites.importer, &expected),
                         bound_index: target.to_string(),
-                        found_dim: builder.format_dimension(&found),
-                        src: importer_src.clone(),
+                        found_dim: definitions.format_dimension(sites.importer, &found),
+                        src: sites.importer_src.clone(),
                         span: span.into(),
                     },
                 ));
@@ -1729,31 +1699,66 @@ fn validate_index_binding_contracts(
     Ok(())
 }
 
-fn effective_index_binding_contract(
-    dep_index: &IndexName,
-    dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-    dep_registry: &Registry,
+/// Each dimension port an include binds, with the importer-side dimension it
+/// is bound to (`None` when the target names no visible dimension).
+fn bound_dimension_ports(
+    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
+    sites: &IndexBindingSites<'_>,
     dim_bindings: &HashMap<DimName, DimName>,
-    builder: &RegistryBuilder,
-    importer_src: &NamedSource<Arc<String>>,
+) -> Result<
+    HashMap<
+        graphcal_compiler::resolved_name::ResolvedDimName,
+        Option<graphcal_compiler::dimension::Dimension>,
+    >,
+    GraphcalError,
+> {
+    use graphcal_compiler::syntax::dimension::DimRef;
+
+    let mut overrides = HashMap::new();
+    for (port, target) in dim_bindings {
+        let Some(port) =
+            definitions.resolve_dimension(sites.template, &DimRef::local(port.clone()))
+        else {
+            continue;
+        };
+        let target = definitions
+            .resolve_dimension(sites.importer, &DimRef::local(target.clone()))
+            .map(|target| definitions.dimension(&target))
+            .transpose()?;
+        overrides.insert(port, target);
+    }
+    Ok(overrides)
+}
+
+fn effective_index_binding_contract(
+    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
+    sites: &IndexBindingSites<'_>,
+    dep_index: &IndexName,
+    dim_bindings: &HashMap<DimName, DimName>,
     binding_span: Span,
 ) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
-    use graphcal_compiler::registry::dimension_table::{
-        DimensionResolveError, resolve_dim_expr_with,
-    };
+    use graphcal_compiler::ir::static_definitions::DimExprFailure;
     use graphcal_compiler::registry::types::{
         ConcreteIndexKind, IndexBindingContract, IndexKind, RequiredIndexKind,
     };
-    use graphcal_compiler::syntax::dimension::DimRef;
 
-    let definition = dep_registry.indexes.get_index(dep_index).ok_or_else(|| {
+    let missing_port = || {
         CompileError::Eval(GraphcalError::InternalError {
-            message: format!("bound dependency index `{dep_index}` is missing from its registry"),
-            src: importer_src.clone(),
+            message: format!("bound dependency index `{dep_index}` has no canonical definition"),
+            src: sites.importer_src.clone(),
             span: binding_span.into(),
         })
-    })?;
+    };
+    let identity = definitions
+        .resolver()
+        .resolve_index_path(
+            sites.template,
+            &graphcal_compiler::syntax::names::NamePath::local(dep_index.atom().clone()),
+        )
+        .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
+        .map_err(|_| missing_port())?;
+    let definition = definitions.index(&identity)?;
 
     match &definition.kind {
         IndexKind::Concrete(ConcreteIndexKind::Named { .. }) => Ok(IndexBindingContract::Named),
@@ -1764,7 +1769,8 @@ fn effective_index_binding_contract(
             })
         }
         IndexKind::Required(RequiredIndexKind::Coordinate { .. }) => {
-            let dimension_expr = dep_declarations
+            let dimension_expr = sites
+                .template_declarations
                 .iter()
                 .find_map(|declaration| {
                     let DeclKind::Index(index) = &declaration.kind else {
@@ -1774,7 +1780,7 @@ fn effective_index_binding_contract(
                         IndexDeclKind::RequiredCoordinate { dimension }
                             if index.name.value == *dep_index =>
                         {
-                            Some(dimension.clone())
+                            Some(dimension)
                         }
                         IndexDeclKind::RequiredCoordinate { .. }
                         | IndexDeclKind::RequiredNamed
@@ -1788,43 +1794,36 @@ fn effective_index_binding_contract(
                         message: format!(
                             "required coordinate index `{dep_index}` has no source declaration"
                         ),
-                        src: importer_src.clone(),
+                        src: sites.importer_src.clone(),
                         span: binding_span.into(),
                     })
                 })?;
-            // The expression is the dependency's source: bound required
-            // dimensions resolve to the importer's binding target, every other
-            // (possibly qualified) reference in the dependency's own scope.
-            let dimension = resolve_dim_expr_with(&dimension_expr, |reference| {
-                dim_bindings
-                    .get(reference.leaf())
-                    .filter(|_| !reference.is_qualified())
-                    .map_or_else(
-                        || dep_registry.dimensions.get_dimension(reference),
-                        |target| builder.get_dimension(&DimRef::local(target.clone())),
-                    )
-            })
-            .map_err(|error| {
-                CompileError::Eval(match error {
-                    DimensionResolveError::UnknownDimension { name } => {
-                        GraphcalError::UnknownDimension {
+            // The expression is the dependency's source: a reference to a
+            // bound dimension port evaluates to the importer's binding target,
+            // every other reference in the dependency's own scope.
+            let overrides = bound_dimension_ports(definitions, sites, dim_bindings)?;
+            let dimension = definitions
+                .evaluate_dim_expr_with_overrides(sites.template, dimension_expr, &overrides)
+                .map_err(|failure| {
+                    CompileError::Eval(match failure {
+                        DimExprFailure::Unknown(name) => GraphcalError::UnknownDimension {
                             name: name.to_name_path(),
-                            src: importer_src.clone(),
+                            src: sites.importer_src.clone(),
                             span: binding_span.into(),
-                        }
-                    }
-                    DimensionResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
-                        src: importer_src.clone(),
-                        span: binding_span.into(),
-                    },
-                })
-            })?;
+                        },
+                        DimExprFailure::Overflow => GraphcalError::DimensionOverflow {
+                            src: sites.importer_src.clone(),
+                            span: binding_span.into(),
+                        },
+                        DimExprFailure::Definition(error) => *error,
+                    })
+                })?;
             Ok(IndexBindingContract::Coordinate { dimension })
         }
         IndexKind::Concrete(ConcreteIndexKind::Finite { .. }) => {
             Err(CompileError::Eval(GraphcalError::InternalError {
                 message: format!("declared dependency index `{dep_index}` became structural"),
-                src: importer_src.clone(),
+                src: sites.importer_src.clone(),
                 span: binding_span.into(),
             }))
         }

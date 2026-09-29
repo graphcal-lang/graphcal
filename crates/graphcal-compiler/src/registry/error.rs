@@ -98,21 +98,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("conflicting definitions of unit `{name}` reach this file through includes")]
-    #[diagnostic(
-        code(graphcal::N010),
-        help(
-            "included modules share this file's unit scope, and two of them define `{name}` with different dimensions or scales, so references would be ambiguous — rename one of the definitions"
-        )
-    )]
-    ConflictingImportedUnit {
-        name: UnitRef,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("import brings in a conflicting `{name}`")]
-        span: SourceSpan,
-    },
-
     #[error("property `{property}` is not valid in {context}")]
     #[diagnostic(code(graphcal::N011), help("{valid}"))]
     InvalidPlotProperty {
@@ -2402,7 +2387,6 @@ impl GraphcalError {
             Self::DuplicateName { src, .. }
             | Self::DuplicateConstructorField { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
-            | Self::ConflictingImportedUnit { src, .. }
             | Self::InvalidPlotProperty { src, .. }
             | Self::PlotPropertyTypeMismatch { src, .. }
             | Self::PlotPropertyDimensioned { src, .. }

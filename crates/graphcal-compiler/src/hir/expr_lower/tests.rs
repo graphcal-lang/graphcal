@@ -27,7 +27,6 @@ use crate::hir::expr::{CheckedAssertBody, CheckedExpr};
 use crate::hir::expr::{collect_expr_dependencies, visit_expr};
 use crate::hir::lower::GenericScope;
 use crate::hir::lower::ModuleScope;
-use crate::registry::types::RegistryBuilder;
 use crate::syntax::parser::Parser;
 
 fn desugared_source(source: &str) -> ast::File {
@@ -648,7 +647,6 @@ fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
         scoped_name,
         ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p")),
     )]);
-    let registry = RegistryBuilder::new().build();
 
     let err = lower_expr(
         node_value(&file, "x"),
@@ -656,7 +654,6 @@ fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
             ModuleScope::new(&owner, &resolver, &scope),
             &TimeZoneRegistry::bundled(),
             BindingOverlay::Frozen(FrozenBindings {
-                unit_registry: &registry.units,
                 unit_bindings: &HashMap::new(),
                 decl_bindings: &bindings,
                 instance_templates: &HashMap::new(),
@@ -791,7 +788,6 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
         ModuleResolver::without_edges([(owner.clone(), file.declarations.as_slice())]).unwrap();
     let scope = GenericScope::new();
     let time_zones = TimeZoneRegistry::bundled();
-    let registry = RegistryBuilder::new().build();
     let no_units = HashMap::new();
     let no_templates = HashMap::new();
     let module = ModuleScope::new(&owner, &resolver, &scope);
@@ -801,7 +797,6 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
             module,
             &time_zones,
             BindingOverlay::Frozen(FrozenBindings {
-                unit_registry: &registry.units,
                 unit_bindings: &no_units,
                 decl_bindings: bindings,
                 instance_templates: &no_templates,

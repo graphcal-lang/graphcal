@@ -11,7 +11,7 @@ use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{IndexBindingTarget, Registry};
+use graphcal_compiler::registry::types::{IndexBindingTarget, TypeRegistry};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
@@ -20,8 +20,6 @@ use graphcal_compiler::syntax::module_name::IncludeInstanceId;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
-
-use super::template::ModuleTemplateStore;
 
 /// Dependency-side name to importer-side name.
 pub(super) type DepToImporter<T> = HashMap<T, T>;
@@ -41,36 +39,41 @@ pub(super) struct ImportAlias {
 
 /// Frontend interface available only while lowering downstream modules.
 ///
-/// The derived dynamic-unit set is constructed atomically with the registry
-/// and export surface, so consumers cannot disagree about which exported units
-/// are runtime-dependent. It contains no checked type, value, or runtime fact.
+/// The derived dynamic-unit set is constructed atomically from the module's
+/// canonical unit definitions and export surface, so consumers cannot disagree
+/// about which exported units are runtime-dependent. It contains no checked
+/// type, value, or runtime fact.
 pub(super) struct LoweringModuleInterface {
-    frontend_registry: Registry,
+    frontend_types: TypeRegistry,
     external_surface: ExternalDeclSurface,
     exported_runtime_units: HashSet<UnitName>,
 }
 
 impl LoweringModuleInterface {
-    pub(super) fn new(frontend_registry: Registry, external_surface: ExternalDeclSurface) -> Self {
-        let exported_runtime_units = frontend_registry
-            .units
-            .all_units()
+    pub(super) fn new(
+        frontend_types: TypeRegistry,
+        hir: &graphcal_compiler::ir::lower::HirDag,
+    ) -> Self {
+        let external_surface = hir.external_surface.clone();
+        let exported_runtime_units = hir
+            .definitions()
+            .statics()
+            .units()
             .filter(|(unit, info)| {
-                !unit.is_qualified()
-                    && !info.scale.constness().is_const()
-                    && external_surface.is_unit_explicit_export(unit.leaf().atom())
+                !info.scale.constness().is_const()
+                    && external_surface.is_unit_explicit_export(unit.atom())
             })
-            .map(|(unit, _)| unit.leaf().clone())
+            .map(|(unit, _)| unit.to_unowned_def_name())
             .collect();
         Self {
-            frontend_registry,
+            frontend_types,
             external_surface,
             exported_runtime_units,
         }
     }
 
-    pub(super) const fn frontend_registry(&self) -> &Registry {
-        &self.frontend_registry
+    pub(super) const fn frontend_types(&self) -> &TypeRegistry {
+        &self.frontend_types
     }
 
     pub(super) const fn external_surface(&self) -> &ExternalDeclSurface {
@@ -181,13 +184,6 @@ pub struct CompiledFile {
     pub(crate) include_debug_names: IncludeDebugNameMap,
 }
 
-/// Project-wide semantic services shared by every module lowering pass.
-pub(super) struct ProjectSemanticContext<'project> {
-    pub(super) project: &'project crate::loader::LoadedProject,
-    pub(super) module_resolver: &'project graphcal_compiler::resolve::ModuleResolver,
-    pub(super) module_templates: &'project mut ModuleTemplateStore,
-}
-
 /// One typed dynamic-unit projection requested by a selective include.
 pub(super) struct UnitProjectionAlias {
     pub(super) source: UnitName,
@@ -232,26 +228,11 @@ impl ProjectModuleBinding {
     }
 }
 
-/// One source-visible Static or Unit projection alias and its effective target.
+/// One source-visible nominal type projection alias and its effective target.
 #[derive(Debug, Clone)]
-pub(super) enum ProjectedStaticAlias {
-    Type {
-        alias: StructTypeName,
-        target: StructTypeName,
-        specialized: bool,
-    },
-    Dimension {
-        alias: DimName,
-        target: DimName,
-    },
-    Index {
-        alias: IndexName,
-        target: IndexBindingTarget,
-    },
-    Unit {
-        alias: UnitName,
-        target: UnitName,
-    },
+pub(super) struct ProjectedTypeAlias {
+    pub(super) alias: StructTypeName,
+    pub(super) target: StructTypeName,
 }
 
 /// Mutable state accumulated while processing one body's imports.
@@ -259,39 +240,21 @@ pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
     pub(super) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    pub(super) imported_type_system_names: HashMap<
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::SelectedDeclarations,
-    >,
-    pub(super) projected_static_aliases:
-        Vec<graphcal_compiler::syntax::span::Spanned<ProjectedStaticAlias>>,
+    /// Nominal types selected from each dependency, by source name.
+    pub(super) imported_types: HashMap<graphcal_compiler::dag_id::DagId, HashSet<StructTypeName>>,
+    pub(super) projected_type_aliases:
+        Vec<graphcal_compiler::syntax::span::Spanned<ProjectedTypeAlias>>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
-    pub(super) frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
+    pub(super) frontend_type_imports: Vec<FrontendTypeImport<'a>>,
     pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,
 }
 
-/// Whether registry composition is a pure import or concrete instance boundary.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum RuntimeUnitBoundary {
-    PureImport,
-    ConcreteInstance,
-}
-
-impl RuntimeUnitBoundary {
-    pub(super) const fn includes_runtime_units(self) -> bool {
-        matches!(self, Self::ConcreteInstance)
-    }
-}
-
-/// Frontend registry surface queued for a module import.
-pub(super) struct FrontendRegistryImport<'a> {
-    pub(super) registry: &'a Registry,
+/// Frontend nominal types of a module import, filtered by its export surface.
+pub(super) struct FrontendTypeImport<'a> {
+    pub(super) types: &'a TypeRegistry,
     pub(super) external_surface: &'a ExternalDeclSurface,
     /// Declared names a pure import may not bring across.
     /// `None` denotes a concrete include instance rather than a pure import.
     pub(super) pure_import_rejections:
         Option<graphcal_compiler::static_interface::StaticImportRejections>,
-    pub(super) unit_alias: ModuleAliasName,
-    pub(super) runtime_unit_boundary: RuntimeUnitBoundary,
-    pub(super) import_span: Span,
 }

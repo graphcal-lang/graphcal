@@ -472,7 +472,10 @@ fn type_resolve_impl(
         cancellation,
     )?;
     Ok(TirBuilder::new(
-        ir.registry.into_formatting(),
+        crate::registry::types::FormattingRegistry::new(
+            project_types.base_dimensions().clone(),
+            ir.display_dimensions,
+        ),
         project_types,
         root_dag,
         ir.extern_functions,

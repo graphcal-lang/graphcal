@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
+use crate::registry::index::FiniteIndex;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
@@ -23,7 +24,7 @@ use super::category::SymbolTable;
 use super::error::{ModuleResolveError, NameCategory};
 use super::imports::ExportLookup;
 use super::scope::Access;
-use super::symbols::Symbol;
+use super::symbols::{DimensionPortBinding, DimensionProjection, Symbol};
 use super::tables::NamespaceTables;
 
 impl ModuleResolver {
@@ -121,8 +122,19 @@ impl ModuleResolver {
                         // include, so the projection is the importer's own
                         // declaration rather than the template's identity.
                         let local_name = DimName::classify(local);
+                        let projection = DimensionProjection::new(
+                            ResolvedDimName::from_def(
+                                template.clone(),
+                                DimName::classify(source.clone()),
+                            ),
+                            dimension_port_bindings(include),
+                        );
                         let entry = self.entry_mut(owner)?;
                         entry.scope.selected_dimensions.remove(&local_name);
+                        entry
+                            .symbols
+                            .dimension_projections
+                            .insert(local_name.clone(), projection);
                         entry.symbols.dimensions.insert(
                             local_name.clone(),
                             Symbol::new(
@@ -148,9 +160,18 @@ impl ModuleResolver {
                         .insert(DimName::classify(local), selected);
                 }
                 ImportItemNamespace::Index => {
-                    if binding.is_some() && binding_path.is_none() {
+                    if let Some(binding) = binding
+                        && binding_path.is_none()
+                    {
                         let local = IndexName::classify(local);
-                        self.entry_mut(owner)?.symbols.indexes.insert(
+                        let finite = finite_index_binding(&binding.value);
+                        let symbols = &mut self.entry_mut(owner)?.symbols;
+                        if let Some(finite) = finite {
+                            symbols
+                                .finite_index_projections
+                                .insert(local.clone(), finite);
+                        }
+                        symbols.indexes.insert(
                             local.clone(),
                             Symbol::new(
                                 ResolvedIndexName::from_def(owner.clone(), local),
@@ -268,5 +289,52 @@ impl ModuleResolver {
                 name: atom.clone(),
             }),
         }
+    }
+}
+
+/// The include's `dim Port: Target` bindings whose target is a name path.
+///
+/// A non-path target is not a dimension; the include's binding validation
+/// reports it, and the port stays opaque in the projection.
+fn dimension_port_bindings(include: &ast::IncludeDecl) -> Vec<DimensionPortBinding> {
+    include
+        .param_bindings
+        .iter()
+        .filter(|binding| binding.category == InputBindingCategory::Dimension)
+        .filter_map(|binding| match &binding.value.kind {
+            ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(DimensionPortBinding::new(
+                DimName::classify(binding.name.name.atom().clone()),
+                path.to_name_path(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The structural index an index binding value names, when it is a concrete
+/// `Fin(N)`.
+///
+/// Any other value is rejected by the include's binding validation.
+fn finite_index_binding(value: &ast::Expr) -> Option<FiniteIndex> {
+    match value.index_binding_arg()? {
+        ast::IndexExpr::Finite { cardinality, .. } => {
+            FiniteIndex::try_from_u64(concrete_nat_value(&cardinality)?).ok()
+        }
+        ast::IndexExpr::Name(_) | ast::IndexExpr::BareNat(_) => None,
+    }
+}
+
+/// Evaluate a variable-free natural-number expression, or `None` when it has
+/// a variable or overflows.
+fn concrete_nat_value(expr: &ast::NatExpr) -> Option<u64> {
+    match expr {
+        ast::NatExpr::Literal(value, _) => Some(*value),
+        ast::NatExpr::Var(_) => None,
+        ast::NatExpr::Add(operands, _) => operands.iter().try_fold(0_u64, |sum, operand| {
+            sum.checked_add(concrete_nat_value(operand)?)
+        }),
+        ast::NatExpr::Mul(operands, _) => operands.iter().try_fold(1_u64, |product, operand| {
+            product.checked_mul(concrete_nat_value(operand)?)
+        }),
     }
 }

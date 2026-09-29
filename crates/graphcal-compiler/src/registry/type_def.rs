@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{GenericConstraint, TypeExpr};
-use crate::registry::aliased_table::AliasedTable;
+use crate::registry::aliased_table::{AliasCycle, AliasedTable};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
 /// A typed field in a constructor payload.
@@ -227,13 +227,6 @@ impl TypeDef {
         }
     }
 
-    /// Returns `true` if this is a tagged union.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) const fn is_union(&self) -> bool {
-        matches!(self.kind, TypeDefKind::Union { .. })
-    }
-
     /// If this is a single-variant union whose sole constructor's name
     /// equals the type's name, returns that variant's payload fields.
     /// This is the record-like shape: field access and brace
@@ -269,18 +262,52 @@ impl TypeDef {
 /// union) and a constructor (`Position` — the sole constructor of that
 /// union). [`lookup_ctor`](Self::lookup_ctor) walks the constructor
 /// side; [`get_type`](Self::get_type) walks the type side.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TypeRegistry {
-    pub(crate) types: AliasedTable<StructTypeName, TypeDef>,
+    types: AliasedTable<StructTypeName, TypeDef>,
     /// Constructor namespace: each constructor name resolves to the
     /// union it belongs to. With no module system, the namespace is
     /// flat. Duplicate names are rejected upstream during name
     /// resolution; like every `register_*` entry point, insertion here
     /// is last-wins defense-in-depth, not a validation layer.
-    pub(crate) ctors: HashMap<ConstructorName, StructTypeName>,
+    ctors: HashMap<ConstructorName, StructTypeName>,
 }
 
 impl TypeRegistry {
+    /// An empty type table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a type definition.
+    ///
+    /// For tagged unions, also populates the constructor namespace: each
+    /// variant's name resolves back to the union it belongs to. Constructor
+    /// collisions are rejected upstream during declaration collection, so this
+    /// table overwrites by key.
+    pub fn register_type(&mut self, def: TypeDef) {
+        if let Some(members) = def.union_members() {
+            for member in members {
+                self.ctors.insert(member.name().clone(), def.name().clone());
+            }
+        }
+        self.types.insert(def.name().clone(), def);
+    }
+
+    /// Register a source-visible type alias without changing nominal identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AliasCycle`] when `target` already resolves through `alias`.
+    pub fn register_type_alias(
+        &mut self,
+        alias: StructTypeName,
+        target: StructTypeName,
+    ) -> Result<(), AliasCycle<StructTypeName>> {
+        self.types.insert_alias(alias, target)
+    }
+
     /// Look up a type definition by source-visible type name, following
     /// aliases.
     #[must_use]

@@ -1,60 +1,13 @@
-//! Dimension table: base-dimension metadata keyed by [`BaseDimId`] and the
-//! source-visible named dimensions of one registry scope.
+//! Base-dimension metadata keyed by [`BaseDimId`] and the dimension
+//! formatting services built from it.
 
 use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
 use crate::dimension::{BaseDimId, Dimension};
-use crate::ratio::RatioError;
-use crate::registry::aliased_table::{AliasCycle, AliasedTable};
+use crate::registry::aliased_table::AliasedTable;
 use crate::syntax::dimension::{DimName, DimRef, UnitName};
-
-/// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum DimensionResolveError {
-    /// A referenced dimension is not visible under its (possibly
-    /// module-qualified) source reference.
-    #[error("unknown dimension `{name}`")]
-    UnknownDimension { name: DimRef },
-    /// Dimension exponent arithmetic overflowed.
-    #[error(transparent)]
-    Overflow(#[from] RatioError),
-}
-
-/// Resolve a `DimExpr` by looking up each term's typed (possibly
-/// module-qualified) reference with `lookup`.
-///
-/// This is the single term-folding implementation; registries supply their
-/// alias-aware scope lookup, while boundary code that spans two scopes (for
-/// example a dependency declaration re-read under include bindings) supplies
-/// a lookup that routes each reference to its owning scope.
-///
-/// # Errors
-///
-/// Returns [`DimensionResolveError::UnknownDimension`] with the full source
-/// reference when `lookup` misses, or an overflow error from exponent
-/// arithmetic.
-pub fn resolve_dim_expr_with<'a>(
-    expr: &DimExpr,
-    mut lookup: impl FnMut(&DimRef) -> Option<&'a Dimension>,
-) -> Result<Dimension, DimensionResolveError> {
-    expr.terms
-        .iter()
-        .try_fold(Dimension::dimensionless(), |acc, item| {
-            let reference: DimRef = item.term.name.value.clone().classify_leaf();
-            let Some(base) = lookup(&reference) else {
-                return Err(DimensionResolveError::UnknownDimension { name: reference });
-            };
-            let powered = base.pow(item.term.effective_power())?;
-            match item.op {
-                MulDivOp::Mul => acc * powered,
-                MulDivOp::Div => acc / powered,
-            }
-            .map_err(DimensionResolveError::from)
-        })
-}
 
 /// Format a dimension, preferring a registered named alias for compound forms.
 ///
@@ -97,13 +50,32 @@ pub struct BaseDimensionInfo {
 }
 
 impl BaseDimensionInfo {
-    /// Metadata of a (non-affine) base dimension with a canonical unit.
+    /// Metadata of a base dimension with the given canonical unit and affine policy.
     #[must_use]
-    pub(crate) const fn with_canonical_unit(unit: UnitName) -> Self {
+    pub(crate) const fn new(canonical_unit: Option<UnitName>, affine_prone: bool) -> Self {
         Self {
-            canonical_unit: Some(unit),
-            affine_prone: false,
+            canonical_unit,
+            affine_prone,
         }
+    }
+
+    /// Record the canonical unit of this base dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CanonicalUnitAlreadyRegistered`] when a canonical unit is
+    /// already recorded.
+    pub(crate) fn register_canonical_unit(
+        &mut self,
+        unit: UnitName,
+    ) -> Result<(), CanonicalUnitAlreadyRegistered> {
+        if let Some(existing) = &self.canonical_unit {
+            return Err(CanonicalUnitAlreadyRegistered {
+                existing: existing.clone(),
+            });
+        }
+        self.canonical_unit = Some(unit);
+        Ok(())
     }
 
     /// The canonical (scale-1) unit of this base dimension, if registered.
@@ -120,7 +92,7 @@ impl BaseDimensionInfo {
 
     /// Fill metadata this entry lacks from another view of the same base
     /// dimension. An already-registered canonical unit wins.
-    fn merge_missing(&mut self, other: &Self) {
+    pub(crate) fn merge_missing(&mut self, other: &Self) {
         if self.canonical_unit.is_none() {
             self.canonical_unit.clone_from(&other.canonical_unit);
         }
@@ -133,192 +105,6 @@ impl BaseDimensionInfo {
 #[error("base dimension already has canonical unit `{existing}`")]
 pub struct CanonicalUnitAlreadyRegistered {
     pub existing: UnitName,
-}
-
-/// Dimension table: base-dimension metadata keyed by [`BaseDimId`] plus the
-/// source-visible named dimensions and their aliases.
-///
-/// Every dimension-name lookup — direct [`Self::get_dimension`] calls and
-/// `DimExpr` resolution alike — goes through the one alias-aware
-/// [`AliasedTable`], so module qualifiers and source-visible aliases are
-/// honoured uniformly.
-#[derive(Debug, Clone, Default)]
-pub struct DimensionTable {
-    bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
-    named: AliasedTable<DimRef, Dimension>,
-}
-
-impl DimensionTable {
-    pub(crate) fn into_formatting(self) -> DimensionFormattingRegistry {
-        DimensionFormattingRegistry {
-            bases: self.bases,
-            display_aliases: self.named,
-        }
-    }
-
-    // -- Mutation --
-
-    /// Register a base dimension and make it source-visible under its leaf
-    /// name (`base dim Foo;`, prelude `Length`).
-    pub(crate) fn register_base_dimension(&mut self, id: BaseDimId) {
-        self.named
-            .insert(DimRef::local(id.source_name()), Dimension::base(id.clone()));
-        self.bases.entry(id).or_default();
-    }
-
-    /// Record a base dimension without making it source-visible.
-    ///
-    /// Imported dimensions and units may be built from a dependency's private
-    /// base dimensions; the importer tracks them but must not be able to name
-    /// them.
-    pub(crate) fn record_base_dimension(&mut self, id: BaseDimId) {
-        self.bases.entry(id).or_default();
-    }
-
-    /// Copy a dependency's metadata for `id`, keeping what is already known.
-    pub(crate) fn import_base_dimension(&mut self, id: BaseDimId, info: &BaseDimensionInfo) {
-        self.bases.entry(id).or_default().merge_missing(info);
-    }
-
-    /// Record the canonical unit of a base dimension.
-    pub(crate) fn register_canonical_unit(
-        &mut self,
-        id: BaseDimId,
-        unit: UnitName,
-    ) -> Result<(), CanonicalUnitAlreadyRegistered> {
-        let info = self.bases.entry(id).or_default();
-        if let Some(existing) = &info.canonical_unit {
-            return Err(CanonicalUnitAlreadyRegistered {
-                existing: existing.clone(),
-            });
-        }
-        info.canonical_unit = Some(unit);
-        Ok(())
-    }
-
-    /// Mark a base dimension as affine-prone: its real-world units (e.g.
-    /// Celsius/Fahrenheit on Temperature) need offset conversions that unit
-    /// definitions cannot express, so user unit definitions on the bare
-    /// dimension are rejected (#648 U4).
-    pub(crate) fn mark_affine_prone(&mut self, id: BaseDimId) {
-        self.bases.entry(id).or_default().affine_prone = true;
-    }
-
-    /// Register a named dimension under a local or module-qualified reference.
-    pub(crate) fn register_dimension(&mut self, name: DimRef, dim: Dimension) {
-        self.named.insert(name, dim);
-    }
-
-    /// Register a source-visible dimension alias without changing identity.
-    pub(crate) fn register_dimension_alias(
-        &mut self,
-        alias: DimRef,
-        target: DimRef,
-    ) -> Result<(), AliasCycle<DimRef>> {
-        self.named.insert_alias(alias, target)
-    }
-
-    /// Merge every entry of `parent` this table does not bind yet.
-    pub(crate) fn merge_missing_from(&mut self, parent: &Self) {
-        for (id, info) in &parent.bases {
-            self.import_base_dimension(id.clone(), info);
-        }
-        self.named.merge_missing_from(&parent.named);
-    }
-
-    // -- Lookup --
-
-    /// Look up a possibly module-qualified dimension reference, following
-    /// source-visible aliases.
-    #[must_use]
-    pub fn get_dimension(&self, reference: &DimRef) -> Option<&Dimension> {
-        self.named.get(reference)
-    }
-
-    /// Iterate over all named dimensions.
-    pub fn all_dimensions(&self) -> impl Iterator<Item = (&DimRef, &Dimension)> {
-        self.named.iter()
-    }
-
-    /// Iterate over every known base dimension and its metadata.
-    pub fn base_dimensions(&self) -> impl Iterator<Item = (&BaseDimId, &BaseDimensionInfo)> {
-        self.bases.iter()
-    }
-
-    /// Metadata of one base dimension, if known.
-    #[must_use]
-    pub fn base_dimension(&self, id: &BaseDimId) -> Option<&BaseDimensionInfo> {
-        self.bases.get(id)
-    }
-
-    /// Canonical-unit symbols of every base dimension that has one, for
-    /// runtime display adapters.
-    #[must_use]
-    pub fn base_unit_symbols(&self) -> BTreeMap<BaseDimId, String> {
-        canonical_unit_symbols(&self.bases)
-    }
-
-    /// Returns `true` when `dim` is exactly an affine-prone base dimension
-    /// (power 1). Compound dimensions involving the base (e.g.
-    /// `Temperature / Time`) stay allowed: offsets cancel in differences.
-    #[must_use]
-    pub(crate) fn is_affine_prone(&self, dim: &Dimension) -> bool {
-        dim.base_dimension_id()
-            .and_then(|id| self.bases.get(id))
-            .is_some_and(BaseDimensionInfo::is_affine_prone)
-    }
-
-    /// Format a dimension as a human-readable string.
-    ///
-    /// Returns `"Dimensionless"` for dimensionless, or names like `"Length / Time"`.
-    /// When a compound dimension matches a named dimension alias (e.g. `Energy`
-    /// for `Length^2 * Mass / Time^2`), the alias is preferred so diagnostics
-    /// speak the user's vocabulary.
-    #[must_use]
-    pub fn format_dimension(&self, dim: &Dimension) -> String {
-        format_dimension_preferring_alias(&self.named, dim)
-    }
-
-    /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
-    ///
-    /// Returns `Ok(None)` if any dimension name is unknown, and `Err` if
-    /// dimension exponent arithmetic overflows `i32`.
-    pub(crate) fn resolve_dim_expr(&self, expr: &DimExpr) -> Result<Option<Dimension>, RatioError> {
-        match self.resolve_dim_expr_detailed(expr) {
-            Ok(dim) => Ok(Some(dim)),
-            Err(DimensionResolveError::UnknownDimension { .. }) => Ok(None),
-            Err(DimensionResolveError::Overflow(err)) => Err(err),
-        }
-    }
-
-    /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
-    /// unknown referenced dimension name in the error.
-    pub fn resolve_dim_expr_detailed(
-        &self,
-        expr: &DimExpr,
-    ) -> Result<Dimension, DimensionResolveError> {
-        resolve_dim_expr_with(expr, |reference| self.get_dimension(reference))
-    }
-
-    /// Resolve a `TypeExpr` to a concrete `Dimension`.
-    ///
-    /// Returns `Ok(None)` if the type references unknown dimensions, and
-    /// `Err` if dimension exponent arithmetic overflows `i32`.
-    pub fn resolve_type_expr(&self, type_expr: &TypeExpr) -> Result<Option<Dimension>, RatioError> {
-        match &type_expr.kind {
-            TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
-            TypeExprKind::IndexLabel { .. }
-            | TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime
-            | TypeExprKind::TypeApplication { .. }
-            | TypeExprKind::DatetimeApplication { .. }
-            | TypeExprKind::ComplexApplication { .. }
-            | TypeExprKind::KeyApplication { .. } => Ok(None),
-            TypeExprKind::DimExpr(dim_expr) => self.resolve_dim_expr(dim_expr),
-            TypeExprKind::Indexed { base, .. } => self.resolve_type_expr(base),
-        }
-    }
 }
 
 /// Project base-dimension metadata to the canonical-unit symbols consumed by
@@ -343,6 +129,23 @@ pub struct DimensionFormattingRegistry {
 }
 
 impl DimensionFormattingRegistry {
+    /// Formatting data from base-dimension metadata and the named dimensions
+    /// a diagnostic may prefer over a base-dimension expansion.
+    #[must_use]
+    pub fn new(
+        bases: BTreeMap<BaseDimId, BaseDimensionInfo>,
+        display_aliases: impl IntoIterator<Item = (DimRef, Dimension)>,
+    ) -> Self {
+        let mut aliases = AliasedTable::default();
+        for (name, dimension) in display_aliases {
+            aliases.insert(name, dimension);
+        }
+        Self {
+            bases,
+            display_aliases: aliases,
+        }
+    }
+
     /// Canonical-unit symbols of every base dimension that has one, for
     /// runtime display adapters.
     #[must_use]
@@ -385,10 +188,6 @@ mod tests {
         BaseDimId::Prelude(PreludeBaseDimension::Length)
     }
 
-    fn temperature() -> BaseDimId {
-        BaseDimId::Prelude(PreludeBaseDimension::Temperature)
-    }
-
     fn unit(name: &str) -> UnitName {
         UnitName::expect_valid(name)
     }
@@ -417,92 +216,41 @@ mod tests {
 
     #[test]
     fn register_canonical_unit_rejects_second_unit() {
-        let mut table = DimensionTable::default();
-        table.register_base_dimension(length());
-        assert_eq!(table.register_canonical_unit(length(), unit("m")), Ok(()));
+        let mut info = BaseDimensionInfo::default();
+        assert_eq!(info.register_canonical_unit(unit("m")), Ok(()));
         assert_eq!(
-            table.register_canonical_unit(length(), unit("ft")),
+            info.register_canonical_unit(unit("ft")),
             Err(CanonicalUnitAlreadyRegistered {
                 existing: unit("m")
             })
         );
+        let formatting =
+            DimensionFormattingRegistry::new(BTreeMap::from([(length(), info)]), Vec::new());
         assert_eq!(
-            table.base_unit_symbols(),
-            BTreeMap::from([(length(), "m".to_string())])
-        );
-    }
-
-    #[test]
-    fn affine_prone_applies_only_to_the_bare_base_dimension() {
-        let mut table = DimensionTable::default();
-        table.register_base_dimension(temperature());
-        table.register_base_dimension(length());
-        table.mark_affine_prone(temperature());
-
-        let bare = Dimension::base(temperature());
-        assert!(table.is_affine_prone(&bare));
-        assert!(!table.is_affine_prone(&bare.pow(2).unwrap()));
-        assert!(!table.is_affine_prone(&Dimension::base(length())));
-        assert!(!table.is_affine_prone(&Dimension::dimensionless()));
-    }
-
-    #[test]
-    fn recorded_base_dimensions_are_tracked_but_not_source_visible() {
-        let mut table = DimensionTable::default();
-        table.record_base_dimension(length());
-        assert!(table.base_dimension(&length()).is_some());
-        assert_eq!(
-            table.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
-            None
-        );
-
-        table.register_base_dimension(length());
-        assert_eq!(
-            table.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
-            Some(&Dimension::base(length()))
-        );
-    }
-
-    #[test]
-    fn merge_missing_from_keeps_local_definitions() {
-        let mut parent = DimensionTable::default();
-        parent.register_base_dimension(length());
-        parent.register_canonical_unit(length(), unit("m")).unwrap();
-        parent.mark_affine_prone(temperature());
-        let rate = DimRef::local(DimName::expect_valid("Rate"));
-        parent.register_dimension(rate.clone(), Dimension::base(temperature()));
-
-        let mut child = DimensionTable::default();
-        child.register_dimension(rate.clone(), Dimension::base(length()));
-        child.merge_missing_from(&parent);
-
-        assert_eq!(child.get_dimension(&rate), Some(&Dimension::base(length())));
-        assert_eq!(
-            child.get_dimension(&DimRef::local(DimName::expect_valid("Length"))),
-            Some(&Dimension::base(length()))
-        );
-        assert!(child.is_affine_prone(&Dimension::base(temperature())));
-        assert_eq!(
-            child.base_unit_symbols(),
+            formatting.base_unit_symbols(),
             BTreeMap::from([(length(), "m".to_string())])
         );
     }
 
     #[test]
     fn formatting_prefers_named_alias_for_compound_dimensions_only() {
-        let mut table = DimensionTable::default();
-        table.register_base_dimension(length());
         let area = Dimension::base(length()).pow(2).unwrap();
-        table.register_dimension(DimRef::local(DimName::expect_valid("Area")), area.clone());
-        table.register_dimension(
-            DimRef::local(DimName::expect_valid("Span")),
-            Dimension::base(length()),
+        let formatting = DimensionFormattingRegistry::new(
+            BTreeMap::new(),
+            [
+                (DimRef::local(DimName::expect_valid("Area")), area.clone()),
+                (
+                    DimRef::local(DimName::expect_valid("Span")),
+                    Dimension::base(length()),
+                ),
+            ],
         );
 
-        assert_eq!(table.format_dimension(&area), "Area");
-        assert_eq!(table.format_dimension(&Dimension::base(length())), "Length");
-        let formatting = table.into_formatting();
         assert_eq!(formatting.format_dimension(&area), "Area");
+        assert_eq!(
+            formatting.format_dimension(&Dimension::base(length())),
+            "Length"
+        );
         assert_eq!(
             formatting.format_dimension(&area.pow(2).unwrap()),
             "Length^4"

@@ -1,8 +1,8 @@
 //! Per-DAG HIR construction from a desugared syntax tree.
 //!
-//! `lower()` combines declaration collection (`resolve`), registry
-//! construction (dimensions, units, indexes, structs), and function
-//! registration into one [`HirDag`]. Reference resolution happens at
+//! `lower()` combines declaration collection (`resolve`), canonical
+//! evaluation of the module's dimensions, units, and indexes, and nominal
+//! type collection into one [`HirDag`]. Reference resolution happens at
 //! [`UnfrozenIR::freeze`], which lowers every assembled declaration body to
 //! HIR — a frozen DAG carries no syntax-AST expression.
 
@@ -13,17 +13,17 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{DeclKind, Expr, File, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::dimension::Dimension;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
-use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::resolve_types::ParsedExpectedFail;
-use crate::registry::types::{Registry, RegistryBuilder, SemanticRegistry};
+use crate::registry::type_def::TypeRegistry;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{UnitName, UnitRef};
+use crate::syntax::dimension::{DimRef, UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
@@ -36,10 +36,10 @@ pub use super::include::{
     IncludeOverrideReconciliations, SemanticInstanceInput, specialize_type_definition,
     substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
 };
-use super::registry_build::register_file_declarations;
-pub use super::registry_build::{
-    SelectedDeclarations, SelectedDimension, register_selected_declarations,
-};
+use super::module_definitions::{ModuleDefinitions, StaticDefinitions};
+use super::registry_build::register_file_types;
+pub use super::registry_build::register_selected_types;
+use super::static_definitions::StaticDefinitionEvaluator;
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
@@ -224,7 +224,7 @@ pub struct RequestedPlot {
 /// Intermediate Representation produced by [`lower`].
 ///
 /// Contains everything downstream stages need:
-/// - A `Registry` with dimensions, units, indexes, structs, and functions
+/// - The module's owner-qualified dimension, unit, index, and nominal definitions
 /// - Declarations (consts, params, nodes) with their expressions
 /// - Dependency graphs for const and runtime evaluation ordering
 /// - Source-order tracking for deterministic output
@@ -233,11 +233,13 @@ pub struct HirDag {
     /// Canonical identity carried by the body itself, so storage and consumers
     /// cannot pair this HIR with a different DAG key.
     pub(super) dag_id: crate::dag_id::DagId,
-    /// Registry capabilities valid from HIR onward. Syntax-backed nominal
-    /// definitions are unrepresentable; `nominal_types` is the sole authority.
-    pub registry: SemanticRegistry,
-    /// Local nominal definitions with all signatures lowered to canonical HIR.
-    pub(super) nominal_types: crate::hir::NominalTypeRegistry,
+    /// Every dimension, unit, index, and nominal definition this DAG owns,
+    /// keyed by canonical identity. Syntax-backed nominal definitions are
+    /// unrepresentable; its nominal types carry canonical HIR signatures.
+    pub(super) definitions: ModuleDefinitions,
+    /// Dimension spellings visible to this DAG, which diagnostics prefer over
+    /// a base-dimension expansion.
+    pub(crate) display_dimensions: Vec<(DimRef, Dimension)>,
     /// Value, assertion, and visualization declarations keyed by canonical
     /// identity, in source order.
     pub(crate) decls: DeclTable<Lowered>,
@@ -285,7 +287,29 @@ impl HirDag {
     /// Nominal definitions canonically owned by this DAG.
     #[must_use]
     pub const fn nominal_types(&self) -> &crate::hir::NominalTypeRegistry {
-        &self.nominal_types
+        self.definitions.nominal_types()
+    }
+
+    /// Every definition canonically owned by this DAG.
+    #[must_use]
+    pub const fn definitions(&self) -> &ModuleDefinitions {
+        &self.definitions
+    }
+
+    /// Diagnostic formatting services for this DAG, given the project's
+    /// base-dimension metadata.
+    #[must_use]
+    pub fn formatting(
+        &self,
+        base_dimensions: std::collections::BTreeMap<
+            crate::dimension::BaseDimId,
+            crate::registry::types::BaseDimensionInfo,
+        >,
+    ) -> crate::registry::types::FormattingRegistry {
+        crate::registry::types::FormattingRegistry::new(
+            base_dimensions,
+            self.display_dimensions.iter().cloned(),
+        )
     }
 
     /// Borrow canonical lexical import targets resolved during HIR lowering.
@@ -344,24 +368,74 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    let (builder, unresolved) = lower_to_builder_with_imported_bindings(
+    // Declaration collection reports duplicate names before the resolver's
+    // own tables are built.
+    resolve_with_imported_values(ast, src, &ImportedValueNames::default(), &dag_id)?;
+    let resolver = single_module_resolver(ast, &dag_id, src)?;
+    let mut definitions = definition_evaluator(
+        &resolver,
+        [(
+            dag_id.clone(),
+            super::static_definitions::DefinitionSource {
+                declarations: &ast.declarations,
+                src,
+            },
+        )],
+        src,
+    )?;
+    let (types, unresolved) = lower_to_types_with_imported_bindings(
         ast,
         src,
         &ImportedValueNames::default(),
         HashMap::new(),
         &dag_id,
         None,
+        &mut definitions,
     )?;
-    let resolver = single_module_resolver(ast, &dag_id, src)?;
-    let registry = builder.build();
-    unresolved.freeze(registry, &dag_id, &resolver, src)
+    unresolved.freeze(&types, &dag_id, &mut definitions, src)
 }
 
+/// Create a definition evaluator over `sources`, reporting a broken prelude
+/// at `src`.
+///
+/// # Errors
+///
+/// Returns an internal error only if the built-in prelude is inconsistent.
+pub fn definition_evaluator<'a>(
+    resolver: &'a crate::resolve::ModuleResolver,
+    sources: impl IntoIterator<
+        Item = (
+            crate::dag_id::DagId,
+            super::static_definitions::DefinitionSource<'a>,
+        ),
+    >,
+    src: &NamedSource<Arc<String>>,
+) -> Result<StaticDefinitionEvaluator<'a>, GraphcalError> {
+    StaticDefinitionEvaluator::new(resolver, sources).map_err(|error| {
+        GraphcalError::internal_error(
+            format!("prelude failed to load: {error}"),
+            src,
+            DiagnosticAnchor::Builtin,
+        )
+    })
+}
+
+/// A file root and its inline DAG bodies lowered with one resolver, for
+/// compiler-side tests without the project loader.
 #[cfg(test)]
-pub(crate) fn lower_with_frontend_registry_for_test(
+pub(crate) struct LoweredTestFile {
+    pub(crate) root: HirDag,
+    pub(crate) inline_dags: Vec<HirDag>,
+    pub(crate) resolver: crate::resolve::ModuleResolver,
+}
+
+/// Lower a file root and each inline DAG body (without self-import
+/// preprocessing) against one project-wide resolver.
+#[cfg(test)]
+pub(crate) fn lower_file_with_inline_dags_for_test(
     ast: &File,
     src: &NamedSource<Arc<String>>,
-) -> Result<(HirDag, Registry), GraphcalError> {
+) -> Result<LoweredTestFile, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
         .map_err(|error| {
             GraphcalError::internal_error(
@@ -370,18 +444,90 @@ pub(crate) fn lower_with_frontend_registry_for_test(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    let (builder, unresolved) = lower_to_builder_with_imported_bindings(
-        ast,
-        src,
-        &ImportedValueNames::default(),
-        HashMap::new(),
-        &dag_id,
-        None,
-    )?;
-    let resolver = single_module_resolver(ast, &dag_id, src)?;
-    let registry = builder.build();
-    let hir = unresolved.freeze(registry.clone(), &dag_id, &resolver, src)?;
-    Ok((hir, registry))
+    resolve_with_imported_values(ast, src, &ImportedValueNames::default(), &dag_id)?;
+    let dag_bodies = ast
+        .declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::Dag(dag) => Some((
+                dag_id.inline_dag_child(dag.name.value.clone()),
+                File {
+                    declarations: dag.body.clone(),
+                },
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut modules = crate::resolve::builder::TestModules::default();
+    modules.add(dag_id.clone(), &ast.declarations);
+    for (owner, body) in &dag_bodies {
+        modules.add(owner.clone(), &body.declarations);
+        for declaration in &body.declarations {
+            if let DeclKind::Import(import) = &declaration.kind {
+                modules.import(owner, import, &dag_id);
+            }
+        }
+    }
+    let resolver = modules.build().map_err(|error| {
+        GraphcalError::internal_error(
+            format!("test module resolver failed: {error}"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let (root, inline_dags) = {
+        let mut definitions = definition_evaluator(
+            &resolver,
+            std::iter::once((
+                dag_id.clone(),
+                super::static_definitions::DefinitionSource {
+                    declarations: &ast.declarations,
+                    src,
+                },
+            ))
+            .chain(dag_bodies.iter().map(|(owner, body)| {
+                (
+                    owner.clone(),
+                    super::static_definitions::DefinitionSource {
+                        declarations: &body.declarations,
+                        src,
+                    },
+                )
+            })),
+            src,
+        )?;
+        let (types, unresolved) = lower_to_types_with_imported_bindings(
+            ast,
+            src,
+            &ImportedValueNames::default(),
+            HashMap::new(),
+            &dag_id,
+            None,
+            &mut definitions,
+        )?;
+        let root = unresolved.freeze(&types, &dag_id, &mut definitions, src)?;
+        let inline_dags = dag_bodies
+            .iter()
+            .map(|(owner, body)| {
+                let (types, unresolved) = lower_dag_module_to_types_with_imported_bindings(
+                    body,
+                    &ImportedValueNames::default(),
+                    HashMap::new(),
+                    src,
+                    owner,
+                    None,
+                    &mut definitions,
+                )?;
+                unresolved.freeze(&types, owner, &mut definitions, src)
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        (root, inline_dags)
+    };
+    Ok(LoweredTestFile {
+        root,
+        inline_dags,
+        resolver,
+    })
 }
 
 /// Build a resolver covering only this file's own module.
@@ -469,16 +615,12 @@ fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration>
         .collect()
 }
 
-/// Hook that merges imported type-system declarations into the registry builder.
-///
-/// Invoked after the prelude is loaded but before the file's own
-/// declarations are registered, so local declarations (e.g. a `unit`
-/// definition referencing an imported unit) resolve against the imported
-/// entries.
-pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<(), GraphcalError>;
+/// Hook that installs imported nominal type definitions into a module's
+/// frontend type table before the module's own types are registered.
+pub type TypeSeed<'a> = &'a mut dyn FnMut(&mut TypeRegistry) -> Result<(), GraphcalError>;
 
-/// Lower an AST with imported value bindings, returning a `RegistryBuilder`
-/// that can be further mutated before freezing.
+/// Lower an AST with imported value bindings, returning the module's frontend
+/// type table, which include elaboration may still extend before freezing.
 ///
 /// Imported lexical names are added to the resolution scope without injecting
 /// parallel AST expressions. Canonical targets remain attached to those names
@@ -491,21 +633,23 @@ pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<()
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_bindings(
+pub fn lower_to_types_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_to_builder_with_imported_bindings_and_cancellation(
+    type_seed: Option<TypeSeed<'_>>,
+    definitions: &mut StaticDefinitionEvaluator<'_>,
+) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
+    lower_to_types_with_imported_bindings_and_cancellation(
         ast,
         src,
         imported_names,
         imported_bindings,
         dag_id,
-        registry_seed,
+        type_seed,
+        definitions,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
@@ -519,25 +663,30 @@ pub fn lower_to_builder_with_imported_bindings(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_bindings_and_cancellation(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "module lowering threads imported bindings, the type seed, definitions, and cancellation"
+)]
+pub fn lower_to_types_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
+    type_seed: Option<TypeSeed<'_>>,
+    definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
     let resolved = resolve_with_imported_values(ast, src, imported_names, dag_id)?;
-    let (builder, mut unfrozen) = build_ir_from_resolved(
+    let (types, mut unfrozen) = build_ir_from_resolved(
         ast,
         src,
         resolved,
         imported_bindings,
         dag_id,
-        None,
-        registry_seed,
+        type_seed,
+        definitions,
         cancellation,
     )?;
 
@@ -549,15 +698,14 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
         .map(|(name, _span)| IncludedPlotEntry { name: name.clone() })
         .collect();
 
-    Ok((builder, unfrozen))
+    Ok((types, unfrozen))
 }
 
 /// Lower a `dag { ... }` body as if it were a standalone file.
 ///
-/// The dag body is a virtual [`File`] whose registry is seeded with the
-/// enclosing file's frozen registry. Cross-scope values must be passed through
-/// params or explicit imports; every imported lexical name maps to its
-/// canonical [`ResolvedDeclName`] target.
+/// The dag body is a virtual [`File`] with its own lexical scope. Cross-scope
+/// values must be passed through params or explicit imports; every imported
+/// lexical name maps to its canonical [`ResolvedDeclName`] target.
 ///
 /// # Errors
 ///
@@ -567,23 +715,23 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_dag_module_to_builder_with_imported_bindings(
+pub fn lower_dag_module_to_types_with_imported_bindings(
     dag_body: &File,
-    parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
+    type_seed: Option<TypeSeed<'_>>,
+    definitions: &mut StaticDefinitionEvaluator<'_>,
+) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
+    lower_dag_module_to_types_with_imported_bindings_and_cancellation(
         dag_body,
-        parent_registry,
         imported_names,
         imported_bindings,
         src,
         dag_id,
-        registry_seed,
+        type_seed,
+        definitions,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
@@ -599,18 +747,18 @@ pub fn lower_dag_module_to_builder_with_imported_bindings(
 )]
 #[expect(
     clippy::too_many_arguments,
-    reason = "dag-module lowering threads imported bindings, registry state, and cancellation"
+    reason = "dag-module lowering threads imported bindings, the type seed, definitions, and cancellation"
 )]
-pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
+pub fn lower_dag_module_to_types_with_imported_bindings_and_cancellation(
     dag_body: &File,
-    parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
+    type_seed: Option<TypeSeed<'_>>,
+    definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
     let resolved = resolve_with_imported_values(dag_body, src, imported_names, dag_id)?;
 
@@ -620,42 +768,10 @@ pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
         resolved,
         imported_bindings,
         dag_id,
-        parent_registry,
-        registry_seed,
+        type_seed,
+        definitions,
         cancellation,
     )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "dag-body lowering threads imported bindings plus parent registry"
-)]
-#[cfg(test)]
-pub(crate) fn lower_dag_body_to_ir(
-    dag_name: &crate::syntax::decl_name::DeclName,
-    stripped_body: &[crate::desugar::desugared_ast::Declaration],
-    parent_registry: &Registry,
-    resolver: &crate::resolve::ModuleResolver,
-    imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::dag_id::DagId,
-) -> Result<HirDag, GraphcalError> {
-    let virtual_file = File {
-        declarations: stripped_body.to_vec(),
-    };
-    let dag_dag_id = parent_dag_id.inline_dag_child(dag_name.clone());
-    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_bindings(
-        &virtual_file,
-        Some(parent_registry),
-        imported_names,
-        imported_bindings,
-        src,
-        &dag_dag_id,
-        None,
-    )?;
-    let registry = builder.build();
-    unfrozen.freeze(registry, &dag_dag_id, resolver, src)
 }
 
 /// Result of `preprocess_dag_body_self_imports`: imported names, canonical
@@ -680,34 +796,21 @@ fn build_ir_from_resolved(
     resolved: CollectedFile,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
-    parent_registry: Option<&Registry>,
-    registry_seed: Option<RegistrySeed<'_>>,
+    type_seed: Option<TypeSeed<'_>>,
+    definitions: &mut StaticDefinitionEvaluator<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+) -> Result<(TypeRegistry, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
-    // Build registry (prelude + user-declared dimensions/units/indexes/structs).
-    // When a parent registry is provided (inline-dag bodies), its entries are
-    // merged in before registering the virtual file's own declarations so that
-    // type annotations and dynamic-unit dep augmentation see the enclosing
-    // file's type system.
-    let mut builder = RegistryBuilder::new();
-    load_prelude(&mut builder).map_err(|error| {
-        GraphcalError::internal_error(
-            format!("prelude failed to load: {error}"),
-            src,
-            DiagnosticAnchor::Builtin,
-        )
-    })?;
-    if let Some(parent) = parent_registry {
-        builder.merge_from_registry(parent);
+    // Imported nominal definitions enter the frontend type table before the
+    // module's own types.
+    let mut types = TypeRegistry::new();
+    if let Some(seed) = type_seed {
+        seed(&mut types)?;
     }
-    // Imported type-system declarations merge before the file's own so that
-    // local declarations (e.g. `const unit halfmile: Length = 0.5 u.mile;`) resolve
-    // against them.
-    if let Some(seed) = registry_seed {
-        seed(&mut builder)?;
-    }
-    let dynamic_unit_scales = register_file_declarations(ast, &mut builder, src, dag_id)?;
+    register_file_types(ast, &mut types, src)?;
+    // Dimensions, units, and indexes are evaluated canonically through the
+    // module resolver; nothing is registered under a source spelling.
+    let module_statics = definitions.module_definitions(dag_id)?;
     cancellation.checkpoint()?;
 
     let unfrozen = UnfrozenIR {
@@ -739,7 +842,8 @@ fn build_ir_from_resolved(
                 )
             })
             .collect(),
-        dynamic_unit_scales,
+        dynamic_unit_scales: module_statics.dynamic_unit_scales,
+        static_definitions: module_statics.definitions,
         unit_bindings: HashMap::new(),
         imported_bindings,
         external_surface: resolved.external_surface,
@@ -754,7 +858,7 @@ fn build_ir_from_resolved(
         semantic_instances: Vec::new(),
     };
 
-    Ok((builder, unfrozen))
+    Ok((types, unfrozen))
 }
 
 /// Value declaration metadata needed to create a selective include alias.
@@ -766,7 +870,7 @@ pub struct IncludeAliasDeclaration {
     pub is_const: bool,
 }
 
-/// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
+/// An IR whose bodies still hold syntax, awaiting a call to [`freeze`](Self::freeze).
 #[derive(Debug, Clone)]
 pub struct UnfrozenIR {
     /// Value, assertion, and visualization declarations in source order,
@@ -785,6 +889,8 @@ pub struct UnfrozenIR {
     pub(super) expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     // Dynamic unit scales declared by this source body.
     pub(super) dynamic_unit_scales: Vec<entry::DynamicUnitScaleEntry<Syntax>>,
+    // Canonical dimensions, units, and indexes this DAG owns.
+    pub(super) static_definitions: StaticDefinitions,
     // Source-visible projected units mapped to concrete instance identities.
     pub(super) unit_bindings: HashMap<UnitRef, ResolvedUnitName>,
     // Lexical binding lookup only; each value carries one canonical target.
@@ -792,8 +898,8 @@ pub struct UnfrozenIR {
     // Explicit exports and named `param` input ports used by downstream
     // import/include boundary checks.
     pub(super) external_surface: ExternalDeclSurface,
-    /// Plugin-import declarations, awaiting signature resolution against the
-    /// frozen registry in [`UnfrozenIR::freeze`].
+    /// Plugin-import declarations, awaiting signature resolution in the
+    /// declaring module's scope in [`UnfrozenIR::freeze`].
     pub(super) plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
     /// Semantic instance edges awaiting importer-context HIR lowering.
     pub(super) semantic_instances: Vec<UnfrozenSemanticInstance>,
@@ -841,22 +947,12 @@ mod tests {
         assert_eq!(ir.decls().consts().count(), 1); // G0
         assert_eq!(ir.decls().params().count(), 3); // dry_mass, fuel_mass, isp
         assert_eq!(ir.decls().nodes().count(), 3); // v_exhaust, mass_ratio, delta_v
-        assert!(
-            ir.registry
-                .dimensions
-                .get_dimension(&crate::syntax::dimension::DimRef::local(
-                    crate::syntax::dimension::DimName::expect_valid("Length")
-                ))
-                .is_some()
-        );
-        assert!(
-            ir.registry
-                .units
-                .get_unit(&crate::syntax::dimension::UnitRef::local(
-                    crate::syntax::dimension::UnitName::expect_valid("km"),
-                ))
-                .is_some()
-        );
+        // Prelude names are resolved canonically; the module owns no copy.
+        assert_eq!(ir.definitions().statics().dimensions().count(), 0);
+        assert!(ir.display_dimensions.iter().any(|(name, _)| name
+            == &crate::syntax::dimension::DimRef::local(
+                crate::syntax::dimension::DimName::expect_valid("Length")
+            )));
     }
 
     #[test]
@@ -873,12 +969,10 @@ mod tests {
         let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert!(
-            ir.registry
-                .indexes
-                .get_index(&crate::syntax::index_name::IndexName::expect_valid(
-                    "Maneuver"
-                ))
-                .is_some()
+            ir.definitions()
+                .statics()
+                .indexes()
+                .any(|(identity, _)| identity.as_str() == "Maneuver")
         );
     }
 
@@ -1068,19 +1162,22 @@ mod tests {
             crate::syntax::non_empty::NonEmpty::singleton(NameAtom::parse("missing").unwrap()),
             NameAtom::parse("Dimension").unwrap(),
         );
-        let registry = RegistryBuilder::new().build();
         let owner =
             crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
                 .unwrap();
         let resolver = crate::resolve::ModuleResolver::default();
         let source = make_src("missing.Dimension");
+        let mut definitions = definition_evaluator(&resolver, [], &source).unwrap();
+        let types = TypeRegistry::new();
 
         let error = resolve_extern_struct_return(
             &path,
             Span::new(0, source.inner().len()),
-            &registry,
-            &owner,
-            &resolver,
+            &mut super::super::extern_fns::ExternSignatureScope {
+                owner: &owner,
+                types: &types,
+                definitions: &mut definitions,
+            },
             &source,
         )
         .unwrap_err();
@@ -1131,33 +1228,40 @@ mod tests {
     }
 
     #[test]
-    fn failed_unit_definition_does_not_enter_registry() {
+    fn failed_unit_definition_is_not_memoized() {
         let source = "const unit wrong: Length = 1.0 h;";
         let src = make_src(source);
         let raw_file = Parser::new(source).parse_file().unwrap();
         let file = crate::desugar::desugared_ast::File::from(raw_file);
-        let mut builder = RegistryBuilder::new();
-        load_prelude(&mut builder).unwrap();
-
-        let err = register_file_declarations(
-            &file,
-            &mut builder,
+        let owner = crate::dag_id::DagId::root_in_package("test", "main");
+        let resolver = single_module_resolver(&file, &owner, &src).unwrap();
+        let mut definitions = definition_evaluator(
+            &resolver,
+            [(
+                owner.clone(),
+                super::super::static_definitions::DefinitionSource {
+                    declarations: &file.declarations,
+                    src: &src,
+                },
+            )],
             &src,
-            &crate::dag_id::DagId::root_in_package("test", "main"),
         )
-        .unwrap_err();
+        .unwrap();
+        let wrong = resolver
+            .resolve_unit_path(&owner, &NamePath::expect_local("wrong"))
+            .unwrap()
+            .into_resolved();
 
+        for _ in 0..2 {
+            assert!(matches!(
+                definitions.unit(&wrong),
+                Err(GraphcalError::UnitDefinitionDimensionMismatch { .. })
+            ));
+        }
         assert!(matches!(
-            err,
-            GraphcalError::UnitDefinitionDimensionMismatch { .. }
+            definitions.module_definitions(&owner),
+            Err(GraphcalError::UnitDefinitionDimensionMismatch { .. })
         ));
-        assert!(
-            builder
-                .get_unit(&crate::syntax::dimension::UnitRef::local(
-                    crate::syntax::dimension::UnitName::expect_valid("wrong"),
-                ))
-                .is_none()
-        );
     }
 
     #[test]

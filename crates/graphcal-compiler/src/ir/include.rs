@@ -12,7 +12,8 @@ use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{self, Registry};
+use crate::registry::type_def::TypeRegistry;
+use crate::registry::types;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
@@ -224,8 +225,8 @@ impl UnfrozenIR {
         }
     }
 
-    /// Freeze into a complete [`HirDag`] by providing a built [`Registry`] and
-    /// the resolution context.
+    /// Freeze into a complete [`HirDag`] given the module's frontend type
+    /// table and the project's canonical definition evaluator.
     ///
     /// This is the lowering boundary of the pipeline: every source declaration
     /// body and importer-context semantic-instance binding assembled so far is
@@ -238,15 +239,15 @@ impl UnfrozenIR {
     /// cannot be resolved.
     pub fn freeze(
         self,
-        registry: Registry,
+        types: &TypeRegistry,
         owner: &crate::dag_id::DagId,
-        resolver: &crate::resolve::ModuleResolver,
+        definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<HirDag, GraphcalError> {
         self.freeze_with_cancellation(
-            registry,
+            types,
             owner,
-            resolver,
+            definitions,
             src,
             &crate::cancellation::CancellationToken::unbounded(),
         )
@@ -263,13 +264,15 @@ impl UnfrozenIR {
     )]
     pub fn freeze_with_cancellation(
         self,
-        registry: Registry,
+        types: &TypeRegistry,
         owner: &crate::dag_id::DagId,
-        resolver: &crate::resolve::ModuleResolver,
+        definitions: &mut super::static_definitions::StaticDefinitionEvaluator<'_>,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<HirDag, GraphcalError> {
         cancellation.checkpoint()?;
+        let resolver = definitions.resolver();
+        let time_zones = crate::registry::time_zone::TimeZoneRegistry::bundled();
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
@@ -319,7 +322,6 @@ impl UnfrozenIR {
 
         let generic_scope = crate::hir::GenericScope::new();
         let overlay = crate::hir::BindingOverlay::Frozen(crate::hir::FrozenBindings {
-            unit_registry: &registry.units,
             unit_bindings: &self.unit_bindings,
             decl_bindings: &decl_bindings,
             instance_templates: &instance_templates,
@@ -327,7 +329,7 @@ impl UnfrozenIR {
         let lower_in = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
             let scope = crate::hir::ModuleScope::new(resolution_owner, resolver, &generic_scope);
             let expr_ctx =
-                crate::hir::ExprLoweringContext::with_overlay(scope, &registry.time_zones, overlay);
+                crate::hir::ExprLoweringContext::with_overlay(scope, &time_zones, overlay);
             crate::hir::lower_expr(expr, expr_ctx)
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
         };
@@ -364,7 +366,7 @@ impl UnfrozenIR {
 
         let nominal_types = crate::hir::nominal::lower_nominal_type_registry(
             owner,
-            &registry,
+            types,
             resolver,
             src,
             cancellation,
@@ -462,7 +464,7 @@ impl UnfrozenIR {
                                     resolver,
                                     &generic_scope,
                                 ),
-                                &registry.time_zones,
+                                &time_zones,
                                 overlay,
                             ),
                         )
@@ -480,7 +482,7 @@ impl UnfrozenIR {
                                     resolver,
                                     &generic_scope,
                                 ),
-                                &registry.time_zones,
+                                &time_zones,
                                 overlay,
                             ),
                         )
@@ -620,19 +622,33 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
 
-        let extern_functions =
-            resolve_plugin_imports(&self.plugin_imports, &registry, owner, resolver, src)?;
+        let extern_functions = resolve_plugin_imports(
+            &self.plugin_imports,
+            &mut super::extern_fns::ExternSignatureScope {
+                owner,
+                types,
+                definitions,
+            },
+            src,
+        )?;
+        let display_dimensions = definitions.display_dimensions(owner)?;
 
         // Syntax-backed nominal definitions are a lowering capability, not a
-        // HIR semantic authority. The phase-specific registry makes retaining
-        // them after `nominal_types` is complete impossible.
-        let registry = registry.into_semantic();
+        // HIR semantic authority: the frontend type table is dropped here and
+        // only the canonical definitions cross into HIR.
+        let definitions = super::module_definitions::ModuleDefinitions::try_new(
+            self.static_definitions,
+            nominal_types,
+        )
+        .map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
 
         Ok(HirDag {
             dag_id: owner.clone(),
             extern_functions,
-            registry,
-            nominal_types,
+            definitions,
+            display_dimensions,
             decls,
             included_plots: self.included_plots,
             source_declarations: self.source_declarations,
@@ -699,14 +715,14 @@ impl UnfrozenIR {
     /// reject them before TIR exists.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the include boundary supplies bindings, canonical owners, registry, and source provenance"
+        reason = "the include boundary supplies bindings, canonical owners, types, and source provenance"
     )]
     pub fn include_override_reconciliations(
         &self,
         bindings: &HashMap<DeclName, Expr>,
         index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
-        dependency_registry: &Registry,
+        dependency_types: &TypeRegistry,
         dependency_owner: &crate::dag_id::DagId,
         importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
@@ -722,7 +738,7 @@ impl UnfrozenIR {
                     NominalOverridePreflight {
                         index_bindings,
                         type_bindings,
-                        type_registry: &dependency_registry.types,
+                        type_registry: dependency_types,
                         orphan_decl: param.name.leaf(),
                         importer_src,
                         include_span,
@@ -766,7 +782,7 @@ impl UnfrozenIR {
 struct NominalOverridePreflight<'a> {
     index_bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
     type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
-    type_registry: &'a crate::registry::types::TypeRegistry,
+    type_registry: &'a TypeRegistry,
     orphan_decl: &'a DeclName,
     importer_src: &'a NamedSource<Arc<String>>,
     include_span: Span,

@@ -3,7 +3,7 @@ use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 use crate::ratio::RatioError;
 use crate::syntax::dimension::{DimName, UnitName};
 
-use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
+use crate::registry::types::PositiveFiniteScale;
 
 /// Canonical synthetic owner for Graphcal prelude type-system symbols.
 ///
@@ -191,45 +191,101 @@ fn dimension_of(factors: BaseFactors) -> Result<Dimension, RatioError> {
         })
 }
 
-/// Load all built-in dimensions and units into the registry builder.
-pub(crate) fn load_prelude(builder: &mut RegistryBuilder) -> Result<(), RatioError> {
+/// Failure to construct the built-in prelude definitions (a compiler bug).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PreludeDefinitionError {
+    #[error(transparent)]
+    Dimension(#[from] RatioError),
+    #[error(transparent)]
+    Owner(#[from] crate::ir::module_definitions::ForeignDefinitionError),
+}
+
+/// The Graphcal prelude's dimensions, units, and base-dimension metadata,
+/// owned by the synthetic [`prelude_dag_id`].
+///
+/// # Errors
+///
+/// Returns an error only if the built-in declarations are inconsistent,
+/// which would be a compiler bug.
+pub fn prelude_definitions()
+-> Result<crate::ir::module_definitions::StaticDefinitions, PreludeDefinitionError> {
+    use crate::registry::dimension_table::BaseDimensionInfo;
+    use crate::registry::unit::{UnitInfo, UnitScale};
+    use crate::resolved_name::{ResolvedDimName, ResolvedUnitName};
+
+    let owner = prelude_dag_id();
+    let mut definitions = crate::ir::module_definitions::StaticDefinitions::new(owner.clone());
+    let dimension =
+        |name: &str| ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name));
+    let unit = |name: &str| ResolvedUnitName::from_def(owner.clone(), UnitName::expect_valid(name));
+    let coherent = |dimension| UnitInfo {
+        dimension,
+        scale: UnitScale::Const(PositiveFiniteScale::ONE),
+    };
     for base in PreludeBaseDimension::ALL {
-        let id = builder.register_base_dimension_with_symbol(
-            BaseDimId::Prelude(base),
-            UnitName::expect_valid(base_symbol(base)),
+        let id = BaseDimId::Prelude(base);
+        definitions.insert_base_dimension(
+            id.clone(),
+            BaseDimensionInfo::new(
+                Some(UnitName::expect_valid(base_symbol(base))),
+                is_affine_prone(base),
+            ),
         );
-        if is_affine_prone(base) {
-            builder.mark_affine_prone(id);
-        }
+        definitions.insert_dimension(dimension(base.as_str()), Dimension::base(id.clone()))?;
+        definitions.insert_unit(unit(base_symbol(base)), coherent(Dimension::base(id)))?;
     }
     for decl in DERIVED_DIMENSIONS {
-        builder.register_dimension(
-            DimName::expect_valid(decl.name),
-            dimension_of(decl.factors)?,
-        );
-    }
-    for base in PreludeBaseDimension::ALL {
-        builder.register_unit(
-            UnitName::expect_valid(base_symbol(base)),
-            Dimension::base(BaseDimId::Prelude(base)),
-            PositiveFiniteScale::ONE,
-        );
+        definitions.insert_dimension(dimension(decl.name), dimension_of(decl.factors)?)?;
     }
     for decl in DERIVED_UNITS {
-        builder.register_unit(
-            UnitName::expect_valid(decl.name),
-            dimension_of(decl.factors)?,
-            decl.scale,
-        );
+        definitions.insert_unit(
+            unit(decl.name),
+            UnitInfo {
+                dimension: dimension_of(decl.factors)?,
+                scale: UnitScale::Const(decl.scale),
+            },
+        )?;
     }
-    Ok(())
+    Ok(definitions)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dimension::Rational;
-    use crate::registry::types::{RegistryBuilder, UnitScale};
+    use crate::registry::types::UnitScale;
+    use crate::syntax::dimension::{DimRef, UnitRef};
+
+    /// The prelude as source-spelled lookups, mirroring the implicit scope.
+    struct Prelude {
+        definitions: crate::ir::module_definitions::StaticDefinitions,
+    }
+
+    impl Prelude {
+        fn load() -> Self {
+            Self {
+                definitions: prelude_definitions().unwrap(),
+            }
+        }
+
+        fn dimension(&self, reference: &DimRef) -> Option<&Dimension> {
+            self.definitions
+                .dimensions()
+                .find(|(identity, _)| {
+                    !reference.is_qualified() && identity.atom() == reference.leaf().atom()
+                })
+                .map(|(_, dimension)| dimension)
+        }
+
+        fn unit(&self, reference: &UnitRef) -> Option<&crate::registry::unit::UnitInfo> {
+            self.definitions
+                .units()
+                .find(|(identity, _)| {
+                    !reference.is_qualified() && identity.atom() == reference.leaf().atom()
+                })
+                .map(|(_, info)| info)
+        }
+    }
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
@@ -244,9 +300,7 @@ mod tests {
 
     #[test]
     fn prelude_loads_all_base_dims() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         for name in [
             "Length",
             "Time",
@@ -258,11 +312,10 @@ mod tests {
             "Angle",
         ] {
             assert!(
-                r.dimensions
-                    .get_dimension(&crate::syntax::dimension::DimRef::local(
-                        DimName::expect_valid(name)
-                    ))
-                    .is_some(),
+                r.dimension(&crate::syntax::dimension::DimRef::local(
+                    DimName::expect_valid(name)
+                ))
+                .is_some(),
                 "missing dimension: {name}"
             );
         }
@@ -270,9 +323,7 @@ mod tests {
 
     #[test]
     fn prelude_loads_all_derived_dims() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         for name in [
             "Velocity",
             "Acceleration",
@@ -285,11 +336,10 @@ mod tests {
             "Volume",
         ] {
             assert!(
-                r.dimensions
-                    .get_dimension(&crate::syntax::dimension::DimRef::local(
-                        DimName::expect_valid(name)
-                    ))
-                    .is_some(),
+                r.dimension(&crate::syntax::dimension::DimRef::local(
+                    DimName::expect_valid(name)
+                ))
+                .is_some(),
                 "missing dimension: {name}"
             );
         }
@@ -299,35 +349,30 @@ mod tests {
     fn prelude_name_lists_match_loaded_registry() {
         use std::collections::BTreeSet;
 
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
 
         let listed_dims = prelude_dimension_names().collect::<BTreeSet<_>>();
         let loaded_dims = r
-            .dimensions
-            .all_dimensions()
-            .map(|(name, _)| name.leaf().as_str())
+            .definitions
+            .dimensions()
+            .map(|(name, _)| name.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_dims, loaded_dims);
 
         let listed_units = prelude_unit_names().collect::<BTreeSet<_>>();
         let loaded_units = r
-            .units
-            .all_units()
-            .map(|(unit_ref, _)| unit_ref.leaf().as_str())
+            .definitions
+            .units()
+            .map(|(unit, _)| unit.as_str())
             .collect::<BTreeSet<_>>();
         assert_eq!(listed_units, loaded_units);
     }
 
     #[test]
     fn prelude_force_dimension_is_correct() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         let force = r
-            .dimensions
-            .get_dimension(&crate::syntax::dimension::DimRef::local(
+            .dimension(&crate::syntax::dimension::DimRef::local(
                 DimName::expect_valid("Force"),
             ))
             .unwrap();
@@ -339,19 +384,15 @@ mod tests {
 
     #[test]
     fn prelude_newton_matches_force_dim() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         let force_dim = r
-            .dimensions
-            .get_dimension(&crate::syntax::dimension::DimRef::local(
+            .dimension(&crate::syntax::dimension::DimRef::local(
                 DimName::expect_valid("Force"),
             ))
             .unwrap()
             .clone();
         let newton = r
-            .units
-            .get_unit(&crate::syntax::dimension::UnitRef::local(
+            .unit(&crate::syntax::dimension::UnitRef::local(
                 crate::syntax::dimension::UnitName::expect_valid("N"),
             ))
             .unwrap();
@@ -361,12 +402,9 @@ mod tests {
 
     #[test]
     fn prelude_km_scale_correct() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         let km = r
-            .units
-            .get_unit(&crate::syntax::dimension::UnitRef::local(
+            .unit(&crate::syntax::dimension::UnitRef::local(
                 UnitName::expect_valid("km"),
             ))
             .unwrap();
@@ -378,12 +416,9 @@ mod tests {
 
     #[test]
     fn prelude_deg_scale_correct() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         let deg = r
-            .units
-            .get_unit(&crate::syntax::dimension::UnitRef::local(
+            .unit(&crate::syntax::dimension::UnitRef::local(
                 crate::syntax::dimension::UnitName::expect_valid("deg"),
             ))
             .unwrap();
@@ -395,15 +430,13 @@ mod tests {
 
     #[test]
     fn prelude_base_dimensions_registered() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
-        let bases: Vec<_> = r.dimensions.base_dimensions().map(|(id, _)| id).collect();
+        let r = Prelude::load();
+        let bases: Vec<_> = r.definitions.base_dimensions().map(|(id, _)| id).collect();
         assert_eq!(bases.len(), 8);
         assert!(bases.contains(&&length_id()));
         assert!(bases.contains(&&time_id()));
         let affine: Vec<_> = r
-            .dimensions
+            .definitions
             .base_dimensions()
             .filter(|(_, info)| info.is_affine_prone())
             .map(|(id, _)| id.name())
@@ -418,16 +451,13 @@ mod tests {
                 .take(PreludeBaseDimension::ALL.len())
                 .eq(PreludeBaseDimension::ALL_NAMES)
         );
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
+        let r = Prelude::load();
         for name in PreludeBaseDimension::ALL_NAMES {
             let expected = prelude_base_dimension(name).unwrap();
             assert_eq!(
-                r.dimensions
-                    .get_dimension(&crate::syntax::dimension::DimRef::local(
-                        DimName::expect_valid(name)
-                    )),
+                r.dimension(&crate::syntax::dimension::DimRef::local(
+                    DimName::expect_valid(name)
+                )),
                 Some(&expected)
             );
         }
@@ -437,10 +467,12 @@ mod tests {
 
     #[test]
     fn prelude_base_dim_symbols_registered() {
-        let mut b = RegistryBuilder::new();
-        load_prelude(&mut b).unwrap();
-        let r = b.build();
-        let symbols = r.dimensions.base_unit_symbols();
+        let r = Prelude::load();
+        let symbols = r
+            .definitions
+            .base_dimensions()
+            .filter_map(|(id, info)| Some((id.clone(), info.canonical_unit()?.to_string())))
+            .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(symbols.len(), 8);
         assert_eq!(symbols.get(&length_id()), Some(&"m".to_string()));
         assert_eq!(symbols.get(&time_id()), Some(&"s".to_string()));
@@ -450,15 +482,12 @@ mod tests {
     fn prelude_time_unit_spellings_are_canonical() {
         use crate::syntax::dimension::UnitRef;
 
-        let mut builder = RegistryBuilder::new();
-        load_prelude(&mut builder).unwrap();
-        let registry = builder.build();
+        let registry = Prelude::load();
         let unit = |name| UnitRef::local(UnitName::expect_valid(name));
 
         assert_eq!(
             registry
-                .units
-                .get_unit(&unit("h"))
+                .unit(&unit("h"))
                 .unwrap()
                 .scale
                 .static_scale()
@@ -467,24 +496,21 @@ mod tests {
         );
         assert_eq!(
             registry
-                .units
-                .get_unit(&unit("min"))
+                .unit(&unit("min"))
                 .unwrap()
                 .scale
                 .static_scale()
                 .map(PositiveFiniteScale::get),
             Some(60.0)
         );
-        assert!(registry.units.get_unit(&unit("hour")).is_none());
+        assert!(registry.unit(&unit("hour")).is_none());
     }
 
     /// The declaration table must reproduce the dimensions the prelude used to
     /// build with explicit products and quotients.
     #[test]
     fn declared_dimensions_match_their_defining_products() {
-        let mut builder = RegistryBuilder::new();
-        load_prelude(&mut builder).unwrap();
-        let registry = builder.build();
+        let registry = Prelude::load();
         let base = |base| Dimension::base(BaseDimId::Prelude(base));
         let length = base(PreludeBaseDimension::Length);
         let time = base(PreludeBaseDimension::Time);
@@ -508,19 +534,16 @@ mod tests {
         ];
         for (name, dimension) in &expected {
             assert_eq!(
-                registry
-                    .dimensions
-                    .get_dimension(&crate::syntax::dimension::DimRef::local(
-                        DimName::expect_valid(*name)
-                    )),
+                registry.dimension(&crate::syntax::dimension::DimRef::local(
+                    DimName::expect_valid(*name)
+                )),
                 Some(dimension),
                 "{name}"
             );
         }
         let unit = |name| {
             registry
-                .units
-                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                .unit(&crate::syntax::dimension::UnitRef::local(
                     UnitName::expect_valid(name),
                 ))
                 .unwrap()
@@ -549,11 +572,14 @@ mod tests {
 
     #[test]
     fn only_bare_temperature_is_affine_prone() {
-        let mut builder = RegistryBuilder::new();
-        load_prelude(&mut builder).unwrap();
+        let prelude = Prelude::load();
         for base in PreludeBaseDimension::ALL {
             assert_eq!(
-                builder.is_affine_prone(&Dimension::base(BaseDimId::Prelude(base))),
+                prelude
+                    .definitions
+                    .base_dimensions()
+                    .find(|(id, _)| **id == BaseDimId::Prelude(base))
+                    .is_some_and(|(_, info)| info.is_affine_prone()),
                 base == PreludeBaseDimension::Temperature,
                 "{base}"
             );

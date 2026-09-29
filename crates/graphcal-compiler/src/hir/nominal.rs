@@ -14,10 +14,11 @@ use thiserror::Error;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::error::GraphcalError;
 use crate::registry::reserved_name::validate_reserved_name;
+use crate::registry::time_zone::TimeZoneRegistry;
+use crate::registry::type_def::TypeRegistry;
 use crate::registry::type_def::{
     StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind, TypeGenericParam,
 };
-use crate::registry::types::Registry;
 use crate::resolve::ModuleResolver;
 use crate::resolve::namespace::Namespace;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
@@ -364,7 +365,7 @@ impl NominalTypeRegistry {
 }
 
 struct NominalLoweringContext<'a> {
-    registry: &'a Registry,
+    time_zones: &'a TimeZoneRegistry,
     resolver: &'a ModuleResolver,
     src: &'a NamedSource<Arc<String>>,
     cancellation: &'a crate::cancellation::CancellationToken,
@@ -373,7 +374,7 @@ struct NominalLoweringContext<'a> {
 /// Lower every nominal definition owned directly by one DAG.
 pub(crate) fn lower_nominal_type_registry(
     owner: &crate::dag_id::DagId,
-    registry: &Registry,
+    types: &TypeRegistry,
     resolver: &ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -387,8 +388,9 @@ pub(crate) fn lower_nominal_type_registry(
     })?;
     let mut declarations = symbols.struct_types().iter().collect::<Vec<_>>();
     declarations.sort_by_key(|(_, symbol)| symbol.span().offset());
+    let time_zones = TimeZoneRegistry::bundled();
     let ctx = NominalLoweringContext {
-        registry,
+        time_zones: &time_zones,
         resolver,
         src,
         cancellation,
@@ -397,7 +399,7 @@ pub(crate) fn lower_nominal_type_registry(
         NominalTypeRegistry::default(),
         |mut lowered, (source_name, symbol)| {
             ctx.cancellation.checkpoint()?;
-            let frontend = registry.types.get_type(source_name).ok_or_else(|| {
+            let frontend = types.get_type(source_name).ok_or_else(|| {
                 invariant_error(
                     format!(
                         "frontend registry is missing local type `{source_name}` owned by `{owner}`"
@@ -565,11 +567,7 @@ fn lower_nominal_field(
     let scope = super::ModuleScope::new(identity.owner(), ctx.resolver, generic_scope);
     let decl_type = super::lower_decl_type(field.type_ann(), scope)
         .map_err(|error| super::diagnostics::type_lower_error_to_graphcal(&error, ctx.src))?;
-    let expr_ctx = super::ExprLoweringContext::with_overlay(
-        scope,
-        &ctx.registry.time_zones,
-        super::BindingOverlay::RegistryUnits(&ctx.registry.units),
-    );
+    let expr_ctx = super::ExprLoweringContext::new(scope, ctx.time_zones);
     let domain_bounds = field
         .type_ann()
         .domain_bounds()

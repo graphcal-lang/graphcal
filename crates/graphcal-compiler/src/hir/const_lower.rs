@@ -1,19 +1,20 @@
 //! Lowering of constant-expression positions from the desugared AST into
 //! [`crate::hir::const_expr`] trees.
 //!
-//! Constant positions are resolved against the static unit registry being
-//! built for the declaring module, not against module-level Term
-//! declarations: a name is either a [`BuiltinConst`] or an error, and a unit
-//! literal must name a unit with a static scale.
+//! Unit literals in constant positions are resolved by the declaring module's
+//! canonical unit scope, not against module-level Term declarations: a name
+//! is either a [`BuiltinConst`] or an error, and a unit literal must name a
+//! unit with a static scale.
 
 use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{self as ast, BinOp, UnaryOp};
+use crate::dimension::Dimension;
 use crate::hir::const_expr::{
     ConstArithOp, ConstExponent, ConstExpr, ConstExprError, ConstExprKind, ConstUnit,
     CoordinateExpr, CoordinatePosition, UnitScaleExpr, UnitScalePosition,
 };
 use crate::hir::types::NatExpr;
-use crate::registry::types::RegistryBuilder;
+use crate::registry::unit::{PositiveFiniteScale, UnitResolveError};
 use crate::syntax::ast::{PowerExponent, UnresolvedRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Spanned;
@@ -151,8 +152,13 @@ const fn arith<P: crate::hir::const_expr::ConstPosition>(
     ConstExprKind::Arith { op, lhs, rhs }
 }
 
-/// Lower a coordinate bound or step, resolving unit literals against the
-/// static unit registry.
+/// Resolve a unit literal to its dimension and static scale in the declaring
+/// module's canonical unit scope.
+pub type UnitExprResolver<'a> =
+    dyn Fn(&ast::UnitExpr) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> + 'a;
+
+/// Lower a coordinate bound or step, resolving unit literals with
+/// `resolve_unit`.
 ///
 /// # Errors
 ///
@@ -162,7 +168,7 @@ const fn arith<P: crate::hir::const_expr::ConstPosition>(
 /// source order.
 pub fn lower_coordinate_expr(
     expr: &ast::Expr,
-    registry: &RegistryBuilder,
+    resolve_unit: &UnitExprResolver<'_>,
 ) -> Result<CoordinateExpr, ConstExprError> {
     let kind: ConstExprKind<CoordinatePosition> = match &expr.kind {
         ast::ExprKind::Number(value) if value.is_finite() => ConstExprKind::Number(*value),
@@ -173,13 +179,10 @@ pub fn lower_coordinate_expr(
             });
         }
         ast::ExprKind::QuantityLiteral { value, unit } => {
-            let (dimension, scale) =
-                registry
-                    .resolve_unit_expr(unit)
-                    .map_err(|error| ConstExprError::Unit {
-                        error,
-                        span: unit.span,
-                    })?;
+            let (dimension, scale) = resolve_unit(unit).map_err(|error| ConstExprError::Unit {
+                error,
+                span: unit.span,
+            })?;
             ConstExprKind::Quantity {
                 value: *value,
                 unit: ConstUnit::new(unit.clone(), dimension, scale),
@@ -196,10 +199,10 @@ pub fn lower_coordinate_expr(
         ast::ExprKind::UnaryOp {
             op: UnaryOp::Neg,
             operand,
-        } => ConstExprKind::Neg(Box::new(lower_coordinate_expr(operand, registry)?)),
+        } => ConstExprKind::Neg(Box::new(lower_coordinate_expr(operand, resolve_unit)?)),
         ast::ExprKind::BinOp { op, lhs, rhs } => {
-            let lhs = Box::new(lower_coordinate_expr(lhs, registry)?);
-            let rhs = Box::new(lower_coordinate_expr(rhs, registry)?);
+            let lhs = Box::new(lower_coordinate_expr(lhs, resolve_unit)?);
+            let rhs = Box::new(lower_coordinate_expr(rhs, resolve_unit)?);
             match op {
                 BinOp::Add => arith(ConstArithOp::Add, lhs, rhs),
                 BinOp::Sub => arith(ConstArithOp::Sub, lhs, rhs),
@@ -256,8 +259,6 @@ mod tests {
     use super::*;
     use crate::desugar::desugared_ast::{DeclKind, File, IndexDeclKind};
     use crate::hir::const_expr::CoordinateAxisExpr;
-    use crate::registry::prelude::load_prelude;
-    use crate::registry::unit::PositiveFiniteScale;
     use crate::syntax::parser::Parser;
 
     fn parse(source: &str) -> File {
@@ -281,27 +282,35 @@ mod tests {
         }
     }
 
-    fn prelude() -> RegistryBuilder {
-        let mut registry = RegistryBuilder::new();
-        load_prelude(&mut registry).unwrap();
-        registry
+    fn prelude_unit(
+        unit: &ast::UnitExpr,
+    ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
+        let prelude = crate::registry::prelude::prelude_definitions().unwrap();
+        crate::registry::unit::resolve_unit_expr_with(unit, |reference| {
+            prelude
+                .units()
+                .find(|(identity, _)| {
+                    !reference.is_qualified() && identity.atom() == reference.leaf().atom()
+                })
+                .map(|(_, info)| info)
+        })
     }
 
     fn axis(source: &str) -> Result<CoordinateAxisExpr, ConstExprError> {
         let file = parse(source);
-        let registry = prelude();
+        let registry: &UnitExprResolver<'_> = &prelude_unit;
         let Some(DeclKind::Index(index)) = file.declarations.first().map(|decl| &decl.kind) else {
             panic!("expected an index declaration");
         };
         match &index.kind {
             IndexDeclKind::Range { start, end, step } => Ok(CoordinateAxisExpr::Range {
-                start: lower_coordinate_expr(start, &registry)?,
-                end: lower_coordinate_expr(end, &registry)?,
-                step: lower_coordinate_expr(step, &registry)?,
+                start: lower_coordinate_expr(start, registry)?,
+                end: lower_coordinate_expr(end, registry)?,
+                step: lower_coordinate_expr(step, registry)?,
             }),
             IndexDeclKind::Linspace { start, end, points } => Ok(CoordinateAxisExpr::Linspace {
-                start: lower_coordinate_expr(start, &registry)?,
-                end: lower_coordinate_expr(end, &registry)?,
+                start: lower_coordinate_expr(start, registry)?,
+                end: lower_coordinate_expr(end, registry)?,
                 points: lower_static_nat_expr(points)?,
             }),
             _ => panic!("expected a coordinate index"),
