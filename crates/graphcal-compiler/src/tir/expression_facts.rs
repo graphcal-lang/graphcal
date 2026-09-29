@@ -18,6 +18,7 @@ use crate::dag_id::DagId;
 use crate::expression_id::ExprId;
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, visit_expr_children};
+use crate::hir::nominal::ResolvedConstructor;
 use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType, IndexTypeRef};
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
@@ -73,13 +74,19 @@ impl ExpressionShape {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConstructorApplication {
-    /// Definition identity used by field contracts, distinct from runtime owner.
-    pub definition: ResolvedStructTypeName,
+    /// The applied constructor and its owning definition. The definition's
+    /// field annotations are the application's field constraints.
+    pub constructor: ResolvedConstructor,
     pub runtime_type: ResolvedStructTypeName,
-    pub constructor: ConstructorName,
     pub generic_args: Vec<DeclaredGenericArg>,
-    /// Empty means no constraints; missing a listed field's contract is an error.
-    pub required_constraints: Vec<FieldName>,
+}
+
+impl ConstructorApplication {
+    /// Definition identity used by field contracts, distinct from runtime owner.
+    #[must_use]
+    pub fn definition(&self) -> &ResolvedStructTypeName {
+        self.constructor.owning_type()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

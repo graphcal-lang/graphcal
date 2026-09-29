@@ -31,47 +31,6 @@ use crate::syntax::module_name::ScopedName;
 pub mod model;
 pub use model::*;
 
-impl TIR {
-    /// Complete constructor targets needed by independently lowered closed
-    /// external values.
-    ///
-    /// Normal source expressions collect only the constructors they mention.
-    /// A prepared evaluator can later receive a constructor value that was not
-    /// present in the source text, so every constructor of every concrete type
-    /// visible in the entry DAG must be available to checking and evaluation.
-    #[must_use]
-    pub fn with_external_value_constructors(mut self) -> Self {
-        let targets = self
-            .root()
-            .semantic
-            .type_defs
-            .struct_types
-            .iter()
-            .flat_map(|(owning_type, type_def)| {
-                let members = match type_def.kind() {
-                    hir::NominalTypeKind::Required => &[][..],
-                    hir::NominalTypeKind::Union { members } => members.as_slice(),
-                };
-                members.iter().map(|variant| {
-                    let constructor = variant.identity().clone();
-                    let target = ResolvedConstructorTarget {
-                        owning_type: owning_type.clone(),
-                        type_def: type_def.clone(),
-                        variant: variant.clone(),
-                    };
-                    (constructor, target)
-                })
-            })
-            .collect::<Vec<_>>();
-        self.root_mut()
-            .semantic
-            .constructor_refs
-            .constructor_defs
-            .extend(targets);
-        self
-    }
-}
-
 impl DagTIR {
     /// Build a concrete `DeclaredType` map from this DAG's resolved types
     /// plus its imported-value metadata. Adds builtin constants as
@@ -700,7 +659,6 @@ fn type_resolve_dag(
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
     cancellation.checkpoint()?;
-    let constructor_refs = ResolvedConstructorRefs::default();
     let override_reconciliations = override_reconciliations(&params);
     cancellation.checkpoint()?;
     let type_defs =
@@ -711,7 +669,6 @@ fn type_resolve_dag(
         domain_bounds,
         dynamic_unit_scales: HashMap::new(),
         dependencies,
-        constructor_refs,
         override_reconciliations,
         bindable_nominals,
         type_defs,
@@ -1622,7 +1579,7 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs_from_expr,
+    augment_runtime_deps_for_dynamic_units, collect_constructed_types_from_expr,
     collect_resolved_dag_dependencies,
 };
 
@@ -1776,18 +1733,13 @@ impl DagTIRSeed {
         };
         // The complete owned-root inventory includes nominal bounds, even when
         // a constructor occurs nowhere in a declaration's ordinary value body.
-        let mut constructors = ResolvedConstructorRefs::default();
+        let mut constructed_types = HashSet::new();
         for root in dag.owned_expression_roots() {
-            collect_resolved_constructor_refs_from_expr(root, module_ctx, src, &mut constructors)?;
+            collect_constructed_types_from_expr(root, module_ctx, src, &mut constructed_types)?;
         }
-        for target in constructors.constructor_defs.values() {
-            record_resolved_struct_type_def(
-                &target.owning_type,
-                module_ctx,
-                &mut dag.semantic.type_defs,
-            )?;
+        for owning_type in &constructed_types {
+            record_resolved_struct_type_def(owning_type, module_ctx, &mut dag.semantic.type_defs)?;
         }
-        dag.semantic.constructor_refs = constructors;
         dag.index_declaration_records()
             .map_err(
                 |DuplicateDeclarationRecord { name, span }| GraphcalError::InternalError {

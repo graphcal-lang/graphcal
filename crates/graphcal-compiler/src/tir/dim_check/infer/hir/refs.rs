@@ -116,43 +116,32 @@ impl Infer<'_> {
             }
             ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
             ConstRef::Constructor(constructor) => {
-                let target_def = self.env.dag
-                .semantic
-                .constructor_refs
-                .constructor_defs
-                .get(constructor)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "semantic constructor metadata missing for nullary constructor `{constructor}`"
-                    ),
-                    src: self.env.src.clone(),
-                    span: target.span.into(),
-                })?;
+                let target_def = self.env.resolved_constructor(constructor, target.span)?;
                 self.check_type_override_dependency(
-                    &target_def.owning_type,
+                    target_def.owning_type(),
                     TypeNominalUse::Constructor {
                         constructor,
                         span: target.span,
                     },
                 )?;
-                if !target_def.variant.fields().is_empty() {
+                if !target_def.variant().fields().is_empty() {
                     return Err(GraphcalError::EvalError {
                         message: format!(
                             "constructor `{}` requires field arguments",
-                            target_def.variant.name()
+                            target_def.name()
                         ),
                         src: self.env.src.clone(),
                         span: target.span.into(),
                     });
                 }
                 let type_args = self.env.resolve_applied_generic_args(
-                    &target_def.owning_type,
-                    &target_def.type_def,
+                    target_def.owning_type(),
+                    target_def.definition(),
                     &[],
                     target.span,
                 )?;
                 Ok(InferredType::Struct(
-                    StructTypeRef::from_resolved(target_def.owning_type.clone()),
+                    StructTypeRef::from_resolved(target_def.owning_type().clone()),
                     type_args,
                 ))
             }

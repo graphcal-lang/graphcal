@@ -392,56 +392,6 @@ fn specialize_dependencies(
     dependencies.const_deps = remap(&dependencies.const_deps);
 }
 
-fn extend_binding_constructor_refs(
-    instance: &mut DagTIR,
-    binding: &crate::hir::Expr,
-    tir: &TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let mut result = Ok(());
-    crate::hir::visit_expr(binding, &mut |expr| {
-        if result.is_err() {
-            return;
-        }
-        let constructors = match expr.kind() {
-            crate::hir::ExprKind::ConstructorCall { callee, .. } => vec![callee.value.clone()],
-            crate::hir::ExprKind::ConstRef(target) => match &target.value {
-                crate::hir::ConstRef::Constructor(constructor) => vec![constructor.clone()],
-                _ => Vec::new(),
-            },
-            crate::hir::ExprKind::Match { arms, .. } => arms
-                .iter()
-                .filter_map(|arm| match &arm.pattern {
-                    crate::hir::expr::MatchPattern::Constructor { constructor, .. } => {
-                        Some(constructor.value.clone())
-                    }
-                    crate::hir::expr::MatchPattern::IndexLabel { .. } => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        for constructor in constructors {
-            let Some(definition) = tir.project_types.lookup_constructor(&constructor) else {
-                result = Err(GraphcalError::internal_error(
-                    format!("semantic binding constructor `{constructor}` is unavailable"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                ));
-                return;
-            };
-            instance.semantic.constructor_refs.constructor_defs.insert(
-                constructor,
-                super::ResolvedConstructorTarget {
-                    owning_type: definition.owning_type.clone(),
-                    type_def: Arc::clone(&definition.type_def),
-                    variant: definition.variant.clone(),
-                },
-            );
-        }
-    });
-    result
-}
-
 fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
     let owner = edge.instance.id().owner();
     instance.semantic.override_reconciliations = edge
@@ -722,7 +672,6 @@ fn specialize_instance_semantics(
     }
     specialize_dependencies(&mut instance.semantic.dependencies, specialization, owner);
     for (template_port, binding) in &edge.value_bindings {
-        extend_binding_constructor_refs(instance, binding, tir, src)?;
         let instance_port = instance_decl(template_port, specialization, owner);
         let dependencies = crate::hir::collect_expr_dependencies(binding)
             .graph_refs

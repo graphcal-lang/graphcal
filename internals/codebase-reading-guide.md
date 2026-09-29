@@ -470,11 +470,10 @@ side map clones bodies.
 `DagSemanticBody` contains derived facts only:
 
 - `semantic.dependencies`: owner-qualified declaration dependency maps.
-- `semantic.constructor_refs`: canonical constructor metadata for checking,
-  backed by shared project-store type handles.
 - `semantic.expression_facts`: sealed value/contextual results, operation and
-  direct dependency identities, complete shapes, constructor applications and
-  required field obligations, match targets, and binder-aware nominal observations.
+  direct dependency identities, complete shapes, constructor applications (each
+  carrying its `hir::nominal::ResolvedConstructor`, whose shared definition supplies the
+  field constraints), match targets, and binder-aware nominal observations.
   Rows retain the semantic owner and checking revision. Static instances specialize
   retained rows and check only independently lowered replacement bindings; replaced
   defaults are excluded from the instance's owned coverage. Generic bound products
@@ -1365,8 +1364,9 @@ importers install body/unit handles rather than copying dependency closures.
 Imported interfaces carry an explicit constant/runtime category. Required constants
 are read from their defining body's checked pool, with missing facts rejected;
 no mutable imported-value injection or duplicate artifact value map remains.
-Externally bindable constructor targets are completed before execution facts are
-published, not while preparing an already checked project. For
+Constructor references resolve through `ProjectTypeStore::lookup_constructor`
+to a `hir::nominal::ResolvedConstructor` (shared definition handle plus member), so
+independently lowered external values need no per-DAG constructor table. For
 each physical file it resolves every root/inline declaration signature first,
 then attaches checked imported interfaces and consumes the same
 `SignatureResolvedHirDag` values into TIR bodies. Dependency aliases never

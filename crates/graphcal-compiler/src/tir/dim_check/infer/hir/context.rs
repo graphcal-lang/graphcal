@@ -30,7 +30,25 @@ pub(in crate::tir::dim_check) struct InferEnv<'a> {
     pub(in crate::tir::dim_check) src: &'a NamedSource<Arc<String>>,
 }
 
-impl InferEnv<'_> {
+impl<'a> InferEnv<'a> {
+    /// Resolve a canonical constructor to its owning nominal definition.
+    pub(in crate::tir::dim_check) fn resolved_constructor(
+        self,
+        constructor: &crate::resolved_name::ResolvedConstructorName,
+        span: crate::syntax::span::Span,
+    ) -> Result<&'a crate::hir::nominal::ResolvedConstructor, GraphcalError> {
+        self.tir
+            .project_type_store()
+            .lookup_constructor(constructor)
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("project type store has no constructor `{constructor}`"),
+                    self.src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
+                )
+            })
+    }
+
     /// Infer an expression's type, recording checked facts for every visited node.
     pub(in crate::tir::dim_check) fn infer_with_expression_facts(
         self,

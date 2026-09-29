@@ -3538,3 +3538,46 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
         "got: {err:?}"
     );
 }
+
+#[test]
+fn resolved_constructor_carries_owning_definition_and_field_constraints() {
+    use crate::syntax::type_name::{ConstructorName, FieldName};
+    let (tir, _src) = module_aware_tir(
+        "type Maneuver {\n    Burn(dv: Dimensionless(min: 0.0), label: Dimensionless),\n    Coast,\n}\nnode m: Maneuver = Coast;",
+    );
+    let lookup = |name: &str| {
+        tir.project_type_store()
+            .lookup_constructor(&crate::resolved_name::ResolvedConstructorName::from_def(
+                test_dag_id(),
+                ConstructorName::expect_valid(name),
+            ))
+            .unwrap()
+    };
+    let burn = lookup("Burn");
+    let coast = lookup("Coast");
+    assert!(std::sync::Arc::ptr_eq(
+        burn.definition(),
+        coast.definition()
+    ));
+    assert_eq!(burn.owning_type(), burn.definition().identity());
+    assert_eq!(burn.name(), ConstructorName::expect_valid("Burn"));
+    assert_eq!(
+        burn.constrained_fields().cloned().collect::<Vec<_>>(),
+        vec![FieldName::expect_valid("dv")]
+    );
+    assert!(burn.constrains(&FieldName::expect_valid("dv")));
+    assert!(!burn.constrains(&FieldName::expect_valid("label")));
+    assert_eq!(coast.constrained_fields().count(), 0);
+    assert_eq!(burn, &burn.clone());
+    assert_ne!(burn, coast);
+    let members = crate::hir::nominal::ResolvedConstructor::members_of(burn.definition())
+        .map(|member| member.name())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        members,
+        vec![
+            ConstructorName::expect_valid("Burn"),
+            ConstructorName::expect_valid("Coast")
+        ]
+    );
+}

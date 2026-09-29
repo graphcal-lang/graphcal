@@ -295,8 +295,7 @@ fn finish_module_assembly(
         src,
         cancellation,
     )?;
-    // Preparation only borrows these completed constructor targets.
-    Ok(tir.with_external_value_constructors())
+    Ok(tir)
 }
 
 #[cfg(test)]

@@ -268,6 +268,86 @@ impl NominalTypeDef {
     }
 }
 
+/// One canonical constructor resolved to the nominal definition that owns it.
+///
+/// Values are only enumerated from a definition's own union members, so the
+/// variant always belongs to the shared definition handle. The variant's field
+/// annotations carry the field domain bounds, so a constructor application
+/// knows its field constraints without a side table.
+#[derive(Debug, Clone)]
+pub struct ResolvedConstructor {
+    def: Arc<NominalTypeDef>,
+    variant: NominalConstructor,
+}
+
+impl ResolvedConstructor {
+    /// Every constructor of `def`, each sharing the same definition handle.
+    /// A required (bodiless) type has no constructors.
+    pub(crate) fn members_of(def: &Arc<NominalTypeDef>) -> impl Iterator<Item = Self> + '_ {
+        def.union_members()
+            .into_iter()
+            .flatten()
+            .map(|variant| Self {
+                def: Arc::clone(def),
+                variant: variant.clone(),
+            })
+    }
+
+    /// Shared handle of the owning nominal definition.
+    #[must_use]
+    pub const fn definition(&self) -> &Arc<NominalTypeDef> {
+        &self.def
+    }
+
+    /// Canonical identity of the owning nominal type.
+    #[must_use]
+    pub fn owning_type(&self) -> &ResolvedStructTypeName {
+        self.def.identity()
+    }
+
+    /// The tagged-union member this constructor builds.
+    #[must_use]
+    pub const fn variant(&self) -> &NominalConstructor {
+        &self.variant
+    }
+
+    /// Canonical constructor identity, including its defining DAG.
+    #[must_use]
+    pub const fn identity(&self) -> &ResolvedConstructorName {
+        self.variant.identity()
+    }
+
+    #[must_use]
+    pub fn name(&self) -> ConstructorName {
+        self.variant.name()
+    }
+
+    /// Payload fields whose annotations declare domain bounds.
+    pub fn constrained_fields(&self) -> impl Iterator<Item = &FieldName> {
+        self.variant
+            .fields()
+            .iter()
+            .filter(|field| !field.type_annotation().domain_bounds.is_empty())
+            .map(NominalField::name)
+    }
+
+    /// Whether `field` carries a domain constraint in this constructor.
+    #[must_use]
+    pub fn constrains(&self, field: &FieldName) -> bool {
+        self.constrained_fields()
+            .any(|constrained| constrained == field)
+    }
+}
+
+/// Canonical identities determine equality: one identity has one definition.
+impl PartialEq for ResolvedConstructor {
+    fn eq(&self, other: &Self) -> bool {
+        self.owning_type() == other.owning_type() && self.identity() == other.identity()
+    }
+}
+
+impl Eq for ResolvedConstructor {}
+
 /// Failure to construct an invariant-preserving HIR nominal definition.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum NominalTypeError {
