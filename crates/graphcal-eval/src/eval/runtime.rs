@@ -276,16 +276,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .collect::<Result<PresentationInstanceMap, _>>()?;
     let presentation_diagnostics = std::cell::RefCell::new(Vec::new());
 
-    let local_key = |name: &ScopedName| {
-        tir.root()
-            .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-    };
-
     let make_value = |name: &ScopedName,
+                      declaration: &ResolvedDeclName,
                       runtime: &RuntimeValue|
      -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
-        let runtime_key = local_key(name)?;
-        let declaration = &runtime_key;
         let declared_type = declared_types.get(name).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked declared type is missing for public declaration `{declaration}`"),
@@ -296,17 +290,18 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         project_runtime_value(
             runtime,
             declared_type,
-            presentation_instances.get(&runtime_key),
+            presentation_instances.get(declaration),
             &ctx.for_decl(declaration),
             &presentation_diagnostics,
         )
     };
 
-    let make_result = |name: &ScopedName| -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
-        let key = local_key(name)?;
-        errors.get(&key).map_or_else(
+    let make_result = |name: &ScopedName,
+                       key: &ResolvedDeclName|
+     -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
+        errors.get(key).map_or_else(
             || {
-                values.get(&key).map_or_else(
+                values.get(key).map_or_else(
                     || {
                         Err(GraphcalError::internal_error(
                             format!("successful declaration `{key}` has no runtime value"),
@@ -314,7 +309,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                             DiagnosticAnchor::WholeFile,
                         ))
                     },
-                    |runtime| make_value(name, runtime),
+                    |runtime| make_value(name, key, runtime),
                 )
             },
             |error| Ok(Err(error.clone())),
@@ -322,15 +317,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     };
 
     let mut result_values = RuntimeResultValueAssembly::default();
-    for (name, category) in tir.root().source_order() {
-        let decl_type = match category {
-            DeclCategory::Value(decl_type) => *decl_type,
+    for entry in tir.root().source_order() {
+        let name = &entry.name;
+        let decl_type = match entry.category {
+            DeclCategory::Value(decl_type) => decl_type,
             DeclCategory::Assert
             | DeclCategory::Plot
             | DeclCategory::Figure
             | DeclCategory::Layer => continue,
         };
-        let key = local_key(name)?;
+        let key = entry.identity.clone();
         let value = match decl_type {
             ValueDeclCategory::Const => plan.root.const_values.get(&key).map_or_else(
                 || {
@@ -340,9 +336,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         DiagnosticAnchor::WholeFile,
                     ))
                 },
-                |runtime| make_value(name, runtime),
+                |runtime| make_value(name, &key, runtime),
             )?,
-            ValueDeclCategory::Param | ValueDeclCategory::Node => make_result(name)?,
+            ValueDeclCategory::Param | ValueDeclCategory::Node => make_result(name, &key)?,
         };
         result_values.insert(
             key,
@@ -391,7 +387,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .root()
                 .source_order()
                 .iter()
-                .any(|(name, _)| name == &projection.exposed_name)
+                .any(|entry| entry.name == projection.exposed_name)
             {
                 continue;
             }
@@ -400,16 +396,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let decl_type = instance_dag
                 .source_order()
                 .iter()
-                .find_map(|(name, category)| {
-                    (instance_dag.bound_decl_identity(name) == Some(&declaration)).then_some(
-                        match category {
-                            DeclCategory::Value(decl_type) => Some(*decl_type),
-                            DeclCategory::Assert
-                            | DeclCategory::Plot
-                            | DeclCategory::Figure
-                            | DeclCategory::Layer => None,
-                        },
-                    )
+                .find_map(|entry| {
+                    (entry.identity == declaration).then_some(match entry.category {
+                        DeclCategory::Value(decl_type) => Some(decl_type),
+                        DeclCategory::Assert
+                        | DeclCategory::Plot
+                        | DeclCategory::Figure
+                        | DeclCategory::Layer => None,
+                    })
                 })
                 .flatten()
                 .ok_or_else(|| {
@@ -447,16 +441,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 src,
             )?;
         }
-        for (name, category) in instance_dag.source_order() {
-            let decl_type = match category {
-                DeclCategory::Value(decl_type) => *decl_type,
+        for entry in instance_dag.source_order() {
+            let name = &entry.name;
+            let decl_type = match entry.category {
+                DeclCategory::Value(decl_type) => decl_type,
                 DeclCategory::Assert
                 | DeclCategory::Plot
                 | DeclCategory::Figure
                 | DeclCategory::Layer => continue,
             };
-            let declaration =
-                instance_dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)?;
+            let declaration = entry.identity.clone();
             let key = declaration.clone();
             let value = if let Some(error) = errors.get(&key) {
                 Err(error.clone())
@@ -515,11 +509,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .plots()
         .iter()
         .try_fold(Vec::new(), |mut plots, entry| {
-            let owner = tir.root().require_bound_decl_identity(
-                &entry.name,
-                src,
-                DiagnosticAnchor::WholeFile,
-            )?;
+            let owner = entry.identity();
             match evaluate_plot(
                 entry,
                 &values,
@@ -600,11 +590,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .figures()
         .iter()
         .map(|entry| {
-            let owner = tir.root().require_bound_decl_identity(
-                &entry.name,
-                src,
-                DiagnosticAnchor::WholeFile,
-            )?;
+            let owner = entry.identity();
             Ok(
                 match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
                     |()| {
@@ -643,11 +629,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .layers()
         .iter()
         .map(|entry| {
-            let owner = tir.root().require_bound_decl_identity(
-                &entry.name,
-                src,
-                DiagnosticAnchor::WholeFile,
-            )?;
+            let owner = entry.identity();
             Ok(
                 match check_plot_dependencies(&entry.plot_names, &plot_errors, &ctx).and_then(
                     |()| {
@@ -688,17 +670,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .root()
         .source_order()
         .iter()
-        .map(|(name, _)| {
-            let key = local_key(name)?;
-            Ok(plan
-                .root
+        .filter_map(|entry| {
+            plan.root
                 .domain_constraints
-                .get(&key)
-                .map(|constraint| (name.clone(), constraint.clone())))
+                .get(&entry.identity)
+                .map(|constraint| (entry.name.clone(), constraint.clone()))
         })
-        .collect::<Result<Vec<_>, GraphcalError>>()?
-        .into_iter()
-        .flatten()
         .collect();
     cancellation.checkpoint()?;
     let source_names_by_key = root_source_names(tir, src)?
@@ -802,11 +779,7 @@ pub(super) fn evaluate_assertions(
         .asserts()
         .iter()
         .map(|entry| {
-            let owner = tir.root().require_bound_decl_identity(
-                &entry.name,
-                src,
-                DiagnosticAnchor::Source(entry.span),
-            )?;
+            let owner = entry.identity();
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, errors, &entry_ctx)
                 .unwrap_or_else(|| {
@@ -832,7 +805,7 @@ pub(super) fn evaluate_assertions(
                 let entry = instance_dag
                     .asserts()
                     .iter()
-                    .find(|entry| instance_dag.bound_decl_identity(&entry.name) == Some(&owner))
+                    .find(|entry| entry.identity() == owner)
                     .ok_or_else(|| {
                         GraphcalError::internal_error(
                             format!(
@@ -880,12 +853,8 @@ pub(super) fn root_source_names(
         .root()
         .source_order()
         .iter()
-        .map(|(name, _)| {
-            tir.root()
-                .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                .map(|identity| (identity, name.clone()))
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .map(|entry| (entry.identity.clone(), entry.name.clone()))
+        .collect::<Vec<_>>();
     for record in tir.root().semantic_instances() {
         let instance_dag = semantic_instance_dag(tir, record, src)?;
         let projections = record

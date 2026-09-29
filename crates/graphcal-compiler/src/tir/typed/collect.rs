@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
 use crate::registry::error::GraphcalError;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
@@ -14,12 +13,9 @@ use super::{
     ResolvedDagDependencies, internal_error, module_resolve_error,
 };
 
-pub(super) fn augment_runtime_deps_for_dynamic_units(
-    dag: &mut DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
     if dag.semantic.dynamic_unit_scales.is_empty() {
-        return Ok(());
+        return;
     }
     let scale_deps: HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> =
         dag.semantic
@@ -35,33 +31,24 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
     let runtime_units = dag
         .params
         .iter()
-        .filter_map(|entry| entry.default.as_ref().map(|default| (entry, default)))
-        .map(|(entry, default)| {
-            Ok((
-                dag.require_bound_decl_identity(
-                    &entry.name,
-                    src,
-                    DiagnosticAnchor::Source(entry.span),
-                )?,
-                collect_unit_names(default),
-            ))
+        .filter_map(|entry| {
+            entry
+                .default
+                .as_ref()
+                .map(|default| (entry.identity(), collect_unit_names(default)))
         })
         .chain(dag.nodes.iter().map(|entry| {
-            Ok((
-                dag.require_bound_decl_identity(
-                    &entry.name,
-                    src,
-                    DiagnosticAnchor::Source(entry.span),
-                )?,
+            (
+                entry.identity(),
                 entry
                     .definition
                     .formula()
                     .map_or_else(Default::default, |expression| {
                         collect_unit_names(expression)
                     }),
-            ))
+            )
         }))
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
+        .collect::<Vec<_>>();
 
     for (key, unit_names) in runtime_units {
         let extra: BTreeSet<ResolvedDeclName> = unit_names
@@ -79,7 +66,6 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
                 .extend(extra);
         }
     }
-    Ok(())
 }
 
 fn collect_unit_names(

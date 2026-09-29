@@ -21,7 +21,6 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
-use crate::declaration_category::DeclCategory;
 use crate::ir::lower::HirDag;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
@@ -411,7 +410,7 @@ fn finalize_hir_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(dag, src)?;
+    augment_runtime_deps_for_dynamic_units(dag);
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;
@@ -1320,11 +1319,7 @@ fn check_hir_body_policies(
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
 
     for entry in &dag.consts {
-        let key = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let key = entry.identity();
         HirPolicyChecker { ctx, src }.check_expr(
             &entry.expr,
             BodyPhase::CompileTime,
@@ -1334,11 +1329,7 @@ fn check_hir_body_policies(
     check_domain_bound_policies(semantic, ctx)?;
     check_dynamic_unit_policies(semantic, ctx)?;
     for entry in &dag.nodes {
-        let key = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let key = entry.identity();
         entry.definition.formula().map_or(Ok(()), |expression| {
             HirPolicyChecker { ctx, src }.check_expr(expression, BodyPhase::Runtime, local(&key))
         })?;
@@ -1426,11 +1417,7 @@ fn check_sink_body_policies(
     let is_explicit_export =
         |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
     for entry in &dag.asserts {
-        let key = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let key = entry.identity();
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
         let checker = HirPolicyChecker { ctx, src };
         match &*entry.body {
@@ -1747,7 +1734,7 @@ struct HirDeclarations {
     plots: Vec<crate::ir::lower::PlotEntry>,
     figures: Vec<crate::ir::lower::FigureEntry>,
     layers: Vec<crate::ir::lower::LayerEntry>,
-    source_order: Vec<(ScopedName, DeclCategory)>,
+    source_order: Vec<SourceOrderEntry>,
     spelling: HashMap<ScopedName, ResolvedDeclName>,
 }
 
@@ -1766,9 +1753,11 @@ impl HirDeclarations {
             spelling,
         };
         for decl in decls {
-            split
-                .source_order
-                .push((decl.name().clone(), decl.category()));
+            split.source_order.push(SourceOrderEntry {
+                name: decl.name().clone(),
+                identity: decl.identity(),
+                category: decl.category(),
+            });
             match decl {
                 crate::ir::entry::Decl::Const(entry) => split.consts.push(entry),
                 crate::ir::entry::Decl::Param(entry) => split.params.push(entry),
@@ -1789,7 +1778,7 @@ struct HirBody {
     plots: Vec<crate::ir::lower::PlotEntry>,
     figures: Vec<crate::ir::lower::FigureEntry>,
     layers: Vec<crate::ir::lower::LayerEntry>,
-    source_order: Vec<(ScopedName, DeclCategory)>,
+    source_order: Vec<SourceOrderEntry>,
     spelling: HashMap<ScopedName, ResolvedDeclName>,
     included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     static_ports: Vec<crate::hir::StaticPort>,
@@ -1898,24 +1887,16 @@ impl DagTIRSeed {
             )?;
         }
         dag.semantic.constructor_refs = constructors;
-        dag.index_declaration_records().map_err(|error| match error {
-            DeclarationIndexError::MissingBinding { name, span } => GraphcalError::InternalError {
-                message: format!(
-                    "checked declaration record `{name}` has no canonical binding while building TIR index"
-                ),
-                src: src.clone(),
-                span: span.into(),
-            },
-            DeclarationIndexError::DuplicateRecord { name, span } => {
-                GraphcalError::InternalError {
+        dag.index_declaration_records()
+            .map_err(
+                |DuplicateDeclarationRecord { name, span }| GraphcalError::InternalError {
                     message: format!(
                         "duplicate checked declaration record `{name}` while building TIR index"
                     ),
                     src: src.clone(),
                     span: span.into(),
-                }
-            }
-        })?;
+                },
+            )?;
         Ok(dag)
     }
 }

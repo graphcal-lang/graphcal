@@ -787,6 +787,9 @@ fn specialize_instance_semantics(
         .iter()
         .map(|(name, target)| (name.clone(), instance_decl(target, specialization, owner)))
         .collect();
+    for entry in &mut instance.source_order {
+        entry.identity = instance_decl(&entry.identity, specialization, owner);
+    }
     specialize_dependencies(&mut instance.semantic.dependencies, specialization, owner);
     for (template_port, binding) in &edge.value_bindings {
         extend_binding_constructor_refs(instance, binding, tir, src)?;

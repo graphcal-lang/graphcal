@@ -32,21 +32,20 @@ pub(super) fn check_plot_properties_dag(
     check_plot_references(ctx, dag)?;
     let mut channel_types = HashMap::new();
     for entry in &dag.plots {
-        let (owner, types) = check_plot_entry(ctx, dag, entry)?;
+        let (owner, types) = check_plot_entry(ctx, entry)?;
         channel_types.insert(owner, types);
     }
     dag.figures
         .iter()
-        .try_for_each(|entry| check_figure_entry(ctx, dag, entry))?;
+        .try_for_each(|entry| check_figure_entry(ctx, entry))?;
     dag.layers
         .iter()
-        .try_for_each(|entry| check_layer_entry(ctx, dag, entry))?;
+        .try_for_each(|entry| check_layer_entry(ctx, entry))?;
     Ok(channel_types)
 }
 
 pub(super) fn check_plot_entry(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
     entry: &crate::ir::lower::PlotEntry,
 ) -> Result<
     (
@@ -56,11 +55,7 @@ pub(super) fn check_plot_entry(
     GraphcalError,
 > {
     let body = &entry.body;
-    let owner = dag.require_bound_decl_identity(
-        &entry.name,
-        ctx.src,
-        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-    )?;
+    let owner = entry.identity();
     let types = check_plot_encodings(ctx, &owner, body)?;
     for field in &body.mark_properties {
         let LoweredPlotProperty::Mark(prop) = &field.property else {
@@ -89,14 +84,9 @@ pub(super) fn check_plot_entry(
 
 pub(super) fn check_figure_entry(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
     entry: &crate::ir::lower::FigureEntry,
 ) -> Result<(), GraphcalError> {
-    let owner = dag.require_bound_decl_identity(
-        &entry.name,
-        ctx.src,
-        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-    )?;
+    let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
             return Err(invalid_property(
@@ -139,14 +129,9 @@ pub(super) fn check_figure_entry(
 
 pub(super) fn check_layer_entry(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
     entry: &crate::ir::lower::LayerEntry,
 ) -> Result<(), GraphcalError> {
-    let owner = dag.require_bound_decl_identity(
-        &entry.name,
-        ctx.src,
-        crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
-    )?;
+    let owner = entry.identity();
     for field in &entry.fields {
         let LoweredPlotProperty::Composition(prop) = &field.property else {
             return Err(invalid_property(

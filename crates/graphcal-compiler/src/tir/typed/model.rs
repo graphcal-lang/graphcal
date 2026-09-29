@@ -1594,10 +1594,18 @@ impl TIR {
         self.dags.iter().find_map(|(_, dag)| {
             dag.consts()
                 .iter()
-                .map(|entry| &entry.name)
-                .chain(dag.params().iter().map(|entry| &entry.name))
-                .chain(dag.nodes().iter().map(|entry| &entry.name))
-                .any(|name| dag.bound_decl_identity(name) == Some(declaration))
+                .map(crate::ir::lower::ConstEntry::identity)
+                .chain(
+                    dag.params()
+                        .iter()
+                        .map(crate::ir::lower::ParamEntry::identity),
+                )
+                .chain(
+                    dag.nodes()
+                        .iter()
+                        .map(crate::ir::lower::NodeEntry::identity),
+                )
+                .any(|identity| &identity == declaration)
                 .then_some(dag)
         })
     }
@@ -1625,18 +1633,20 @@ impl TIR {
         let (name, annotation) = dag
             .consts()
             .iter()
-            .map(|entry| (&entry.name, &entry.type_ann))
+            .map(|entry| (&entry.name, entry.identity(), &entry.type_ann))
             .chain(
                 dag.params()
                     .iter()
-                    .map(|entry| (&entry.name, &entry.type_ann)),
+                    .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
             )
             .chain(
                 dag.nodes()
                     .iter()
-                    .map(|entry| (&entry.name, &entry.type_ann)),
+                    .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
             )
-            .find(|(name, _)| dag.bound_decl_identity(name) == Some(declaration))
+            .find_map(|(name, identity, annotation)| {
+                (&identity == declaration).then_some((name, annotation))
+            })
             .ok_or_else(|| {
                 GraphcalError::internal_error(
                     format!("runtime declaration `{declaration}` has no checked annotation"),
@@ -1795,14 +1805,25 @@ pub(super) struct DagDeclarationIndex {
     assertions: HashMap<ResolvedDeclName, usize>,
 }
 
-/// An invariant failure discovered while indexing checked declaration records.
+/// Two checked declaration records share one canonical identity.
 #[derive(Debug)]
-pub(super) enum DeclarationIndexError {
-    MissingBinding { name: ScopedName, span: Span },
-    DuplicateRecord { name: ScopedName, span: Span },
+pub(super) struct DuplicateDeclarationRecord {
+    pub(super) name: ScopedName,
+    pub(super) span: Span,
 }
 
 pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
+
+/// One value, assertion, or visualization declaration in evaluation source
+/// order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceOrderEntry {
+    /// Source-facing spelling in this DAG body.
+    pub name: ScopedName,
+    /// Canonical identity; concrete instances carry their runtime identity.
+    pub identity: ResolvedDeclName,
+    pub category: DeclCategory,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExpressionRootScope {
@@ -1830,7 +1851,7 @@ pub struct DagTIR {
     pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
-    pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
+    pub(crate) source_order: Vec<SourceOrderEntry>,
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
@@ -2021,43 +2042,47 @@ impl DagTIR {
     }
 
     /// Build identity-to-record indexes after all declaration vectors are installed.
-    pub(super) fn index_declaration_records(&mut self) -> Result<(), DeclarationIndexError> {
+    pub(super) fn index_declaration_records(&mut self) -> Result<(), DuplicateDeclarationRecord> {
         let mut index = DagDeclarationIndex::default();
-        for (slot, name, span) in
-            self.consts
-                .iter()
-                .enumerate()
-                .map(|(slot, entry)| (ValueDeclarationSlot::Const(slot), &entry.name, entry.span))
-                .chain(self.params.iter().enumerate().map(|(slot, entry)| {
-                    (ValueDeclarationSlot::Param(slot), &entry.name, entry.span)
-                }))
-                .chain(self.nodes.iter().enumerate().map(|(slot, entry)| {
-                    (ValueDeclarationSlot::Node(slot), &entry.name, entry.span)
-                }))
+        for (slot, name, key, span) in self
+            .consts
+            .iter()
+            .enumerate()
+            .map(|(slot, entry)| {
+                (
+                    ValueDeclarationSlot::Const(slot),
+                    &entry.name,
+                    entry.identity(),
+                    entry.span,
+                )
+            })
+            .chain(self.params.iter().enumerate().map(|(slot, entry)| {
+                (
+                    ValueDeclarationSlot::Param(slot),
+                    &entry.name,
+                    entry.identity(),
+                    entry.span,
+                )
+            }))
+            .chain(self.nodes.iter().enumerate().map(|(slot, entry)| {
+                (
+                    ValueDeclarationSlot::Node(slot),
+                    &entry.name,
+                    entry.identity(),
+                    entry.span,
+                )
+            }))
         {
-            let key = self.bound_decl_identity(name).cloned().ok_or_else(|| {
-                DeclarationIndexError::MissingBinding {
-                    name: name.clone(),
-                    span,
-                }
-            })?;
             if index.values.insert(key, slot).is_some() {
-                return Err(DeclarationIndexError::DuplicateRecord {
+                return Err(DuplicateDeclarationRecord {
                     name: name.clone(),
                     span,
                 });
             }
         }
         for (slot, entry) in self.asserts.iter().enumerate() {
-            let key = self
-                .bound_decl_identity(&entry.name)
-                .cloned()
-                .ok_or_else(|| DeclarationIndexError::MissingBinding {
-                    name: entry.name.clone(),
-                    span: entry.span,
-                })?;
-            if index.assertions.insert(key, slot).is_some() {
-                return Err(DeclarationIndexError::DuplicateRecord {
+            if index.assertions.insert(entry.identity(), slot).is_some() {
+                return Err(DuplicateDeclarationRecord {
                     name: entry.name.clone(),
                     span: entry.span,
                 });
@@ -2229,7 +2254,7 @@ impl DagTIR {
     }
 
     #[must_use]
-    pub fn source_order(&self) -> &[(ScopedName, DeclCategory)] {
+    pub fn source_order(&self) -> &[SourceOrderEntry] {
         &self.source_order
     }
 

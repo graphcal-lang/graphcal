@@ -2783,14 +2783,12 @@ fn check_inline_dag_asserts(
         .execution_plan()?
         .callable(dag_tir.dag_id())
         .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
-    for (name, cat) in dag_tir.source_order() {
-        if !matches!(cat, DeclCategory::Assert) {
+    for entry in dag_tir.source_order() {
+        if !matches!(entry.category, DeclCategory::Assert) {
             continue;
         }
-        let key = dag_tir
-            .lookup_decl_identity(name)
-            .into_bound()
-            .map_err(|probe| ctx.internal_error(probe.to_string(), call_span))?;
+        let name = &entry.name;
+        let key = entry.identity.clone();
         let body = dag_tir.assert_body(&key).ok_or_else(|| {
             ctx.internal_error(
                 format!("TIR assertion entry missing for DAG assertion `{name}`"),

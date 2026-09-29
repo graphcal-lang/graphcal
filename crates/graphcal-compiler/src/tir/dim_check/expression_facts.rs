@@ -294,7 +294,7 @@ fn check_instance_defaults(
             .map(crate::hir::expr::Expr::id)
             == Some(id);
         if !inherited {
-            check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
+            check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
             ctx.expression_facts.record_contextual(default, ctx.src)?;
             continue;
         }
@@ -305,11 +305,7 @@ fn check_instance_defaults(
                 DiagnosticAnchor::Source(default.span),
             )
         })?;
-        let declaration = ctx.dag.require_bound_decl_identity(
-            &entry.name,
-            ctx.src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let declaration = entry.identity();
         check_retained_reconciliations(ctx.dag, &declaration, record.nominal_observations())?;
         let ExpressionFact::Value { checked_type, .. } = &record.fact else {
             return Err(GraphcalError::internal_error(
