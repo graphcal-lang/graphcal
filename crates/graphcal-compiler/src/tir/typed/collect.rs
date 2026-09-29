@@ -107,8 +107,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
-        let key =
-            ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.leaf().clone());
+        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
         let mut deps = hir::collect_expr_dependencies(&entry.expr);
         for graph_ref in &deps.graph_refs {
             // `@const_name` in a const body is a const dependency. Non-const
@@ -139,8 +138,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in params {
-        let key =
-            ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.leaf().clone());
+        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
         let deps = entry
             .default
             .as_ref()
@@ -151,8 +149,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let key =
-            ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.leaf().clone());
+        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
         let dependencies = match &entry.definition {
             crate::node_definition::NodeDefinition::Formula(expression) => {
                 hir::collect_expr_dependencies(expression).graph_refs

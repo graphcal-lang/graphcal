@@ -1669,7 +1669,7 @@ pub(super) struct DagDeclarationIndex {
 pub(super) enum DeclarationRecordError {
     /// Two records share one canonical identity.
     #[error("duplicate checked declaration record `{name}`")]
-    Duplicate { name: ScopedName, span: Span },
+    Duplicate { name: DeclName, span: Span },
     /// A record is owned by a different DAG than the one storing it.
     #[error("checked declaration record `{identity}` is stored in DAG `{dag_id}`")]
     ForeignOwner {
@@ -1693,8 +1693,8 @@ pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
 /// order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceOrderEntry {
-    /// Source-facing spelling in this DAG body.
-    pub name: ScopedName,
+    /// Local name in this DAG body.
+    pub name: DeclName,
     /// Canonical identity; concrete instances carry their runtime identity.
     pub identity: ResolvedDeclName,
     pub category: DeclCategory,

@@ -277,22 +277,22 @@ fn check_instance_defaults(
     facts: &CheckedExpressionFacts,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
 ) -> Result<(), GraphcalError> {
+    // An instance keeps each template default it does not rebind, and
+    // expression identities are unique across lowered bodies, so a default is
+    // inherited exactly when it is one of the template's parameter defaults.
+    let template_defaults = template
+        .params
+        .iter()
+        .filter_map(|entry| entry.default.as_deref())
+        .map(crate::hir::expr::Expr::id)
+        .collect::<std::collections::HashSet<_>>();
     for entry in &ctx.env.dag.params {
         ctx.checkpoint()?;
         let Some(default) = &entry.default else {
             continue;
         };
         let id = default.id();
-        // Compare this parameter's authoritative default, not every body root.
-        let template_declaration = template.require_bound_decl_identity(
-            &entry.name,
-            ctx.env.src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
-        let inherited = template
-            .runtime_expr(&template_declaration)
-            .map(crate::hir::expr::Expr::id)
-            == Some(id);
+        let inherited = template_defaults.contains(id);
         if !inherited {
             check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
             ctx.expression_facts

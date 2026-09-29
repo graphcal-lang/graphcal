@@ -16,16 +16,16 @@ use crate::ir::entry::{
     PlotEntry,
 };
 use crate::resolved_name::ResolvedDeclName;
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::decl_name::DeclName;
 
 /// A declaration table could not be built from its entries.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum DeclTableError {
     #[error("declaration `{name}` is declared more than once")]
-    Duplicate { name: ScopedName },
+    Duplicate { name: DeclName },
     #[error("declaration `{name}` is owned by `{declaration_owner}`, not by DAG `{owner}`")]
     ForeignOwner {
-        name: ScopedName,
+        name: DeclName,
         declaration_owner: DagId,
         owner: DagId,
     },
@@ -36,7 +36,7 @@ pub enum DeclTableError {
 pub struct DeclTable<P: BodyPhase> {
     order: Vec<ResolvedDeclName>,
     decls: HashMap<ResolvedDeclName, Decl<P>>,
-    spelling: HashMap<ScopedName, ResolvedDeclName>,
+    spelling: HashMap<DeclName, ResolvedDeclName>,
 }
 
 /// The empty table of a DAG without value, assertion, or visualization
@@ -148,7 +148,7 @@ impl<P: BodyPhase> DeclTable<P> {
     /// Consume the table into its declarations in source order and its
     /// spelling index.
     #[must_use]
-    pub fn into_parts(self) -> (Vec<Decl<P>>, HashMap<ScopedName, ResolvedDeclName>) {
+    pub fn into_parts(self) -> (Vec<Decl<P>>, HashMap<DeclName, ResolvedDeclName>) {
         let Self {
             order,
             mut decls,
@@ -169,13 +169,13 @@ impl<P: BodyPhase> DeclTable<P> {
 
     /// The identity written as `name` in this DAG body.
     #[must_use]
-    pub fn lookup(&self, name: &ScopedName) -> Option<&ResolvedDeclName> {
+    pub fn lookup(&self, name: &DeclName) -> Option<&ResolvedDeclName> {
         self.spelling.get(name)
     }
 
     /// Every source spelling with its canonical identity.
     #[must_use]
-    pub const fn spelling(&self) -> &HashMap<ScopedName, ResolvedDeclName> {
+    pub const fn spelling(&self) -> &HashMap<DeclName, ResolvedDeclName> {
         &self.spelling
     }
 

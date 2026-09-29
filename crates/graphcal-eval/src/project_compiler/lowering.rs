@@ -295,6 +295,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     let output_surface: HashSet<ScopedName> = unfrozen
         .value_names()
         .cloned()
+        .map(ScopedName::local)
         .chain(
             ctx.imported_source_order
                 .iter()
@@ -824,7 +825,7 @@ fn resolve_projection_expected_fail(
 fn template_value_ports(
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> impl Iterator<Item = graphcal_compiler::syntax::decl_name::DeclName> + '_ {
-    template.value_names().map(|name| name.leaf().clone())
+    template.value_names().cloned()
 }
 
 /// Explicit value-port bindings keyed by their template declaration.
@@ -1518,7 +1519,7 @@ fn add_selective_aliases_inner(
         }
         if declaration.is_const {
             unfrozen.add_const_alias(
-                ScopedName::local(local_name.clone()),
+                local_name.clone(),
                 type_ann,
                 owners.r#type.clone(),
                 alias_expr,
@@ -1527,7 +1528,7 @@ fn add_selective_aliases_inner(
             );
         } else {
             unfrozen.add_node_alias(
-                ScopedName::local(local_name.clone()),
+                local_name.clone(),
                 type_ann,
                 owners.r#type.clone(),
                 alias_expr,

@@ -672,7 +672,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
         let owning_type = struct_type_ref_from_resolved_type(entry.type_ann.checked().resolved());
         check_const_struct_field_constraints(
             value,
-            entry.name.leaf().as_str(),
+            entry.name.as_str(),
             entry.span,
             owning_type.as_ref(),
             field_constraints,

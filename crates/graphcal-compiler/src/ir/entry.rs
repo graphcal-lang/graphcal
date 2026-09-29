@@ -23,6 +23,7 @@ use crate::dimension::Dimension;
 use crate::plot_visibility::PlotVisibility;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::ast::MarkType;
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::{Span, Spanned};
@@ -94,7 +95,7 @@ impl BodyPhase for Syntax {
 /// A `const node` declaration.
 #[derive(Debug, Clone)]
 pub struct ConstEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     pub type_ann: P::TypeAnnotation,
@@ -105,7 +106,7 @@ pub struct ConstEntry<P: BodyPhase> {
 /// A `param` declaration with its optional default.
 #[derive(Debug, Clone)]
 pub struct ParamEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     pub type_ann: P::TypeAnnotation,
@@ -120,7 +121,7 @@ pub struct ParamEntry<P: BodyPhase> {
 /// A `node` declaration.
 #[derive(Debug, Clone)]
 pub struct NodeEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     pub type_ann: P::TypeAnnotation,
@@ -131,7 +132,7 @@ pub struct NodeEntry<P: BodyPhase> {
 /// An `assert` declaration.
 #[derive(Debug, Clone)]
 pub struct AssertEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     pub body: P::AssertBody,
@@ -141,7 +142,7 @@ pub struct AssertEntry<P: BodyPhase> {
 /// A `plot` declaration.
 #[derive(Debug, Clone)]
 pub struct PlotEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     /// Mark shape rendered for this plot.
@@ -155,7 +156,7 @@ pub struct PlotEntry<P: BodyPhase> {
 /// A `figure` declaration.
 #[derive(Debug, Clone)]
 pub struct FigureEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     /// Plots composed by this figure, in source order.
@@ -166,7 +167,7 @@ pub struct FigureEntry<P: BodyPhase> {
 /// A `layer` declaration.
 #[derive(Debug, Clone)]
 pub struct LayerEntry<P: BodyPhase> {
-    pub name: ScopedName,
+    pub name: DeclName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: DagId,
     /// Plots composed by this layer, in source order.
@@ -196,10 +197,10 @@ pub struct DynamicUnitScaleEntry<P: BodyPhase> {
 
 /// Canonical identity of a declaration entry owned by `owner`.
 ///
-/// Every entry is authored under a local, unqualified spelling; qualified
-/// names reach a DAG only as lexical bindings to other owners' declarations.
-fn entry_identity(owner: &DagId, name: &ScopedName) -> ResolvedDeclName {
-    ResolvedDeclName::from_def(owner.clone(), name.leaf().clone())
+/// Every entry is authored under a local, unqualified name; qualified names
+/// reach a DAG only as lexical bindings to other owners' declarations.
+fn entry_identity(owner: &DagId, name: &DeclName) -> ResolvedDeclName {
+    ResolvedDeclName::from_def(owner.clone(), name.clone())
 }
 
 macro_rules! impl_entry_identity {
@@ -237,9 +238,9 @@ pub enum Decl<P: BodyPhase> {
 }
 
 impl<P: BodyPhase> Decl<P> {
-    /// Source-facing spelling of the declaration.
+    /// Local name of the declaration in its owning DAG.
     #[must_use]
-    pub const fn name(&self) -> &ScopedName {
+    pub const fn name(&self) -> &DeclName {
         match self {
             Self::Const(entry) => &entry.name,
             Self::Param(entry) => &entry.name,

@@ -37,8 +37,8 @@ fn owner() -> DagId {
     DagId::root_in_package("test", "main")
 }
 
-fn name(spelling: &str) -> ScopedName {
-    ScopedName::local(DeclName::expect_valid(spelling))
+fn name(spelling: &str) -> DeclName {
+    DeclName::expect_valid(spelling)
 }
 
 fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {

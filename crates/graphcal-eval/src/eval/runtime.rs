@@ -350,7 +350,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
         result_values.insert(
             key,
-            name.clone(),
+            ScopedName::local(name.clone()),
             value,
             decl_type,
             OutputExposure::Surface,
@@ -395,7 +395,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 .root()
                 .source_order()
                 .iter()
-                .any(|entry| entry.name == projection.exposed_name)
+                .any(|entry| projection.exposed_name.as_bare() == Some(&entry.name))
             {
                 continue;
             }
@@ -487,7 +487,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             } else {
                 ScopeSegment::Named(record.debug_scope.clone())
             };
-            let debug_name = ScopedName::in_scope(debug_scope, name.leaf().clone());
+            let debug_name = ScopedName::in_scope(debug_scope, name.clone());
             result_values.insert(
                 key,
                 debug_name,
@@ -528,7 +528,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 Ok(plot) => plots.push(plot),
                 Err(PlotEvaluationError::Unavailable(reason)) => {
                     plot_errors.push(super::types::PlotError {
-                        name: entry.name.clone(),
+                        name: ScopedName::local(entry.name.clone()),
                         reason,
                     });
                 }
@@ -552,21 +552,20 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             })?;
         for projection in &record.plot_projections {
             let owner = outer_instance.runtime_decl_identity(&projection.target);
-            let plot_dag = tir
-                .dag_registry()
-                .get(owner.owner())
-                .unwrap_or(outer_instance);
-            let entry = plot_dag
-                .plots()
-                .iter()
-                .find(|entry| entry.name.leaf().as_str() == owner.atom().as_str())
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!("projected plot `{owner}` is absent from semantic instance"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
+            let entry = tir.dag_registry().get(owner.owner()).and_then(|plot_dag| {
+                plot_dag
+                    .plots()
+                    .iter()
+                    .find(|entry| entry.identity() == owner)
+                    .map(|entry| (plot_dag, entry))
+            });
+            let (plot_dag, entry) = entry.ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("projected plot `{owner}` is absent from semantic instance"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
             match evaluate_plot(
                 entry,
                 &values,
@@ -611,14 +610,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     },
                 ) {
                     Ok(evaluated) => Some(super::types::FigureSpec {
-                        name: entry.name.clone(),
+                        name: ScopedName::local(entry.name.clone()),
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
                     Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
-                            name: entry.name.clone(),
+                            name: ScopedName::local(entry.name.clone()),
                             reason,
                         });
                         None
@@ -650,14 +649,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     },
                 ) {
                     Ok(evaluated) => Some(super::types::LayerSpec {
-                        name: entry.name.clone(),
+                        name: ScopedName::local(entry.name.clone()),
                         plot_names: evaluated.plot_names,
                         properties: evaluated.properties,
                     }),
                     Err(PlotEvaluationError::Fatal(error)) => return Err(error),
                     Err(PlotEvaluationError::Unavailable(reason)) => {
                         plot_errors.push(super::types::PlotError {
-                            name: entry.name.clone(),
+                            name: ScopedName::local(entry.name.clone()),
                             reason,
                         });
                         None
@@ -682,7 +681,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             plan.root
                 .domain_constraints
                 .get(&entry.identity)
-                .map(|constraint| (entry.name.clone(), constraint.clone()))
+                .map(|constraint| (ScopedName::local(entry.name.clone()), constraint.clone()))
         })
         .collect();
     cancellation.checkpoint()?;
@@ -796,7 +795,11 @@ pub(super) fn evaluate_assertions(
                         eval_hir_expr(expr, values, &empty_hir_locals, &entry_ctx)
                     })
                 });
-            Ok((entry.name.clone(), assert_result, entry.span))
+            Ok((
+                ScopedName::local(entry.name.clone()),
+                assert_result,
+                entry.span,
+            ))
         })
         .collect::<Result<_, GraphcalError>>()?;
     let mut semantic_parents = tir
@@ -861,7 +864,12 @@ pub(super) fn root_source_names(
         .root()
         .source_order()
         .iter()
-        .map(|entry| (entry.identity.clone(), entry.name.clone()))
+        .map(|entry| {
+            (
+                entry.identity.clone(),
+                ScopedName::local(entry.name.clone()),
+            )
+        })
         .collect::<Vec<_>>();
     for record in tir.root().semantic_instances() {
         let instance_dag = semantic_instance_dag(tir, record, src)?;
@@ -1138,7 +1146,7 @@ fn evaluate_plot(
     }
 
     Ok(PlotSpec {
-        name: entry.name.clone(),
+        name: ScopedName::local(entry.name.clone()),
         mark_type: entry.mark_type,
         encodings,
         encoding_meta,

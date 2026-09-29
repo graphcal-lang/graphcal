@@ -8,6 +8,7 @@ use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKe
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 
@@ -125,7 +126,7 @@ impl DimCheckContext<'_> {
     /// Look up the module-aware HIR assertion body for a local assertion.
     fn hir_assert_body(
         &self,
-        name: &crate::syntax::module_name::ScopedName,
+        name: &DeclName,
         declaration: &ResolvedDeclName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::AssertBody, GraphcalError> {
@@ -171,7 +172,7 @@ fn validate_declared_shape(
 /// Check that a declaration's expression type matches its declared type annotation.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
-    name: &crate::syntax::module_name::ScopedName,
+    name: &DeclName,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
 ) -> Result<(), GraphcalError> {
@@ -195,7 +196,7 @@ fn check_decl_expr_type(
         .semantic_instances()
         .iter()
         .flat_map(|instance| &instance.output_projections)
-        .any(|projection| &projection.exposed_name == name)
+        .any(|projection| projection.exposed_name.as_bare() == Some(name))
     {
         // Projection bodies are generated from the already checked instance
         // interface. Retain that proof rather than treating them as unchecked.
@@ -1193,7 +1194,7 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
 }
 
 fn check_one_bound(
-    name: &crate::syntax::module_name::ScopedName,
+    name: &DeclName,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
@@ -1648,18 +1649,14 @@ fn detect_decl_cycles(
     use petgraph::algo::toposort;
     use petgraph::graph::DiGraph;
 
-    use crate::syntax::module_name::ScopedName;
-
     fn check_resolved<'a>(
-        declarations: impl Iterator<
-            Item = (&'a ScopedName, ResolvedDeclName, crate::syntax::span::Span),
-        >,
+        declarations: impl Iterator<Item = (&'a DeclName, ResolvedDeclName, crate::syntax::span::Span)>,
         deps: &HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
         let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
         let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
-        let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
+        let mut local_name_by_key: HashMap<ResolvedDeclName, DeclName> = HashMap::new();
         let mut span_by_key: HashMap<ResolvedDeclName, crate::syntax::span::Span> = HashMap::new();
         for (name, key, span) in declarations {
             let idx = graph.add_node(key.clone());
