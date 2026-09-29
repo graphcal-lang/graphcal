@@ -1675,7 +1675,7 @@ fn root_parts(tir: &CheckedTir) -> CheckedParts {
     let root = tir.root();
     CheckedParts {
         expression_facts: HashMap::from([(owner.clone(), root.expression_facts().clone())]),
-        typed_bodies: HashMap::from([(owner.clone(), root.typed_bodies().unwrap().clone())]),
+        bodies: HashMap::from([(owner.clone(), root.bodies().clone())]),
         presentation: HashMap::from([(owner.clone(), root.presentation().clone())]),
         schedules: CheckedSchedules {
             constants: tir.const_schedule().clone(),
@@ -1716,8 +1716,8 @@ fn checked_tir_pairs_each_local_body_with_everything_its_check_published() {
         "no checked runtime schedule",
     );
     fails_with(
-        pair(&|parts| parts.typed_bodies.clear()),
-        "a canonical body has no typed trees",
+        pair(&|parts| parts.bodies.clear()),
+        "no checked typed bodies",
     );
     // Every part belongs to the other check's revision of the same body.
     fails_with(pair(&|_| {}), "another semantic environment");

@@ -96,6 +96,8 @@ pub(in crate::tir::dim_check) enum PublicationError {
     #[error(transparent)]
     TypedBodies(#[from] crate::tir::texpr::TypedBodiesError),
     #[error(transparent)]
+    Discharge(#[from] crate::tir::texpr::DischargeError),
+    #[error(transparent)]
     Disagreement(#[from] crate::tir::texpr::fact_agreement::FactDisagreement),
 }
 
@@ -111,7 +113,7 @@ impl FinishedObservations {
     ) -> Result<
         (
             crate::tir::expression_facts::CheckedExpressionFacts,
-            crate::tir::texpr::TypedBodies,
+            crate::tir::texpr::CheckedBodies,
         ),
         PublicationError,
     > {
@@ -122,7 +124,10 @@ impl FinishedObservations {
             self.records,
             cardinality,
         )?;
-        let typed = crate::tir::texpr::TypedBodies::publish(roots, self.typed)?;
+        let typed = crate::tir::texpr::CheckedBodies::discharge(
+            crate::tir::texpr::claim_roots(roots, self.typed)?,
+            cardinality,
+        )?;
         crate::tir::texpr::fact_agreement::check(&typed, &facts)?;
         Ok((facts, typed))
     }

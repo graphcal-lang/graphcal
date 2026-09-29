@@ -1427,6 +1427,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "dim_check", "body_specialization"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "concrete_obligations"]
 role = "checking"
 
@@ -1447,7 +1452,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "expression_facts", "static_index"]
+path = ["tir", "static_index"]
 role = "contracts"
 
 [[module]]
@@ -1477,7 +1482,12 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["tir", "texpr", "typed_bodies"]
+path = ["tir", "texpr", "checked_bodies"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "map"]
 role = "contracts"
 
 [[module]]

@@ -7,13 +7,13 @@ use std::sync::Arc;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::expr::visit_expr;
-use crate::registry::checked_type::{CheckedType, Symbolic};
+use crate::registry::checked_type::CheckedType;
 use crate::registry::error::GraphcalError;
 use crate::tir::expression_facts::{
     CheckedExpressionFacts, CheckingEnvironment, ExpressionFact, ValueFact,
 };
 use crate::tir::typed::model::{TirRead, UncheckedTir};
-use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
+use crate::tir::typed::specialization::specialize_expression_type;
 
 use super::expression_axes::{check_materializable, checked_index_cardinality};
 use super::{DimCheckContext, check_decl_expr_type, infer};
@@ -63,7 +63,7 @@ pub(super) fn specialize_bound_facts(
                 record,
                 dag,
                 tir,
-                &FactSubstitution::Generic(&substitution),
+                &super::body_specialization::BodySubstitution::Generic(&substitution),
                 src,
                 root.span,
                 &record.environment,
@@ -71,7 +71,7 @@ pub(super) fn specialize_bound_facts(
             Ok((id, record))
         })
         .collect::<Result<_, GraphcalError>>()?;
-    CheckedExpressionFacts::publish(
+    let facts = CheckedExpressionFacts::publish(
         dag.dag_id().clone(),
         dag.body_revision().clone(),
         &[root],
@@ -91,7 +91,21 @@ pub(super) fn specialize_bound_facts(
             }
         }
         error => diagnostic(error.to_string()),
-    })
+    })?;
+    // The specialized tree must say what the specialized facts say.
+    let bodies = tir.checked_bodies(dag.dag_id()).ok_or_else(|| {
+        diagnostic(format!(
+            "DAG `{}` has no published typed bodies",
+            dag.dag_id()
+        ))
+    })?;
+    let tree =
+        super::body_specialization::specialize_bound_body(tir, dag, bodies, root, bindings, src)?;
+    let body =
+        crate::tir::texpr::CheckedBody::Executable(crate::tir::texpr::TBody::Value(Box::new(tree)));
+    crate::tir::texpr::fact_agreement::check_roots([(root.id(), &body)], &facts)
+        .map_err(|error| diagnostic(error.to_string()))?;
+    Ok(facts)
 }
 
 fn check_retained_reconciliations(
@@ -182,20 +196,42 @@ fn check_retained_reconciliations(
     Ok(())
 }
 
+/// The template's parameter defaults an instance inherits.
+///
+/// An instance keeps each template default it does not rebind, and expression
+/// identities are unique across lowered bodies, so a default is inherited
+/// exactly when it is one of the template's parameter defaults.
+fn inherited_defaults(
+    template: &crate::tir::typed::model::DagTIR,
+) -> std::collections::HashSet<&crate::expression_id::ExprId> {
+    template
+        .params()
+        .filter_map(|entry| entry.default.as_deref())
+        .map(crate::hir::expr::Expr::id)
+        .collect()
+}
+
+/// The parameter defaults an instance rebinds, checked independently of its
+/// template.
+fn rebound_defaults<'d>(
+    template: &crate::tir::typed::model::DagTIR,
+    instance: &'d crate::tir::typed::model::DagTIR,
+) -> Vec<&'d crate::hir::expr::Expr> {
+    let inherited = inherited_defaults(template);
+    instance
+        .params()
+        .filter_map(|entry| entry.default.as_deref())
+        .filter(|default| !inherited.contains(default.id()))
+        .collect()
+}
+
 fn check_instance_defaults(
     ctx: &DimCheckContext<'_>,
     template: &crate::tir::typed::model::DagTIR,
     facts: &CheckedExpressionFacts,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
 ) -> Result<(), GraphcalError> {
-    // An instance keeps each template default it does not rebind, and
-    // expression identities are unique across lowered bodies, so a default is
-    // inherited exactly when it is one of the template's parameter defaults.
-    let template_defaults = template
-        .params()
-        .filter_map(|entry| entry.default.as_deref())
-        .map(crate::hir::expr::Expr::id)
-        .collect::<std::collections::HashSet<_>>();
+    let template_defaults = inherited_defaults(template);
     for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         let Some(default) = &entry.default else {
@@ -242,51 +278,13 @@ fn check_instance_defaults(
     Ok(())
 }
 
-enum FactSubstitution<'a> {
-    Static(&'a crate::ir::static_substitution::StaticSubstitution),
-    Generic(&'a crate::tir::typed::Substitution),
-}
-
-impl FactSubstitution<'_> {
-    fn value_type(
-        &self,
-        ty: &CheckedType<Symbolic>,
-        tir: &dyn TirRead,
-        src: &NamedSource<Arc<String>>,
-        span: crate::syntax::span::Span,
-    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
-        match self {
-            Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
-            Self::Generic(substitution) => substitution
-                .instantiate(ty, span)
-                .map(|ty| ty.to_symbolic())
-                .map_err(|error| error.into_graphcal(src)),
-        }
-    }
-
-    fn index(
-        &self,
-        index: &crate::registry::checked_type::IndexTypeRef<Symbolic>,
-        src: &NamedSource<Arc<String>>,
-        span: crate::syntax::span::Span,
-    ) -> Result<crate::registry::checked_type::IndexTypeRef<Symbolic>, GraphcalError> {
-        match self {
-            Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
-            Self::Generic(substitution) => substitution
-                .instantiate_index(index, span)
-                .map(|index| index.to_symbolic())
-                .map_err(|error| error.into_graphcal(src)),
-        }
-    }
-}
-
 /// Map retained meaning directly. Do not clone the old type/shape/constructor
 /// arguments merely to discard them immediately during specialization.
 fn specialize_record(
     record: &crate::tir::expression_facts::CheckedExpressionRecord,
     dag: &crate::tir::typed::model::DagTIR,
     tir: &dyn TirRead,
-    substitution: &FactSubstitution<'_>,
+    substitution: &super::body_specialization::BodySubstitution<'_>,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
     environment: &Arc<CheckingEnvironment>,
@@ -367,24 +365,30 @@ fn specialize_record(
 /// instance's facts).
 pub(super) struct InstanceFacts {
     pub(super) facts: Vec<(crate::dag_id::DagId, CheckedExpressionFacts)>,
+    pub(super) bodies: Vec<(crate::dag_id::DagId, crate::tir::texpr::CheckedBodies)>,
     pub(super) port_generic_plot_channels:
         HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>,
 }
 
-/// Specialize and publish every semantic instance's expression facts from its
-/// template's `canonical` facts.
+/// Specialize and publish every semantic instance's expression facts and
+/// checked trees from its template's `canonical` facts and `canonical_bodies`.
 pub(super) fn instance_expression_facts(
     tir: &UncheckedTir,
     canonical: &HashMap<crate::dag_id::DagId, CheckedExpressionFacts>,
+    canonical_bodies: &HashMap<crate::dag_id::DagId, crate::tir::texpr::CheckedBodies>,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts, GraphcalError> {
     let checking = crate::tir::typed::CheckingTir {
         tir,
         facts: canonical,
+        bodies: canonical_bodies,
     };
+    let internal =
+        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     let mut port_generic_plot_channels = HashMap::new();
     let mut published = Vec::new();
+    let mut published_bodies = Vec::new();
     let instances = tir.local_dags().filter_map(|(owner, dag)| {
         dag.frame()
             .specialization()
@@ -392,32 +396,26 @@ pub(super) fn instance_expression_facts(
     });
     for (owner, dag, specialization) in instances {
         cancellation.checkpoint()?;
-        let template = tir.dags.get(&specialization.template).ok_or_else(|| {
-            GraphcalError::internal_error(
-                "instance has no canonical template",
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        let facts = checking
-            .expression_facts(&specialization.template)
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "canonical template `{}` has no published expression facts",
-                        specialization.template
-                    ),
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
+        let template = tir
+            .dags
+            .get(&specialization.template)
+            .ok_or_else(|| internal("instance has no canonical template".to_owned()))?;
+        let (Some(facts), Some(template_bodies)) = (
+            checking.expression_facts(&specialization.template),
+            checking.checked_bodies(&specialization.template),
+        ) else {
+            return Err(internal(format!(
+                "canonical template `{}` has no published expression facts",
+                specialization.template
+            )));
+        };
         // A rebound defaulted dimension port: the template's facts saw its
         // default, so the bodies' facts come from the view where it is rigid.
         let ports = tir
             .project_type_store()
             .bound_defaulted_dimension_ports(&specialization.substitution);
-        let port_generic_records = if ports.is_empty() {
-            HashMap::new()
+        let (port_generic_records, port_generic_bodies) = if ports.is_empty() {
+            (HashMap::new(), HashMap::new())
         } else {
             let generic = super::template_closure::port_generic_facts(
                 tir,
@@ -427,7 +425,7 @@ pub(super) fn instance_expression_facts(
                 cancellation,
             )?;
             port_generic_plot_channels.insert(owner.clone(), generic.plot_channels);
-            generic.records
+            (generic.records, generic.bodies)
         };
         let observations = infer::hir::BodyObservations::new(dag);
         let ctx = DimCheckContext {
@@ -442,21 +440,40 @@ pub(super) fn instance_expression_facts(
             observations: &observations,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;
-        // Instance bodies are specialized from the template; only the facts of
-        // independently checked defaults are kept.
+        // Instance bodies are specialized from the template; only the trees
+        // and facts of independently checked defaults are kept.
+        let finished = observations.finish();
+        let independent =
+            crate::tir::texpr::claim_roots(&rebound_defaults(template, dag), finished.typed)
+                .map_err(|error| internal(error.to_string()))?
+                .into_iter()
+                .collect();
+        let bodies = super::body_specialization::instance_bodies(
+            dag,
+            &checking,
+            independent,
+            template_bodies,
+            &port_generic_bodies,
+            &specialization.substitution,
+            src,
+        )?;
         let facts = complete_instance_facts(
             dag,
             &checking,
-            observations.finish().records,
+            finished.records,
             facts,
             &port_generic_records,
             &specialization.substitution,
             src,
         )?;
+        crate::tir::texpr::fact_agreement::check(&bodies, &facts)
+            .map_err(|error| internal(format!("DAG `{owner}`: {error}")))?;
         published.push((owner.clone(), facts));
+        published_bodies.push((owner.clone(), bodies));
     }
     Ok(InstanceFacts {
         facts: published,
+        bodies: published_bodies,
         port_generic_plot_channels,
     })
 }
@@ -503,7 +520,7 @@ fn complete_instance_facts(
             record,
             dag,
             tir,
-            &FactSubstitution::Static(substitution),
+            &super::body_specialization::BodySubstitution::Static(substitution),
             src,
             span,
             &environment,

@@ -324,3 +324,46 @@ fn nominal_bound_constructors_are_prepared_in_each_owning_scope() {
         assert_eq!(result.has_errors(), value == "0.0", "{result:?}");
     }
 }
+
+#[test]
+fn instance_trees_are_their_templates_specialized_by_the_instance_bindings() {
+    let source = "dag worker { pub(bind) index Axis; pub node v: Dimensionless[Axis] = for i: Axis { 1.0 }; }\n\
+                  include worker(index Axis: Fin(2)) as w;\n\
+                  node total: Dimensionless = sum(@w::v);";
+    let tir = compile_to_tir(source, "instance-trees.gcl").unwrap();
+    let formula = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
+        dag.value_expr(dag.bound_decl_identity(&scoped_name("v")).unwrap())
+            .unwrap()
+            .id()
+            .clone()
+    };
+    let (instances, templates): (Vec<_>, Vec<_>) = tir
+        .dag_registry()
+        .values()
+        .filter(|dag| dag.bound_decl_identity(&scoped_name("v")).is_some())
+        .partition(|dag| dag.is_semantic_instance());
+    let [template] = templates.as_slice() else {
+        panic!("expected one template: {templates:?}");
+    };
+    let [instance] = instances.as_slice() else {
+        panic!("expected one instance: {instances:?}");
+    };
+    // The template's axis awaits its binding; the instance's is `Fin(2)`.
+    assert!(matches!(
+        template.bodies().executable_value(&formula(template)),
+        Err(graphcal_compiler::tir::texpr::ExecutableBodyError::Deferred(_))
+    ));
+    let tree = instance
+        .bodies()
+        .executable_value(&formula(instance))
+        .unwrap();
+    assert!(
+        matches!(
+            tree.ty(),
+            graphcal_compiler::registry::checked_type::CheckedType::Indexed { index, .. }
+                if index.finite_index().is_some_and(|axis| axis.cardinality().get() == 2)
+        ),
+        "{:?}",
+        tree.ty()
+    );
+}

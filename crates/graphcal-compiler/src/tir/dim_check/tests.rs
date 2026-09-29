@@ -3861,7 +3861,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
 
 #[test]
 fn inference_emits_typed_trees_carrying_node_facts() {
-    use crate::tir::texpr::{TArg, TBody, TConstRef, TExprKind, TIndexArg, TMatchPattern};
+    use crate::tir::texpr::{TArg, TConstRef, TExprKind, TIndexArg, TMatchPattern};
 
     let source = "type Maneuver { Impulsive(delta_v: Dimensionless), Coast }\n\
                   node burn: Maneuver = Impulsive(delta_v: 2.0);\n\
@@ -3877,7 +3877,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     let (tir, src) = module_aware_tir(source);
     let tir = check_draft(tir, &src).unwrap();
     let dag = tir.root();
-    let bodies = dag.typed_bodies().unwrap();
+    let bodies = dag.bodies();
     crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts()).unwrap();
     let root = |name: &str| {
         let formula = dag
@@ -3885,10 +3885,9 @@ fn inference_emits_typed_trees_carrying_node_facts() {
             .find(|entry| entry.name().as_str() == name)
             .and_then(|entry| entry.definition.formula())
             .unwrap();
-        match bodies.get(formula.id()) {
-            Some(TBody::Value(root)) => root,
-            other => panic!("`{name}` has no typed value root: {other:?}"),
-        }
+        bodies
+            .executable_value(formula.id())
+            .unwrap_or_else(|error| panic!("`{name}` has no typed value root: {error}"))
     };
 
     let TExprKind::Construct {
@@ -3901,7 +3900,10 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     assert_eq!(application.constructor.name().as_str(), "Impulsive");
     assert_eq!(fields.len(), 1);
     let coast = match root("coast").kind() {
-        TExprKind::Const(TConstRef::Constructor(application))
+        TExprKind::Const(crate::syntax::span::Spanned {
+            value: TConstRef::Constructor(application),
+            ..
+        })
         | TExprKind::Construct { application, .. } => application,
         other => panic!("expected a constructor application, got {other:?}"),
     };
@@ -3943,5 +3945,5 @@ fn inference_emits_typed_trees_carrying_node_facts() {
         .map(|(_, expr)| expr)
         .find(|expr| matches!(expr.kind(), crate::hir::ExprKind::StringLiteral(_)))
         .unwrap();
-    assert!(matches!(bodies.get(color.id()), Some(TBody::Contextual(_))));
+    assert!(bodies.contextual(color.id()).is_some());
 }

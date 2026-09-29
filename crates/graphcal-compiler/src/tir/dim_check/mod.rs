@@ -19,6 +19,7 @@ pub(crate) use helpers::{expect_quantity, format_checked_type};
 
 use helpers::is_bool_type;
 
+mod body_specialization;
 mod builtins;
 mod concrete_obligations;
 mod expression_axes;
@@ -678,10 +679,10 @@ impl crate::tir::typed::InstantiatedTir {
         check_field_domain_constraint_dimensions(&tir, src, cancellation, &sinks)?;
         drop(sinks);
         let mut facts = HashMap::new();
-        let mut typed_bodies = HashMap::new();
+        let mut bodies = HashMap::new();
         let mut checked_plot_shapes = HashMap::new();
         for (dag_id, dag, observations, plot_shapes) in checked_dag_facts {
-            let (published, bodies) = observations
+            let (published, checked_bodies) = observations
                 .finish()
                 .publish(
                     dag_id.clone(),
@@ -697,15 +698,17 @@ impl crate::tir::typed::InstantiatedTir {
                     )
                 })?;
             facts.insert(dag_id.clone(), published);
-            typed_bodies.insert(dag_id.clone(), bodies);
+            bodies.insert(dag_id.clone(), checked_bodies);
             checked_plot_shapes.insert(dag_id.clone(), plot_shapes);
         }
 
-        let instances = instance_expression_facts(&tir, &facts, src, cancellation)?;
+        let instances = instance_expression_facts(&tir, &facts, &bodies, src, cancellation)?;
         facts.extend(instances.facts);
+        bodies.extend(instances.bodies);
         let checking = crate::tir::typed::CheckingTir {
             tir: &tir,
             facts: &facts,
+            bodies: &bodies,
         };
         concrete_obligations::validate_project(&checking, src, cancellation)?;
 
@@ -728,7 +731,7 @@ impl crate::tir::typed::InstantiatedTir {
         tir.into_checked(
             crate::tir::typed::CheckedParts {
                 expression_facts: facts,
-                typed_bodies,
+                bodies,
                 presentation,
                 schedules: schedules.into_parts(),
             },

@@ -59,10 +59,11 @@ fn a_parent_assembles_from_its_recorded_children() {
     pending
         .record_value(&expr, dimensionless(), &no_facts(&matches))
         .unwrap();
-    let bodies = TypedBodies::publish(&[&expr], pending).unwrap();
-    let Some(TBody::Value(root)) = bodies.get(expr.id()) else {
-        panic!("expected a typed value root");
+    let bodies = claim_roots(&[&expr], pending).unwrap();
+    let [(id, TBody::Value(root))] = bodies.as_slice() else {
+        panic!("expected one typed value root");
     };
+    assert_eq!(id, expr.id());
     let TExprKind::Binary { lhs, rhs, .. } = root.kind() else {
         panic!("expected a binary node, got {:?}", root.kind());
     };
@@ -191,7 +192,7 @@ fn publication_requires_every_root_and_claims_every_node() {
             .unwrap();
     }
     assert!(matches!(
-        TypedBodies::publish(&[&expr], pending),
+        claim_roots(&[&expr], pending),
         Err(TypedBodiesError::MissingRoot(_))
     ));
 
@@ -202,7 +203,7 @@ fn publication_requires_every_root_and_claims_every_node() {
             .unwrap();
     }
     assert!(matches!(
-        TypedBodies::publish(&[children(&expr)[0]], pending),
+        claim_roots(&[children(&expr)[0]], pending),
         Err(TypedBodiesError::Unclaimed(_))
     ));
 }
@@ -277,7 +278,7 @@ fn facts(root: &Expr) -> CheckedExpressionFacts {
     CheckedExpressionFacts::publish(owner(), revision, &[root], records, &|_| Ok(None)).unwrap()
 }
 
-fn typed(roots: &[&Expr], nodes: &[&Expr], ty: &CheckedType<Symbolic>) -> TypedBodies {
+fn typed(roots: &[&Expr], nodes: &[&Expr], ty: &CheckedType<Symbolic>) -> CheckedBodies {
     let matches = HashMap::new();
     let mut pending = PendingNodes::default();
     for node in nodes {
@@ -285,7 +286,7 @@ fn typed(roots: &[&Expr], nodes: &[&Expr], ty: &CheckedType<Symbolic>) -> TypedB
             .record_value(node, ty.clone(), &no_facts(&matches))
             .unwrap();
     }
-    TypedBodies::publish(roots, pending).unwrap()
+    CheckedBodies::discharge(claim_roots(roots, pending).unwrap(), &|_| Ok(None)).unwrap()
 }
 
 #[test]
@@ -320,4 +321,174 @@ fn typed_trees_agree_with_the_facts_of_the_same_pass() {
         ),
         Err(FactDisagreement::MissingFact(other.id().clone()))
     );
+}
+
+fn key_node(
+    ids: &mut crate::expression_id::ExprIds,
+    axis: IndexTypeRef<Symbolic>,
+    position: u64,
+) -> TExpr<Symbolic> {
+    let arg = TExpr::new(
+        ids.allocate().unwrap(),
+        Span::new(4, 1),
+        CheckedType::Int,
+        TExprKind::Integer(i64::try_from(position).unwrap()),
+    );
+    TExpr::new(
+        ids.allocate().unwrap(),
+        Span::new(0, 6),
+        CheckedType::Key(axis.clone()),
+        TExprKind::Key {
+            kind: crate::syntax::ast::KeyFormKind::Static,
+            axis: crate::hir::expr::ForBindingIndex::Finite {
+                cardinality: crate::syntax::span::Spanned::new(
+                    crate::nat::NatPolyForm::from_constant(3),
+                    Span::new(0, 1),
+                ),
+                span: Span::new(0, 1),
+            },
+            arg: Box::new(arg),
+            static_position: Some(StaticPosition {
+                axis,
+                position,
+                usage: crate::tir::expression_facts::StaticIndexUse::Key,
+            }),
+        },
+    )
+}
+
+fn fin(size: u64) -> IndexTypeRef<Symbolic> {
+    IndexTypeRef::from_finite_index(
+        crate::registry::index::FiniteIndex::try_from_u64(size).unwrap(),
+    )
+}
+
+fn known(
+    size: u64,
+) -> impl Fn(
+    &IndexTypeRef<Symbolic>,
+) -> Result<
+    Option<crate::registry::index::IndexCardinality>,
+    crate::tir::static_index::UnavailableIndex,
+> {
+    move |_| {
+        Ok(Some(
+            crate::registry::index::IndexCardinality::try_from_u64(size).unwrap(),
+        ))
+    }
+}
+
+#[test]
+fn discharge_publishes_only_trees_whose_every_obligation_is_met() {
+    let mut ids = crate::expression_id::ExprIds::default();
+    let ready = CheckedBody::discharge(
+        TBody::Value(Box::new(key_node(&mut ids, fin(3), 1))),
+        &known(3),
+    )
+    .unwrap();
+    let CheckedBody::Executable(TBody::Value(tree)) = ready else {
+        panic!("a discharged tree is executable: {ready:?}");
+    };
+    assert!(matches!(tree.ty(), CheckedType::Key(_)));
+
+    // An axis still awaiting its binding keeps the tree deferred.
+    let waiting = CheckedBody::discharge(
+        TBody::Value(Box::new(key_node(&mut ids, fin(3), 1))),
+        &|_| Ok(None),
+    )
+    .unwrap();
+    assert!(matches!(waiting, CheckedBody::Deferred(_)));
+
+    // A `Nat` variable keeps the tree deferred even when its size is known.
+    let n = IndexTypeRef::from_finite_index_form(crate::nat::NatPolyForm::from_var(
+        crate::generic_param::test_support::type_param("N"),
+    ))
+    .unwrap();
+    let symbolic =
+        CheckedBody::discharge(TBody::Value(Box::new(key_node(&mut ids, n, 1))), &known(3))
+            .unwrap();
+    assert!(matches!(symbolic, CheckedBody::Deferred(_)));
+
+    // A position outside the now-known axis is an error, not a deferral.
+    assert!(matches!(
+        CheckedBody::discharge(
+            TBody::Value(Box::new(key_node(&mut ids, fin(3), 5))),
+            &known(3)
+        ),
+        Err(DischargeError::StaticIndex(_))
+    ));
+}
+
+#[test]
+fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
+    let mut ids = crate::expression_id::ExprIds::default();
+    let ready = key_node(&mut ids, fin(3), 1);
+    let waiting = key_node(&mut ids, fin(3), 2);
+    let literal = TContextual::new(
+        ids.allocate().unwrap(),
+        Span::new(0, 3),
+        ContextualLiteral::String("red".to_owned()),
+    );
+    let (ready_id, waiting_id, literal_id) = (
+        ready.id().clone(),
+        waiting.id().clone(),
+        literal.id().clone(),
+    );
+    let bodies = CheckedBodies::discharge(
+        vec![
+            (ready_id.clone(), TBody::Value(Box::new(ready))),
+            (literal_id.clone(), TBody::Contextual(literal)),
+        ],
+        &known(3),
+    )
+    .unwrap();
+    assert!(bodies.executable_value(&ready_id).is_ok());
+    assert_eq!(
+        bodies.executable_value(&literal_id).unwrap_err(),
+        ExecutableBodyError::Contextual(literal_id.clone())
+    );
+    assert!(bodies.contextual(&literal_id).is_some());
+    assert!(bodies.contextual(&ready_id).is_none());
+    assert_eq!(
+        bodies.executable_value(&waiting_id).unwrap_err(),
+        ExecutableBodyError::Missing(waiting_id.clone())
+    );
+    let deferred = CheckedBodies::discharge(
+        vec![(waiting_id.clone(), TBody::Value(Box::new(waiting)))],
+        &|_| Ok(None),
+    )
+    .unwrap();
+    assert_eq!(
+        deferred.executable_value(&waiting_id).unwrap_err(),
+        ExecutableBodyError::Deferred(waiting_id)
+    );
+}
+
+#[test]
+fn type_maps_keep_structure_and_rewrite_every_carried_type() {
+    let mut ids = crate::expression_id::ExprIds::default();
+    let tree = key_node(&mut ids, fin(3), 1);
+    let concrete = tree.map_types(&mut map::ToConcrete).unwrap();
+    let back = concrete
+        .map_types(&mut map::ToSymbolic)
+        .unwrap_or_else(|never| match never {});
+    assert_eq!(back.ty(), tree.ty());
+    assert_eq!(back.id(), tree.id());
+    let (
+        TExprKind::Key {
+            static_position: Some(before),
+            arg: before_arg,
+            ..
+        },
+        TExprKind::Key {
+            static_position: Some(after),
+            arg: after_arg,
+            ..
+        },
+    ) = (tree.kind(), back.kind())
+    else {
+        panic!("a map keeps the key form and its proof");
+    };
+    assert_eq!(before, after);
+    assert_eq!(before_arg.id(), after_arg.id());
 }
