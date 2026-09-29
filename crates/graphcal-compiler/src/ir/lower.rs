@@ -12,11 +12,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::declaration_category::DeclCategory;
-use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, Expr, FigureDecl, File, LayerDecl, PlotDecl, TypeExpr,
-};
+use crate::desugar::desugared_ast::{DeclKind, Expr, File, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::dimension::Dimension;
 use crate::ir::instance::InstanceRecord;
 use crate::ir::resolve::{CollectedFile, ImportedValueNames, resolve_with_imported_values};
 use crate::plot_visibility::PlotVisibility;
@@ -29,8 +26,9 @@ use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::span::{Span, Spanned};
+use crate::syntax::span::Span;
 
+use super::entry::{self, BodyPhase, Syntax};
 #[cfg(test)]
 use super::extern_fns::resolve_extern_struct_return;
 pub use super::extern_fns::{ExternFunctionEntry, ExternStructResult};
@@ -38,10 +36,10 @@ pub use super::include::{
     IncludeOverrideReconciliations, SemanticInstanceInput, specialize_type_definition,
     substitute_dim_expr_names, substitute_type_expr_indexes, substitute_type_expr_nominal_names,
 };
+use super::registry_build::register_file_declarations;
 pub use super::registry_build::{
     SelectedDeclarations, SelectedDimension, register_selected_declarations,
 };
-use super::registry_build::{extract_type_annotations, register_file_declarations};
 
 // ---------------------------------------------------------------------------
 // Entry types for IR declarations
@@ -117,137 +115,36 @@ pub(crate) struct ParsedExpectedFailMetadata {
     pub(crate) attribute_span: Span,
 }
 
+/// Frozen phase: every body is strictly lowered HIR with canonical references.
+#[derive(Debug, Clone, Copy)]
+pub enum Lowered {}
+
+impl BodyPhase for Lowered {
+    type Expr = crate::hir::CheckedExpr;
+    type TypeAnnotation = crate::hir::TypeAnnotation;
+    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
+    type AssertBody = crate::hir::CheckedAssertBody;
+    type PlotBody = LoweredPlotBody;
+    type CompositionFields = Vec<LoweredPlotField>;
+    type UnitIdentity = ResolvedUnitName;
+}
+
 /// A const declaration with type annotation and lowered body.
-#[derive(Debug, Clone)]
-pub struct ConstEntry {
-    pub name: ScopedName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: crate::hir::TypeAnnotation,
-    pub(crate) expr: crate::hir::CheckedExpr,
-    pub span: Span,
-}
-
-/// A lowered parameter default.
-#[derive(Debug, Clone)]
-pub struct ParamDefault {
-    pub expr: crate::hir::CheckedExpr,
-}
-
+pub type ConstEntry = entry::ConstEntry<Lowered>;
 /// A param declaration with type annotation and an atomic lowered default.
-#[derive(Debug, Clone)]
-pub struct ParamEntry {
-    pub name: ScopedName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: crate::hir::TypeAnnotation,
-    pub default: Option<ParamDefault>,
-    pub span: Span,
-    /// Include overrides whose nominal dependencies must be checked after
-    /// canonical type inference.
-    pub(crate) override_reconciliations:
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
-}
-
+pub type ParamEntry = entry::ParamEntry<Lowered>;
 /// A node declaration with type annotation and lowered body.
-#[derive(Debug, Clone)]
-pub struct NodeEntry {
-    pub name: ScopedName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: crate::hir::TypeAnnotation,
-    pub definition: crate::hir::node_definition::NodeDefinition,
-    pub span: Span,
-}
-
+pub type NodeEntry = entry::NodeEntry<Lowered>;
 /// An assert declaration with lowered body.
-#[derive(Debug, Clone)]
-pub struct AssertEntry {
-    pub name: ScopedName,
-    /// Canonical semantic owner, independent of the source-facing scoped name.
-    pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub body: crate::hir::CheckedAssertBody,
-    pub span: Span,
-}
-
-/// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
-///
-/// Pre-freeze bodies stay syntactic so include instantiation can rewrite
-/// reference paths (prefixing, index/type rebinding) before resolution.
-#[derive(Debug, Clone)]
-pub struct UnfrozenConstEntry {
-    pub(super) name: ScopedName,
-    pub(super) declaration_owner: crate::dag_id::DagId,
-    pub(super) type_ann: TypeExpr,
-    /// Module scope for the declaration signature (type annotation and domain bounds).
-    pub(super) type_resolution_owner: crate::dag_id::DagId,
-    pub(super) expr: Expr,
-    /// Module scope for the declaration body expression.
-    pub(super) body_resolution_owner: crate::dag_id::DagId,
-    pub(super) span: Span,
-}
-
-/// A syntactic parameter default awaiting lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub(super) struct UnfrozenParamDefault {
-    pub(super) expr: Expr,
-    /// Module scope used to resolve the default expression.
-    pub(super) resolution_owner: crate::dag_id::DagId,
-}
-
-/// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenParamEntry {
-    pub(super) name: ScopedName,
-    pub(super) declaration_owner: crate::dag_id::DagId,
-    pub(super) type_ann: TypeExpr,
-    /// Module scope for the parameter signature (type annotation and domain bounds).
-    pub(super) type_resolution_owner: crate::dag_id::DagId,
-    pub(super) default: Option<UnfrozenParamDefault>,
-    pub(super) span: Span,
-    /// Include overrides awaiting canonical typed dependency checking.
-    pub(super) override_reconciliations:
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
-}
-
-/// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenNodeEntry {
-    pub(super) name: ScopedName,
-    pub(super) declaration_owner: crate::dag_id::DagId,
-    pub(super) type_ann: TypeExpr,
-    /// Module scope for the declaration signature (type annotation and domain bounds).
-    pub(super) type_resolution_owner: crate::dag_id::DagId,
-    pub(super) definition:
-        crate::node_definition::NodeDefinition<Expr, crate::syntax::ast::IdentPath>,
-    /// Module scope for the declaration body expression.
-    pub(super) body_resolution_owner: crate::dag_id::DagId,
-    pub(super) span: Span,
-}
-
-/// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenAssertEntry {
-    pub(super) name: ScopedName,
-    pub(super) declaration_owner: crate::dag_id::DagId,
-    pub(super) body: AssertBody,
-    /// Module scope for the assertion body expression(s).
-    pub(super) body_resolution_owner: crate::dag_id::DagId,
-    pub(super) span: Span,
-}
-
+pub type AssertEntry = entry::AssertEntry<Lowered>;
 /// A plot declaration with lowered body.
-#[derive(Debug, Clone)]
-pub struct PlotEntry {
-    pub name: ScopedName,
-    /// Mark shape rendered for this plot.
-    pub mark_type: crate::syntax::ast::MarkType,
-    /// Strictly lowered semantic body.
-    pub body: LoweredPlotBody,
-    /// Whether this plot renders standalone when its file is the entry
-    /// point; `#[hidden]` makes it composition-only (#847).
-    pub visibility: PlotVisibility,
-}
+pub type PlotEntry = entry::PlotEntry<Lowered>;
+/// A figure declaration with lowered fields.
+pub type FigureEntry = entry::FigureEntry<Lowered>;
+/// A layer declaration with lowered fields.
+pub type LayerEntry = entry::LayerEntry<Lowered>;
+/// A validated dynamic unit scale lowered to HIR.
+pub type DynamicUnitScaleEntry = entry::DynamicUnitScaleEntry<Lowered>;
 
 /// A plot alias brought into this DAG by an include brace list (#847).
 ///
@@ -260,38 +157,6 @@ pub struct IncludedPlotEntry {
     pub name: ScopedName,
 }
 
-/// A validated dynamic unit scale lowered to HIR.
-#[derive(Debug, Clone)]
-pub struct DynamicUnitScaleEntry {
-    /// Canonical declaration identity of the unit being defined.
-    pub unit: ResolvedUnitName,
-    /// Source spelling under which the unit is registered in this IR.
-    pub spelling: UnitRef,
-    /// Strictly lowered scalar expression.
-    pub expr: crate::hir::CheckedExpr,
-    /// Dimension declared on the unit definition.
-    pub declared_dimension: Dimension,
-    /// Dimension proved from the RHS base-unit expression.
-    pub base_unit_dimension: Dimension,
-    /// Span of the scalar expression.
-    pub span: Span,
-    /// Source of the owning DAG, whose bytes `expr` and `span` index. The
-    /// evaluator needs it when it evaluates a unit scale owned by another DAG.
-    pub src: NamedSource<Arc<String>>,
-}
-
-/// A dynamic unit scale awaiting strict HIR lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub(super) struct UnfrozenDynamicUnitScaleEntry {
-    pub(super) spelling: UnitRef,
-    pub(super) expr: Expr,
-    pub(super) unit_owner: crate::dag_id::DagId,
-    pub(super) body_resolution_owner: crate::dag_id::DagId,
-    pub(super) declared_dimension: Dimension,
-    pub(super) base_unit_dimension: Dimension,
-    pub(super) span: Span,
-}
-
 /// A plot requested by an include brace list item (#847).
 #[derive(Debug, Clone)]
 pub struct RequestedPlot {
@@ -299,56 +164,6 @@ pub struct RequestedPlot {
     pub alias: DeclName,
     /// Composition-only when the include item carried `#[hidden]`.
     pub visibility: PlotVisibility,
-}
-
-/// A figure declaration with lowered fields.
-#[derive(Debug, Clone)]
-pub struct FigureEntry {
-    pub name: ScopedName,
-    /// Plots composed by this figure, in source order.
-    pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Strictly lowered field expressions.
-    pub fields: Vec<LoweredPlotField>,
-}
-
-/// A layer declaration with lowered fields.
-#[derive(Debug, Clone)]
-pub struct LayerEntry {
-    pub name: ScopedName,
-    /// Plots composed by this layer, in source order.
-    pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Strictly lowered field expressions.
-    pub fields: Vec<LoweredPlotField>,
-}
-
-/// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenPlotEntry {
-    pub(super) name: ScopedName,
-    pub(super) decl: PlotDecl,
-    /// Module scope for plot field expressions.
-    pub body_resolution_owner: crate::dag_id::DagId,
-    pub span: Span,
-    /// Whether this plot renders standalone (no `#[hidden]`).
-    pub(super) visibility: PlotVisibility,
-}
-
-/// A figure declaration awaiting field lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenFigureEntry {
-    pub(super) name: ScopedName,
-    pub(super) decl: FigureDecl,
-    /// Module scope for figure field expressions.
-    pub body_resolution_owner: crate::dag_id::DagId,
-}
-
-/// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
-#[derive(Debug, Clone)]
-pub struct UnfrozenLayerEntry {
-    pub(super) name: ScopedName,
-    pub(super) decl: LayerDecl,
-    /// Module scope for layer field expressions.
-    pub body_resolution_owner: crate::dag_id::DagId,
 }
 
 /// Intermediate Representation produced by [`lower`].
@@ -666,13 +481,11 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
-    let resolved = resolve_with_imported_values(ast, src, imported_names)?;
-    let type_anns = extract_type_annotations(ast);
+    let resolved = resolve_with_imported_values(ast, src, imported_names, dag_id)?;
     let (builder, mut unfrozen) = build_ir_from_resolved(
         ast,
         src,
         resolved,
-        type_anns,
         imported_bindings,
         dag_id,
         None,
@@ -751,14 +564,12 @@ pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
-    let resolved = resolve_with_imported_values(dag_body, src, imported_names)?;
-    let type_anns = extract_type_annotations(dag_body);
+    let resolved = resolve_with_imported_values(dag_body, src, imported_names, dag_id)?;
 
     build_ir_from_resolved(
         dag_body,
         src,
         resolved,
-        type_anns,
         imported_bindings,
         dag_id,
         parent_registry,
@@ -807,33 +618,10 @@ pub struct DagBodySelfImports {
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
-/// Remove and return the type annotation for `name`, or raise an internal error
-/// if it was dropped during resolution. The parser and resolver jointly
-/// guarantee that every top-level const/param/node ends up in `type_anns`;
-/// a missing entry is a compiler invariant violation.
-fn take_type_ann(
-    type_anns: &mut HashMap<DeclName, TypeExpr>,
-    name: &DeclName,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<TypeExpr, GraphcalError> {
-    type_anns
-        .remove(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("missing type annotation for `{name}`"),
-            src: src.clone(),
-            span: span.into(),
-        })
-}
-
 /// Shared implementation for local and imported-binding lowering.
 ///
-/// Builds the registry, augments runtime deps for dynamic units, pairs resolved
-/// declarations with type annotations, and constructs the `UnfrozenIR`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single linear pipeline — splitting would obscure the flow"
-)]
+/// Builds the registry, augments runtime deps for dynamic units, and
+/// constructs the `UnfrozenIR` from the collected declaration entries.
 #[expect(
     clippy::too_many_arguments,
     reason = "IR construction threads imported bindings and registry state"
@@ -842,7 +630,6 @@ fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     resolved: CollectedFile,
-    mut type_anns: HashMap<DeclName, TypeExpr>,
     imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
@@ -875,119 +662,14 @@ fn build_ir_from_resolved(
     let dynamic_unit_scales = register_file_declarations(ast, &mut builder, src, dag_id)?;
     cancellation.checkpoint()?;
 
-    // Pair resolved declarations with type annotations.
-    let consts = resolved
-        .consts
-        .into_iter()
-        .map(|entry| {
-            cancellation.checkpoint()?;
-            let decl_name = entry.name;
-            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(UnfrozenConstEntry {
-                name: ScopedName::from(decl_name),
-                declaration_owner: dag_id.clone(),
-                type_ann,
-                type_resolution_owner: dag_id.clone(),
-                expr: entry.expr,
-                body_resolution_owner: dag_id.clone(),
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    cancellation.checkpoint()?;
-    let params = resolved
-        .params
-        .into_iter()
-        .map(|entry| {
-            cancellation.checkpoint()?;
-            let decl_name = entry.name;
-            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            let default = entry.default_expr.map(|expr| UnfrozenParamDefault {
-                expr,
-                resolution_owner: dag_id.clone(),
-            });
-            Ok(UnfrozenParamEntry {
-                name: ScopedName::from(decl_name),
-                declaration_owner: dag_id.clone(),
-                type_ann,
-                type_resolution_owner: dag_id.clone(),
-                default,
-                span: entry.span,
-                override_reconciliations: Vec::new(),
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    cancellation.checkpoint()?;
-    let nodes = resolved
-        .nodes
-        .into_iter()
-        .map(|entry| {
-            cancellation.checkpoint()?;
-            let decl_name = entry.name;
-            let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            Ok(UnfrozenNodeEntry {
-                name: ScopedName::from(decl_name),
-                declaration_owner: dag_id.clone(),
-                type_ann,
-                type_resolution_owner: dag_id.clone(),
-                definition: entry.definition,
-                body_resolution_owner: dag_id.clone(),
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-
     let unfrozen = UnfrozenIR {
-        consts,
-        params,
-        nodes,
-        asserts: resolved
-            .asserts
-            .into_iter()
-            .map(|entry| UnfrozenAssertEntry {
-                name: ScopedName::from(entry.name),
-                declaration_owner: dag_id.clone(),
-                body: entry.body,
-                body_resolution_owner: dag_id.clone(),
-                span: entry.span,
-            })
-            .collect(),
-        plots: resolved
-            .plots
-            .into_iter()
-            .map(|entry| {
-                let visibility = if resolved.hidden_plots.contains(&entry.name) {
-                    PlotVisibility::CompositionOnly
-                } else {
-                    PlotVisibility::Standalone
-                };
-                UnfrozenPlotEntry {
-                    name: ScopedName::from(entry.name),
-                    decl: entry.decl,
-                    body_resolution_owner: dag_id.clone(),
-                    span: entry.span,
-                    visibility,
-                }
-            })
-            .collect(),
-        figures: resolved
-            .figures
-            .into_iter()
-            .map(|entry| UnfrozenFigureEntry {
-                name: ScopedName::from(entry.name),
-                decl: entry.decl,
-                body_resolution_owner: dag_id.clone(),
-            })
-            .collect(),
-        layers: resolved
-            .layers
-            .into_iter()
-            .map(|entry| UnfrozenLayerEntry {
-                name: ScopedName::from(entry.name),
-                decl: entry.decl,
-                body_resolution_owner: dag_id.clone(),
-            })
-            .collect(),
+        consts: resolved.consts,
+        params: resolved.params,
+        nodes: resolved.nodes,
+        asserts: resolved.asserts,
+        plots: resolved.plots,
+        figures: resolved.figures,
+        layers: resolved.layers,
         included_plots: Vec::new(),
         source_order: resolved
             .source_order
@@ -1050,13 +732,13 @@ pub struct IncludeAliasDeclaration {
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 #[derive(Debug, Clone)]
 pub struct UnfrozenIR {
-    pub(super) consts: Vec<UnfrozenConstEntry>,
-    pub(super) params: Vec<UnfrozenParamEntry>,
-    pub(super) nodes: Vec<UnfrozenNodeEntry>,
-    pub(super) asserts: Vec<UnfrozenAssertEntry>,
-    pub(super) plots: Vec<UnfrozenPlotEntry>,
-    pub(super) figures: Vec<UnfrozenFigureEntry>,
-    pub(super) layers: Vec<UnfrozenLayerEntry>,
+    pub(super) consts: Vec<entry::ConstEntry<Syntax>>,
+    pub(super) params: Vec<entry::ParamEntry<Syntax>>,
+    pub(super) nodes: Vec<entry::NodeEntry<Syntax>>,
+    pub(super) asserts: Vec<entry::AssertEntry<Syntax>>,
+    pub(super) plots: Vec<entry::PlotEntry<Syntax>>,
+    pub(super) figures: Vec<entry::FigureEntry<Syntax>>,
+    pub(super) layers: Vec<entry::LayerEntry<Syntax>>,
     /// Plot aliases from include brace lists (#847).
     pub(super) included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
@@ -1071,7 +753,7 @@ pub struct UnfrozenIR {
     // Key-lookup only, order irrelevant. Each value retains authored scope/source.
     pub(super) expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     // Dynamic unit scales declared by this source body.
-    pub(super) dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
+    pub(super) dynamic_unit_scales: Vec<entry::DynamicUnitScaleEntry<Syntax>>,
     // Source-visible projected units mapped to concrete instance identities.
     pub(super) unit_bindings: HashMap<UnitRef, ResolvedUnitName>,
     // Lexical binding lookup only; each value carries one canonical target.

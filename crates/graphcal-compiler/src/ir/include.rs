@@ -25,12 +25,13 @@ use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::ExprVisitor;
 
 use super::{
+    entry::{self, InScope},
     extern_fns::resolve_plugin_imports,
     lower::{
         AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag,
         IncludeAliasDeclaration, LayerEntry, LoweredPlotBody, LoweredPlotField,
-        LoweredPlotProperty, NodeEntry, ParamDefault, ParamEntry, PlotEntry, UnfrozenConstEntry,
-        UnfrozenIR, UnfrozenNodeEntry, UnfrozenSemanticInstance,
+        LoweredPlotProperty, NodeEntry, ParamEntry, PlotEntry, UnfrozenIR,
+        UnfrozenSemanticInstance,
     },
 };
 
@@ -72,7 +73,7 @@ impl UnfrozenIR {
             .find(|entry| entry.name.leaf() == name)
             .map(|entry| {
                 ResolvedDeclName::from_def(
-                    entry.body_resolution_owner.clone(),
+                    entry.body.resolution_owner.clone(),
                     entry.name.leaf().clone(),
                 )
             })
@@ -146,7 +147,7 @@ impl UnfrozenIR {
             .iter()
             .find(|entry| entry.name == local)
             .map(|entry| IncludeAliasDeclaration {
-                type_ann: entry.type_ann.clone(),
+                type_ann: entry.type_ann.syntax.clone(),
                 is_const: true,
             })
             .or_else(|| {
@@ -154,7 +155,7 @@ impl UnfrozenIR {
                     .iter()
                     .find(|entry| entry.name == local)
                     .map(|entry| IncludeAliasDeclaration {
-                        type_ann: entry.type_ann.clone(),
+                        type_ann: entry.type_ann.syntax.clone(),
                         is_const: false,
                     })
             })
@@ -163,7 +164,7 @@ impl UnfrozenIR {
                     .iter()
                     .find(|entry| entry.name == local)
                     .map(|entry| IncludeAliasDeclaration {
-                        type_ann: entry.type_ann.clone(),
+                        type_ann: entry.type_ann.syntax.clone(),
                         is_const: false,
                     })
             })
@@ -337,10 +338,13 @@ impl UnfrozenIR {
             crate::hir::lower_expr(expr, expr_ctx)
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
         };
-        let lower_type_annotation_in =
-            |type_ann: &TypeExpr,
-             resolution_owner: &crate::dag_id::DagId|
-             -> Result<crate::hir::TypeAnnotation, GraphcalError> {
+        let lower_scoped = |expr: &InScope<Expr>| lower_in(&expr.syntax, &expr.resolution_owner);
+        let lower_type_annotation =
+            |type_ann: &InScope<TypeExpr>| -> Result<crate::hir::TypeAnnotation, GraphcalError> {
+                let InScope {
+                    syntax: type_ann,
+                    resolution_owner,
+                } = type_ann;
                 crate::hir::diagnostics::validate_type_annotation(type_ann, src)?;
                 let scope =
                     crate::hir::ModuleScope::new(resolution_owner, resolver, &generic_scope);
@@ -379,7 +383,7 @@ impl UnfrozenIR {
             .map(|entry| {
                 cancellation.checkpoint()?;
                 let unit = resolver
-                    .resolve_unit_path(&entry.unit_owner, &entry.spelling.to_name_path())
+                    .resolve_unit_path(&entry.unit, &entry.spelling.to_name_path())
                     .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|err| GraphcalError::InternalError {
                         message: format!(
@@ -392,11 +396,11 @@ impl UnfrozenIR {
                 Ok(DynamicUnitScaleEntry {
                     unit,
                     spelling: entry.spelling.clone(),
-                    expr: lower_in(&entry.expr, &entry.body_resolution_owner)?,
+                    expr: lower_scoped(&entry.expr)?,
                     declared_dimension: entry.declared_dimension.clone(),
                     base_unit_dimension: entry.base_unit_dimension.clone(),
                     span: entry.span,
-                    src: src.clone(),
+                    src: entry.src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -409,11 +413,8 @@ impl UnfrozenIR {
                 Ok(ConstEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation_in(
-                        &entry.type_ann,
-                        &entry.type_resolution_owner,
-                    )?,
-                    expr: lower_in(&entry.expr, &entry.body_resolution_owner)?,
+                    type_ann: lower_type_annotation(&entry.type_ann)?,
+                    expr: lower_scoped(&entry.expr)?,
                     span: entry.span,
                 })
             })
@@ -424,22 +425,11 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let default = entry
-                    .default
-                    .as_ref()
-                    .map(|default| {
-                        lower_in(&default.expr, &default.resolution_owner)
-                            .map(|expr| ParamDefault { expr })
-                    })
-                    .transpose()?;
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation_in(
-                        &entry.type_ann,
-                        &entry.type_resolution_owner,
-                    )?,
-                    default,
+                    type_ann: lower_type_annotation(&entry.type_ann)?,
+                    default: entry.default.as_ref().map(lower_scoped).transpose()?,
                     span: entry.span,
                     override_reconciliations: entry.override_reconciliations.clone(),
                 })
@@ -454,15 +444,12 @@ impl UnfrozenIR {
                 Ok(NodeEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation_in(
-                        &entry.type_ann,
-                        &entry.type_resolution_owner,
-                    )?,
+                    type_ann: lower_type_annotation(&entry.type_ann)?,
                     definition: super::node_definition::lower(
-                        &entry.definition,
+                        &entry.definition.syntax,
                         crate::hir::ExprLoweringContext::with_overlay(
                             crate::hir::ModuleScope::new(
-                                &entry.body_resolution_owner,
+                                &entry.definition.resolution_owner,
                                 resolver,
                                 &generic_scope,
                             ),
@@ -485,10 +472,10 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
                     body: crate::hir::lower_assert_body(
-                        &entry.body,
+                        &entry.body.syntax,
                         crate::hir::ExprLoweringContext::with_overlay(
                             crate::hir::ModuleScope::new(
-                                &entry.body_resolution_owner,
+                                &entry.body.resolution_owner,
                                 resolver,
                                 &generic_scope,
                             ),
@@ -507,47 +494,53 @@ impl UnfrozenIR {
         // Sink expressions are semantic program bodies, not optional rendering
         // hints. Batch compilation lowers every one strictly; tolerant HIR is
         // reserved for editor-facing incomplete buffers.
+        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
+                            resolution_owner: &crate::dag_id::DagId,
+                            classify: fn(
+            crate::syntax::ast::PlotPropertyName,
+        ) -> LoweredPlotProperty| {
+            fields
+                .iter()
+                .map(|field| {
+                    Ok(LoweredPlotField {
+                        property: classify(field.name.value.clone()),
+                        name_span: field.name.span,
+                        value: lower_in(&field.value, resolution_owner)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, GraphcalError>>()
+        };
         cancellation.checkpoint()?;
         let plots = self
             .plots
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let encodings = entry
-                    .decl
+                let InScope {
+                    syntax: body,
+                    resolution_owner,
+                } = &entry.body;
+                let encodings = body
                     .encodings
                     .iter()
                     .map(|encoding| {
-                        lower_in(&encoding.value, &entry.body_resolution_owner)
+                        lower_in(&encoding.value, resolution_owner)
                             .map(|lowered| (encoding.channel, lowered))
                     })
                     .collect::<Result<Vec<_>, GraphcalError>>()?;
-                let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                                    classify: fn(
-                    crate::syntax::ast::PlotPropertyName,
-                ) -> LoweredPlotProperty| {
-                    fields
-                        .iter()
-                        .map(|field| {
-                            Ok(LoweredPlotField {
-                                property: classify(field.name.value.clone()),
-                                name_span: field.name.span,
-                                value: lower_in(&field.value, &entry.body_resolution_owner)?,
-                            })
-                        })
-                        .collect::<Result<Vec<_>, GraphcalError>>()
-                };
                 Ok(PlotEntry {
                     name: entry.name.clone(),
-                    mark_type: entry.decl.mark.mark_type,
+                    mark_type: entry.mark_type,
                     body: LoweredPlotBody {
                         encodings,
                         mark_properties: lower_fields(
-                            &entry.decl.mark.properties,
+                            &body.mark_properties,
+                            resolution_owner,
                             LoweredPlotProperty::mark,
                         )?,
                         properties: lower_fields(
-                            &entry.decl.properties,
+                            &body.properties,
+                            resolution_owner,
                             LoweredPlotProperty::plot,
                         )?,
                     },
@@ -555,19 +548,14 @@ impl UnfrozenIR {
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
-        let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId| {
-            fields
-                .iter()
-                .map(|field| {
-                    Ok(LoweredPlotField {
-                        property: LoweredPlotProperty::composition(field.name.value.clone()),
-                        name_span: field.name.span,
-                        value: lower_in(&field.value, resolution_owner)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, GraphcalError>>()
-        };
+        let lower_composition_fields =
+            |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>| {
+                lower_fields(
+                    &fields.syntax,
+                    &fields.resolution_owner,
+                    LoweredPlotProperty::composition,
+                )
+            };
         cancellation.checkpoint()?;
         let figures = self
             .figures
@@ -576,8 +564,8 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 Ok(FigureEntry {
                     name: entry.name.clone(),
-                    plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner)?,
+                    plot_names: entry.plot_names.clone(),
+                    fields: lower_composition_fields(&entry.fields)?,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -589,8 +577,8 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 Ok(LayerEntry {
                     name: entry.name.clone(),
-                    plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner)?,
+                    plot_names: entry.plot_names.clone(),
+                    fields: lower_composition_fields(&entry.fields)?,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -665,13 +653,11 @@ impl UnfrozenIR {
         body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
-        self.consts.push(UnfrozenConstEntry {
+        self.consts.push(entry::ConstEntry {
             name: name.clone(),
             declaration_owner: body_resolution_owner.clone(),
-            type_ann,
-            type_resolution_owner,
-            expr,
-            body_resolution_owner,
+            type_ann: InScope::new(type_ann, type_resolution_owner),
+            expr: InScope::new(expr, body_resolution_owner),
             span,
         });
         self.source_order
@@ -690,13 +676,14 @@ impl UnfrozenIR {
         body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
-        self.nodes.push(UnfrozenNodeEntry {
+        self.nodes.push(entry::NodeEntry {
             name: name.clone(),
             declaration_owner: body_resolution_owner.clone(),
-            type_ann,
-            type_resolution_owner,
-            definition: crate::node_definition::NodeDefinition::Formula(expr),
-            body_resolution_owner,
+            type_ann: InScope::new(type_ann, type_resolution_owner),
+            definition: InScope::new(
+                crate::node_definition::NodeDefinition::Formula(expr),
+                body_resolution_owner,
+            ),
             span,
         });
         self.source_order
@@ -740,7 +727,7 @@ impl UnfrozenIR {
                         importer_src,
                         include_span,
                     }
-                    .visit_expr(&default.expr)?;
+                    .visit_expr(&default.syntax)?;
                     reconciliations.push(
                         crate::ir::override_reconciliation::PendingOverrideReconciliation::new(
                             param.name.leaf().clone(),

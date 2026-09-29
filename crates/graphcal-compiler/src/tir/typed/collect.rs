@@ -46,7 +46,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
                     src,
                     DiagnosticAnchor::Source(entry.span),
                 )?,
-                collect_unit_names(&default.expr),
+                collect_unit_names(default),
             ))
         })
         .chain(dag.nodes.iter().map(|entry| {
@@ -163,7 +163,7 @@ pub(super) fn collect_resolved_dag_dependencies(
             .default
             .as_ref()
             .map_or_else(hir::ExprDependencies::default, |default| {
-                hir::collect_expr_dependencies(&default.expr)
+                hir::collect_expr_dependencies(default)
             });
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }

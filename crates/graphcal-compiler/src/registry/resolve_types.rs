@@ -3,11 +3,10 @@
 //! Source collection shells and attribute policy stay here; execution consumers
 //! use the independent declaration-category and assertion-expectation contracts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey};
-use crate::declaration_category::DeclCategory;
-use crate::desugar::desugared_ast::{AssertBody, DeclKind, Expr, FigureDecl, LayerDecl, PlotDecl};
+use crate::desugar::desugared_ast::DeclKind;
 use crate::resolve::namespace::Namespace;
 use crate::syntax::ast::{DeclExposure, IntroducedName};
 use crate::syntax::attribute::AttributeName;
@@ -25,7 +24,7 @@ use crate::syntax::span::Span;
 /// Semantic category of a source declaration.
 ///
 /// This broad category is for diagnostics and declaration-level policy. It is
-/// distinct from [`DeclCategory`], whose variants are intentionally limited to
+/// distinct from [`DeclCategory`](crate::declaration_category::DeclCategory), whose variants are intentionally limited to
 /// declarations that can appear in evaluation source order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeclarationKind {
@@ -181,65 +180,6 @@ pub struct ImportedValueNames {
     pub plot_names: Vec<(ScopedName, Span)>,
 }
 
-// ---------------------------------------------------------------------------
-// Entry types for collected declaration shells
-// ---------------------------------------------------------------------------
-
-/// A collected const declaration awaiting type and HIR lowering.
-#[derive(Debug)]
-pub struct CollectedConstEntry {
-    pub(crate) name: DeclName,
-    pub(crate) expr: Expr,
-    pub(crate) span: Span,
-}
-
-/// A collected parameter declaration awaiting type and HIR lowering.
-#[derive(Debug)]
-pub struct CollectedParamEntry {
-    pub(crate) name: DeclName,
-    pub(crate) default_expr: Option<Expr>,
-    pub(crate) span: Span,
-}
-
-/// A collected node declaration awaiting type and HIR lowering.
-#[derive(Debug)]
-pub struct CollectedNodeEntry {
-    pub(crate) name: DeclName,
-    pub(crate) definition:
-        crate::node_definition::NodeDefinition<Expr, crate::syntax::ast::IdentPath>,
-    pub(crate) span: Span,
-}
-
-/// A collected assertion declaration awaiting HIR lowering.
-#[derive(Debug)]
-pub struct CollectedAssertEntry {
-    pub(crate) name: DeclName,
-    pub(crate) body: AssertBody,
-    pub(crate) span: Span,
-}
-
-/// A collected plot declaration awaiting HIR lowering.
-#[derive(Debug)]
-pub struct CollectedPlotEntry {
-    pub(crate) name: DeclName,
-    pub(crate) decl: PlotDecl,
-    pub(crate) span: Span,
-}
-
-/// A collected figure declaration awaiting HIR lowering.
-#[derive(Debug)]
-pub struct CollectedFigureEntry {
-    pub name: DeclName,
-    pub decl: FigureDecl,
-}
-
-/// A collected layer declaration awaiting HIR lowering.
-#[derive(Debug)]
-pub struct CollectedLayerEntry {
-    pub name: DeclName,
-    pub decl: LayerDecl,
-}
-
 pub(crate) type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
 pub type ParsedExpectedFail = ExpectedFail<NamePath>;
 
@@ -376,36 +316,4 @@ impl ExternalDeclSurface {
             Some(ExternalDeclRole::ExplicitExport | ExternalDeclRole::InputPort)
         )
     }
-}
-
-/// The result of declaration collection: declarations separated by category.
-#[derive(Debug)]
-pub(crate) struct CollectedFile {
-    /// Const declarations in source order.
-    pub(crate) consts: Vec<CollectedConstEntry>,
-    /// Param declarations in source order.
-    pub(crate) params: Vec<CollectedParamEntry>,
-    /// Node declarations in source order.
-    pub(crate) nodes: Vec<CollectedNodeEntry>,
-    /// Assert declarations in source order.
-    pub(crate) asserts: Vec<CollectedAssertEntry>,
-    /// Plot declarations in source order.
-    pub(crate) plots: Vec<CollectedPlotEntry>,
-    /// Figure declarations in source order.
-    pub(crate) figures: Vec<CollectedFigureEntry>,
-    /// Layer declarations in source order.
-    pub(crate) layers: Vec<CollectedLayerEntry>,
-    /// All declaration names in source order with their category.
-    pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
-    /// Mapping from assert name to the list of declarations that assume it.
-    /// Built from `#[assumes(...)]` attributes.
-    pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
-    /// Mapping from assert name to its expected-fail configuration.
-    /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
-    pub(crate) expected_fail: HashMap<DeclName, CollectedExpectedFail>,
-    /// Plot names carrying `#[hidden]`: evaluated and referenceable from
-    /// figures/layers, but excluded from standalone output (#847).
-    pub(crate) hidden_plots: HashSet<DeclName>,
-    /// Explicit exports and annotation-free `param` input ports, classified by role.
-    pub(crate) external_surface: ExternalDeclSurface,
 }

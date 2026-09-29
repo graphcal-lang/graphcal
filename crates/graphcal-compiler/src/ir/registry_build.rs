@@ -19,7 +19,6 @@ use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, RegistryBuilder, UnitScale,
 };
 use crate::syntax::ast::UnitConstness;
-use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::{NameAtom, NamePath};
@@ -28,7 +27,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use crate::syntax::visitor::ExprVisitor;
 
-use super::lower::UnfrozenDynamicUnitScaleEntry;
+use super::entry::{DynamicUnitScaleEntry, InScope, Syntax};
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
 /// into the registry.
@@ -41,7 +40,7 @@ pub(super) fn register_file_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-) -> Result<Vec<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
+) -> Result<Vec<DynamicUnitScaleEntry<Syntax>>, GraphcalError> {
     let mut dynamic_unit_scales = Vec::new();
     register_declarations_impl(file, registry, src, None, dag_id, &mut dynamic_unit_scales)?;
     Ok(dynamic_unit_scales)
@@ -336,7 +335,7 @@ fn register_declarations_impl(
     src: &NamedSource<Arc<String>>,
     filter: Option<&SelectedDeclarations>,
     dag_id: &crate::dag_id::DagId,
-    dynamic_unit_scales: &mut Vec<UnfrozenDynamicUnitScaleEntry>,
+    dynamic_unit_scales: &mut Vec<DynamicUnitScaleEntry<Syntax>>,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
@@ -710,7 +709,7 @@ fn register_unit_decl(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-) -> Result<Option<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
+) -> Result<Option<DynamicUnitScaleEntry<Syntax>>, GraphcalError> {
     let dim = registry
         .resolve_dim_expr_detailed(&u.dim_type)
         .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
@@ -785,14 +784,14 @@ fn register_unit_decl(
             // Preserve the validated definition in IR so strict HIR lowering,
             // policy checking, dependency collection, and type checking all
             // consume the same source-qualified semantic entry.
-            dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
+            dynamic_unit_scale = Some(DynamicUnitScaleEntry {
+                unit: dag_id.clone(),
                 spelling: UnitRef::local(u.name.value.clone()),
-                expr: def.scale_expr.clone(),
-                unit_owner: dag_id.clone(),
-                body_resolution_owner: dag_id.clone(),
+                expr: InScope::new(def.scale_expr.clone(), dag_id.clone()),
                 declared_dimension: dim.clone(),
                 base_unit_dimension: resolved_definition.dimension.clone(),
                 span: def.scale_expr.span,
+                src: src.clone(),
             });
             UnitScale::Dynamic {
                 base_unit_scale: resolved_definition.base_scale,
@@ -1457,25 +1456,4 @@ fn coordinate_index(
                 }
             }
         })
-}
-
-/// Extract a map of type annotations from const/param/node declarations,
-/// keyed by their typed declaration names.
-pub(super) fn extract_type_annotations(ast: &File) -> HashMap<DeclName, TypeExpr> {
-    let mut type_anns = HashMap::new();
-    for decl in &ast.declarations {
-        match &decl.kind {
-            DeclKind::Param(p) => {
-                type_anns.insert(p.name.value.clone(), p.type_ann.clone());
-            }
-            DeclKind::Node(n) => {
-                type_anns.insert(n.name.value.clone(), n.type_ann.clone());
-            }
-            DeclKind::ConstNode(c) => {
-                type_anns.insert(c.name.value.clone(), c.type_ann.clone());
-            }
-            _ => {}
-        }
-    }
-    type_anns
 }

@@ -482,6 +482,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "entry"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["ir", "extern_fns"]
 role = "checking"
 

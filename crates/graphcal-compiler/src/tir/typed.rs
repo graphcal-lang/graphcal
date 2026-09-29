@@ -1345,7 +1345,7 @@ fn check_hir_body_policies(
         };
         // Params are exempt from A10 (a rebinding importer is forced to
         // rebind the param too — V005 at the include site).
-        HirPolicyChecker { ctx, src }.check_expr(&default.expr, BodyPhase::Runtime, false)?;
+        HirPolicyChecker { ctx, src }.check_expr(default, BodyPhase::Runtime, false)?;
     }
     check_sink_body_policies(dag, external_surface, ctx, src)
 }

@@ -974,11 +974,11 @@ pub fn collect_override_dependency_summary_with_cancellation(
                 src,
                 DiagnosticAnchor::Source(param.span),
             )?;
-            let record = facts.get(default.expr.id()).map_err(|error| {
+            let record = facts.get(default.id()).map_err(|error| {
                 GraphcalError::internal_error(
                     error.to_string(),
                     src,
-                    DiagnosticAnchor::Source(default.expr.span),
+                    DiagnosticAnchor::Source(default.span),
                 )
             })?;
             let mut dependencies: HashSet<_> = record

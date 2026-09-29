@@ -1356,7 +1356,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
         crate::dimension::Rational::ONE
     );
 
-    let expression = &param.default.as_ref().unwrap().expr;
+    let expression = param.default.as_ref().unwrap();
     let crate::hir::ExprKind::QuantityLiteral { unit, .. } = expression.kind() else {
         panic!("expected quantity literal");
     };
