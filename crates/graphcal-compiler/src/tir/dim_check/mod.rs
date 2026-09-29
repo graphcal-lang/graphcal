@@ -26,10 +26,8 @@ mod expression_axes;
 pub mod expression_facts;
 mod helpers;
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
-    reason = "inference functions pass compilation context through many parameters; \
-              large match on ExprKind variants is inherently long"
+    reason = "large match on ExprKind variants is inherently long"
 )]
 mod infer;
 use expression_facts::install_instance_expression_facts;
@@ -105,19 +103,14 @@ impl InferredType {
 
 /// Per-DAG context bundle threaded through the dimension-check passes.
 ///
-/// Bundles the read-only inputs that every per-declaration check needs
-/// (declared types, the locals scope, TIR, registry, builtins, source)
-/// so individual helpers take a single `&DimCheckContext` instead of
-/// six positional arguments.
+/// Bundles the read-only inference environment with the operation-scoped
+/// cancellation token and expression-fact collector, so individual helpers take
+/// a single `&DimCheckContext` instead of positional arguments.
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
+    env: infer::hir::InferEnv<'a>,
     cancellation: &'a crate::cancellation::CancellationToken,
     expression_facts: &'a infer::hir::ExpressionFactCollector,
-    declared_types: &'a HashMap<ScopedName, DeclaredType>,
-    dag: &'a crate::tir::typed::DagTIR,
-    tir: &'a crate::tir::typed::TIR,
-    registry: &'a FormattingRegistry,
-    src: &'a NamedSource<Arc<String>>,
 }
 
 impl DimCheckContext<'_> {
@@ -127,7 +120,7 @@ impl DimCheckContext<'_> {
 
     /// Look up the module-aware HIR expression for a local declaration.
     fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::Expr> {
-        self.dag.value_expr(declaration)
+        self.env.dag.value_expr(declaration)
     }
 
     /// Look up the module-aware HIR assertion body for a local assertion.
@@ -137,29 +130,26 @@ impl DimCheckContext<'_> {
         declaration: &ResolvedDeclName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::AssertBody, GraphcalError> {
-        self.dag
+        self.env
+            .dag
             .assert_body(declaration)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("TIR assertion entry missing for `{name}`"),
-                src: self.src.clone(),
+                src: self.env.src.clone(),
                 span: span.into(),
             })
     }
 
-    /// Infer the type of a module-aware HIR expression using this context's bindings.
+    /// Infer the type of a module-aware HIR expression, recording its facts in
+    /// this context's collector.
     fn infer_hir(
         &self,
         expr: &crate::hir::Expr,
-        owner: &ResolvedDeclName,
+        owner: Option<&ResolvedDeclName>,
     ) -> Result<InferredType, GraphcalError> {
-        infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
+        self.env.infer_with_expression_facts(
             expr,
-            Some(owner),
-            self.declared_types,
-            self.dag,
-            self.tir,
-            self.registry,
-            self.src,
+            owner,
             self.cancellation,
             self.expression_facts.clone(),
         )
@@ -171,14 +161,14 @@ fn validate_declared_shape(
     name: &ScopedName,
     span: Span,
 ) -> Result<(), GraphcalError> {
-    let ty = ctx.declared_types.get(name).ok_or_else(|| {
+    let ty = ctx.env.declared_types.get(name).ok_or_else(|| {
         GraphcalError::internal_error(
             "declaration has no checked type",
-            ctx.src,
+            ctx.env.src,
             DiagnosticAnchor::Source(span),
         )
     })?;
-    expression_axes::checked_expression_shape(ty, ctx.tir, ctx.src, span).map(|_| ())
+    expression_axes::checked_expression_shape(ty, ctx.env.tir, ctx.env.src, span).map(|_| ())
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -188,15 +178,16 @@ fn check_decl_expr_type(
     identity: &ResolvedDeclName,
     type_ann_span: &crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
-    let declared = ctx
-        .declared_types
-        .get(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("no declared type recorded for `{name}`"),
-            src: ctx.src.clone(),
-            span: (*type_ann_span).into(),
-        })?;
-    if ctx.dag.todo(identity).is_some() {
+    let declared =
+        ctx.env
+            .declared_types
+            .get(name)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("no declared type recorded for `{name}`"),
+                src: ctx.env.src.clone(),
+                span: (*type_ann_span).into(),
+            })?;
+    if ctx.env.dag.todo(identity).is_some() {
         // The explicit declaration type is the entire contract; there is no
         // formula to infer or expression fact to fabricate.
         return Ok(());
@@ -205,10 +196,11 @@ fn check_decl_expr_type(
         .hir_expr_for_decl(identity)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("value declaration record missing while checking `{name}`"),
-            src: ctx.src.clone(),
+            src: ctx.env.src.clone(),
             span: (*type_ann_span).into(),
         })?;
     if ctx
+        .env
         .dag
         .semantic_instances()
         .iter()
@@ -220,41 +212,32 @@ fn check_decl_expr_type(
         return ctx.expression_facts.record(
             hir_expr,
             &InferredType::from(declared),
-            ctx.dag,
-            ctx.tir,
-            ctx.src,
+            ctx.env.dag,
+            ctx.env.tir,
+            ctx.env.src,
         );
     }
-    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
-        hir_expr,
-        Some(identity),
-        ctx.declared_types,
-        ctx.dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.src,
-        ctx.cancellation,
-        ctx.expression_facts.clone(),
-    )?;
-    let matches = ctx.dag.resolved_decl_types.get(name).map_or_else(
+    let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
+    let matches = ctx.env.dag.resolved_decl_types.get(name).map_or_else(
         || types_match(declared, &inferred),
         |resolved| resolved_type_matches_inferred(resolved, &inferred),
     );
     if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(declared, ctx.registry),
-            inferred: format_inferred_type(&inferred, ctx.registry),
-            src: ctx.src.clone(),
+            declared: format_declared_type(declared, ctx.env.registry),
+            inferred: format_inferred_type(&inferred, ctx.env.registry),
+            src: ctx.env.src.clone(),
             span: (*type_ann_span).into(),
         });
     }
-    check_ineffective_conversions(hir_expr, true, ctx.src)?;
+    check_ineffective_conversions(hir_expr, true, ctx.env.src)?;
     Ok(())
 }
 
 /// Require every runtime unit factor to be one scalar Dimensionless quantity.
 fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    ctx.dag
+    ctx.env
+        .dag
         .semantic
         .dynamic_unit_scales
         .values()
@@ -270,36 +253,28 @@ fn check_dynamic_unit_scale_type(
         return Err(GraphcalError::UnitDefinitionDimensionMismatch {
             name: entry.spelling.leaf().clone(),
             declared: ctx
+                .env
                 .registry
                 .dimensions
                 .format_dimension(&entry.declared_dimension),
             definition: ctx
+                .env
                 .registry
                 .dimensions
                 .format_dimension(&entry.base_unit_dimension),
-            src: ctx.src.clone(),
+            src: ctx.env.src.clone(),
             span: entry.span.into(),
         });
     }
-    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
-        &entry.expr,
-        None,
-        ctx.declared_types,
-        ctx.dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.src,
-        ctx.cancellation,
-        ctx.expression_facts.clone(),
-    )?;
+    let inferred = ctx.infer_hir(&entry.expr, None)?;
     if !matches!(
         &inferred,
         InferredType::Quantity(dimension) if dimension.is_dimensionless()
     ) {
         return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
             name: entry.spelling.clone(),
-            found: format_inferred_type(&inferred, ctx.registry),
-            src: ctx.src.clone(),
+            found: format_inferred_type(&inferred, ctx.env.registry),
+            src: ctx.env.src.clone(),
             span: entry.expr.span.into(),
         });
     }
@@ -464,11 +439,11 @@ fn check_hir_assert_body(
     body: &crate::hir::AssertBody,
     span: crate::syntax::span::Span,
 ) -> Result<AssertionIndexShape, GraphcalError> {
-    let registry = ctx.registry;
-    let src = ctx.src;
+    let registry = ctx.env.registry;
+    let src = ctx.env.src;
     match body {
         crate::hir::AssertBody::Expr(body_expr) => {
-            let inferred = ctx.infer_hir(body_expr, owner)?;
+            let inferred = ctx.infer_hir(body_expr, Some(owner))?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
@@ -483,9 +458,9 @@ fn check_hir_assert_body(
             expected,
             tolerance,
         } => {
-            let actual_type = ctx.infer_hir(actual, owner)?;
-            let expected_type = ctx.infer_hir(expected, owner)?;
-            let tolerance_type = ctx.infer_hir(tolerance, owner)?;
+            let actual_type = ctx.infer_hir(actual, Some(owner))?;
+            let expected_type = ctx.infer_hir(expected, Some(owner))?;
+            let tolerance_type = ctx.infer_hir(tolerance, Some(owner))?;
 
             // Element-wise broadcasting (#809): the assertion's index shape
             // comes from `actual`; `expected` and `tolerance` are each unindexed
@@ -1029,14 +1004,16 @@ pub fn check_external_value_expr_type(
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
     let collector = infer::hir::ExpressionFactCollector::new(tir.root());
-    let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
+    let inferred = infer::hir::InferEnv {
+        declared_types,
+        dag: tir.root(),
+        tir,
+        registry: &tir.registry,
+        src,
+    }
+    .infer_with_expression_facts(
         expr,
         None,
-        declared_types,
-        tir.root(),
-        tir,
-        &tir.registry,
-        src,
         &crate::cancellation::CancellationToken::unbounded(),
         collector.clone(),
     )?;
@@ -1075,7 +1052,7 @@ pub fn check_external_value_expr_type(
 }
 
 fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for entry in &ctx.dag.params {
+    for entry in &ctx.env.dag.params {
         ctx.checkpoint()?;
         validate_declared_shape(ctx, &entry.name, entry.type_ann.span)?;
         if entry.default.is_none() {
@@ -1099,13 +1076,15 @@ fn check_dimensions_dag(
     cancellation.checkpoint()?;
     let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
+        env: infer::hir::InferEnv {
+            declared_types: &declared_types,
+            dag,
+            tir,
+            registry,
+            src,
+        },
         cancellation,
         expression_facts,
-        declared_types: &declared_types,
-        dag,
-        tir,
-        registry,
-        src,
     };
 
     for entry in &dag.consts {
@@ -1187,7 +1166,7 @@ enum ExpectedBound {
 /// Other targets (e.g., `Bool`) are rejected by
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let dag = ctx.dag;
+    let dag = ctx.env.dag;
     let decl_iter = dag
         .consts
         .iter()
@@ -1218,18 +1197,15 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
         };
 
         for bound in bounds {
-            let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
-                &bound.value,
-                Some(&key),
-                ctx.declared_types,
-                dag,
-                ctx.tir,
-                ctx.registry,
-                ctx.src,
-                ctx.cancellation,
-                ctx.expression_facts.clone(),
+            let inferred = ctx.infer_hir(&bound.value, Some(&key))?;
+            check_one_bound(
+                name,
+                bound,
+                &inferred,
+                &expected,
+                ctx.env.registry,
+                ctx.env.src,
             )?;
-            check_one_bound(name, bound, &inferred, &expected, ctx.registry, ctx.src)?;
         }
     }
 
@@ -1488,14 +1464,16 @@ fn check_field_domain_constraint_dimensions(
             };
             for bound in field_semantics.domain_bounds() {
                 let definition_types = definition_dag.build_declared_types(&bound.src)?;
-                let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
-                    &bound.value,
-                    None,
-                    &definition_types,
-                    definition_dag,
+                let inferred = infer::hir::InferEnv {
+                    declared_types: &definition_types,
+                    dag: definition_dag,
                     tir,
                     registry,
-                    &bound.src,
+                    src: &bound.src,
+                }
+                .infer_with_expression_facts(
+                    &bound.value,
+                    None,
                     cancellation,
                     collector.clone(),
                 )?;

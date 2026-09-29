@@ -175,14 +175,14 @@ fn check_plot_references(
                         owner_kind,
                         owner: owner.clone(),
                         name: reference.value.clone(),
-                        src: ctx.src.clone(),
+                        src: ctx.env.src.clone(),
                         span: reference.span.into(),
                     },
                     |actual_kind| GraphcalError::CompositionReferencesNonPlot {
                         owner_kind,
                         actual_kind,
                         name: reference.value.clone(),
-                        src: ctx.src.clone(),
+                        src: ctx.env.src.clone(),
                         span: reference.span.into(),
                     },
                 ));
@@ -192,7 +192,7 @@ fn check_plot_references(
                     owner_kind,
                     owner: owner.clone(),
                     name: reference.value.clone(),
-                    src: ctx.src.clone(),
+                    src: ctx.env.src.clone(),
                     span: reference.span.into(),
                 });
             }
@@ -211,7 +211,7 @@ fn check_plot_encodings(
         .iter()
         .map(|(channel, expr)| {
             ctx.checkpoint()?;
-            check_ineffective_conversions(expr, true, ctx.src)?;
+            check_ineffective_conversions(expr, true, ctx.env.src)?;
             if matches!(expr.kind(), ExprKind::StringLiteral(_)) {
                 return Ok(PlotChannelShape::new(
                     Vec::new(),
@@ -221,8 +221,8 @@ fn check_plot_encodings(
             let inferred = infer_expression_type(ctx, owner, expr)?;
             plot_channel_shape(&inferred).ok_or_else(|| GraphcalError::PlotEncodingTypeMismatch {
                 channel: *channel,
-                found: format_inferred_type(&inferred, ctx.registry),
-                src: ctx.src.clone(),
+                found: format_inferred_type(&inferred, ctx.env.registry),
+                src: ctx.env.src.clone(),
                 span: expr.span.into(),
             })
         })
@@ -235,7 +235,7 @@ fn check_plot_encodings(
         let (_, expr) = &body.encodings[error.channel()];
         return Err(GraphcalError::PlotEncodingAxisMismatch {
             channels: describe_channel_axes(body, &shapes),
-            src: ctx.src.clone(),
+            src: ctx.env.src.clone(),
             span: expr.span.into(),
         });
     }
@@ -316,7 +316,7 @@ fn invalid_property(
         property: field.property.name().to_string(),
         context,
         valid: valid.to_string(),
-        src: ctx.src.clone(),
+        src: ctx.env.src.clone(),
         span: field.name_span.into(),
     }
 }
@@ -334,7 +334,7 @@ pub(super) fn check_property_value(
         property,
         expected: expected.describe(),
         found,
-        src: ctx.src.clone(),
+        src: ctx.env.src.clone(),
         span: field.value.span.into(),
     };
 
@@ -357,11 +357,11 @@ pub(super) fn check_property_value(
                 InferredType::Quantity(d) if d.is_dimensionless() => Ok(()),
                 InferredType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
                     property,
-                    dimension: ctx.registry.dimensions.format_dimension(&d),
-                    src: ctx.src.clone(),
+                    dimension: ctx.env.registry.dimensions.format_dimension(&d),
+                    src: ctx.env.src.clone(),
                     span: field.value.span.into(),
                 }),
-                other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
+                other => Err(mismatch(format_inferred_type(&other, ctx.env.registry))),
             }
         }
         PlotPropertyType::Bool => {
@@ -370,7 +370,7 @@ pub(super) fn check_property_value(
             }
             match infer_expression_type(ctx, owner, &field.value)? {
                 InferredType::Bool => Ok(()),
-                other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
+                other => Err(mismatch(format_inferred_type(&other, ctx.env.registry))),
             }
         }
     }
@@ -381,5 +381,5 @@ fn infer_expression_type(
     owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
-    ctx.infer_hir(expr, owner)
+    ctx.infer_hir(expr, Some(owner))
 }

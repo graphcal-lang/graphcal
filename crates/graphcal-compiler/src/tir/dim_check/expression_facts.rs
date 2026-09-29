@@ -277,7 +277,7 @@ fn check_instance_defaults(
     facts: &CheckedExpressionFacts,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
 ) -> Result<(), GraphcalError> {
-    for entry in &ctx.dag.params {
+    for entry in &ctx.env.dag.params {
         ctx.checkpoint()?;
         let Some(default) = &entry.default else {
             continue;
@@ -286,7 +286,7 @@ fn check_instance_defaults(
         // Compare this parameter's authoritative default, not every body root.
         let template_declaration = template.require_bound_decl_identity(
             &entry.name,
-            ctx.src,
+            ctx.env.src,
             DiagnosticAnchor::Source(entry.span),
         )?;
         let inherited = template
@@ -295,38 +295,40 @@ fn check_instance_defaults(
             == Some(id);
         if !inherited {
             check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
-            ctx.expression_facts.record_contextual(default, ctx.src)?;
+            ctx.expression_facts
+                .record_contextual(default, ctx.env.src)?;
             continue;
         }
         let record = facts.get(id).map_err(|error| {
             GraphcalError::internal_error(
                 error.to_string(),
-                ctx.src,
+                ctx.env.src,
                 DiagnosticAnchor::Source(default.span),
             )
         })?;
         let declaration = entry.identity();
-        check_retained_reconciliations(ctx.dag, &declaration, record.nominal_observations())?;
+        check_retained_reconciliations(ctx.env.dag, &declaration, record.nominal_observations())?;
         let ExpressionFact::Value { checked_type, .. } = &record.fact else {
             return Err(GraphcalError::internal_error(
                 "parameter default has no value checking result",
-                ctx.src,
+                ctx.env.src,
                 DiagnosticAnchor::Source(default.span),
             ));
         };
-        let specialized = specialize_expression_type(checked_type, substitution, ctx.tir, ctx.src)?;
-        let expected = ctx.declared_types.get(&entry.name).ok_or_else(|| {
+        let specialized =
+            specialize_expression_type(checked_type, substitution, ctx.env.tir, ctx.env.src)?;
+        let expected = ctx.env.declared_types.get(&entry.name).ok_or_else(|| {
             GraphcalError::internal_error(
                 "instance parameter has no declared type",
-                ctx.src,
+                ctx.env.src,
                 DiagnosticAnchor::Source(entry.span),
             )
         })?;
         if &specialized != expected {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: expected.format(&ctx.registry.dimensions),
-                inferred: specialized.format(&ctx.registry.dimensions),
-                src: ctx.src.clone(),
+                declared: expected.format(&ctx.env.registry.dimensions),
+                inferred: specialized.format(&ctx.env.registry.dimensions),
+                src: ctx.env.src.clone(),
                 span: default.span.into(),
             });
         }
@@ -495,13 +497,15 @@ pub(super) fn install_instance_expression_facts(
         let declared_types = dag.build_declared_types(src)?;
         let collector = infer::hir::ExpressionFactCollector::new(dag);
         let ctx = DimCheckContext {
+            env: infer::hir::InferEnv {
+                declared_types: &declared_types,
+                dag,
+                tir,
+                registry: &tir.registry,
+                src,
+            },
             cancellation,
             expression_facts: &collector,
-            declared_types: &declared_types,
-            dag,
-            tir,
-            registry: &tir.registry,
-            src,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;
         let mut records = collector.finish();
