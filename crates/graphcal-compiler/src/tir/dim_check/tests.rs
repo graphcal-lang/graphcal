@@ -130,16 +130,30 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, NamedSource<A
     (tir, src)
 }
 
-fn count_contextual(facts: &crate::tir::expression_facts::CheckedExpressionFacts) -> usize {
-    facts
-        .records()
-        .filter(|(_, record)| {
-            matches!(
-                record.fact,
-                crate::tir::expression_facts::ExpressionFact::Contextual(_)
-            )
-        })
-        .count()
+/// Count the nodes of every checked tree of `bodies` that `select` accepts.
+fn count_nodes(bodies: &crate::tir::texpr::CheckedBodies, select: fn(bool) -> bool) -> usize {
+    use crate::tir::texpr::{CheckedBody, TNodeRef, visit_tnodes};
+    let mut count = 0_usize;
+    for (_, body) in bodies.roots() {
+        let mut visit = |contextual: bool| {
+            if select(contextual) {
+                count = count.saturating_add(1);
+            }
+        };
+        match body {
+            CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
+                visit(matches!(node, TNodeRef::Contextual(_)));
+            }),
+            CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
+                visit(matches!(node, TNodeRef::Contextual(_)));
+            }),
+        }
+    }
+    count
+}
+
+fn count_contextual(bodies: &crate::tir::texpr::CheckedBodies) -> usize {
+    count_nodes(bodies, |contextual| contextual)
 }
 
 fn count_contextual_nodes(tree: &crate::tir::texpr::TExpr) -> usize {
@@ -162,7 +176,7 @@ fn one_checking_pass_records_every_expression_once() {
         );
         let (tir, src) = module_aware_tir(&source);
         let tir = check_draft(tir, &src).unwrap();
-        assert_eq!(tir.root().expression_facts().records().count(), depth + 1);
+        assert_eq!(count_nodes(tir.root().bodies(), |_| true), depth + 1);
     }
 }
 
@@ -171,7 +185,7 @@ fn consuming_rules_record_contextual_literals() {
     let (tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
     let tir = check_draft(tir, &src).unwrap();
-    assert_eq!(count_contextual(tir.root().expression_facts()), 1);
+    assert_eq!(count_contextual(tir.root().bodies()), 1);
     let node = tir.root().nodes().next().unwrap();
     let independent = check_external_value_expr_type(
         &tir,
@@ -196,14 +210,14 @@ fn consuming_rules_record_contextual_literals() {
     let tir = check_draft(tir, &src).unwrap();
     // Two zoned-datetime arguments, one civil literal, the string encoding,
     // and the string property.
-    assert_eq!(count_contextual(tir.root().expression_facts()), 5);
+    assert_eq!(count_contextual(tir.root().bodies()), 5);
 }
 
 #[test]
 fn body_observations_reject_a_second_record_of_one_expression() {
     let source = "node value: Dimensionless = 1.0;";
     let (tir, src) = module_aware_tir(source);
-    let observations = infer::hir::BodyObservations::new(tir.root());
+    let observations = infer::hir::BodyObservations::default();
     let expr = tir
         .root()
         .nodes()
@@ -415,25 +429,42 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         }
     });
     let tir = check_draft(draft.clone(), &src).unwrap();
+    // The executable tree nodes checked for `ids`, in pre-order.
+    let nodes = |tir: &crate::tir::typed::CheckedTir| {
+        let formula = tir
+            .root()
+            .nodes()
+            .next()
+            .unwrap()
+            .definition
+            .formula()
+            .unwrap();
+        let tree = tir.root().bodies().executable_value(formula.id()).unwrap();
+        let mut types = Vec::new();
+        crate::tir::texpr::visit_tnodes(crate::tir::texpr::TNodeRef::Value(tree), &mut |node| {
+            if let crate::tir::texpr::TNodeRef::Value(expr) = node
+                && ids.contains(expr.id())
+            {
+                types.push(expr.ty().clone());
+            }
+        });
+        types
+    };
     let totals = |tir: &crate::tir::typed::CheckedTir| {
-        ids.iter()
-            .map(
-                |id| match &tir.root().expression_facts().get(id).unwrap().fact {
-                    crate::tir::expression_facts::ExpressionFact::Executable(value) => value
-                        .checked_type
-                        .materialized_shape(|axis| {
-                            Ok::<_, crate::tir::materialized_shape::MaterializedShapeError>(
-                                tir.index_def(axis)
-                                    .and_then(|index| index.concrete_cardinality()),
-                            )
-                        })
-                        .unwrap()
-                        .expect("an indexed value has a materialized shape")
-                        .total()
-                        .get(),
-                    fact => panic!("expected executable checked value: {fact:?}"),
-                },
-            )
+        nodes(tir)
+            .iter()
+            .map(|ty| {
+                ty.materialized_shape(|axis| {
+                    Ok::<_, crate::tir::materialized_shape::MaterializedShapeError>(
+                        tir.index_def(axis)
+                            .and_then(|index| index.concrete_cardinality()),
+                    )
+                })
+                .unwrap()
+                .expect("an indexed value has a materialized shape")
+                .total()
+                .get()
+            })
             .collect::<Vec<_>>()
     };
     assert_eq!(totals(&tir), vec![2, 3]);
@@ -450,10 +481,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     assert_eq!(totals(&tir), vec![2, 3]);
     let (rebuilt, rebuilt_src) = module_aware_tir(source);
     let rebuilt = check_draft(rebuilt, &rebuilt_src).unwrap();
-    assert!(
-        ids.iter()
-            .all(|id| rebuilt.root().expression_facts().get(id).is_err())
-    );
+    assert!(nodes(&rebuilt).is_empty());
 }
 
 #[test]
@@ -3866,7 +3894,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
         .override_reconciliations
         .insert(owner, vec![reconciliation]);
     let tir = check_draft(tir, &src).unwrap();
-    assert_eq!(tir.root().expression_facts().records().count(), 5);
+    assert_eq!(count_nodes(tir.root().bodies(), |_| true), 5);
 }
 
 #[test]
@@ -3888,7 +3916,6 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     let tir = check_draft(tir, &src).unwrap();
     let dag = tir.root();
     let bodies = dag.bodies();
-    crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts()).unwrap();
     let root = |name: &str| {
         let formula = dag
             .nodes()

@@ -5,7 +5,6 @@
 )]
 
 pub mod assertion_expectation;
-pub mod body_revision;
 pub mod builtin;
 pub mod cancellation;
 pub mod complex_value;

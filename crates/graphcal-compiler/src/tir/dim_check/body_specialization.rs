@@ -16,16 +16,18 @@ use crate::hir::expr::Expr;
 use crate::registry::checked_type::{CheckedType, IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::{ConstructorApplication, ConstructorMatch};
 use crate::tir::texpr::map::{SymbolicView, TypeMap};
-use crate::tir::texpr::{CheckedBodies, CheckedBody, StaticPosition, TBody};
+use crate::tir::texpr::{
+    CheckedBodies, CheckedBody, ConstructorApplication, ConstructorMatch, NominalObservation,
+    StaticPosition, TBody,
+};
 use crate::tir::typed::model::{DagTIR, TirRead};
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
 use super::expression_axes::{check_materializable, checked_index_cardinality};
 
 /// The bindings a specialization applies.
-pub(super) enum BodySubstitution<'a> {
+enum BodySubstitution<'a> {
     /// A semantic instance's Static substitution.
     Static(&'a crate::ir::static_substitution::StaticSubstitution),
     /// One generic application's `Nat` arguments.
@@ -33,7 +35,7 @@ pub(super) enum BodySubstitution<'a> {
 }
 
 impl BodySubstitution<'_> {
-    pub(super) fn value_type(
+    fn value_type(
         &self,
         ty: &CheckedType<Symbolic>,
         tir: &dyn TirRead,
@@ -49,7 +51,7 @@ impl BodySubstitution<'_> {
         }
     }
 
-    pub(super) fn index(
+    fn index(
         &self,
         index: &IndexTypeRef<Symbolic>,
         src: &NamedSource<Arc<String>>,
@@ -171,17 +173,26 @@ impl Specializer<'_> {
     }
 }
 
+/// Symbolic trees checked outside a body's canonical check, by root, with the
+/// nominal uses checking observed in each.
+#[derive(Default)]
+pub(super) struct DerivedTrees {
+    pub(super) bodies: HashMap<ExprId, TBody<Symbolic>>,
+    pub(super) nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
+}
+
 /// The checked trees of one semantic instance: each root inferred
 /// independently by the instance (a rebound parameter default) keeps its own
 /// tree; every other root is its template's tree (or, when the instance binds
 /// a defaulted dimension port, the tree checked where that port is rigid),
-/// specialized with the instance's Static substitution.
-pub(super) fn instance_bodies(
+/// specialized with the instance's Static substitution. Each root keeps the
+/// nominal uses of the tree it came from.
+pub(super) fn specialize_instance_bodies(
     dag: &DagTIR,
     tir: &dyn TirRead,
-    mut independent: HashMap<ExprId, TBody<Symbolic>>,
+    mut independent: DerivedTrees,
     template: &CheckedBodies,
-    port_generic: &HashMap<ExprId, TBody<Symbolic>>,
+    port_generic: &DerivedTrees,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
     src: &NamedSource<Arc<String>>,
 ) -> Result<CheckedBodies, GraphcalError> {
@@ -194,15 +205,19 @@ pub(super) fn instance_bodies(
     };
     let mut seen = std::collections::HashSet::new();
     let mut roots = Vec::new();
+    let mut nominal_uses = HashMap::new();
     for root in dag.owned_expression_roots() {
         let id = root.id();
         if !seen.insert(id) {
             continue;
         }
-        let body = if let Some(body) = independent.remove(id) {
-            body
-        } else if let Some(body) = port_generic.get(id) {
-            body.map_types(&mut specializer)?
+        let (body, uses) = if let Some(body) = independent.bodies.remove(id) {
+            (body, independent.nominal_uses.remove(id))
+        } else if let Some(body) = port_generic.bodies.get(id) {
+            (
+                body.map_types(&mut specializer)?,
+                port_generic.nominal_uses.get(id).cloned(),
+            )
         } else {
             let body = template.get(id).ok_or_else(|| {
                 internal(
@@ -211,12 +226,17 @@ pub(super) fn instance_bodies(
                     DiagnosticAnchor::Source(root.span),
                 )
             })?;
-            specializer.body(body)?
+            (specializer.body(body)?, template.shared_nominal_uses(id))
         };
+        if let Some(uses) = uses {
+            nominal_uses.insert(id.clone(), uses);
+        }
         roots.push((id.clone(), body));
     }
-    CheckedBodies::discharge(roots, &|index| checked_index_cardinality(tir, index))
-        .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
+    CheckedBodies::discharge(roots, nominal_uses, &|index| {
+        checked_index_cardinality(tir, index)
+    })
+    .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
 }
 
 /// The executable tree of one generic field bound under one application's

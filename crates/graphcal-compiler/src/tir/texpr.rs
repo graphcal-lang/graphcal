@@ -12,15 +12,14 @@
 //! Inference emits these trees through its observation sink while it checks
 //! each body (see `assembly`). Publication classifies each root's tree as
 //! executable or deferred ([`CheckedBodies`]); a semantic instance's trees
-//! are its template's, specialized (see `map`). Until the facts are removed,
-//! publication verifies that trees and retained expression facts agree
-//! (`fact_agreement`).
+//! are its template's, specialized (see `map`). Evaluation runs executable
+//! trees directly.
 
 mod assembly;
 mod checked_bodies;
-pub(crate) mod fact_agreement;
 pub(crate) mod map;
 mod model;
+mod nominal;
 
 #[cfg(test)]
 mod tests;
@@ -35,8 +34,7 @@ pub use model::{
     TFieldInit, TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TNodeRef, TParamBinding,
     visit_tnodes,
 };
+pub use nominal::{ConstructorApplication, ConstructorMatch, NominalObservation};
 
 #[cfg(doc)]
 use crate::registry::checked_type::CheckedType;
-#[cfg(doc)]
-use crate::tir::expression_facts::{ConstructorApplication, ConstructorMatch};

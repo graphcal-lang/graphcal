@@ -507,17 +507,18 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         let field_constraints = plan.program().facts().struct_field_constraints();
         assert_eq!(field_constraints.len(), 1);
-        let applications = tir
-            .root()
-            .expression_facts()
-            .records()
-            .filter_map(|(_, record)| {
-                record
-                    .fact
-                    .concrete_value()
-                    .and_then(|value| value.constructor.as_ref())
-            })
-            .collect::<Vec<_>>();
+        let mut applications = Vec::new();
+        for (_, body) in tir.root().bodies().roots() {
+            if let graphcal_compiler::tir::texpr::CheckedBody::Executable(body) = body {
+                graphcal_compiler::tir::texpr::visit_tnodes(body.as_node(), &mut |node| {
+                    if let graphcal_compiler::tir::texpr::TNodeRef::Value(expr) = node
+                        && let Some(application) = expr.application()
+                    {
+                        applications.push(application);
+                    }
+                });
+            }
+        }
         assert_eq!(applications.len(), 1);
         let application = applications[0];
         let keys = application

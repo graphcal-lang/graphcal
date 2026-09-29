@@ -10,7 +10,7 @@ use crate::registry::checked_type::{
 };
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::{ExpressionFact, ValueFact};
+use crate::tir::texpr::{CheckedBody, TBody, TNodeRef, visit_tnodes};
 use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TirRead};
 use miette::NamedSource;
 use std::sync::Arc;
@@ -67,26 +67,17 @@ pub(super) fn validate_project(
                 cancellation,
             )?;
         }
-        let facts = checking.facts.get(dag_id).ok_or_else(|| {
+        let bodies = checking.bodies.get(dag_id).ok_or_else(|| {
             GraphcalError::internal_error(
-                format!("DAG `{dag_id}` has no published expression facts"),
+                format!("DAG `{dag_id}` has no published typed bodies"),
                 src,
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        for (id, record) in facts.records() {
-            if let Some(value) = record.fact.symbolic_value()
-                && value.constructor.is_some()
-            {
-                let span = facts.span(id).map_err(|error| {
-                    GraphcalError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
+        for (_, body) in bodies.roots() {
+            for (checked_type, span) in constructor_applications(body) {
                 validate_concrete_type_obligations(
-                    &value.checked_type,
+                    &checked_type,
                     dag,
                     tir,
                     src,
@@ -97,6 +88,28 @@ pub(super) fn validate_project(
         }
     }
     Ok(())
+}
+
+/// The type and span of every constructor application in a checked tree, in
+/// pre-order.
+fn constructor_applications(body: &CheckedBody) -> Vec<(CheckedType<Symbolic>, Span)> {
+    fn collect<V: crate::tir::texpr::map::SymbolicView>(
+        body: &TBody<V>,
+    ) -> Vec<(CheckedType<Symbolic>, Span)> {
+        let mut applications = Vec::new();
+        visit_tnodes(body.as_node(), &mut |node| {
+            if let TNodeRef::Value(expr) = node
+                && expr.application().is_some()
+            {
+                applications.push((V::symbolic_type(expr.ty()).into_owned(), expr.span()));
+            }
+        });
+        applications
+    }
+    match body {
+        CheckedBody::Executable(body) => collect(body),
+        CheckedBody::Deferred(body) => collect(body),
+    }
 }
 
 fn validate(
@@ -222,39 +235,28 @@ fn check_bound(
     } else {
         format!("{}.{}.{}", definition.name(), member.name(), key.field)
     };
-    let owner = ctx.tir.dag(key.owning_type.owner()).ok_or_else(|| {
-        GraphcalError::internal_error(
-            "field-constraint owner has no checked DAG",
-            &bound.src,
-            DiagnosticAnchor::Source(bound.span),
-        )
-    })?;
-    let facts = super::expression_facts::specialize_bound_facts(
-        ctx.tir,
-        owner,
-        &bound.value,
-        nats,
-        &bound.src,
-    )?;
-    let id = bound.value.id();
-    let record = facts.executable_value(id).map_err(|error| {
-        GraphcalError::internal_error(
-            error.to_string(),
-            &bound.src,
-            DiagnosticAnchor::Source(bound.span),
-        )
-    })?;
-    let ExpressionFact::Executable(ValueFact { checked_type, .. }) = &record.fact else {
+    let (Some(owner), Some(bodies)) = (
+        ctx.tir.dag(key.owning_type.owner()),
+        ctx.tir.checked_bodies(key.owning_type.owner()),
+    ) else {
         return Err(GraphcalError::internal_error(
-            "bound has no retained value type",
+            "field-constraint owner has no checked DAG",
             &bound.src,
             DiagnosticAnchor::Source(bound.span),
         ));
     };
+    let tree = super::body_specialization::specialize_bound_body(
+        ctx.tir,
+        owner,
+        bodies,
+        &bound.value,
+        nats,
+        &bound.src,
+    )?;
     super::check_one_bound_with_display_name(
         &display,
         bound,
-        checked_type,
+        tree.ty(),
         &expected,
         ctx.tir.registry(),
         &bound.src,

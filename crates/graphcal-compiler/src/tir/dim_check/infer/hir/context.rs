@@ -85,7 +85,7 @@ impl InferenceControl<'_> {
     /// Record one nominal use of the checked root.
     pub(super) fn observe_nominal(
         &self,
-        observation: crate::tir::expression_facts::NominalObservation,
+        observation: crate::tir::texpr::NominalObservation,
         definition_span: Option<crate::syntax::span::Span>,
     ) {
         self.observations
@@ -98,11 +98,11 @@ impl InferenceControl<'_> {
         operand: &Expr,
         axis: &IndexTypeRef<Symbolic>,
         position: u64,
-        usage: crate::tir::expression_facts::StaticIndexUse,
+        usage: crate::tir::static_index::StaticIndexUse,
     ) {
         self.observations.retain_static_index(
             expr.id(),
-            crate::tir::expression_facts::StaticIndexRequirement {
+            crate::tir::static_index::StaticIndexRequirement {
                 operand: operand.id().clone(),
                 axis: axis.clone(),
                 position,

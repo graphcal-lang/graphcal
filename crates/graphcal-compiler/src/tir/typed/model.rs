@@ -1317,11 +1317,6 @@ pub(crate) trait TirRead {
     fn dag(&self, dag_id: &crate::dag_id::DagId) -> Option<&DagTIR>;
     /// Every local and imported DAG body.
     fn dag_bodies(&self) -> Box<dyn Iterator<Item = &DagTIR> + '_>;
-    /// The checked expression facts already published for one DAG.
-    fn expression_facts(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<&crate::tir::expression_facts::CheckedExpressionFacts>;
     /// The checked trees already published for one DAG.
     fn checked_bodies(
         &self,
@@ -1404,16 +1399,6 @@ impl TirRead for UncheckedTir {
         Box::new(self.dags.iter().map(|(_, dag)| dag))
     }
 
-    /// Before any local body is checked, only imported bodies have facts.
-    fn expression_facts(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<&crate::tir::expression_facts::CheckedExpressionFacts> {
-        self.dags
-            .shared(dag_id)
-            .map(super::checked::CheckedDag::expression_facts)
-    }
-
     /// Before any local body is checked, only imported bodies have trees.
     fn checked_bodies(
         &self,
@@ -1426,12 +1411,10 @@ impl TirRead for UncheckedTir {
 }
 
 /// A project TIR in the middle of its check: unchecked local bodies with the
-/// expression facts published for them so far.
+/// checked trees published for them so far.
 #[derive(Clone, Copy)]
 pub(crate) struct CheckingTir<'a> {
     pub(crate) tir: &'a UncheckedTir,
-    pub(crate) facts:
-        &'a HashMap<crate::dag_id::DagId, crate::tir::expression_facts::CheckedExpressionFacts>,
     pub(crate) bodies: &'a HashMap<crate::dag_id::DagId, crate::tir::texpr::CheckedBodies>,
 }
 
@@ -1450,15 +1433,6 @@ impl TirRead for CheckingTir<'_> {
 
     fn dag_bodies(&self) -> Box<dyn Iterator<Item = &DagTIR> + '_> {
         self.tir.dag_bodies()
-    }
-
-    fn expression_facts(
-        &self,
-        dag_id: &crate::dag_id::DagId,
-    ) -> Option<&crate::tir::expression_facts::CheckedExpressionFacts> {
-        self.facts
-            .get(dag_id)
-            .or_else(|| self.tir.expression_facts(dag_id))
     }
 
     fn checked_bodies(
@@ -1499,7 +1473,6 @@ enum ExpressionRootScope {
 #[derive(Debug, Clone)]
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,
-    pub(crate) body_revision: crate::body_revision::BodyRevision,
     /// Every declaration owned by this DAG, keyed by canonical identity, in
     /// source order.
     pub(crate) decls: crate::ir::decl_table::DeclTable<Typed>,
@@ -1516,11 +1489,6 @@ pub struct DagTIR {
 }
 
 impl DagTIR {
-    #[must_use]
-    pub const fn body_revision(&self) -> &crate::body_revision::BodyRevision {
-        &self.body_revision
-    }
-
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id

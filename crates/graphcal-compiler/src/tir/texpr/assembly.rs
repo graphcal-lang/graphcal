@@ -17,14 +17,13 @@ use crate::hir::expr::{ConstRef, Expr, ExprKind, IndexArg, MatchPattern};
 use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::resolved_name::ResolvedConstructorName;
 use crate::syntax::span::Spanned;
-use crate::tir::expression_facts::{
-    ConstructorApplication, ConstructorMatch, ContextualOperand, StaticIndexRequirement,
-};
+use crate::tir::static_index::StaticIndexRequirement;
 
 use super::model::{
     ContextualLiteral, StaticPosition, TArg, TConstRef, TContextual, TExpr, TExprKind, TFieldInit,
     TIndexArg, TMapEntry, TMatchArm, TMatchPattern, TParamBinding,
 };
+use super::nominal::{ConstructorApplication, ConstructorMatch};
 
 /// Why a checked node could not be assembled into a typed tree.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -78,7 +77,7 @@ impl PendingNodes {
     }
 
     /// Record a contextual literal accepted by its consumer.
-    pub fn record_contextual(&mut self, expr: &Expr) -> Result<ContextualOperand, AssemblyError> {
+    pub fn record_contextual(&mut self, expr: &Expr) -> Result<(), AssemblyError> {
         let literal = match expr.kind() {
             ExprKind::StringLiteral(value) => ContextualLiteral::String(value.clone()),
             ExprKind::OffsetDateTimeLiteral(value) => ContextualLiteral::OffsetDateTime(*value),
@@ -89,12 +88,10 @@ impl PendingNodes {
             ExprKind::IanaTimeZoneLiteral(value) => ContextualLiteral::TimeZone(value.clone()),
             _ => return Err(AssemblyError::NotContextual(expr.id().clone())),
         };
-        let operand = literal.operand();
         self.insert(
             expr.id(),
             TArg::Contextual(TContextual::new(expr.id().clone(), expr.span, literal)),
-        )?;
-        Ok(operand)
+        )
     }
 
     /// Take the typed node of a checked root out of the pending set.

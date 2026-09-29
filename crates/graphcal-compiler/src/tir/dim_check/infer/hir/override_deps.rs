@@ -7,7 +7,7 @@ use crate::registry::checked_type::{IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;
-use crate::tir::expression_facts::NominalObservation;
+use crate::tir::texpr::NominalObservation;
 
 use super::context::Infer;
 

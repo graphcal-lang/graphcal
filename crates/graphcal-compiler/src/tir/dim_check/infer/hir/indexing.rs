@@ -120,7 +120,7 @@ impl Infer<'_> {
                             DiagnosticAnchor::Source(arg.span),
                         )
                     })?,
-                    crate::tir::expression_facts::StaticIndexUse::Key,
+                    crate::tir::static_index::StaticIndexUse::Key,
                 );
                 Ok(CheckedType::Key(index_identity))
             }
@@ -413,7 +413,7 @@ impl Infer<'_> {
                                 index_expr,
                                 &index,
                                 position,
-                                crate::tir::expression_facts::StaticIndexUse::Selection,
+                                crate::tir::static_index::StaticIndexUse::Selection,
                             );
                         }
                         _ => {

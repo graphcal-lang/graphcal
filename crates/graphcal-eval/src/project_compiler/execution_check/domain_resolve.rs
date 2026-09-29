@@ -575,9 +575,7 @@ fn collect_constructor_applications(
     body: &graphcal_compiler::tir::texpr::CheckedBody,
     applications: &mut HashSet<ConcreteNominalApplication>,
 ) {
-    use graphcal_compiler::tir::texpr::{
-        CheckedBody, TConstRef, TExprKind, TNodeRef, visit_tnodes,
-    };
+    use graphcal_compiler::tir::texpr::{CheckedBody, TNodeRef, visit_tnodes};
     let mut insert = |definition: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
                       generic_args: Vec<CheckedGenericArg>| {
         applications.insert(ConcreteNominalApplication {
@@ -587,36 +585,27 @@ fn collect_constructor_applications(
     };
     match body {
         CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
-            if let TNodeRef::Value(expr) = node {
-                match expr.kind() {
-                    TExprKind::Construct { application, .. }
-                    | TExprKind::Const(graphcal_compiler::syntax::span::Spanned {
-                        value: TConstRef::Constructor(application),
-                        ..
-                    }) => insert(application.definition(), application.generic_args.clone()),
-                    _ => {}
-                }
+            if let TNodeRef::Value(expr) = node
+                && let Some(application) = expr.application()
+            {
+                insert(application.definition(), application.generic_args.clone());
             }
         }),
         CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
-            if let TNodeRef::Value(expr) = node {
-                let (TExprKind::Construct { application, .. }
-                | TExprKind::Const(graphcal_compiler::syntax::span::Spanned {
-                    value: TConstRef::Constructor(application),
-                    ..
-                })) = expr.kind()
-                else {
-                    return;
-                };
-                // Only a concretely typed application is one a value can have.
-                let generic_args = application
-                    .generic_args
-                    .iter()
-                    .map(graphcal_compiler::registry::checked_type::CheckedGenericArg::to_concrete)
-                    .collect::<Option<Vec<_>>>();
-                if let (Some(_), Some(generic_args)) = (expr.ty().to_concrete(), generic_args) {
-                    insert(application.definition(), generic_args);
-                }
+            let TNodeRef::Value(expr) = node else {
+                return;
+            };
+            let Some(application) = expr.application() else {
+                return;
+            };
+            // Only a concretely typed application is one a value can have.
+            let generic_args = application
+                .generic_args
+                .iter()
+                .map(graphcal_compiler::registry::checked_type::CheckedGenericArg::to_concrete)
+                .collect::<Option<Vec<_>>>();
+            if let (Some(_), Some(generic_args)) = (expr.ty().to_concrete(), generic_args) {
+                insert(application.definition(), generic_args);
             }
         }),
     }

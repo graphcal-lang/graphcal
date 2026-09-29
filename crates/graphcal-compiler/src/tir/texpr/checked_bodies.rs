@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use thiserror::Error;
 
 use crate::expression_id::ExprId;
@@ -22,6 +23,7 @@ use crate::tir::static_index::{
 use super::assembly::PendingNodes;
 use super::map::ToConcrete;
 use super::model::{StaticPosition, TArg, TBody, TContextual, TExpr, TNodeRef};
+use super::nominal::NominalObservation;
 
 /// Why the typed trees of one checking pass cannot be published.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -164,32 +166,59 @@ fn static_positions<V: crate::registry::checked_type::Concreteness>(
 }
 
 /// The checked tree of each expression root of one body, keyed by the root's
-/// occurrence.
+/// occurrence and kept in publication order, with the nominal uses checking
+/// each root observed.
 ///
 /// Clones share one immutable publication.
 #[derive(Debug, Clone)]
 pub struct CheckedBodies {
-    roots: Arc<HashMap<ExprId, CheckedBody>>,
+    roots: Arc<IndexMap<ExprId, CheckedBody>>,
+    nominal_uses: Arc<HashMap<ExprId, Arc<[NominalObservation]>>>,
 }
 
 impl CheckedBodies {
-    /// Classify the typed tree of each root, in order.
+    /// Classify the typed tree of each root, in order. Nominal uses are kept
+    /// for the published roots only.
     ///
     /// # Errors
     ///
     /// Returns the first [`DischargeError`] in root order.
     pub(crate) fn discharge(
         roots: Vec<(ExprId, TBody<Symbolic>)>,
+        mut nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
         cardinality: &AxisCardinality<'_>,
     ) -> Result<Self, DischargeError> {
-        let mut published = HashMap::with_capacity(roots.len());
+        let mut published = IndexMap::with_capacity(roots.len());
         for (id, body) in roots {
             let body = CheckedBody::discharge(body, cardinality)?;
             published.insert(id, body);
         }
+        nominal_uses.retain(|root, _| published.contains_key(root));
         Ok(Self {
             roots: Arc::new(published),
+            nominal_uses: Arc::new(nominal_uses),
         })
+    }
+
+    /// Whether these are the trees of exactly `roots`.
+    pub fn cover<'a>(&self, roots: impl IntoIterator<Item = &'a Expr>) -> bool {
+        let roots = roots
+            .into_iter()
+            .map(Expr::id)
+            .collect::<std::collections::HashSet<_>>();
+        roots.len() == self.roots.len() && roots.into_iter().all(|id| self.roots.contains_key(id))
+    }
+
+    /// The nominal uses checking observed in one root, in inference order.
+    #[must_use]
+    pub fn nominal_uses(&self, root: &ExprId) -> &[NominalObservation] {
+        self.nominal_uses.get(root).map_or(&[], AsRef::as_ref)
+    }
+
+    /// The shared nominal uses of one root, to publish with a tree derived
+    /// from it.
+    pub(crate) fn shared_nominal_uses(&self, root: &ExprId) -> Option<Arc<[NominalObservation]>> {
+        self.nominal_uses.get(root).cloned()
     }
 
     /// The checked tree of one root.
@@ -198,7 +227,7 @@ impl CheckedBodies {
         self.roots.get(root)
     }
 
-    /// Every root's checked tree.
+    /// Every root's checked tree, in publication order.
     pub fn roots(&self) -> impl Iterator<Item = (&ExprId, &CheckedBody)> {
         self.roots.iter()
     }
