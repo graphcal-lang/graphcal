@@ -1056,9 +1056,19 @@ fn generic_index_substitution_preserves_resolved_owner() {
         Some(&resolved_index)
     );
 
+    let mut substitution = Substitution::default();
+    for (param, index) in &index_sub {
+        substitution.bind(
+            param.clone(),
+            ResolvedGenericArg::Index(ResolvedIndex::Concrete(
+                index.declared_resolved().unwrap().clone(),
+                Span::new(0, 0),
+            )),
+        );
+    }
     let substituted =
-        substitute_resolved_type(&resolved_type, &dim_sub, &index_sub, &nat_sub, &src).unwrap();
-    let InferredType::Indexed { index, .. } = substituted else {
+        resolved_to_declared_type(&substitution.apply(&resolved_type).unwrap(), &src).unwrap();
+    let DeclaredType::Indexed { index, .. } = substituted else {
         panic!("expected indexed type after substitution");
     };
     assert_eq!(index.declared_resolved(), Some(&resolved_index));

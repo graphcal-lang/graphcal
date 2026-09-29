@@ -15,16 +15,14 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::registry::error::GraphcalError;
-use crate::registry::index::FiniteIndex;
 use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::time_zone::TimeZoneRegistry;
 use crate::resolve::ModuleResolver;
 use crate::resolve::namespace::Namespace;
-use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
-};
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, GenericParamName};
@@ -474,25 +472,10 @@ fn invariant_error(message: String, src: &NamedSource<Arc<String>>, span: Span) 
     }
 }
 
-/// The importer-side target of one bound template index.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NominalIndexTarget {
-    Declared(ResolvedIndexName),
-    Finite(FiniteIndex),
-}
-
-/// Canonical replacement of template identities in a projected nominal
-/// definition: the include's Static bindings plus the template declarations
-/// the same include projects as importer-owned declarations.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct NominalSubstitution {
-    pub types: HashMap<ResolvedStructTypeName, ResolvedStructTypeName>,
-    pub dimensions: HashMap<ResolvedDimName, ResolvedDimName>,
-    pub indexes: HashMap<ResolvedIndexName, NominalIndexTarget>,
-}
-
 /// Specialize a template's nominal definition as the importer-owned
-/// definition `identity` through `substitution`.
+/// definition `identity` through `substitution`: the include's Static
+/// bindings plus the template declarations the same include projects as
+/// importer-owned declarations.
 ///
 /// Constructors and generic parameters are re-owned by `identity`; every
 /// signature reference the substitution names is replaced. Domain bounds
@@ -504,7 +487,7 @@ pub struct NominalSubstitution {
 pub fn specialize_nominal_type(
     template: &NominalTypeDef,
     identity: ResolvedStructTypeName,
-    substitution: &NominalSubstitution,
+    substitution: &StaticSubstitution,
     source: NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<NominalTypeDef, NominalTypeError> {
@@ -568,7 +551,7 @@ pub fn specialize_nominal_type(
 struct Specializer<'a> {
     template: &'a ResolvedStructTypeName,
     identity: &'a ResolvedStructTypeName,
-    substitution: &'a NominalSubstitution,
+    substitution: &'a StaticSubstitution,
 }
 
 impl Specializer<'_> {
@@ -690,10 +673,10 @@ impl Specializer<'_> {
     fn index(&self, index: &IndexRef) -> Result<IndexRef, NatOverflowError> {
         Ok(match index {
             IndexRef::Concrete(name) => match self.substitution.indexes.get(&name.value) {
-                Some(NominalIndexTarget::Declared(target)) => {
+                Some(InstanceIndexBindingTarget::Declared(target)) => {
                     IndexRef::Concrete(Spanned::new(target.clone(), name.span))
                 }
-                Some(NominalIndexTarget::Finite(finite)) => IndexRef::Finite(Spanned::new(
+                Some(InstanceIndexBindingTarget::Finite(finite)) => IndexRef::Finite(Spanned::new(
                     NatPolyForm::from_constant(finite.size_u64()),
                     name.span,
                 )),
@@ -726,9 +709,12 @@ impl Specializer<'_> {
 mod tests {
     use super::*;
     use crate::dag_id::DagId;
+    use crate::registry::index::FiniteIndex;
     use crate::resolve::builder::TestModules;
+    use crate::resolved_name::{ResolvedDimName, ResolvedIndexName};
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::StructTypeName;
+    use std::collections::BTreeMap;
 
     fn parse(source: &str) -> ast::File {
         ast::File::from(Parser::new(source).parse_file().unwrap())
@@ -883,12 +869,12 @@ mod tests {
             template_id,
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
         );
-        let substitution = NominalSubstitution {
-            types: HashMap::from([(slot, concrete.clone())]),
-            dimensions: HashMap::from([(port, length.clone())]),
-            indexes: HashMap::from([(
+        let substitution = StaticSubstitution {
+            types: BTreeMap::from([(slot, concrete.clone())]),
+            dimensions: BTreeMap::from([(port, length.clone())]),
+            indexes: BTreeMap::from([(
                 axis,
-                NominalIndexTarget::Finite(FiniteIndex::try_from_u64(3).unwrap()),
+                InstanceIndexBindingTarget::Finite(FiniteIndex::try_from_u64(3).unwrap()),
             )]),
         };
         let specialized = specialize_nominal_type(

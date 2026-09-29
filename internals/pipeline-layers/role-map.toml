@@ -1387,11 +1387,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["tir", "dim_check", "expression_facts", "tests"]
-role = "checking"
-
-[[module]]
-package = "compiler"
 path = ["tir", "expression_facts"]
 role = "contracts"
 
@@ -1624,6 +1619,16 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["tir", "typed", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "substitution"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "substitution", "tests"]
 role = "checking"
 
 [[module]]

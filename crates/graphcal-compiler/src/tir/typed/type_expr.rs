@@ -1,14 +1,11 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
-use crate::generic_param::GenericParamId;
 use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
-use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
 use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
@@ -19,7 +16,7 @@ use crate::syntax::span::Span;
 
 use super::{
     ModuleTypeContext, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
-    ResolvedIndex, ResolvedTypeExpr, nat_overflow_error,
+    ResolvedIndex, ResolvedTypeExpr, Substitution,
 };
 
 // ---------------------------------------------------------------------------
@@ -275,315 +272,6 @@ fn resolve_hir_index_ref(
     }
 }
 
-#[derive(Default)]
-struct ResolvedGenericSubstitutions {
-    dims: HashMap<GenericParamId, ResolvedDimArg>,
-    indexes: HashMap<GenericParamId, ResolvedIndex>,
-    nats: HashMap<GenericParamId, NatPolyForm>,
-    types: HashMap<GenericParamId, ResolvedTypeExpr>,
-}
-
-impl ResolvedGenericSubstitutions {
-    fn from_resolved_prefix(
-        type_def: &NominalTypeDef,
-        resolved_args: &[ResolvedGenericArg],
-    ) -> Self {
-        type_def.generic_params().iter().zip(resolved_args).fold(
-            Self::default(),
-            |mut substitutions, (param, arg)| {
-                match arg {
-                    ResolvedGenericArg::Dim(dim) => {
-                        substitutions.dims.insert(param.id().clone(), dim.clone());
-                    }
-                    ResolvedGenericArg::Index(index) => {
-                        substitutions
-                            .indexes
-                            .insert(param.id().clone(), index.clone());
-                    }
-                    ResolvedGenericArg::Nat(form, _) => {
-                        substitutions.nats.insert(param.id().clone(), form.clone());
-                    }
-                    ResolvedGenericArg::Type(type_expr) => {
-                        substitutions
-                            .types
-                            .insert(param.id().clone(), type_expr.clone());
-                    }
-                }
-                substitutions
-            },
-        )
-    }
-}
-
-enum GenericDefaultSubstitutionError {
-    Nat(crate::nat::NatOverflowError),
-    Dimension(crate::ratio::RatioError),
-    UnexpectedGenericDimensionTerm,
-}
-
-impl From<crate::nat::NatOverflowError> for GenericDefaultSubstitutionError {
-    fn from(error: crate::nat::NatOverflowError) -> Self {
-        Self::Nat(error)
-    }
-}
-
-impl From<crate::ratio::RatioError> for GenericDefaultSubstitutionError {
-    fn from(error: crate::ratio::RatioError) -> Self {
-        Self::Dimension(error)
-    }
-}
-
-fn instantiate_params_in_default(
-    default: &mut ResolvedGenericArg,
-    type_def: &NominalTypeDef,
-    resolved_args: &[ResolvedGenericArg],
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<(), GraphcalError> {
-    let substitutions = ResolvedGenericSubstitutions::from_resolved_prefix(type_def, resolved_args);
-    substitute_params_in_generic_arg(default, &substitutions).map_err(|error| match error {
-        GenericDefaultSubstitutionError::Nat(error) => nat_overflow_error(error, src, span),
-        GenericDefaultSubstitutionError::Dimension(_error) => GraphcalError::DimensionOverflow {
-            src: src.clone(),
-            span: span.into(),
-        },
-        GenericDefaultSubstitutionError::UnexpectedGenericDimensionTerm => internal_error(
-            "generic dimension term remained after concrete-default substitution".to_string(),
-            src,
-            span,
-        ),
-    })
-}
-
-fn substitute_params_in_generic_arg(
-    arg: &mut ResolvedGenericArg,
-    substitutions: &ResolvedGenericSubstitutions,
-) -> Result<(), GenericDefaultSubstitutionError> {
-    match arg {
-        ResolvedGenericArg::Dim(dim) => substitute_params_in_dim_arg(dim, substitutions),
-        ResolvedGenericArg::Index(index) => {
-            substitute_params_in_resolved_index(index, substitutions)
-        }
-        ResolvedGenericArg::Nat(form, _) => {
-            *form = form.substitute_forms(&substitutions.nats)?;
-            Ok(())
-        }
-        ResolvedGenericArg::Type(type_expr) => {
-            substitute_params_in_resolved_type(type_expr, substitutions)
-        }
-    }
-}
-
-fn substitute_params_in_dim_arg(
-    arg: &mut ResolvedDimArg,
-    substitutions: &ResolvedGenericSubstitutions,
-) -> Result<(), GenericDefaultSubstitutionError> {
-    match arg {
-        ResolvedDimArg::GenericParam(name, _) => {
-            if let Some(replacement) = substitutions.dims.get(name) {
-                *arg = replacement.clone();
-            }
-            Ok(())
-        }
-        ResolvedDimArg::Expr { terms, span } => {
-            let expression_span = *span;
-            let substituted =
-                std::mem::take(terms)
-                    .into_iter()
-                    .try_fold(Vec::new(), |mut output, term| {
-                        match term {
-                            ResolvedDimTerm::GenericParam {
-                                name,
-                                power,
-                                op,
-                                span,
-                            } => match substitutions.dims.get(&name) {
-                                Some(replacement) => {
-                                    output.extend(expand_dim_arg(replacement, power, op)?);
-                                }
-                                None => output.push(ResolvedDimTerm::GenericParam {
-                                    name,
-                                    power,
-                                    op,
-                                    span,
-                                }),
-                            },
-                            concrete @ ResolvedDimTerm::Concrete { .. } => output.push(concrete),
-                        }
-                        Ok::<_, GenericDefaultSubstitutionError>(output)
-                    })?;
-            *arg = collapse_dim_terms(substituted, expression_span)?;
-            Ok(())
-        }
-        ResolvedDimArg::Dimensionless | ResolvedDimArg::Concrete(_) => Ok(()),
-    }
-}
-
-fn expand_dim_arg(
-    arg: &ResolvedDimArg,
-    outer_power: Rational,
-    outer_op: MulDivOp,
-) -> Result<Vec<ResolvedDimTerm>, GenericDefaultSubstitutionError> {
-    match arg {
-        ResolvedDimArg::Dimensionless => Ok(Vec::new()),
-        ResolvedDimArg::Concrete(dim) => Ok(vec![ResolvedDimTerm::Concrete {
-            dim: dim.clone(),
-            power: outer_power,
-            op: outer_op,
-        }]),
-        ResolvedDimArg::GenericParam(name, span) => Ok(vec![ResolvedDimTerm::GenericParam {
-            name: name.clone(),
-            power: outer_power,
-            op: outer_op,
-            span: *span,
-        }]),
-        ResolvedDimArg::Expr { terms, .. } => terms
-            .iter()
-            .map(|term| match term {
-                ResolvedDimTerm::Concrete { dim, power, op } => Ok(ResolvedDimTerm::Concrete {
-                    dim: dim.clone(),
-                    power: (*power * outer_power)?,
-                    op: combine_dim_ops(outer_op, *op),
-                }),
-                ResolvedDimTerm::GenericParam {
-                    name,
-                    power,
-                    op,
-                    span,
-                } => Ok(ResolvedDimTerm::GenericParam {
-                    name: name.clone(),
-                    power: (*power * outer_power)?,
-                    op: combine_dim_ops(outer_op, *op),
-                    span: *span,
-                }),
-            })
-            .collect(),
-    }
-}
-
-const fn combine_dim_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
-    if matches!(
-        (outer, inner),
-        (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div)
-    ) {
-        MulDivOp::Mul
-    } else {
-        MulDivOp::Div
-    }
-}
-
-fn collapse_dim_terms(
-    terms: Vec<ResolvedDimTerm>,
-    span: Span,
-) -> Result<ResolvedDimArg, GenericDefaultSubstitutionError> {
-    if terms.is_empty() {
-        return Ok(ResolvedDimArg::Dimensionless);
-    }
-    if terms
-        .iter()
-        .any(|term| matches!(term, ResolvedDimTerm::GenericParam { .. }))
-    {
-        return Ok(ResolvedDimArg::Expr { terms, span });
-    }
-    let dimension =
-        terms
-            .iter()
-            .try_fold(Dimension::dimensionless(), |dimension, term| match term {
-                ResolvedDimTerm::Concrete { dim, power, op } => {
-                    let powered = dim.pow(*power)?;
-                    match op {
-                        MulDivOp::Mul => dimension.checked_mul(&powered).map_err(Into::into),
-                        MulDivOp::Div => dimension.checked_div(&powered).map_err(Into::into),
-                    }
-                }
-                ResolvedDimTerm::GenericParam { .. } => {
-                    Err(GenericDefaultSubstitutionError::UnexpectedGenericDimensionTerm)
-                }
-            })?;
-    if dimension.is_dimensionless() {
-        Ok(ResolvedDimArg::Dimensionless)
-    } else {
-        Ok(ResolvedDimArg::Concrete(dimension))
-    }
-}
-
-fn substitute_params_in_resolved_index(
-    index: &mut ResolvedIndex,
-    substitutions: &ResolvedGenericSubstitutions,
-) -> Result<(), GenericDefaultSubstitutionError> {
-    match index {
-        ResolvedIndex::GenericParam(name, _) => {
-            if let Some(replacement) = substitutions.indexes.get(name) {
-                *index = replacement.clone();
-            }
-        }
-        ResolvedIndex::Finite(form, _) => {
-            *form = form.substitute_forms(&substitutions.nats)?;
-        }
-        ResolvedIndex::Concrete(_, _) => {}
-    }
-    Ok(())
-}
-
-fn dim_arg_as_resolved_type(arg: ResolvedDimArg) -> ResolvedTypeExpr {
-    match arg {
-        ResolvedDimArg::Dimensionless => ResolvedTypeExpr::Dimensionless,
-        ResolvedDimArg::Concrete(dim) => ResolvedTypeExpr::Quantity(dim),
-        ResolvedDimArg::GenericParam(name, span) => ResolvedTypeExpr::GenericDimParam(name, span),
-        ResolvedDimArg::Expr { terms, span } => ResolvedTypeExpr::GenericDimExpr { terms, span },
-    }
-}
-
-fn substitute_params_in_resolved_type(
-    type_expr: &mut ResolvedTypeExpr,
-    substitutions: &ResolvedGenericSubstitutions,
-) -> Result<(), GenericDefaultSubstitutionError> {
-    match type_expr {
-        ResolvedTypeExpr::Key { index, .. } => {
-            substitute_params_in_resolved_index(index, substitutions)
-        }
-        ResolvedTypeExpr::GenericDimParam(name, _) => {
-            if let Some(replacement) = substitutions.dims.get(name) {
-                *type_expr = dim_arg_as_resolved_type(replacement.clone());
-            }
-            Ok(())
-        }
-        ResolvedTypeExpr::GenericTypeParam(name, _) => {
-            if let Some(replacement) = substitutions.types.get(name) {
-                *type_expr = replacement.clone();
-            }
-            Ok(())
-        }
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            let mut dim_arg = ResolvedDimArg::Expr {
-                terms: std::mem::take(terms),
-                span: *span,
-            };
-            substitute_params_in_dim_arg(&mut dim_arg, substitutions)?;
-            *type_expr = dim_arg_as_resolved_type(dim_arg);
-            Ok(())
-        }
-        ResolvedTypeExpr::Complex { dimension, .. } => {
-            substitute_params_in_dim_arg(dimension, substitutions)
-        }
-        ResolvedTypeExpr::GenericStruct { generic_args, .. } => generic_args
-            .iter_mut()
-            .try_for_each(|arg| substitute_params_in_generic_arg(arg, substitutions)),
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            substitute_params_in_resolved_type(base, substitutions)?;
-            indexes
-                .iter_mut()
-                .try_for_each(|index| substitute_params_in_resolved_index(index, substitutions))
-        }
-        ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::Bool
-        | ResolvedTypeExpr::Int
-        | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Quantity(_)
-        | ResolvedTypeExpr::Struct(_, _) => Ok(()),
-    }
-}
-
 /// Validate the generic-argument count for a type application: enough to
 /// reach the last non-defaulted parameter, and at most the total count.
 /// Shared by the HIR and syntax type-application resolvers.
@@ -646,15 +334,13 @@ fn resolve_hir_type_application(
             src: ctx.src.clone(),
             span: type_ann.span.into(),
         })?;
-        let mut resolved = resolve_hir_generic_arg_for_param(param, default, ctx)?;
-        instantiate_params_in_default(
-            &mut resolved,
-            type_def,
-            &resolved_args,
-            ctx.src,
-            default.span(),
-        )?;
-        resolved_args.push(resolved);
+        // A default may name earlier parameters; instantiate it with the
+        // arguments resolved so far.
+        let resolved = resolve_hir_generic_arg_for_param(param, default, ctx)?;
+        let instantiated = Substitution::for_params(type_def.generic_params(), &resolved_args)
+            .apply_generic_arg(&resolved)
+            .map_err(|error| error.into_graphcal(ctx.src))?;
+        resolved_args.push(instantiated);
     }
 
     Ok(ResolvedTypeExpr::GenericStruct {

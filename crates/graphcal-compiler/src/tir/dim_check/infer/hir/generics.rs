@@ -20,6 +20,7 @@ use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
 
 use crate::tir::dim_check::{InferredGenericArg, InferredType};
+use crate::tir::typed::Substitution;
 
 use super::context::InferEnv;
 use super::nat_forms::finite_index_error;
@@ -41,7 +42,7 @@ fn generic_substitution_prefix(
     type_args: &[InferredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<GenericSubstitutions, GraphcalError> {
+) -> Result<Substitution, GraphcalError> {
     if type_args.len() > type_def.generic_params().len() {
         return Err(GraphcalError::EvalError {
             message: format!(
@@ -55,18 +56,23 @@ fn generic_substitution_prefix(
         });
     }
 
-    let mut subs = GenericSubstitutions::default();
+    // A validated concrete argument, embedded into the symbolic form.
+    let bound = |arg: &InferredGenericArg| {
+        crate::tir::typed::declared_to_resolved_generic_arg(
+            &crate::registry::declared_type::DeclaredGenericArg::from(arg),
+            span,
+        )
+    };
+    let mut subs = Substitution::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint() {
             GenericConstraint::Dim => match arg {
-                InferredGenericArg::Dim(dim) => {
-                    subs.dims.insert(param.id().clone(), dim.clone());
-                }
+                InferredGenericArg::Dim(_) => subs.bind(param.id().clone(), bound(arg)),
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
-                    subs.indexes.insert(param.id().clone(), index.clone());
+                    subs.bind(param.id().clone(), bound(arg));
                 }
                 InferredGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
@@ -80,7 +86,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Nat => match arg {
                 InferredGenericArg::Nat(form) if form.is_constant() => {
-                    subs.nats.insert(param.id().clone(), form.constant());
+                    subs.bind(param.id().clone(), bound(arg));
                 }
                 InferredGenericArg::Nat(form) => {
                     return Err(non_concrete_generic_argument(
@@ -94,7 +100,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Type => match arg {
                 InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
-                    subs.types.insert(param.id().clone(), type_expr.clone());
+                    subs.bind(param.id().clone(), bound(arg));
                 }
                 InferredGenericArg::Type(type_expr) => {
                     return Err(non_concrete_generic_argument(
@@ -129,8 +135,21 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
             span: span.into(),
         });
     }
-    let values = generic_substitution_prefix(type_def, type_args, src, span)?;
-    Ok(ConcreteGenericSubstitutions { values })
+    let substitution = generic_substitution_prefix(type_def, type_args, src, span)?;
+    let nats = type_def
+        .generic_params()
+        .iter()
+        .zip(type_args)
+        .filter_map(|(parameter, arg)| match arg {
+            InferredGenericArg::Nat(form) => form
+                .constant_value()
+                .map(|value| (parameter.id().clone(), value)),
+            InferredGenericArg::Dim(_)
+            | InferredGenericArg::Index(_)
+            | InferredGenericArg::Type(_) => None,
+        })
+        .collect();
+    Ok(ConcreteGenericSubstitutions { substitution, nats })
 }
 
 fn inferred_index_is_concrete(index: &IndexTypeRef) -> bool {
@@ -187,30 +206,19 @@ fn generic_arg_internal_sort_error(
     }
 }
 
-#[derive(Clone, Default)]
-pub(super) struct GenericSubstitutions {
-    dims: HashMap<GenericParamId, Dimension>,
-    indexes: HashMap<GenericParamId, IndexTypeRef>,
-    nats: HashMap<GenericParamId, u64>,
-    types: HashMap<GenericParamId, InferredType>,
-}
-
 /// Complete, sort-checked, concrete bindings for one nominal application.
 ///
 /// This wrapper can only be constructed after exact arity, sort, and
 /// concreteness validation.
 #[derive(Clone)]
 pub(in crate::tir::dim_check) struct ConcreteGenericSubstitutions {
-    values: GenericSubstitutions,
+    substitution: Substitution,
+    nats: HashMap<GenericParamId, u64>,
 }
 
 impl ConcreteGenericSubstitutions {
-    const fn bindings(&self) -> &GenericSubstitutions {
-        &self.values
-    }
-
     pub(in crate::tir::dim_check) const fn nats(&self) -> &HashMap<GenericParamId, u64> {
-        &self.values.nats
+        &self.nats
     }
 
     pub(in crate::tir::dim_check) fn field_type(
@@ -218,38 +226,34 @@ impl ConcreteGenericSubstitutions {
         resolved: &crate::tir::typed::ResolvedTypeExpr,
         src: &NamedSource<Arc<String>>,
     ) -> Result<InferredType, GraphcalError> {
-        substitute_resolved_type_with_type_params(resolved, self.bindings(), src)
+        instantiate_concrete_type(resolved, &self.substitution, src)
     }
 }
 
-pub(super) fn substitute_resolved_type_with_type_params(
+/// Instantiate a symbolic type whose every generic parameter `substitution`
+/// binds to a concrete argument.
+pub(super) fn instantiate_concrete_type(
     resolved: &crate::tir::typed::ResolvedTypeExpr,
-    subs: &GenericSubstitutions,
+    substitution: &Substitution,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    crate::tir::typed::substitute_resolved_type_with_types(
-        resolved,
-        &subs.dims,
-        &subs.indexes,
-        &subs.nats,
-        &subs.types,
-        src,
-    )
+    let instantiated = substitution
+        .apply(resolved)
+        .map_err(|error| error.into_graphcal(src))?;
+    crate::tir::typed::resolved_to_declared_type(&instantiated, src)
+        .map(|declared| InferredType::from(&declared))
 }
 
-fn substitute_resolved_generic_arg_with_type_params(
+fn instantiate_concrete_generic_arg(
     resolved: &crate::tir::typed::ResolvedGenericArg,
-    subs: &GenericSubstitutions,
+    substitution: &Substitution,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredGenericArg, GraphcalError> {
-    crate::tir::typed::substitute_resolved_generic_arg(
-        resolved,
-        &subs.dims,
-        &subs.indexes,
-        &subs.nats,
-        &subs.types,
-        src,
-    )
+    let instantiated = substitution
+        .apply_generic_arg(resolved)
+        .map_err(|error| error.into_graphcal(src))?;
+    crate::tir::typed::resolved_generic_arg_to_declared(&instantiated, src)
+        .map(|declared| InferredGenericArg::from(&declared))
 }
 
 pub(in crate::tir::dim_check) fn resolved_field_type(
@@ -272,8 +276,7 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
                 src: src.clone(),
                 span: span.into(),
             })?;
-    let subs = concrete_generic_substitutions(type_def, type_args, src, span)?;
-    substitute_resolved_type_with_type_params(resolved, subs.bindings(), src)
+    concrete_generic_substitutions(type_def, type_args, src, span)?.field_type(resolved, src)
 }
 
 impl InferEnv<'_> {
@@ -503,7 +506,7 @@ impl InferEnv<'_> {
                 })?
                 .resolved;
             let subs = generic_substitution_prefix(type_def, &args, self.src, span)?;
-            args.push(substitute_resolved_generic_arg_with_type_params(
+            args.push(instantiate_concrete_generic_arg(
                 resolved_default,
                 &subs,
                 self.src,

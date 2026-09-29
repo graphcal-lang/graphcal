@@ -208,6 +208,7 @@ pub enum ResolvedDimTerm {
 
 impl ResolvedDimTerm {
     /// Get the combining operator for this term.
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn op(&self) -> MulDivOp {
         match self {

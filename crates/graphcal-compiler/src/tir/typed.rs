@@ -1731,19 +1731,19 @@ pub(crate) fn rigid_dimension_view(
 // ---------------------------------------------------------------------------
 mod ops;
 pub use ops::resolved_to_declared_type;
-pub(crate) use ops::{
-    substitute_resolved_generic_arg, substitute_resolved_type, substitute_resolved_type_with_types,
-};
+pub(crate) use ops::{declared_to_resolved_generic_arg, resolved_generic_arg_to_declared};
 #[cfg(test)]
 use ops::{unify_nat_poly_form, unify_resolved_type};
 
 // ---------------------------------------------------------------------------
 pub(crate) mod specialization;
+mod substitution;
 mod type_expr;
 pub use specialization::instantiate_semantic_edges;
 pub(crate) use specialization::{
     install_semantic_plot_projection_facts, install_semantic_presentation_facts,
 };
+pub use substitution::{Substitution, SubstitutionError};
 pub use type_expr::resolve_hir_decl_type;
 use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
 

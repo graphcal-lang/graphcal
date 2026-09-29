@@ -5,7 +5,6 @@ use crate::resolved_name::{
     ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
-use std::collections::HashMap;
 
 use crate::builtin::{BuiltinConst, BuiltinFn, ScaleFreeBuiltin};
 use crate::dag_id::DagId;
@@ -320,7 +319,9 @@ pub enum ExprKind<C: Completeness = Strict> {
     DagCall {
         target: Spanned<DagId>,
         args: Vec<ParamBinding<C>>,
-        static_bindings: DagCallStaticBindings,
+        /// The call's Static bindings: the same canonical substitution an
+        /// include applies to its template.
+        static_bindings: crate::ir::static_substitution::StaticSubstitution,
         output: Spanned<ResolvedDeclName>,
     },
 }
@@ -502,21 +503,6 @@ pub struct FieldInit<C: Completeness = Strict> {
 pub struct ParamBinding<C: Completeness = Strict> {
     pub target: Spanned<ResolvedDeclName>,
     pub value: Expr<C>,
-}
-
-/// Canonical Static substitutions supplied by one direct DAG call.
-#[derive(Debug, Clone, Default)]
-pub struct DagCallStaticBindings {
-    pub types: HashMap<ResolvedStructTypeName, ResolvedStructTypeName>,
-    pub dimensions: HashMap<ResolvedDimName, ResolvedDimName>,
-    pub indexes: HashMap<ResolvedIndexName, DagCallIndexBinding>,
-}
-
-/// Concrete index target supplied to a direct DAG call.
-#[derive(Debug, Clone)]
-pub enum DagCallIndexBinding {
-    Declared(ResolvedIndexName),
-    Finite(crate::registry::types::FiniteIndex),
 }
 
 /// A resolved map literal entry.

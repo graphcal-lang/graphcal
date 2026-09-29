@@ -2,13 +2,11 @@
 
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
 use crate::resolved_name::ResolvedDeclName;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::generic_param::GenericParamId;
 use crate::registry::declared_type::StructTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::module_name::ScopedName;
@@ -47,17 +45,7 @@ impl InferEnv<'_> {
                     src: self.src.clone(),
                     span: span.into(),
                 })?;
-        let dim_sub = HashMap::new();
-        let index_sub =
-            HashMap::<GenericParamId, crate::registry::declared_type::IndexTypeRef>::new();
-        let nat_sub = HashMap::new();
-        crate::tir::typed::substitute_resolved_type(
-            checked.resolved(),
-            &dim_sub,
-            &index_sub,
-            &nat_sub,
-            self.src,
-        )
+        Ok(InferredType::from(checked.declared()))
     }
 }
 
