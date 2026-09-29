@@ -10,6 +10,7 @@ use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::decl_name::{DeclName, DeclNameNamespace};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::index_name::{IndexName, IndexNameNamespace, IndexVariantName};
+use crate::syntax::module_name::ScopeSegment;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
@@ -194,6 +195,12 @@ pub struct ConstructorSignature {
 }
 
 impl ConstructorSignature {
+    /// Source name of the owning type, declared in the constructor's module.
+    #[must_use]
+    pub(crate) const fn owner_type(&self) -> &StructTypeName {
+        &self.owner_type
+    }
+
     /// Source signature of the owning type's generic parameters.
     #[must_use]
     pub(crate) fn generic_params(&self) -> &[GenericParamSignature] {
@@ -224,6 +231,36 @@ pub struct ModuleSymbols {
     /// Index symbols a selective include projects as this module's own
     /// declarations because their port is bound to a structural `Fin(N)`.
     pub(super) finite_index_projections: HashMap<IndexName, FiniteIndex>,
+    /// Nominal type symbols a selective include projects as this module's
+    /// own declarations, specialized by the include's Static bindings.
+    pub(super) struct_type_projections:
+        HashMap<StructTypeName, StaticProjection<StructTypeNameNamespace>>,
+}
+
+/// A template declaration that one selective include projects as an
+/// importer-owned declaration specialized by the include's Static bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticProjection<Ns: NameNamespace> {
+    template: ResolvedName<Ns>,
+    instance: ScopeSegment,
+}
+
+impl<Ns: NameNamespace> StaticProjection<Ns> {
+    pub(super) const fn new(template: ResolvedName<Ns>, instance: ScopeSegment) -> Self {
+        Self { template, instance }
+    }
+
+    /// The template's own declaration the projection specializes.
+    #[must_use]
+    pub const fn template(&self) -> &ResolvedName<Ns> {
+        &self.template
+    }
+
+    /// The instance scope of the projecting include within its importer.
+    #[must_use]
+    pub const fn instance(&self) -> &ScopeSegment {
+        &self.instance
+    }
 }
 
 /// A template dimension that a selective include specializes through its
@@ -233,22 +270,28 @@ pub struct ModuleSymbols {
 /// denotes a different dimension in every configured instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimensionProjection {
-    template: ResolvedName<DimNameNamespace>,
+    projection: StaticProjection<DimNameNamespace>,
     ports: Vec<DimensionPortBinding>,
 }
 
 impl DimensionProjection {
     pub(super) const fn new(
-        template: ResolvedName<DimNameNamespace>,
+        projection: StaticProjection<DimNameNamespace>,
         ports: Vec<DimensionPortBinding>,
     ) -> Self {
-        Self { template, ports }
+        Self { projection, ports }
     }
 
     /// The template's own dimension the projection specializes.
     #[must_use]
     pub const fn template(&self) -> &ResolvedName<DimNameNamespace> {
-        &self.template
+        self.projection.template()
+    }
+
+    /// The instance scope of the projecting include within its importer.
+    #[must_use]
+    pub const fn instance(&self) -> &ScopeSegment {
+        self.projection.instance()
     }
 
     /// The include's dimension bindings, as template port to importer path.
@@ -323,6 +366,7 @@ impl ModuleSymbols {
             constructors: HashMap::new(),
             dimension_projections: HashMap::new(),
             finite_index_projections: HashMap::new(),
+            struct_type_projections: HashMap::new(),
         };
         let errors = declarations
             .iter()
@@ -372,6 +416,23 @@ impl ModuleSymbols {
     #[must_use]
     pub(crate) fn dimension_projection(&self, name: &DimName) -> Option<&DimensionProjection> {
         self.dimension_projections.get(name)
+    }
+
+    /// Every dimension symbol of this module that an include projects.
+    pub(crate) fn dimension_projections(
+        &self,
+    ) -> impl Iterator<Item = (&DimName, &DimensionProjection)> {
+        self.dimension_projections.iter()
+    }
+
+    /// The include projection a nominal type symbol of this module denotes,
+    /// when it is a specialized projection rather than a source declaration.
+    #[must_use]
+    pub(crate) fn struct_type_projection(
+        &self,
+        name: &StructTypeName,
+    ) -> Option<&StaticProjection<StructTypeNameNamespace>> {
+        self.struct_type_projections.get(name)
     }
 
     /// The structural index an index symbol of this module denotes, when it

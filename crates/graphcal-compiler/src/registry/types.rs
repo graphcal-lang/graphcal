@@ -20,9 +20,6 @@ pub use super::index::{
     IndexBindingContractError, IndexBindingTarget, IndexCardinality, IndexCardinalityError,
     IndexCategory, IndexDef, IndexKind, MAX_INDEX_CARDINALITY, RequiredIndexKind,
 };
-pub use super::type_def::{
-    StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericParam, TypeRegistry, UnionMemberDef,
-};
 pub use super::unit::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitScale, UnitScaleStepError,
     UnitScaleTerm, try_fold_unit_scale,

@@ -9,9 +9,8 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
-use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{IndexBindingTarget, TypeRegistry};
+use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
@@ -44,17 +43,12 @@ pub(super) struct ImportAlias {
 /// about which exported units are runtime-dependent. It contains no checked
 /// type, value, or runtime fact.
 pub(super) struct LoweringModuleInterface {
-    frontend_types: TypeRegistry,
-    external_surface: ExternalDeclSurface,
     exported_runtime_units: HashSet<UnitName>,
 }
 
 impl LoweringModuleInterface {
-    pub(super) fn new(
-        frontend_types: TypeRegistry,
-        hir: &graphcal_compiler::ir::lower::HirDag,
-    ) -> Self {
-        let external_surface = hir.external_surface.clone();
+    pub(super) fn new(hir: &graphcal_compiler::ir::lower::HirDag) -> Self {
+        let external_surface = &hir.external_surface;
         let exported_runtime_units = hir
             .definitions()
             .statics()
@@ -66,18 +60,8 @@ impl LoweringModuleInterface {
             .map(|(unit, _)| unit.to_unowned_def_name())
             .collect();
         Self {
-            frontend_types,
-            external_surface,
             exported_runtime_units,
         }
-    }
-
-    pub(super) const fn frontend_types(&self) -> &TypeRegistry {
-        &self.frontend_types
-    }
-
-    pub(super) const fn external_surface(&self) -> &ExternalDeclSurface {
-        &self.external_surface
     }
 
     pub(super) fn is_exported_runtime_unit(&self, name: &UnitName) -> bool {
@@ -228,33 +212,11 @@ impl ProjectModuleBinding {
     }
 }
 
-/// One source-visible nominal type projection alias and its effective target.
-#[derive(Debug, Clone)]
-pub(super) struct ProjectedTypeAlias {
-    pub(super) alias: StructTypeName,
-    pub(super) target: StructTypeName,
-}
-
 /// Mutable state accumulated while processing one body's imports.
 pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
     pub(super) imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Nominal types selected from each dependency, by source name.
-    pub(super) imported_types: HashMap<graphcal_compiler::dag_id::DagId, HashSet<StructTypeName>>,
-    pub(super) projected_type_aliases:
-        Vec<graphcal_compiler::syntax::span::Spanned<ProjectedTypeAlias>>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
-    pub(super) frontend_type_imports: Vec<FrontendTypeImport<'a>>,
     pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,
-}
-
-/// Frontend nominal types of a module import, filtered by its export surface.
-pub(super) struct FrontendTypeImport<'a> {
-    pub(super) types: &'a TypeRegistry,
-    pub(super) external_surface: &'a ExternalDeclSurface,
-    /// Declared names a pure import may not bring across.
-    /// `None` denotes a concrete include instance rather than a pure import.
-    pub(super) pure_import_rejections:
-        Option<graphcal_compiler::static_interface::StaticImportRejections>,
 }

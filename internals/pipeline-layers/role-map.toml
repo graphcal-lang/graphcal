@@ -467,6 +467,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["hir", "nominal_lower"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["hir", "nominal_lower", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["hir", "source_interface"]
 role = "contracts"
 
@@ -568,11 +578,6 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "override_reconciliation", "tests"]
-role = "checking"
-
-[[module]]
-package = "compiler"
-path = ["ir", "registry_build"]
 role = "checking"
 
 [[module]]
@@ -798,11 +803,6 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["registry", "time_zone", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["registry", "type_def"]
 role = "contracts"
 
 [[module]]
@@ -2047,11 +2047,6 @@ role = "contracts"
 [[module]]
 package = "eval"
 path = ["project_compiler", "pipeline"]
-role = "checking"
-
-[[module]]
-package = "eval"
-path = ["project_compiler", "registry_merge"]
 role = "checking"
 
 [[module]]

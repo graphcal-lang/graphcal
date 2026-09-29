@@ -75,16 +75,12 @@ fn lower_single_file_to_hir(
 > {
     cancellation.checkpoint()?;
     let file_dag_id = loaded_file.dag_id();
-    let file_src = loaded_file.named_source();
 
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
-        imported_types: HashMap::new(),
-        projected_type_aliases: Vec::new(),
         module_map: HashMap::new(),
-        frontend_type_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
@@ -103,22 +99,9 @@ fn lower_single_file_to_hir(
     // Each lowered inline DAG publishes its own frozen surface, not that of
     // whichever module first elaborated its template.
     for frozen in &hir.inline_dags {
-        let template = semantic
-            .module_templates
-            .get(frozen.dag_id())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::internal_error(
-                    format!(
-                        "inline module template `{}` was not retained",
-                        frozen.dag_id()
-                    ),
-                    file_src,
-                    DiagnosticAnchor::WholeFile,
-                ))
-            })?;
         interfaces.push((
             frozen.dag_id().clone(),
-            LoweringModuleInterface::new(template.frontend_types.clone(), frozen),
+            LoweringModuleInterface::new(frozen),
         ));
     }
     Ok((hir, interfaces))

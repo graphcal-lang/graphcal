@@ -11,7 +11,6 @@ pub mod module_definitions;
 pub mod module_interface;
 mod node_definition;
 pub(crate) mod override_reconciliation;
-pub(crate) mod registry_build;
 pub(crate) mod required_bindability;
 pub mod resolve;
 pub mod static_definitions;

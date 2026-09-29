@@ -31,6 +31,12 @@ impl GenericParamId {
     pub(crate) const fn new(owner: GenericParamOwner, name: GenericParamName) -> Self {
         Self { owner, name }
     }
+
+    /// The lexical scope that owns this parameter.
+    #[must_use]
+    pub(crate) const fn owner(&self) -> &GenericParamOwner {
+        &self.owner
+    }
 }
 
 /// The lexical scope that owns a generic parameter list.

@@ -244,3 +244,54 @@ fn runtime_unit_does_not_cross_a_pure_import_in_unit_definitions() {
     let error = eval_error(&root);
     assert!(error.contains("EUR"), "{error}");
 }
+
+const SPECIALIZED_TYPE_LIBRARY: &str = "pub(bind) dim Q;\n\
+     pub dim QR = Q / Time;\n\
+     pub type Inner { Inner(x: Q) }\n\
+     pub type Box { Box(v: Q, i: Inner) }\n\
+     pub type Rated { Rated(r: QR) }\n\
+     param q: Q;\n\
+     pub node b: Box = Box(v: @q, i: Inner(x: @q));\n";
+
+/// Bug fix: a type projected under Static bindings is specialized from the
+/// template's canonical definition, so its fields may name other template
+/// types. The template signature used to be re-read in the importer's scope,
+/// where `Inner` is unknown.
+#[test]
+fn specialized_type_projection_keeps_template_field_types() {
+    let (_dir, root) = write_project(
+        "p",
+        &[
+            ("lib.gcl", SPECIALIZED_TYPE_LIBRARY),
+            (
+                "main.gcl",
+                "include p.lib(dim Q: Length, q: 2.0 m)::{type Box, Box, b};\n\
+                 node v: Length = match @b { Box(v: value, i: _) => value };\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = eval(&root);
+    assert!((si_value(&result, "v") - 2.0).abs() < 1e-12);
+}
+
+/// A specialized type whose field names a derived dimension of a bound port
+/// follows the include binding when the same include projects that dimension.
+#[test]
+fn specialized_type_projection_follows_the_projected_dimension() {
+    let (_dir, root) = write_project(
+        "p",
+        &[
+            ("lib.gcl", SPECIALIZED_TYPE_LIBRARY),
+            (
+                "main.gcl",
+                "include p.lib(dim Q: Length, q: 2.0 m)::{type Rated, Rated, dim QR};\n\
+                 node r: Rated = Rated(r: 3.0 m/s);\n\
+                 node speed: QR = match @r { Rated(r: value) => value };\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = eval(&root);
+    assert!((si_value(&result, "speed") - 3.0).abs() < 1e-12);
+}
