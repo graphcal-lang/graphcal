@@ -44,6 +44,8 @@ impl GenericParamId {
 pub enum GenericParamOwner {
     /// Generic parameter on a user-defined `type` declaration.
     Type(ResolvedStructTypeName),
+    /// Dimension or index binder of an extern plugin function signature.
+    ExternFn(crate::plugin_identity::ExternFnKey),
 }
 
 /// Built-in type forms with closed semantic meaning.

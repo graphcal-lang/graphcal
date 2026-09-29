@@ -588,7 +588,7 @@ impl Specializer<'_> {
                 GenericParamOwner::Type(self.identity.clone()),
                 id.name.clone(),
             ),
-            GenericParamOwner::Type(_) => id.clone(),
+            GenericParamOwner::Type(_) | GenericParamOwner::ExternFn(_) => id.clone(),
         }
     }
 
