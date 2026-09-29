@@ -3581,3 +3581,26 @@ fn resolved_constructor_carries_owning_definition_and_field_constraints() {
         ]
     );
 }
+
+#[test]
+fn check_match_foreign_constructor_names_the_constructor_member() {
+    use crate::registry::error::NominalMember;
+    use crate::syntax::type_name::ConstructorName;
+    let source = "\
+pub type Maybe { Some(value: Length), None }
+pub type Other { Elsewhere }
+param x: Maybe = Some(value: 1.0 m);
+node y: Length = match @x { Elsewhere => 1.0 m, Some(value: v) => v, None => 0.0 m };";
+    let err = check(source).unwrap_err();
+    let GraphcalError::UnknownField { member, .. } = &err else {
+        panic!("got: {err:?}");
+    };
+    assert_eq!(
+        member,
+        &NominalMember::Constructor(ConstructorName::expect_valid("Elsewhere"))
+    );
+    assert_eq!(
+        err.to_string(),
+        "unknown field `Elsewhere` on struct `Maybe`"
+    );
+}

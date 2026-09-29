@@ -39,7 +39,7 @@ fn check_builtin_arity(
 ) -> Result<(), GraphcalError> {
     match function.entry().arity() {
         BuiltinArity::Exact(expected) if got != expected => Err(GraphcalError::WrongArity {
-            name: crate::syntax::function_name::FnName::expect_valid(function.as_str()),
+            name: crate::registry::error::CalledFunction::Builtin(function),
             expected,
             got,
             src: src.clone(),
@@ -368,7 +368,7 @@ impl Infer<'_> {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
         infer_fn_dim(
-            name.as_str(),
+            name.into(),
             func.signature(),
             &dimension_args,
             callee_span,

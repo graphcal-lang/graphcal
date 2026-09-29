@@ -37,7 +37,7 @@ impl Infer<'_> {
         let sig = &function.signature;
         if args.len() != sig.arity() {
             return Err(GraphcalError::WrongArity {
-                name: ext.name.clone(),
+                name: crate::registry::error::CalledFunction::Extern(ext.name.clone()),
                 expected: sig.arity(),
                 got: args.len(),
                 src: self.env.src.clone(),

@@ -34,6 +34,15 @@ use super::types::{
     GenericParamId, IndexRef, NatExpr, ValueType, ValueTypeKind,
 };
 
+/// Render accepted generic constraints as `A or B` at the diagnostic boundary.
+fn render_accepted_constraints(accepted: &[GenericConstraint]) -> String {
+    accepted
+        .iter()
+        .map(|constraint| constraint.as_str())
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
 /// Errors produced while lowering syntax type expressions into HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum HirLowerError {
@@ -69,12 +78,14 @@ pub enum HirLowerError {
     NestedIndexedType { span: Span },
     /// A natural-number expression referenced a non-Nat generic parameter.
     #[error(
-        "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {expected}"
+        "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {}",
+        render_accepted_constraints(expected)
     )]
     GenericConstraintMismatch {
         name: GenericParamName,
         actual: GenericConstraint,
-        expected: &'static str,
+        /// Every constraint this position accepts, in diagnostic order.
+        expected: &'static [GenericConstraint],
         span: Span,
     },
     /// A Nat was supplied where an explicit Index is required.
@@ -908,7 +919,7 @@ fn lower_single_term_nominal_type(
                 return Err(HirLowerError::GenericConstraintMismatch {
                     name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
-                    expected: "Dim or Type",
+                    expected: &[GenericConstraint::Dim, GenericConstraint::Type],
                     span: item.term.name.span,
                 });
             }
@@ -1003,7 +1014,7 @@ pub(crate) fn lower_dim_term(
                 Err(HirLowerError::GenericConstraintMismatch {
                     name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
-                    expected: "Dim",
+                    expected: &[GenericConstraint::Dim],
                     span: term.name.span,
                 })
             }
@@ -1071,7 +1082,7 @@ fn lower_index_expr_name(
                 Err(HirLowerError::GenericConstraintMismatch {
                     name: GenericParamName::classify(atom.clone()),
                     actual: binding.constraint,
-                    expected: "Index",
+                    expected: &[GenericConstraint::Index],
                     span: path.span,
                 })
             }
@@ -1120,7 +1131,7 @@ pub(crate) fn lower_nat_expr(
                 return Err(HirLowerError::GenericConstraintMismatch {
                     name,
                     actual: binding.constraint,
-                    expected: "Nat",
+                    expected: &[GenericConstraint::Nat],
                     span: ident.span,
                 });
             }
@@ -1636,5 +1647,24 @@ mod tests {
             );
             assert_eq!(error.to_string(), message, "`{param_type}`");
         }
+    }
+
+    #[test]
+    fn generic_constraint_mismatch_renders_every_accepted_constraint() {
+        let mismatch =
+            |expected: &'static [GenericConstraint]| HirLowerError::GenericConstraintMismatch {
+                name: GenericParamName::expect_valid("N"),
+                actual: GenericConstraint::Nat,
+                expected,
+                span: Span::new(0, 1),
+            };
+        assert_eq!(
+            mismatch(&[GenericConstraint::Dim, GenericConstraint::Type]).to_string(),
+            "generic parameter `N` has constraint `Nat`, but this position expects Dim or Type"
+        );
+        assert_eq!(
+            mismatch(&[GenericConstraint::Index]).to_string(),
+            "generic parameter `N` has constraint `Nat`, but this position expects Index"
+        );
     }
 }

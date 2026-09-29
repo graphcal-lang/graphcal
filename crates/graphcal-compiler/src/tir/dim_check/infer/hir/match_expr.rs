@@ -36,7 +36,7 @@ impl InferEnv<'_> {
         {
             return Err(GraphcalError::UnknownField {
                 type_name: type_def.name(),
-                field_name: field.value.clone(),
+                member: crate::registry::error::NominalMember::Field(field.value.clone()),
                 src: self.src.clone(),
                 span: field.span.into(),
             });
@@ -194,7 +194,9 @@ impl Infer<'_> {
                     if type_name.resolved() != target.owning_type() {
                         return Err(GraphcalError::UnknownField {
                             type_name: type_name.name().clone(),
-                            field_name: FieldName::expect_valid(target.variant().name().as_str()),
+                            member: crate::registry::error::NominalMember::Constructor(
+                                target.name(),
+                            ),
                             src: self.env.src.clone(),
                             span: constructor.span.into(),
                         });
