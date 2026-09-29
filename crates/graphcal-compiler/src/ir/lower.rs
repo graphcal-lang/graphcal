@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{DeclKind, Expr, File, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::InstanceRecord;
@@ -28,6 +27,7 @@ use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
+use super::decl_table::DeclTable;
 use super::entry::{self, BodyPhase, Syntax};
 #[cfg(test)]
 use super::extern_fns::resolve_extern_struct_return;
@@ -115,6 +115,59 @@ pub(crate) struct ParsedExpectedFailMetadata {
     pub(crate) attribute_span: Span,
 }
 
+impl ParsedExpectedFailMetadata {
+    /// Resolve every named index key in the scope that authored the attribute.
+    pub(super) fn resolve(
+        self,
+        resolver: &crate::resolve::ModuleResolver,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<ResolvedExpectedFailMetadata, GraphcalError> {
+        use crate::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
+
+        let Self {
+            expected,
+            resolution_owner,
+            attribute_span,
+        } = self;
+        let expected = match expected {
+            ExpectedFail::All => ExpectedFail::All,
+            ExpectedFail::Variants(keys) => ExpectedFail::Variants(keys.try_map(|key| {
+                key.into_iter()
+                    .map(|part| match part {
+                        ExpectedFailKeyPart::Named {
+                            index,
+                            variant,
+                            span,
+                        } => resolver
+                            .resolve_index_variant_parts(&resolution_owner, &index, &variant)
+                            .map(|resolved| ExpectedFailKeyPart::resolved(resolved, span))
+                            .map_err(|err| GraphcalError::EvalError {
+                                message: err.to_string(),
+                                src: src.clone(),
+                                span: span.into(),
+                            }),
+                        ExpectedFailKeyPart::FinitePosition { position, span } => {
+                            Ok(ExpectedFailKeyPart::FinitePosition { position, span })
+                        }
+                    })
+                    .collect::<Result<_, GraphcalError>>()
+            })?),
+        };
+        Ok(ResolvedExpectedFailMetadata {
+            expected,
+            attribute_span,
+        })
+    }
+}
+
+/// Expected-fail metadata whose index keys were resolved at the freeze
+/// boundary in the scope that authored the attribute.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedExpectedFailMetadata {
+    pub(crate) expected: crate::assertion_expectation::ExpectedFail,
+    pub(crate) attribute_span: Span,
+}
+
 /// Frozen phase: every body is strictly lowered HIR with canonical references.
 #[derive(Debug, Clone, Copy)]
 pub enum Lowered {}
@@ -129,6 +182,8 @@ impl BodyPhase for Lowered {
     type UnitIdentity = ResolvedUnitName;
 }
 
+/// A lowered value, assertion, or visualization declaration.
+pub type HirDecl = entry::Decl<Lowered>;
 /// A const declaration with type annotation and lowered body.
 pub type ConstEntry = entry::ConstEntry<Lowered>;
 /// A param declaration with type annotation and an atomic lowered default.
@@ -183,33 +238,20 @@ pub struct HirDag {
     pub registry: SemanticRegistry,
     /// Local nominal definitions with all signatures lowered to canonical HIR.
     pub(super) nominal_types: crate::hir::NominalTypeRegistry,
-    /// Const declarations in source order.
-    pub(crate) consts: Vec<ConstEntry>,
-    /// Param declarations in source order.
-    pub(crate) params: Vec<ParamEntry>,
-    /// Node declarations in source order.
-    pub(crate) nodes: Vec<NodeEntry>,
-    /// Assert declarations in source order.
-    pub(crate) asserts: Vec<AssertEntry>,
-    /// Plot declarations in source order.
-    pub(crate) plots: Vec<PlotEntry>,
-    /// Figure declarations in source order.
-    pub(crate) figures: Vec<FigureEntry>,
-    /// Layer declarations in source order.
-    pub(crate) layers: Vec<LayerEntry>,
+    /// Value, assertion, and visualization declarations keyed by canonical
+    /// identity, in source order.
+    pub(crate) decls: DeclTable<Lowered>,
     /// Plot aliases from include brace lists (#847).
     pub(crate) included_plots: Vec<IncludedPlotEntry>,
-    /// All declaration names in source order with their category.
-    pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Runtime-interface-relevant declarations authored directly in this DAG,
     /// excluding declarations merged from includes.
     pub(super) source_declarations: Vec<crate::hir::SourceDeclaration>,
     /// Typed Static ports authored directly in this reusable DAG.
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
-    /// Mapping from assert name to the list of declarations that assume it.
-    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    /// Expected-fail metadata keyed by assertion name, retaining its authored scope and source.
-    pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
+    /// Mapping from each assertion to the declarations that assume it.
+    pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
+    /// Expected-fail configurations with resolved index keys, per assertion.
+    pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
     /// Strictly lowered, source-qualified dynamic unit scale definitions.
     pub(crate) dynamic_unit_scales: Vec<DynamicUnitScaleEntry>,
     /// Imported declarations keyed by their source-visible lexical binding.
@@ -232,6 +274,12 @@ impl HirDag {
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id
+    }
+
+    /// Value, assertion, and visualization declarations of this DAG.
+    #[must_use]
+    pub const fn decls(&self) -> &DeclTable<Lowered> {
+        &self.decls
     }
 
     /// Nominal definitions canonically owned by this DAG.
@@ -663,19 +711,8 @@ fn build_ir_from_resolved(
     cancellation.checkpoint()?;
 
     let unfrozen = UnfrozenIR {
-        consts: resolved.consts,
-        params: resolved.params,
-        nodes: resolved.nodes,
-        asserts: resolved.asserts,
-        plots: resolved.plots,
-        figures: resolved.figures,
-        layers: resolved.layers,
+        decls: resolved.decls,
         included_plots: Vec::new(),
-        source_order: resolved
-            .source_order
-            .into_iter()
-            .map(|(name, cat)| (ScopedName::from(name), cat))
-            .collect(),
         source_declarations: collect_source_declarations(ast),
         static_ports: collect_static_ports(ast, dag_id),
         assumes_map: resolved
@@ -683,8 +720,8 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(k, v)| {
                 (
-                    ScopedName::from(k),
-                    v.into_iter().map(ScopedName::from).collect(),
+                    ScopedName::local(k),
+                    v.into_iter().map(ScopedName::local).collect(),
                 )
             })
             .collect(),
@@ -693,7 +730,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(name, collected)| {
                 (
-                    ScopedName::from(name),
+                    ScopedName::local(name),
                     ParsedExpectedFailMetadata {
                         expected: collected.expected,
                         resolution_owner: dag_id.clone(),
@@ -732,19 +769,13 @@ pub struct IncludeAliasDeclaration {
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
 #[derive(Debug, Clone)]
 pub struct UnfrozenIR {
-    pub(super) consts: Vec<entry::ConstEntry<Syntax>>,
-    pub(super) params: Vec<entry::ParamEntry<Syntax>>,
-    pub(super) nodes: Vec<entry::NodeEntry<Syntax>>,
-    pub(super) asserts: Vec<entry::AssertEntry<Syntax>>,
-    pub(super) plots: Vec<entry::PlotEntry<Syntax>>,
-    pub(super) figures: Vec<entry::FigureEntry<Syntax>>,
-    pub(super) layers: Vec<entry::LayerEntry<Syntax>>,
+    /// Value, assertion, and visualization declarations in source order,
+    /// including selective include aliases appended during assembly.
+    pub(super) decls: Vec<entry::Decl<Syntax>>,
     /// Plot aliases from include brace lists (#847).
     pub(super) included_plots: Vec<IncludedPlotEntry>,
-    /// All declaration names in source order with their category.
-    pub source_order: Vec<(ScopedName, DeclCategory)>,
     /// Direct source declarations are immutable provenance. Include merging
-    /// extends `source_order` but never this entry-interface subset.
+    /// extends `decls` but never this entry-interface subset.
     pub(super) source_declarations: Vec<crate::hir::SourceDeclaration>,
     /// Static interface provenance is authored only by this DAG template.
     pub(super) static_ports: Vec<crate::hir::StaticPort>,
@@ -807,9 +838,9 @@ mod tests {
     fn lower_rocket() {
         let source = include_str!("../../../../tests/fixtures/valid/rocket.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert_eq!(ir.consts.len(), 1); // G0
-        assert_eq!(ir.params.len(), 3); // dry_mass, fuel_mass, isp
-        assert_eq!(ir.nodes.len(), 3); // v_exhaust, mass_ratio, delta_v
+        assert_eq!(ir.decls().consts().count(), 1); // G0
+        assert_eq!(ir.decls().params().count(), 3); // dry_mass, fuel_mass, isp
+        assert_eq!(ir.decls().nodes().count(), 3); // v_exhaust, mass_ratio, delta_v
         assert!(
             ir.registry
                 .dimensions
@@ -832,9 +863,9 @@ mod tests {
     fn lower_constants() {
         let source = include_str!("../../../../tests/fixtures/valid/constants.gcl");
         let ir = parse_and_lower(source).unwrap();
-        assert_eq!(ir.consts.len(), 4);
-        assert_eq!(ir.params.len(), 1);
-        assert_eq!(ir.nodes.len(), 2);
+        assert_eq!(ir.decls().consts().count(), 4);
+        assert_eq!(ir.decls().params().count(), 1);
+        assert_eq!(ir.decls().nodes().count(), 2);
     }
 
     #[test]
@@ -1130,12 +1161,40 @@ mod tests {
     }
 
     #[test]
+    fn freeze_resolves_attribute_targets_to_identities() {
+        let hir = parse_and_lower(
+            "#[expected_fail]\nassert ok = true;\n\
+             #[assumes(ok)]\nparam p: Dimensionless = 1.0;\n\
+             #[assumes(ok)]\nnode n: Dimensionless = @p;",
+        )
+        .unwrap();
+        let identity = |spelling: &str| {
+            hir.decls()
+                .lookup(&ScopedName::local(DeclName::expect_valid(spelling)))
+                .unwrap()
+                .clone()
+        };
+        let ok = identity("ok");
+        assert_eq!(ok.owner(), hir.dag_id());
+        let mut assumers = hir.assumes_map.get(&ok).unwrap().clone();
+        assumers.sort_by_key(ToString::to_string);
+        assert_eq!(assumers, [identity("n"), identity("p")]);
+        assert!(matches!(
+            hir.expected_fail
+                .get(&ok)
+                .map(|metadata| &metadata.expected),
+            Some(crate::assertion_expectation::ExpectedFail::All)
+        ));
+        assert_eq!(hir.expected_fail.len(), 1);
+    }
+
+    #[test]
     fn lower_source_order_preserved() {
         let ir = parse_and_lower(
             "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;",
         )
         .unwrap();
-        let names: Vec<String> = ir.source_order.iter().map(|(n, _)| n.to_string()).collect();
+        let names: Vec<String> = ir.decls().iter().map(|d| d.name().to_string()).collect();
         assert_eq!(names, vec!["b", "a", "z"]);
     }
 }

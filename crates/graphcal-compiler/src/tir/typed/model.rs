@@ -1802,12 +1802,7 @@ pub(super) enum DeclarationIndexError {
     DuplicateRecord { name: ScopedName, span: Span },
 }
 
-/// Resolved expected-fail configuration; `attribute_span` indexes the DAG's source.
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedExpectedFailMetadata {
-    pub(crate) expected: ExpectedFail,
-    pub(crate) attribute_span: Span,
-}
+pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExpressionRootScope {
@@ -1837,8 +1832,8 @@ pub struct DagTIR {
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
-    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
+    pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
+    pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
@@ -2239,20 +2234,22 @@ impl DagTIR {
     }
 
     #[must_use]
-    pub const fn assumes_map(&self) -> &HashMap<ScopedName, Vec<ScopedName>> {
+    pub const fn assumes_map(&self) -> &HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
         &self.assumes_map
     }
 
     /// Return one assertion's resolved expected-fail configuration.
     #[must_use]
-    pub fn expected_fail(&self, name: &ScopedName) -> Option<&ExpectedFail> {
+    pub fn expected_fail(&self, assertion: &ResolvedDeclName) -> Option<&ExpectedFail> {
         self.expected_fail
-            .get(name)
+            .get(assertion)
             .map(|metadata| &metadata.expected)
     }
 
     /// Iterate over expected-fail configurations without exposing diagnostic provenance.
-    pub fn expected_fail_entries(&self) -> impl Iterator<Item = (&ScopedName, &ExpectedFail)> {
+    pub fn expected_fail_entries(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedDeclName, &ExpectedFail)> {
         self.expected_fail
             .iter()
             .map(|(name, metadata)| (name, &metadata.expected))

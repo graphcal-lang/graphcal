@@ -3,18 +3,15 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::assertion_expectation::ExpectedFail;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
-use crate::ir::lower::ParsedExpectedFailMetadata;
 use crate::registry::error::GraphcalError;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
 use super::{
     DagTIR, ModuleTypeContext, ResolvedConstructorRefs, ResolvedConstructorTarget,
-    ResolvedDagDependencies, ResolvedExpectedFailMetadata, internal_error, module_resolve_error,
+    ResolvedDagDependencies, internal_error, module_resolve_error,
 };
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(
@@ -263,105 +260,4 @@ pub(super) fn collect_resolved_constructor_refs_from_expr(
         })();
     });
     result
-}
-
-pub(super) fn collect_hir_decl_bindings(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
-    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-) -> HashMap<ScopedName, ResolvedDeclName> {
-    let mut bindings = HashMap::new();
-
-    for (name, declaration_owner) in consts
-        .iter()
-        .map(|entry| (&entry.name, &entry.declaration_owner))
-        .chain(
-            params
-                .iter()
-                .map(|entry| (&entry.name, &entry.declaration_owner)),
-        )
-        .chain(
-            nodes
-                .iter()
-                .map(|entry| (&entry.name, &entry.declaration_owner)),
-        )
-    {
-        bindings.insert(
-            name.clone(),
-            ResolvedDeclName::from_def(declaration_owner.clone(), name.leaf().clone()),
-        );
-    }
-
-    bindings.extend(
-        imported_bindings
-            .iter()
-            .map(|(name, binding)| (name.clone(), binding.target().clone())),
-    );
-    bindings
-}
-
-pub(super) fn resolve_expected_fail_keys(
-    expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
-    ctx: ModuleTypeContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedExpectedFailMetadata>, GraphcalError> {
-    expected_fail
-        .into_iter()
-        .map(|(assert_name, metadata)| {
-            let ParsedExpectedFailMetadata {
-                expected,
-                resolution_owner,
-                attribute_span,
-            } = metadata;
-            let resolved = match expected {
-                ExpectedFail::All => ExpectedFail::All,
-                ExpectedFail::Variants(keys) => {
-                    let resolved_keys = keys
-                        .try_map(|key| {
-                            key.into_iter()
-                                .map(|part| match part {
-                                    crate::assertion_expectation::ExpectedFailKeyPart::Named {
-                                        index,
-                                        variant,
-                                        span,
-                                    } => {
-                                        let resolved = ctx
-                                            .resolver
-                                            .resolve_index_variant_parts(
-                                                &resolution_owner,
-                                                &index,
-                                                &variant,
-                                            )
-                                            .map_err(|err| {
-                                                module_resolve_error(&err, src, span)
-                                            })?;
-                                        Ok(crate::assertion_expectation::ExpectedFailKeyPart::resolved(
-                                            resolved, span,
-                                        ))
-                                    }
-                                    crate::assertion_expectation::ExpectedFailKeyPart::FinitePosition {
-                                        position,
-                                        span,
-                                    } => Ok(
-                                        crate::assertion_expectation::ExpectedFailKeyPart::FinitePosition {
-                                            position,
-                                            span,
-                                        },
-                                    ),
-                                })
-                                .collect::<Result<_, GraphcalError>>()
-                        })?;
-                    ExpectedFail::Variants(resolved_keys)
-                }
-            };
-            Ok((
-                assert_name,
-                ResolvedExpectedFailMetadata {
-                    expected: resolved,
-                    attribute_span,
-                },
-            ))
-        })
-        .collect()
 }

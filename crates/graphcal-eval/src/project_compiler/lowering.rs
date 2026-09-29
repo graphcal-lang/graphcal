@@ -298,11 +298,14 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         })?;
 
     let output_surface: HashSet<ScopedName> = unfrozen
-        .source_order
-        .iter()
-        .chain(ctx.imported_source_order.iter())
-        .filter(|(_, category)| matches!(category, DeclCategory::Value(_)))
-        .map(|(name, _)| name.clone())
+        .value_names()
+        .cloned()
+        .chain(
+            ctx.imported_source_order
+                .iter()
+                .filter(|(_, category)| matches!(category, DeclCategory::Value(_)))
+                .map(|(name, _)| name.clone()),
+        )
         .chain(
             ctx.include_instances
                 .iter()
@@ -897,16 +900,7 @@ fn resolve_projection_expected_fail(
 fn template_value_ports(
     template: &graphcal_compiler::ir::lower::UnfrozenIR,
 ) -> impl Iterator<Item = graphcal_compiler::syntax::decl_name::DeclName> + '_ {
-    template
-        .source_order
-        .iter()
-        .filter(|(_, category)| {
-            matches!(
-                category,
-                graphcal_compiler::declaration_category::DeclCategory::Value(_)
-            )
-        })
-        .map(|(name, _)| name.leaf().clone())
+    template.value_names().map(|name| name.leaf().clone())
 }
 
 /// Explicit value-port bindings keyed by their template declaration.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::declaration_category::{DeclCategory, ValueDeclCategory};
+use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{DimExpr, Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::ir::instance::{
@@ -25,10 +25,11 @@ use crate::syntax::type_name::{ConstructorName, StructTypeName};
 use crate::syntax::visitor::ExprVisitor;
 
 use super::{
-    entry::{self, InScope},
+    decl_table::DeclTable,
+    entry::{self, Decl, InScope},
     extern_fns::resolve_plugin_imports,
     lower::{
-        AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag,
+        AssertEntry, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag, HirDecl,
         IncludeAliasDeclaration, LayerEntry, LoweredPlotBody, LoweredPlotField,
         LoweredPlotProperty, NodeEntry, ParamEntry, PlotEntry, UnfrozenIR,
         UnfrozenSemanticInstance,
@@ -68,14 +69,11 @@ impl UnfrozenIR {
     /// Resolve an exposed plot alias to its canonical template declaration.
     #[must_use]
     pub fn plot_projection_target(&self, name: &DeclName) -> Option<ResolvedDeclName> {
-        self.plots
+        self.decls
             .iter()
-            .find(|entry| entry.name.leaf() == name)
-            .map(|entry| {
-                ResolvedDeclName::from_def(
-                    entry.body.resolution_owner.clone(),
-                    entry.name.leaf().clone(),
-                )
+            .find_map(|decl| match decl {
+                Decl::Plot(entry) if entry.name.leaf() == name => Some(entry.identity()),
+                _ => None,
             })
             .or_else(|| {
                 self.semantic_instances.iter().find_map(|instance| {
@@ -96,10 +94,29 @@ impl UnfrozenIR {
     /// Names of assertions authored by this reusable DAG template.
     #[must_use]
     pub fn assertion_names(&self) -> Vec<DeclName> {
-        self.asserts
+        self.decls
             .iter()
-            .map(|entry| entry.name.leaf().clone())
+            .filter_map(|decl| match decl {
+                Decl::Assert(entry) => Some(entry.name.leaf().clone()),
+                _ => None,
+            })
             .collect()
+    }
+
+    /// Source spellings of the value declarations in this IR, in source
+    /// order, including selective include aliases.
+    pub fn value_names(&self) -> impl Iterator<Item = &ScopedName> {
+        self.decls
+            .iter()
+            .filter(|decl| matches!(decl.category(), DeclCategory::Value(_)))
+            .map(Decl::name)
+    }
+
+    fn params(&self) -> impl Iterator<Item = &entry::ParamEntry<entry::Syntax>> {
+        self.decls.iter().filter_map(|decl| match decl {
+            Decl::Param(entry) => Some(entry),
+            _ => None,
+        })
     }
 
     /// Record one include as a semantic edge rather than merging its syntax tree.
@@ -143,31 +160,18 @@ impl UnfrozenIR {
     #[must_use]
     pub fn include_alias_declaration(&self, name: &DeclName) -> Option<IncludeAliasDeclaration> {
         let local = ScopedName::local(name.clone());
-        self.consts
-            .iter()
-            .find(|entry| entry.name == local)
-            .map(|entry| IncludeAliasDeclaration {
-                type_ann: entry.type_ann.syntax.clone(),
-                is_const: true,
+        self.decls.iter().find_map(|decl| {
+            let (type_ann, is_const) = match decl {
+                Decl::Const(entry) if entry.name == local => (&entry.type_ann, true),
+                Decl::Param(entry) if entry.name == local => (&entry.type_ann, false),
+                Decl::Node(entry) if entry.name == local => (&entry.type_ann, false),
+                _ => return None,
+            };
+            Some(IncludeAliasDeclaration {
+                type_ann: type_ann.syntax.clone(),
+                is_const,
             })
-            .or_else(|| {
-                self.params
-                    .iter()
-                    .find(|entry| entry.name == local)
-                    .map(|entry| IncludeAliasDeclaration {
-                        type_ann: entry.type_ann.syntax.clone(),
-                        is_const: false,
-                    })
-            })
-            .or_else(|| {
-                self.nodes
-                    .iter()
-                    .find(|entry| entry.name == local)
-                    .map(|entry| IncludeAliasDeclaration {
-                        type_ann: entry.type_ann.syntax.clone(),
-                        is_const: false,
-                    })
-            })
+        })
     }
 
     /// Publish a synthesized Term alias as part of this module's external surface.
@@ -279,27 +283,16 @@ impl UnfrozenIR {
                 )
             })
             .collect::<HashMap<_, _>>();
-        let mut decl_bindings = HashMap::new();
-        for (name, declaration_owner) in self
-            .consts
+        let table = DeclTable::new(owner, self.decls).map_err(|error| {
+            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        })?;
+        // Value expressions may reference local values (never assertions or
+        // visualizations), semantic instance ports, and imported values.
+        let mut decl_bindings = table
             .iter()
-            .map(|entry| (&entry.name, &entry.declaration_owner))
-            .chain(
-                self.params
-                    .iter()
-                    .map(|entry| (&entry.name, &entry.declaration_owner)),
-            )
-            .chain(
-                self.nodes
-                    .iter()
-                    .map(|entry| (&entry.name, &entry.declaration_owner)),
-            )
-        {
-            cancellation.checkpoint()?;
-            let canonical =
-                ResolvedDeclName::from_def(declaration_owner.clone(), name.leaf().clone());
-            decl_bindings.insert(name.clone(), canonical);
-        }
+            .filter(|decl| matches!(decl.category(), DeclCategory::Value(_)))
+            .map(|decl| (decl.name().clone(), decl.identity()))
+            .collect::<HashMap<_, _>>();
         for record in &self.semantic_instances {
             let scope = record.instance.id().scope();
             for target in record.instance.concrete_value_ports() {
@@ -405,95 +398,6 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
 
-        let consts = self
-            .consts
-            .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                Ok(ConstEntry {
-                    name: entry.name.clone(),
-                    declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation(&entry.type_ann)?,
-                    expr: lower_scoped(&entry.expr)?,
-                    span: entry.span,
-                })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
-        cancellation.checkpoint()?;
-        let params = self
-            .params
-            .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                Ok(ParamEntry {
-                    name: entry.name.clone(),
-                    declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation(&entry.type_ann)?,
-                    default: entry.default.as_ref().map(lower_scoped).transpose()?,
-                    span: entry.span,
-                    override_reconciliations: entry.override_reconciliations.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
-        cancellation.checkpoint()?;
-        let nodes = self
-            .nodes
-            .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                Ok(NodeEntry {
-                    name: entry.name.clone(),
-                    declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: lower_type_annotation(&entry.type_ann)?,
-                    definition: super::node_definition::lower(
-                        &entry.definition.syntax,
-                        crate::hir::ExprLoweringContext::with_overlay(
-                            crate::hir::ModuleScope::new(
-                                &entry.definition.resolution_owner,
-                                resolver,
-                                &generic_scope,
-                            ),
-                            &registry.time_zones,
-                            overlay,
-                        ),
-                    )
-                    .map_err(|error| crate::hir::expr_lower_error_to_graphcal(&error, src))?,
-                    span: entry.span,
-                })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
-        cancellation.checkpoint()?;
-        let asserts = self
-            .asserts
-            .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                Ok(AssertEntry {
-                    name: entry.name.clone(),
-                    declaration_owner: entry.declaration_owner.clone(),
-                    body: crate::hir::lower_assert_body(
-                        &entry.body.syntax,
-                        crate::hir::ExprLoweringContext::with_overlay(
-                            crate::hir::ModuleScope::new(
-                                &entry.body.resolution_owner,
-                                resolver,
-                                &generic_scope,
-                            ),
-                            &registry.time_zones,
-                            overlay,
-                        ),
-                    )
-                    .map_err(|err| {
-                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
-                    })?,
-                    span: entry.span,
-                })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
-
-        // Sink expressions are semantic program bodies, not optional rendering
-        // hints. Batch compilation lowers every one strictly; tolerant HIR is
-        // reserved for editor-facing incomplete buffers.
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
                             resolution_owner: &crate::dag_id::DagId,
                             classify: fn(
@@ -510,44 +414,6 @@ impl UnfrozenIR {
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()
         };
-        cancellation.checkpoint()?;
-        let plots = self
-            .plots
-            .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                let InScope {
-                    syntax: body,
-                    resolution_owner,
-                } = &entry.body;
-                let encodings = body
-                    .encodings
-                    .iter()
-                    .map(|encoding| {
-                        lower_in(&encoding.value, resolution_owner)
-                            .map(|lowered| (encoding.channel, lowered))
-                    })
-                    .collect::<Result<Vec<_>, GraphcalError>>()?;
-                Ok(PlotEntry {
-                    name: entry.name.clone(),
-                    mark_type: entry.mark_type,
-                    body: LoweredPlotBody {
-                        encodings,
-                        mark_properties: lower_fields(
-                            &body.mark_properties,
-                            resolution_owner,
-                            LoweredPlotProperty::mark,
-                        )?,
-                        properties: lower_fields(
-                            &body.properties,
-                            resolution_owner,
-                            LoweredPlotProperty::plot,
-                        )?,
-                    },
-                    visibility: entry.visibility,
-                })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
         let lower_composition_fields =
             |fields: &InScope<Vec<crate::desugar::desugared_ast::PlotField>>| {
                 lower_fields(
@@ -556,32 +422,178 @@ impl UnfrozenIR {
                     LoweredPlotProperty::composition,
                 )
             };
-        cancellation.checkpoint()?;
-        let figures = self
-            .figures
-            .iter()
-            .map(|entry| {
+        // Lower kind by kind, preserving the established diagnostic order when
+        // several bodies are invalid.
+        let decls = table.try_map(
+            |decl| match decl {
+                Decl::Const(_) => 0,
+                Decl::Param(_) => 1,
+                Decl::Node(_) => 2,
+                Decl::Assert(_) => 3,
+                Decl::Plot(_) => 4,
+                Decl::Figure(_) => 5,
+                Decl::Layer(_) => 6,
+            },
+            |decl| -> Result<HirDecl, GraphcalError> {
                 cancellation.checkpoint()?;
-                Ok(FigureEntry {
-                    name: entry.name.clone(),
-                    plot_names: entry.plot_names.clone(),
-                    fields: lower_composition_fields(&entry.fields)?,
+                Ok(match decl {
+                    Decl::Const(entry) => Decl::Const(ConstEntry {
+                        type_ann: lower_type_annotation(&entry.type_ann)?,
+                        expr: lower_scoped(&entry.expr)?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        span: entry.span,
+                    }),
+                    Decl::Param(entry) => Decl::Param(ParamEntry {
+                        type_ann: lower_type_annotation(&entry.type_ann)?,
+                        default: entry.default.as_ref().map(lower_scoped).transpose()?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        span: entry.span,
+                        override_reconciliations: entry.override_reconciliations,
+                    }),
+                    Decl::Node(entry) => Decl::Node(NodeEntry {
+                        type_ann: lower_type_annotation(&entry.type_ann)?,
+                        definition: super::node_definition::lower(
+                            &entry.definition.syntax,
+                            crate::hir::ExprLoweringContext::with_overlay(
+                                crate::hir::ModuleScope::new(
+                                    &entry.definition.resolution_owner,
+                                    resolver,
+                                    &generic_scope,
+                                ),
+                                &registry.time_zones,
+                                overlay,
+                            ),
+                        )
+                        .map_err(|error| crate::hir::expr_lower_error_to_graphcal(&error, src))?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        span: entry.span,
+                    }),
+                    Decl::Assert(entry) => Decl::Assert(AssertEntry {
+                        body: crate::hir::lower_assert_body(
+                            &entry.body.syntax,
+                            crate::hir::ExprLoweringContext::with_overlay(
+                                crate::hir::ModuleScope::new(
+                                    &entry.body.resolution_owner,
+                                    resolver,
+                                    &generic_scope,
+                                ),
+                                &registry.time_zones,
+                                overlay,
+                            ),
+                        )
+                        .map_err(|err| {
+                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                        })?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        span: entry.span,
+                    }),
+                    // Sink expressions are semantic program bodies, not
+                    // optional rendering hints. Batch compilation lowers every
+                    // one strictly; tolerant HIR is reserved for editor-facing
+                    // incomplete buffers.
+                    Decl::Plot(entry) => {
+                        let InScope {
+                            syntax: body,
+                            resolution_owner,
+                        } = &entry.body;
+                        let encodings = body
+                            .encodings
+                            .iter()
+                            .map(|encoding| {
+                                lower_in(&encoding.value, resolution_owner)
+                                    .map(|lowered| (encoding.channel, lowered))
+                            })
+                            .collect::<Result<Vec<_>, GraphcalError>>()?;
+                        Decl::Plot(PlotEntry {
+                            body: LoweredPlotBody {
+                                encodings,
+                                mark_properties: lower_fields(
+                                    &body.mark_properties,
+                                    resolution_owner,
+                                    LoweredPlotProperty::mark,
+                                )?,
+                                properties: lower_fields(
+                                    &body.properties,
+                                    resolution_owner,
+                                    LoweredPlotProperty::plot,
+                                )?,
+                            },
+                            name: entry.name,
+                            declaration_owner: entry.declaration_owner,
+                            mark_type: entry.mark_type,
+                            visibility: entry.visibility,
+                        })
+                    }
+                    Decl::Figure(entry) => Decl::Figure(FigureEntry {
+                        fields: lower_composition_fields(&entry.fields)?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        plot_names: entry.plot_names,
+                    }),
+                    Decl::Layer(entry) => Decl::Layer(LayerEntry {
+                        fields: lower_composition_fields(&entry.fields)?,
+                        name: entry.name,
+                        declaration_owner: entry.declaration_owner,
+                        plot_names: entry.plot_names,
+                    }),
                 })
-            })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
-        cancellation.checkpoint()?;
-        let layers = self
-            .layers
+            },
+        )?;
+
+        let lookup_assertion = |name: &ScopedName| {
+            decls
+                .lookup(name)
+                .or_else(|| self.imported_bindings.get(name))
+                .cloned()
+                .or_else(|| {
+                    self.semantic_instances.iter().find_map(|record| {
+                        record
+                            .assertion_projections
+                            .iter()
+                            .find(|projection| &projection.exposed_name == name)
+                            .map(|projection| {
+                                ResolvedDeclName::from_def(
+                                    record.instance.id().owner().clone(),
+                                    projection.target.to_unowned_def_name(),
+                                )
+                            })
+                    })
+                })
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("attribute target `{name}` has no canonical declaration"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })
+        };
+        let assumes_map = self
+            .assumes_map
             .iter()
-            .map(|entry| {
-                cancellation.checkpoint()?;
-                Ok(LayerEntry {
-                    name: entry.name.clone(),
-                    plot_names: entry.plot_names.clone(),
-                    fields: lower_composition_fields(&entry.fields)?,
-                })
+            .map(|(assertion, assumers)| {
+                Ok((
+                    lookup_assertion(assertion)?,
+                    assumers
+                        .iter()
+                        .map(&lookup_assertion)
+                        .collect::<Result<Vec<_>, GraphcalError>>()?,
+                ))
             })
-            .collect::<Result<Vec<_>, GraphcalError>>()?;
+            .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+        let expected_fail = self
+            .expected_fail
+            .into_iter()
+            .map(|(assertion, metadata)| {
+                Ok((
+                    lookup_assertion(&assertion)?,
+                    metadata.resolve(resolver, src)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
         cancellation.checkpoint()?;
 
@@ -621,19 +633,12 @@ impl UnfrozenIR {
             extern_functions,
             registry,
             nominal_types,
-            consts,
-            params,
-            nodes,
-            asserts,
-            plots,
-            figures,
-            layers,
+            decls,
             included_plots: self.included_plots,
-            source_order: self.source_order,
             source_declarations: self.source_declarations,
             static_ports: self.static_ports,
-            assumes_map: self.assumes_map,
-            expected_fail: self.expected_fail,
+            assumes_map,
+            expected_fail,
             dynamic_unit_scales,
             imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
@@ -653,15 +658,13 @@ impl UnfrozenIR {
         body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
-        self.consts.push(entry::ConstEntry {
-            name: name.clone(),
+        self.decls.push(Decl::Const(entry::ConstEntry {
+            name,
             declaration_owner: body_resolution_owner.clone(),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
             span,
-        });
-        self.source_order
-            .push((name, DeclCategory::Value(ValueDeclCategory::Const)));
+        }));
     }
 
     /// Add a node alias: a synthetic node declaration that references another node/param.
@@ -676,8 +679,8 @@ impl UnfrozenIR {
         body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
-        self.nodes.push(entry::NodeEntry {
-            name: name.clone(),
+        self.decls.push(Decl::Node(entry::NodeEntry {
+            name,
             declaration_owner: body_resolution_owner.clone(),
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(
@@ -685,9 +688,7 @@ impl UnfrozenIR {
                 body_resolution_owner,
             ),
             span,
-        });
-        self.source_order
-            .push((name, DeclCategory::Value(ValueDeclCategory::Node)));
+        }));
     }
 
     /// Record include-site nominal override obligations before substitution.
@@ -711,8 +712,7 @@ impl UnfrozenIR {
         importer_src: &NamedSource<Arc<String>>,
         include_span: Span,
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
-        self.params
-            .iter()
+        self.params()
             .filter(|param| !bindings.contains_key(param.name.leaf()))
             .map(|param| {
                 let mut reconciliations = param.override_reconciliations.clone();

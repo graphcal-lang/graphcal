@@ -22,8 +22,8 @@ use crate::desugar::desugared_ast::{
     TypeExprKind,
 };
 use crate::ir::entry::{
-    AssertEntry, ConstEntry, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry, PlotEntry,
-    PlotSyntax, Syntax,
+    AssertEntry, ConstEntry, Decl, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry,
+    PlotEntry, PlotSyntax, Syntax,
 };
 use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
@@ -164,22 +164,8 @@ fn check_value_namespace_collisions(
 /// each entry carrying its complete signature and attribute-derived policy.
 #[derive(Debug)]
 pub(crate) struct CollectedFile {
-    /// Const declarations in source order.
-    pub(crate) consts: Vec<ConstEntry<Syntax>>,
-    /// Param declarations in source order.
-    pub(crate) params: Vec<ParamEntry<Syntax>>,
-    /// Node declarations in source order.
-    pub(crate) nodes: Vec<NodeEntry<Syntax>>,
-    /// Assert declarations in source order.
-    pub(crate) asserts: Vec<AssertEntry<Syntax>>,
-    /// Plot declarations in source order.
-    pub(crate) plots: Vec<PlotEntry<Syntax>>,
-    /// Figure declarations in source order.
-    pub(crate) figures: Vec<FigureEntry<Syntax>>,
-    /// Layer declarations in source order.
-    pub(crate) layers: Vec<LayerEntry<Syntax>>,
-    /// All declaration names in source order with their category.
-    pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
+    /// Value, assertion, and visualization declarations in source order.
+    pub(crate) decls: Vec<Decl<Syntax>>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Built from `#[assumes(...)]` attributes.
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
@@ -190,9 +176,51 @@ pub(crate) struct CollectedFile {
     pub(crate) external_surface: ExternalDeclSurface,
 }
 
+#[cfg(test)]
+impl CollectedFile {
+    fn consts(&self) -> Vec<&ConstEntry<Syntax>> {
+        self.decls
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Const(entry) => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn params(&self) -> Vec<&ParamEntry<Syntax>> {
+        self.decls
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Param(entry) => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn nodes(&self) -> Vec<&NodeEntry<Syntax>> {
+        self.decls
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Node(entry) => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn plots(&self) -> Vec<&PlotEntry<Syntax>> {
+        self.decls
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Plot(entry) => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Result of validating local declaration shells from the AST.
 struct CollectedDeclarations {
-    source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
     external_surface: ExternalDeclSurface,
 }
@@ -304,14 +332,13 @@ const fn source_order_category(kind: IntroducedKind) -> Option<DeclCategory> {
 
 /// Validate all local declaration shells and check for duplicates.
 ///
-/// Returns the evaluated source order and external surface, and records local
-/// names in the names map for further processing.
+/// Returns the local assertion names and external surface, and records local
+/// evaluated names in the names map for further processing.
 fn collect_local_declarations(
     file: &File,
     src: &NamedSource<Arc<String>>,
     names: &mut HashMap<ScopedName, Span>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
-    let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
     check_builtin_name_shadowing(file, src)?;
@@ -346,13 +373,11 @@ fn collect_local_declarations(
         let name = DeclName::classify(introduced.atom().clone());
         names.insert(ScopedName::local(name.clone()), introduced.span());
         if category == DeclCategory::Assert {
-            assert_names.insert(name.clone());
+            assert_names.insert(name);
         }
-        source_order.push((name, category));
     }
 
     Ok(CollectedDeclarations {
-        source_order,
         assert_names,
         external_surface,
     })
@@ -361,13 +386,7 @@ fn collect_local_declarations(
 /// Declaration entries built alongside attribute validation.
 #[derive(Default)]
 struct CollectedEntries {
-    consts: Vec<ConstEntry<Syntax>>,
-    params: Vec<ParamEntry<Syntax>>,
-    nodes: Vec<NodeEntry<Syntax>>,
-    asserts: Vec<AssertEntry<Syntax>>,
-    plots: Vec<PlotEntry<Syntax>>,
-    figures: Vec<FigureEntry<Syntax>>,
-    layers: Vec<LayerEntry<Syntax>>,
+    decls: Vec<Decl<Syntax>>,
     assumes_map: HashMap<DeclName, Vec<DeclName>>,
     expected_fail_map: HashMap<DeclName, CollectedExpectedFail>,
 }
@@ -392,14 +411,15 @@ impl CollectedEntries {
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
             DeclKind::Sugar(s) => never(*s),
-            DeclKind::Assert(a) => self.asserts.push(AssertEntry {
+            DeclKind::Assert(a) => self.decls.push(Decl::Assert(AssertEntry {
                 name: ScopedName::local(a.name.value.clone()),
                 declaration_owner: dag_id.clone(),
                 body: InScope::new(a.body.clone(), dag_id.clone()),
                 span: decl.span,
-            }),
-            DeclKind::Plot(p) => self.plots.push(PlotEntry {
+            })),
+            DeclKind::Plot(p) => self.decls.push(Decl::Plot(PlotEntry {
                 name: ScopedName::local(p.name.value.clone()),
+                declaration_owner: dag_id.clone(),
                 mark_type: p.mark.mark_type,
                 body: InScope::new(
                     PlotSyntax {
@@ -410,18 +430,20 @@ impl CollectedEntries {
                     dag_id.clone(),
                 ),
                 visibility,
-            }),
-            DeclKind::Figure(f) => self.figures.push(FigureEntry {
+            })),
+            DeclKind::Figure(f) => self.decls.push(Decl::Figure(FigureEntry {
                 name: ScopedName::local(f.name.value.clone()),
+                declaration_owner: dag_id.clone(),
                 plot_names: f.plot_names.clone(),
                 fields: InScope::new(f.fields.clone(), dag_id.clone()),
-            }),
-            DeclKind::Layer(l) => self.layers.push(LayerEntry {
+            })),
+            DeclKind::Layer(l) => self.decls.push(Decl::Layer(LayerEntry {
                 name: ScopedName::local(l.name.value.clone()),
+                declaration_owner: dag_id.clone(),
                 plot_names: l.plot_names.clone(),
                 fields: InScope::new(l.fields.clone(), dag_id.clone()),
-            }),
-            DeclKind::Param(p) => self.params.push(ParamEntry {
+            })),
+            DeclKind::Param(p) => self.decls.push(Decl::Param(ParamEntry {
                 name: ScopedName::local(p.name.value.clone()),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(p.type_ann.clone(), dag_id.clone()),
@@ -431,21 +453,21 @@ impl CollectedEntries {
                     .map(|expr| InScope::new(expr.clone(), dag_id.clone())),
                 span: decl.span,
                 override_reconciliations: Vec::new(),
-            }),
-            DeclKind::ConstNode(c) => self.consts.push(ConstEntry {
+            })),
+            DeclKind::ConstNode(c) => self.decls.push(Decl::Const(ConstEntry {
                 name: ScopedName::local(c.name.value.clone()),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
-            }),
-            DeclKind::Node(n) => self.nodes.push(NodeEntry {
+            })),
+            DeclKind::Node(n) => self.decls.push(Decl::Node(NodeEntry {
                 name: ScopedName::local(n.name.value.clone()),
                 declaration_owner: dag_id.clone(),
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.definition.clone(), dag_id.clone()),
                 span: decl.span,
-            }),
+            })),
         }
     }
 }
@@ -873,14 +895,7 @@ pub(crate) fn resolve_with_imported_values(
     validate_private_in_public(file, src, &local.external_surface)?;
 
     Ok(CollectedFile {
-        consts: entries.consts,
-        params: entries.params,
-        nodes: entries.nodes,
-        asserts: entries.asserts,
-        plots: entries.plots,
-        figures: entries.figures,
-        layers: entries.layers,
-        source_order: local.source_order,
+        decls: entries.decls,
         assumes_map: entries.assumes_map,
         expected_fail: entries.expected_fail_map,
         external_surface: local.external_surface,

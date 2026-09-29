@@ -243,27 +243,14 @@ fn prepare_callable_plan(
         topo_order,
         assumes_map: semantic_dags
             .iter()
-            .flat_map(|dag| dag.assumes_map().iter().map(move |entry| (*dag, entry)))
-            .map(|(dag, (name, assumers))| {
-                let key =
-                    dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)?;
-                let assumers = assumers
-                    .iter()
-                    .map(|assumer| {
-                        dag.require_bound_decl_identity(assumer, src, DiagnosticAnchor::WholeFile)
-                    })
-                    .collect::<Result<Vec<_>, GraphcalError>>()?;
-                Ok((key, assumers))
-            })
-            .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
+            .flat_map(|dag| dag.assumes_map().iter())
+            .map(|(assertion, assumers)| (assertion.clone(), assumers.clone()))
+            .collect(),
         expected_fail: semantic_dags
             .iter()
-            .flat_map(|dag| dag.expected_fail_entries().map(move |entry| (*dag, entry)))
-            .map(|(dag, (name, expected))| {
-                dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                    .map(|key| (key, expected.clone()))
-            })
-            .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
+            .flat_map(|dag| dag.expected_fail_entries())
+            .map(|(assertion, expected)| (assertion.clone(), expected.clone()))
+            .collect(),
         domain_constraints,
     })
 }

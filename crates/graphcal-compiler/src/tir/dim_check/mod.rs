@@ -1145,13 +1145,9 @@ fn check_dimensions_dag(
     for entry in &dag.asserts {
         ctx.checkpoint()?;
         let body = ctx.hir_assert_body(&entry.name, entry.span)?;
-        let owner = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let owner = entry.identity();
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
-        if let Some(metadata) = dag.expected_fail.get(&entry.name) {
+        if let Some(metadata) = dag.expected_fail.get(&owner) {
             validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;
         }
         // Assertion results are never displayed with units, so no position

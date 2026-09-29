@@ -91,9 +91,9 @@ fn resolve_rocket_ksr() {
     let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
-    assert_eq!(resolved.consts.len(), 1);
-    assert_eq!(resolved.params.len(), 3);
-    assert_eq!(resolved.nodes.len(), 3);
+    assert_eq!(resolved.consts().len(), 1);
+    assert_eq!(resolved.params().len(), 3);
+    assert_eq!(resolved.nodes().len(), 3);
 }
 
 #[test]
@@ -101,9 +101,9 @@ fn resolve_constants_ksr() {
     let source = include_str!("../../../../../tests/fixtures/valid/constants.gcl");
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
-    assert_eq!(resolved.consts.len(), 4);
-    assert_eq!(resolved.params.len(), 1);
-    assert_eq!(resolved.nodes.len(), 2);
+    assert_eq!(resolved.consts().len(), 4);
+    assert_eq!(resolved.params().len(), 1);
+    assert_eq!(resolved.nodes().len(), 2);
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn parser_accepts_any_param_casing() {
 #[test]
 fn resolve_builtin_const_recognized() {
     let resolved = parse_and_resolve("node x: Dimensionless = PI * 2.0;").unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    assert_eq!(resolved.nodes().len(), 1);
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn resolve_builtin_function_recognized() {
          node upper: Dimensionless = greatest(@x, 3.0);",
     )
     .unwrap();
-    assert_eq!(resolved.nodes.len(), 3);
+    assert_eq!(resolved.nodes().len(), 3);
 }
 
 #[test]
@@ -450,8 +450,8 @@ fn resolve_const_collision_with_param() {
     let resolved =
         parse_and_resolve("const node a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;")
             .unwrap();
-    assert_eq!(resolved.consts.len(), 1);
-    assert_eq!(resolved.params.len(), 1);
+    assert_eq!(resolved.consts().len(), 1);
+    assert_eq!(resolved.params().len(), 1);
 }
 
 #[test]
@@ -460,7 +460,7 @@ fn resolve_unknown_bare_name_in_const_becomes_local_ref() {
     // and resolved to LocalRef (fallback). The resolve pass no longer rejects it;
     // the error is caught later in the TIR dim-check phase as UnknownLocalRef.
     let resolved = parse_and_resolve("const node a: Dimensionless = NONEXISTENT + 1.0;").unwrap();
-    assert_eq!(resolved.consts.len(), 1);
+    assert_eq!(resolved.consts().len(), 1);
 }
 
 #[test]
@@ -502,13 +502,13 @@ fn resolve_const_with_if_else() {
     let resolved =
         parse_and_resolve("const node a: Dimensionless = if 1.0 > 0.0 { 1.0 } else { 0.0 };")
             .unwrap();
-    assert_eq!(resolved.consts.len(), 1);
+    assert_eq!(resolved.consts().len(), 1);
 }
 
 #[test]
 fn resolve_const_with_unary_op() {
     let resolved = parse_and_resolve("const node a: Dimensionless = -42.0;").unwrap();
-    assert_eq!(resolved.consts.len(), 1);
+    assert_eq!(resolved.consts().len(), 1);
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn resolve_node_with_struct() {
     ",
     )
     .unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    assert_eq!(resolved.nodes().len(), 1);
 }
 
 #[test]
@@ -535,14 +535,14 @@ fn resolve_node_with_field_access() {
     ",
     )
     .unwrap();
-    assert_eq!(resolved.nodes.len(), 2);
+    assert_eq!(resolved.nodes().len(), 2);
 }
 
 #[test]
 fn resolve_node_with_convert() {
     let resolved =
         parse_and_resolve("param x: Length = 1000.0 m;\nnode y: Length = @x -> km;").unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    assert_eq!(resolved.nodes().len(), 1);
 }
 
 #[test]
@@ -551,9 +551,9 @@ fn resolve_import_decl_skipped() {
     let source = "import helper::{something};";
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
-    assert!(resolved.params.is_empty());
-    assert!(resolved.nodes.is_empty());
-    assert!(resolved.consts.is_empty());
+    assert!(resolved.params().is_empty());
+    assert!(resolved.nodes().is_empty());
+    assert!(resolved.consts().is_empty());
 }
 
 #[test]
@@ -569,7 +569,7 @@ fn resolve_indexed_param() {
     ",
     )
     .unwrap();
-    assert_eq!(resolved.params.len(), 1);
+    assert_eq!(resolved.params().len(), 1);
 }
 
 #[test]
@@ -586,7 +586,7 @@ fn resolve_for_comprehension() {
     ",
     )
     .unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    assert_eq!(resolved.nodes().len(), 1);
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn resolve_scan_expression() {
     ",
     )
     .unwrap();
-    assert_eq!(resolved.nodes.len(), 1);
+    assert_eq!(resolved.nodes().len(), 1);
 }
 
 #[test]
@@ -1097,8 +1097,8 @@ fn collected_plot_entries_carry_hidden_visibility() {
     )
     .unwrap();
     let visibilities: Vec<_> = resolved
-        .plots
-        .iter()
+        .plots()
+        .into_iter()
         .map(|entry| (entry.name.to_string(), entry.visibility))
         .collect();
     assert_eq!(
@@ -1118,7 +1118,7 @@ fn collected_value_entries_carry_their_signatures_and_scope() {
                   node n: Length = @p;";
     let resolved = parse_and_resolve(source).unwrap();
     let owner = DagId::root_in_package("test", "main");
-    let [constant] = resolved.consts.as_slice() else {
+    let [constant] = resolved.consts()[..] else {
         panic!("expected one const");
     };
     assert!(matches!(
@@ -1127,7 +1127,7 @@ fn collected_value_entries_carry_their_signatures_and_scope() {
     ));
     assert_eq!(constant.type_ann.resolution_owner, owner);
     assert_eq!(constant.expr.resolution_owner, owner);
-    let [defaulted, required] = resolved.params.as_slice() else {
+    let [defaulted, required] = resolved.params()[..] else {
         panic!("expected two params");
     };
     assert_eq!(
@@ -1137,7 +1137,7 @@ fn collected_value_entries_carry_their_signatures_and_scope() {
     assert!(defaulted.default.is_some());
     assert!(required.default.is_none());
     assert_eq!(source_text(source, required.type_ann.syntax.span), "Time");
-    let [node] = resolved.nodes.as_slice() else {
+    let [node] = resolved.nodes()[..] else {
         panic!("expected one node");
     };
     assert_eq!(source_text(source, node.type_ann.syntax.span), "Length");

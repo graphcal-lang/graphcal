@@ -669,8 +669,7 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
         .iter_mut()
         .for_each(|entry| entry.declaration_owner = owner.clone());
     for entry in &mut instance.params {
-        let template_port =
-            ResolvedDeclName::from_def(specialization.template.clone(), entry.name.leaf().clone());
+        let template_port = entry.identity();
         entry.declaration_owner = owner.clone();
         if let Some(binding) = edge.value_bindings.get(&template_port) {
             entry.default = Some(binding.clone());
@@ -684,9 +683,39 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
         .asserts
         .iter_mut()
         .for_each(|entry| entry.declaration_owner = owner.clone());
-    instance.expected_fail.values_mut().for_each(|expected| {
-        specialize_expected_fail(&mut expected.expected, &specialization.substitution);
-    });
+    instance
+        .plots
+        .iter_mut()
+        .for_each(|entry| entry.declaration_owner = owner.clone());
+    instance
+        .figures
+        .iter_mut()
+        .for_each(|entry| entry.declaration_owner = owner.clone());
+    instance
+        .layers
+        .iter_mut()
+        .for_each(|entry| entry.declaration_owner = owner.clone());
+    // Attribute tables are keyed by template-owned identities; the instance
+    // addresses the same declarations under its runtime identities.
+    instance.assumes_map = std::mem::take(&mut instance.assumes_map)
+        .into_iter()
+        .map(|(assertion, assumers)| {
+            (
+                instance.runtime_decl_identity(&assertion),
+                assumers
+                    .iter()
+                    .map(|assumer| instance.runtime_decl_identity(assumer))
+                    .collect(),
+            )
+        })
+        .collect();
+    instance.expected_fail = std::mem::take(&mut instance.expected_fail)
+        .into_iter()
+        .map(|(assertion, mut expected)| {
+            specialize_expected_fail(&mut expected.expected, &specialization.substitution);
+            (instance.runtime_decl_identity(&assertion), expected)
+        })
+        .collect();
 }
 
 fn specialize_dynamic_unit_scales(
