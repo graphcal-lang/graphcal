@@ -8,7 +8,7 @@ use miette::NamedSource;
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::UnaryOp;
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::rules::{self, Operand};
 
@@ -20,7 +20,7 @@ impl Infer<'_> {
         condition: &Expr,
         then_branch: &Expr,
         else_branch: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let infer = |expr: &Expr| self.infer_hir_type(expr);
         let cond_type = infer(condition)?;
         let then_type = infer(then_branch)?;
@@ -47,7 +47,7 @@ impl Infer<'_> {
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
         operand: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let operand_type = self.infer_hir_type(operand)?;
         rules::unary_rule(
             op,
@@ -94,7 +94,7 @@ impl Infer<'_> {
         op: crate::desugar::desugared_ast::BinOp,
         lhs: &Expr,
         rhs: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         use crate::desugar::desugared_ast::BinOp;
         let lhs_type = self.infer_hir_type(lhs)?;
         let rhs_type = self.infer_hir_type(rhs)?;
@@ -152,7 +152,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         target: &ResolvedUnitExpr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         // `->` distributes element-wise over indexed values (#648 U1): the quantity
@@ -188,7 +188,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         timezone: &crate::registry::time_zone::IanaTimeZoneId,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         if !matches!(&inner_type, CheckedType::Datetime(_)) {

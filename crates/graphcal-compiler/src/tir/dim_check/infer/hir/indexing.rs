@@ -6,7 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
@@ -33,7 +33,7 @@ impl Infer<'_> {
         axis: &ForBindingIndex,
         axis_span: Span,
         arg: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         use crate::syntax::ast::KeyFormKind;
 
         let arg_type = self.infer_hir_type(arg)?;
@@ -189,7 +189,7 @@ impl Infer<'_> {
         &self,
         bindings: &[ForBinding],
         body: &Expr,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let mut inner_locals = self.locals.child(Vec::new());
         for binding in bindings {
             // Every loop variable is a key of its axis. Coordinate arithmetic
@@ -238,7 +238,7 @@ impl Infer<'_> {
 }
 
 fn finite_axis_form(
-    index: &IndexTypeRef,
+    index: &IndexTypeRef<Symbolic>,
     declared_definition: Option<&crate::registry::types::IndexDef>,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -269,7 +269,7 @@ impl Infer<'_> {
         expr: &Expr,
         inner: &Expr,
         args: &[IndexArg],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let mut current = self.infer_hir_type(inner)?;
         for arg in args {
             let CheckedType::Indexed { element, index } = current else {

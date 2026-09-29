@@ -848,12 +848,11 @@ mod tests {
             .expression_facts()
             .unwrap()
             .records()
-            .filter_map(|(_, record)| match &record.fact {
-                graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
-                    constructor: Some(application),
-                    ..
-                } => Some(application),
-                _ => None,
+            .filter_map(|(_, record)| {
+                record
+                    .fact
+                    .concrete_value()
+                    .and_then(|value| value.constructor.as_ref())
             })
             .collect::<Vec<_>>();
         assert_eq!(applications.len(), 1);

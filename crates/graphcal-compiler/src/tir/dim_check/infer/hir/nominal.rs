@@ -5,7 +5,7 @@ use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::resolved_name::ResolvedConstructorName;
 
-use crate::registry::checked_type::StructTypeRef;
+use crate::registry::checked_type::{StructTypeRef, Symbolic};
 use crate::registry::error::GraphcalError;
 use crate::syntax::type_name::FieldName;
 
@@ -31,7 +31,7 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         field: &crate::syntax::span::Spanned<FieldName>,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let inner_type = self.infer_hir_type(inner)?;
         let CheckedType::Struct(type_name, type_args) = &inner_type else {
             return Err(GraphcalError::NotAStruct {
@@ -89,6 +89,7 @@ impl Infer<'_> {
             self.env.src,
             field.span,
         )
+        .map(|ty| ty.to_symbolic())
     }
 
     pub(super) fn infer_hir_constructor_call(
@@ -97,7 +98,7 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
             target.owning_type(),
@@ -191,7 +192,8 @@ impl Infer<'_> {
                 self.env.dag,
                 self.env.src,
                 field_init.name.span,
-            )?;
+            )?
+            .to_symbolic();
             if value_type != expected {
                 let (expected, found) =
                     format_distinct_types(&expected, &value_type, self.env.registry);

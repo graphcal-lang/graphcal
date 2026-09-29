@@ -5,7 +5,7 @@ use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
@@ -15,7 +15,7 @@ impl Infer<'_> {
         &self,
         kind: ConversionFn,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
             ConversionFn::ToFloat => {
@@ -113,7 +113,7 @@ impl Infer<'_> {
         name: BuiltinFn,
         scale: crate::registry::time_scale::TimeScale,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
@@ -133,7 +133,7 @@ impl Infer<'_> {
         epoch_scale: Option<crate::registry::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         match kind {
             DatetimeConstructorFn::Datetime => {
                 let first_is_valid = match args.len() {
@@ -212,8 +212,8 @@ impl Infer<'_> {
         &self,
         name: BuiltinFn,
         args: &[Expr],
-        result: CheckedType,
-    ) -> Result<CheckedType, GraphcalError> {
+        result: CheckedType<Symbolic>,
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
         if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {

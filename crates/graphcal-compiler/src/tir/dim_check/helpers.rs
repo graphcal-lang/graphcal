@@ -7,9 +7,9 @@ use crate::hir::NominalTypeDef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 
-use crate::registry::checked_type::{CheckedType, StructTypeRef};
+use crate::registry::checked_type::{CheckedType, Concreteness, StructTypeRef, Symbolic};
 
-pub(super) fn is_bool_type(ty: &CheckedType) -> bool {
+pub(super) fn is_bool_type(ty: &CheckedType<Symbolic>) -> bool {
     match ty {
         CheckedType::Bool => true,
         CheckedType::Indexed { element, .. } => is_bool_type(element),
@@ -34,15 +34,18 @@ pub(super) fn struct_type_def_for_inferred<'a>(
 
 /// Format a checked type for display in diagnostics.
 #[must_use]
-pub fn format_checked_type(ty: &CheckedType, registry: &FormattingRegistry) -> String {
+pub fn format_checked_type<V: Concreteness>(
+    ty: &CheckedType<V>,
+    registry: &FormattingRegistry,
+) -> String {
     ty.format(&registry.dimensions)
 }
 
 /// Format unequal inferred types without emitting a self-contradictory
 /// leaf-only diagnostic such as `expected Foo, found Foo`.
 pub(super) fn format_distinct_types(
-    expected: &CheckedType,
-    found: &CheckedType,
+    expected: &CheckedType<Symbolic>,
+    found: &CheckedType<Symbolic>,
     registry: &FormattingRegistry,
 ) -> (String, String) {
     let expected_display = expected.format(&registry.dimensions);
@@ -56,8 +59,8 @@ pub(super) fn format_distinct_types(
     )
 }
 
-pub fn expect_quantity(
-    inferred: &CheckedType,
+pub fn expect_quantity<V: Concreteness>(
+    inferred: &CheckedType<V>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,

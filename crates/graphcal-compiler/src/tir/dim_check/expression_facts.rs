@@ -7,13 +7,15 @@ use std::sync::Arc;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::expr::visit_expr;
-use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::{CheckedType, Symbolic};
 use crate::registry::error::GraphcalError;
-use crate::tir::expression_facts::{CheckedExpressionFacts, CheckingEnvironment, ExpressionFact};
+use crate::tir::expression_facts::{
+    CheckedExpressionFacts, CheckingEnvironment, ExpressionFact, ValueFact,
+};
 use crate::tir::typed::model::TIR;
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
-use super::expression_axes::{checked_expression_shape, checked_index_cardinality};
+use super::expression_axes::{check_materializable, checked_index_cardinality};
 use super::{DimCheckContext, check_decl_expr_type, infer};
 
 /// Discharge one bound's retained Nat/type/shape obligations in its canonical
@@ -146,7 +148,7 @@ fn check_retained_reconciliations(
                             | NominalObservation::TypeArgument(_) => continue,
                         };
                         (identity.declared_resolved() == Some(source)
-                            || replacement.matches_ref(identity))
+                            || replacement.to_symbolic().matches_ref(identity))
                         .then(|| (overridden.to_string(), "index", detail))
                     }
                 };
@@ -202,17 +204,21 @@ fn check_instance_defaults(
         })?;
         let declaration = entry.identity();
         check_retained_reconciliations(ctx.env.dag, &declaration, record.nominal_observations())?;
-        let ExpressionFact::Value { checked_type, .. } = &record.fact else {
+        let Some(value) = record.fact.symbolic_value() else {
             return Err(GraphcalError::internal_error(
                 "parameter default has no value checking result",
                 ctx.env.src,
                 DiagnosticAnchor::Source(default.span),
             ));
         };
-        let specialized =
-            specialize_expression_type(checked_type, substitution, ctx.env.tir, ctx.env.src)?;
+        let specialized = specialize_expression_type(
+            &value.checked_type,
+            substitution,
+            ctx.env.tir,
+            ctx.env.src,
+        )?;
         let expected = entry.type_ann.checked().declared();
-        if &specialized != expected {
+        if specialized != expected.to_symbolic() {
             return Err(GraphcalError::DimensionMismatchInAnnotation {
                 declared: expected.format(&ctx.env.registry.dimensions),
                 inferred: specialized.format(&ctx.env.registry.dimensions),
@@ -232,29 +238,31 @@ enum FactSubstitution<'a> {
 impl FactSubstitution<'_> {
     fn value_type(
         &self,
-        ty: &CheckedType,
+        ty: &CheckedType<Symbolic>,
         tir: &TIR,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
-    ) -> Result<CheckedType, GraphcalError> {
+    ) -> Result<CheckedType<Symbolic>, GraphcalError> {
         match self {
             Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
             Self::Generic(substitution) => substitution
-                .apply_declared(ty, span)
+                .instantiate(ty, span)
+                .map(|ty| ty.to_symbolic())
                 .map_err(|error| error.into_graphcal(src)),
         }
     }
 
     fn index(
         &self,
-        index: &crate::registry::checked_type::IndexTypeRef,
+        index: &crate::registry::checked_type::IndexTypeRef<Symbolic>,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
-    ) -> Result<crate::registry::checked_type::IndexTypeRef, GraphcalError> {
+    ) -> Result<crate::registry::checked_type::IndexTypeRef<Symbolic>, GraphcalError> {
         match self {
             Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
             Self::Generic(substitution) => substitution
-                .apply_index_ref(index, span)
+                .instantiate_index(index, span)
+                .map(|index| index.to_symbolic())
                 .map_err(|error| error.into_graphcal(src)),
         }
     }
@@ -274,16 +282,13 @@ fn specialize_record(
     use crate::tir::expression_facts::{
         CheckedExpressionRecord, ConstructorApplication, ConstructorMatch, StaticIndexRequirement,
     };
-    let fact = match &record.fact {
-        ExpressionFact::Contextual(kind) => ExpressionFact::Contextual(*kind),
-        ExpressionFact::Value {
-            checked_type,
-            constructor,
-            ..
-        } => {
-            let checked_type = substitution.value_type(checked_type, tir, src, span)?;
-            let shape = checked_expression_shape(&checked_type, tir, src, span)?;
-            let constructor = constructor
+    let fact = match record.fact.symbolic_value() {
+        None => record.fact.clone(),
+        Some(value) => {
+            let checked_type = substitution.value_type(&value.checked_type, tir, src, span)?;
+            check_materializable(&checked_type, tir, src, span)?;
+            let constructor = value
+                .constructor
                 .as_ref()
                 .map(|application| {
                     let CheckedType::Struct(_, args) = &checked_type else {
@@ -300,11 +305,10 @@ fn specialize_record(
                     }))
                 })
                 .transpose()?;
-            ExpressionFact::Value {
+            ExpressionFact::Symbolic(ValueFact {
                 checked_type,
-                shape,
                 constructor,
-            }
+            })
         }
     };
     let static_indexes = record

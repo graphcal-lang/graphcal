@@ -732,6 +732,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["registry", "checked_type", "sealed"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["registry", "checked_type", "tests"]
 role = "contracts"
 

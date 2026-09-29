@@ -377,19 +377,7 @@ fn generic_nat_bindings(
             | CheckedGenericArg::Index(_)
             | CheckedGenericArg::Type(_) => None,
         })
-        .map(|(param, form)| {
-            form.constant_value()
-                .map(|value| (param.id().clone(), value))
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "concrete Nat argument `{}` for `{}` remained symbolic",
-                        form.format(),
-                        param.name()
-                    ),
-                    src: src.clone(),
-                    span: span.into(),
-                })
-        })
+        .map(|(param, value)| Ok((param.id().clone(), *value)))
         .collect()
 }
 
@@ -571,10 +559,10 @@ fn collect_field_constraint_applications(
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
         for (_, record) in facts.records() {
-            if let graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
+            if let Some(graphcal_compiler::tir::expression_facts::ValueFact {
                 constructor: Some(application),
                 ..
-            } = &record.fact
+            }) = record.fact.concrete_value()
             {
                 applications.insert(ConcreteNominalApplication {
                     identity: StructTypeRef::from_resolved(application.definition().clone()),

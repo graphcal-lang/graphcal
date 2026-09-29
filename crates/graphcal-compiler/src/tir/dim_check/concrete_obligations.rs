@@ -5,10 +5,12 @@ use super::infer::hir::concrete_generic_substitutions;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
-use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{
+    CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef, Symbolic,
+};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
-use crate::tir::expression_facts::ExpressionFact;
+use crate::tir::expression_facts::{ExpressionFact, ValueFact};
 use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TIR};
 use miette::NamedSource;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq, Eq)]
 struct Application {
     identity: StructTypeRef,
-    arguments: Vec<CheckedGenericArg>,
+    arguments: Vec<CheckedGenericArg<Symbolic>>,
 }
 
 struct Context<'a> {
@@ -28,7 +30,7 @@ struct Context<'a> {
 }
 
 pub(super) fn validate_concrete_type_obligations(
-    inferred: &CheckedType,
+    inferred: &CheckedType<Symbolic>,
     dag: &DagTIR,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
@@ -56,7 +58,7 @@ pub(super) fn validate_project(
     for (_, dag) in tir.local_dags() {
         for (_, annotation) in dag.value_decl_types() {
             validate_concrete_type_obligations(
-                annotation.checked().declared(),
+                &annotation.checked().declared().to_symbolic(),
                 dag,
                 tir,
                 src,
@@ -68,11 +70,8 @@ pub(super) fn validate_project(
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
         for (id, record) in facts.records() {
-            if let ExpressionFact::Value {
-                checked_type,
-                constructor: Some(_),
-                ..
-            } = &record.fact
+            if let Some(value) = record.fact.symbolic_value()
+                && value.constructor.is_some()
             {
                 let span = facts.span(id).map_err(|error| {
                     GraphcalError::internal_error(
@@ -82,7 +81,7 @@ pub(super) fn validate_project(
                     )
                 })?;
                 validate_concrete_type_obligations(
-                    checked_type,
+                    &value.checked_type,
                     dag,
                     tir,
                     src,
@@ -96,12 +95,12 @@ pub(super) fn validate_project(
 }
 
 fn validate(
-    inferred: &CheckedType,
+    inferred: &CheckedType<Symbolic>,
     ctx: &Context<'_>,
     stack: &mut Vec<Application>,
 ) -> Result<(), GraphcalError> {
     ctx.cancellation.checkpoint()?;
-    super::expression_axes::checked_expression_shape(inferred, ctx.tir, ctx.src, ctx.span)?;
+    super::expression_axes::check_materializable(inferred, ctx.tir, ctx.src, ctx.span)?;
     match inferred {
         CheckedType::Struct(identity, arguments) => {
             for arg in arguments {
@@ -167,7 +166,7 @@ fn validate(
                             ctx,
                         )?;
                     }
-                    validate(&ty, ctx, stack)?;
+                    validate(&ty.to_symbolic(), ctx, stack)?;
                 }
             }
             stack.pop();
@@ -186,19 +185,14 @@ fn validate(
     }
 }
 
-fn validate_index(index: &IndexTypeRef, ctx: &Context<'_>) -> Result<(), GraphcalError> {
-    match index.finite_index_form() {
-        Some(form) if !form.is_constant() => Err(GraphcalError::EvalError {
+fn validate_index(index: &IndexTypeRef<Symbolic>, ctx: &Context<'_>) -> Result<(), GraphcalError> {
+    match index.to_concrete() {
+        Some(_) => Ok(()),
+        None => Err(GraphcalError::EvalError {
             message: format!("unresolved finite-index obligation `{index}`"),
             src: ctx.src.clone(),
             span: ctx.span.into(),
         }),
-        Some(form) if form.constant() == 0 => Err(GraphcalError::EvalError {
-            message: "Fin(0) is invalid: finite indexes must contain at least one key".into(),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        }),
-        _ => Ok(()),
     }
 }
 
@@ -249,7 +243,7 @@ fn check_bound(
             DiagnosticAnchor::Source(bound.span),
         )
     })?;
-    let ExpressionFact::Value { checked_type, .. } = &record.fact else {
+    let ExpressionFact::Executable(ValueFact { checked_type, .. }) = &record.fact else {
         return Err(GraphcalError::internal_error(
             "bound has no retained value type",
             &bound.src,

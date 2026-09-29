@@ -6,6 +6,7 @@
 //! the typed registry in [`crate::plot_props`], and property values are
 //! type-checked (string literal vs. dimensionless number vs. boolean).
 
+use crate::registry::checked_type::Symbolic;
 use std::collections::HashMap;
 
 use crate::hir::ExprKind;
@@ -245,15 +246,15 @@ fn check_plot_encodings(
         .collect())
 }
 
-fn plot_channel_shape(inferred: &CheckedType) -> Option<PlotChannelShape> {
+fn plot_channel_shape(inferred: &CheckedType<Symbolic>) -> Option<PlotChannelShape> {
     let mut axes = Vec::new();
     let leaf = plot_leaf_kind(inferred, &mut axes)?;
     Some(PlotChannelShape::new(axes, leaf))
 }
 
 fn plot_leaf_kind(
-    inferred: &CheckedType,
-    axes: &mut Vec<crate::registry::checked_type::IndexTypeRef>,
+    inferred: &CheckedType<Symbolic>,
+    axes: &mut Vec<crate::registry::checked_type::IndexTypeRef<Symbolic>>,
 ) -> Option<PlotLeafKind> {
     match inferred {
         CheckedType::Indexed { element, index } => {
@@ -378,6 +379,6 @@ fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::Expr,
-) -> Result<CheckedType, GraphcalError> {
+) -> Result<CheckedType<Symbolic>, GraphcalError> {
     ctx.infer_hir(expr, Some(owner))
 }
