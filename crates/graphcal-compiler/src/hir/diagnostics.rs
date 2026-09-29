@@ -9,10 +9,8 @@ use crate::hir;
 use crate::registry::error::GraphcalError;
 use crate::resolve::category::SymbolTable;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
-use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
-use crate::syntax::span::Span;
 
 /// Reject source-only type syntax that has no valid HIR representation.
 pub fn validate_type_annotation(
@@ -66,118 +64,31 @@ fn validate_generic_args<'a>(
     })
 }
 
-/// Convert a HIR type-lowering failure while preserving source-category
-/// diagnostics that are only knowable at the syntax-to-HIR boundary.
+/// Convert a failure to lower a declaration type annotation.
+///
+/// An unknown path in an index axis or a dimension term is reported as the
+/// missing index or dimension; its slot says which namespace was searched.
 pub fn type_lower_error_to_graphcal(
     err: &hir::HirLowerError,
-    type_ann: &TypeExpr,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
-    if let hir::HirLowerError::UnknownTypePath { path, span } = err {
-        if type_expr_has_index_name_at_span(type_ann, *span)
-            && let Ok(name) = IndexName::try_new(path.clone())
-        {
-            return GraphcalError::UnknownIndex {
-                name: name.into(),
+    if let hir::HirLowerError::UnknownTypePath { path, slot, span } = err
+        && let Some(atom) = path.as_bare()
+    {
+        return match slot {
+            hir::TypePathSlot::IndexAxis => GraphcalError::UnknownIndex {
+                name: IndexName::classify(atom.clone()).into(),
                 src: src.clone(),
                 span: (*span).into(),
-            };
-        }
-        if type_expr_has_dim_term_at_span(type_ann, *span)
-            && let Ok(name) = DimName::try_new(path.clone())
-        {
-            return GraphcalError::UnknownDimension {
-                name: NamePath::from(name.into_atom()),
+            },
+            hir::TypePathSlot::DimensionTerm => GraphcalError::UnknownDimension {
+                name: NamePath::local(atom.clone()),
                 src: src.clone(),
                 span: (*span).into(),
-            };
-        }
+            },
+        };
     }
     hir_lower_error_to_graphcal(err, src)
-}
-
-fn generic_args_have_index_name_at_span<'a>(
-    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    span: Span,
-) -> bool {
-    generic_args.into_iter().any(|arg| {
-        matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                if type_expr_has_index_name_at_span(type_expr, span)
-        )
-    })
-}
-
-fn generic_args_have_dim_term_at_span<'a>(
-    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    span: Span,
-) -> bool {
-    generic_args.into_iter().any(|arg| {
-        matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                if type_expr_has_dim_term_at_span(type_expr, span)
-        ) || matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
-                if ambiguous.span() == span
-        )
-    })
-}
-
-fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
-    match &type_ann.kind {
-        TypeExprKind::Indexed { base, indexes } => {
-            type_expr_has_index_name_at_span(base, span)
-                || indexes.iter().any(|index| match index {
-                    crate::desugar::desugared_ast::IndexExpr::Name(name) => name.span == span,
-                    crate::desugar::desugared_ast::IndexExpr::Finite { .. }
-                    | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
-                })
-        }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            generic_args_have_index_name_at_span(generic_args, span)
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            generic_args_have_index_name_at_span(generic_args, span)
-        }
-        TypeExprKind::DatetimeApplication { type_args } => type_args
-            .iter()
-            .any(|arg| type_expr_has_index_name_at_span(arg, span)),
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::DimExpr(_) => false,
-    }
-}
-
-fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
-    match &type_ann.kind {
-        TypeExprKind::DimExpr(dim_expr) => dim_expr
-            .terms
-            .iter()
-            .any(|item| item.term.name.span == span),
-        TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            generic_args_have_dim_term_at_span(generic_args, span)
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            generic_args_have_dim_term_at_span(generic_args, span)
-        }
-        TypeExprKind::DatetimeApplication { type_args } => type_args
-            .iter()
-            .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime => false,
-    }
 }
 
 /// Convert a HIR expression-lowering failure into a spanned diagnostic.
@@ -546,5 +457,55 @@ pub fn hir_lower_error_to_graphcal(
         message: err.to_string(),
         src: src.clone(),
         span: span.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::syntax::names::NameAtom;
+    use crate::syntax::non_empty::NonEmpty;
+    use crate::syntax::span::Span;
+
+    fn unknown(path: NamePath, slot: hir::TypePathSlot) -> GraphcalError {
+        let src = NamedSource::new("main.gcl", Arc::new(String::new()));
+        let error = hir::HirLowerError::UnknownTypePath {
+            path,
+            slot,
+            span: Span::new(2, 3),
+        };
+        type_lower_error_to_graphcal(&error, &src)
+    }
+
+    fn atom(name: &str) -> NameAtom {
+        NameAtom::try_from(name).unwrap()
+    }
+
+    #[test]
+    fn unknown_type_path_is_reported_by_its_slot() {
+        let path = NamePath::local(atom("Foo"));
+        assert!(matches!(
+            unknown(path.clone(), hir::TypePathSlot::IndexAxis),
+            GraphcalError::UnknownIndex { name, .. } if name.to_string() == "Foo"
+        ));
+        assert!(matches!(
+            unknown(path.clone(), hir::TypePathSlot::DimensionTerm),
+            GraphcalError::UnknownDimension { name, .. } if name == path
+        ));
+    }
+
+    #[test]
+    fn qualified_unknown_type_path_keeps_the_generic_diagnostic() {
+        let path = NamePath::qualified(NonEmpty::singleton(atom("lib")), atom("Foo"));
+        for slot in [
+            hir::TypePathSlot::IndexAxis,
+            hir::TypePathSlot::DimensionTerm,
+        ] {
+            assert!(matches!(
+                unknown(path.clone(), slot),
+                GraphcalError::EvalError { message, .. }
+                    if message == "unknown type-level name `lib::Foo`"
+            ));
+        }
     }
 }

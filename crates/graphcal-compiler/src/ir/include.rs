@@ -345,7 +345,7 @@ impl UnfrozenIR {
                 let scope =
                     crate::hir::ModuleScope::new(resolution_owner, resolver, &generic_scope);
                 let decl_type = crate::hir::lower_decl_type(type_ann, scope).map_err(|error| {
-                    crate::hir::diagnostics::type_lower_error_to_graphcal(&error, type_ann, src)
+                    crate::hir::diagnostics::type_lower_error_to_graphcal(&error, src)
                 })?;
                 let domain_bounds = type_ann
                     .domain_bounds()

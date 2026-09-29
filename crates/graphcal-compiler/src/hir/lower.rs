@@ -5,7 +5,10 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::resolved_name::{ResolvedDimName, ResolvedName, ResolvedUnitName};
+use crate::resolved_name::{
+    ResolvedConstructorName, ResolvedDimName, ResolvedName, ResolvedStructTypeName,
+    ResolvedUnitName,
+};
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -43,7 +46,11 @@ pub enum HirLowerError {
     },
     /// A type-level path was not found in any namespace valid for that syntax position.
     #[error("unknown type-level name `{path}`")]
-    UnknownTypePath { path: String, span: Span },
+    UnknownTypePath {
+        path: NamePath,
+        slot: TypePathSlot,
+        span: Span,
+    },
     /// An index label appeared in a type-expression slot.
     #[error("index label `{index}#{label}` cannot be used as a type")]
     IndexLabelAsType {
@@ -79,8 +86,8 @@ pub enum HirLowerError {
     /// An application supplied the wrong number of generic arguments.
     #[error("`{target}` expects {expected} generic argument(s), got {got}")]
     WrongGenericArgCount {
-        target: String,
-        expected: String,
+        target: GenericApplicationTarget,
+        expected: GenericArgArity,
         got: usize,
         span: Span,
     },
@@ -117,10 +124,93 @@ pub enum HirLowerError {
     /// `Datetime<...>` argument was a bare name, but not a supported time scale.
     #[error("unknown time scale `{name}`; expected one of: {expected}")]
     UnknownTimeScale {
-        name: String,
+        name: NameAtom,
         expected: &'static str,
         span: Span,
     },
+}
+
+/// The syntactic position of a type-level path that resolved to nothing.
+///
+/// Each position has one namespace, so the diagnostic can name what was
+/// missing without re-walking the syntax tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypePathSlot {
+    /// An index axis of a declaration type: `I` in `T[I]`.
+    IndexAxis,
+    /// A term of a dimension expression in a type position: `L` in `L / T`.
+    DimensionTerm,
+}
+
+/// The generic type or constructor a generic argument list is applied to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericApplicationTarget {
+    /// A user-declared generic struct type.
+    StructType(ResolvedStructTypeName),
+    /// A constructor of a user-declared generic type.
+    Constructor(ResolvedConstructorName),
+    /// The built-in `Complex<D>` type.
+    Complex,
+    /// The built-in `Key<I>` type.
+    Key,
+}
+
+impl std::fmt::Display for GenericApplicationTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StructType(name) => f.write_str(name.as_str()),
+            Self::Constructor(name) => f.write_str(name.as_str()),
+            Self::Complex => f.write_str("Complex"),
+            Self::Key => f.write_str("Key"),
+        }
+    }
+}
+
+/// The accepted number of generic arguments: every parameter up to the last
+/// one without a default is required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GenericArgArity {
+    required: usize,
+    max: usize,
+}
+
+impl GenericArgArity {
+    /// Exactly `count` arguments.
+    #[must_use]
+    pub const fn exactly(count: usize) -> Self {
+        Self {
+            required: count,
+            max: count,
+        }
+    }
+
+    /// The arity of a declared generic parameter list.
+    fn of_params(params: &[crate::resolve::symbols::GenericParamSignature]) -> Self {
+        let required = params
+            .iter()
+            .rposition(|param| !param.has_default)
+            .map_or(0, |index| index.saturating_add(1));
+        Self {
+            required,
+            max: params.len(),
+        }
+    }
+
+    /// Whether `got` arguments are accepted.
+    #[must_use]
+    pub const fn accepts(self, got: usize) -> bool {
+        self.required <= got && got <= self.max
+    }
+}
+
+impl std::fmt::Display for GenericArgArity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.required == self.max {
+            write!(f, "{}", self.max)
+        } else {
+            write!(f, "{}..{}", self.required, self.max)
+        }
+    }
 }
 
 /// Implicit prelude type-system symbols visible without an import.
@@ -400,7 +490,7 @@ fn lower_type_slot(
                 })?;
             let resolved_name = struct_type.into_resolved();
             let generic_args = lower_generic_args(
-                resolved_name.as_str(),
+                GenericApplicationTarget::StructType(resolved_name.clone()),
                 struct_type.kind(),
                 generic_args.as_slice(),
                 type_ann.span,
@@ -423,8 +513,8 @@ fn lower_complex_application(
 ) -> Result<DimArg, HirLowerError> {
     let [arg] = args else {
         return Err(HirLowerError::WrongGenericArgCount {
-            target: "Complex".to_string(),
-            expected: "1".to_string(),
+            target: GenericApplicationTarget::Complex,
+            expected: GenericArgArity::exactly(1),
             got: args.len(),
             span,
         });
@@ -450,8 +540,8 @@ fn lower_key_application(
 ) -> Result<IndexRef, HirLowerError> {
     let [arg] = args else {
         return Err(HirLowerError::WrongGenericArgCount {
-            target: "Key".to_string(),
-            expected: "1".to_string(),
+            target: GenericApplicationTarget::Key,
+            expected: GenericArgArity::exactly(1),
             got: args.len(),
             span,
         });
@@ -471,7 +561,7 @@ fn lower_key_application(
 }
 
 pub(crate) fn lower_generic_args(
-    target: &str,
+    target: GenericApplicationTarget,
     params: &[crate::resolve::symbols::GenericParamSignature],
     args: &[ast::GenericArg],
     span: Span,
@@ -488,29 +578,22 @@ pub(crate) fn lower_generic_args(
 }
 
 fn check_generic_arg_count(
-    target: &str,
+    target: GenericApplicationTarget,
     params: &[crate::resolve::symbols::GenericParamSignature],
     got: usize,
     span: Span,
 ) -> Result<(), HirLowerError> {
-    let required = params
-        .iter()
-        .rposition(|param| !param.has_default)
-        .map_or(0, |index| index.saturating_add(1));
-    if got < required || got > params.len() {
-        let expected = if required == params.len() {
-            params.len().to_string()
-        } else {
-            format!("{required}..{}", params.len())
-        };
-        return Err(HirLowerError::WrongGenericArgCount {
-            target: target.to_string(),
+    let expected = GenericArgArity::of_params(params);
+    if expected.accepts(got) {
+        Ok(())
+    } else {
+        Err(HirLowerError::WrongGenericArgCount {
+            target,
             expected,
             got,
             span,
-        });
+        })
     }
-    Ok(())
 }
 
 pub(crate) fn lower_generic_arg_for_constraint(
@@ -757,7 +840,7 @@ fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError>
     atom.as_str()
         .parse::<TimeScale>()
         .map_err(|_| HirLowerError::UnknownTimeScale {
-            name: atom.to_string(),
+            name: atom.clone(),
             expected: "UTC, TAI, TT, TDB, ET, GPST, GST, BDT, QZSST",
             span: item.term.name.span,
         })
@@ -775,8 +858,8 @@ fn lower_dim_expr_as_type(
                 ValueTypeKind::DimExpr(dim_expr),
                 span,
             ))),
-            Err(HirLowerError::UnknownTypePath { path, span }) => deferred_error.map_or(
-                Err(HirLowerError::UnknownTypePath { path, span }),
+            Err(HirLowerError::UnknownTypePath { path, slot, span }) => deferred_error.map_or(
+                Err(HirLowerError::UnknownTypePath { path, slot, span }),
                 |source| Err(HirLowerError::ModuleResolve { source, span }),
             ),
             Err(HirLowerError::ModuleResolve { source, span }) => {
@@ -858,7 +941,7 @@ fn lower_single_term_nominal_type(
                 ValueTypeKind::Struct(Spanned::new(struct_type, item.term.name.span))
             } else {
                 check_generic_arg_count(
-                    struct_type.as_str(),
+                    GenericApplicationTarget::StructType(struct_type.clone()),
                     generic_params,
                     0,
                     item.term.name.span,
@@ -933,7 +1016,8 @@ fn lower_dim_term(term: &ast::DimTerm, ctx: ModuleScope<'_>) -> Result<DimTermRe
         Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
             .resolve_dimension_path(&term.name.value)
             .ok_or_else(|| HirLowerError::UnknownTypePath {
-                path: term.name.value.display_path(),
+                path: term.name.value.clone(),
+                slot: TypePathSlot::DimensionTerm,
                 span: term.name.span,
             })?,
         Err(source) => {
@@ -997,7 +1081,8 @@ fn lower_index_expr_name(
         .map(|index| IndexRef::Concrete(Spanned::new(index, path.span)))
         .map_err(|source| match source {
             ModuleResolveError::UnknownName { .. } => HirLowerError::UnknownTypePath {
-                path: path.value.display_path(),
+                path: path.value.clone(),
+                slot: TypePathSlot::IndexAxis,
                 span: path.span,
             },
             source => HirLowerError::ModuleResolve {
@@ -1450,5 +1535,103 @@ mod tests {
             .to_string(),
             "I"
         );
+    }
+
+    fn unknown_type_path(param_type: &str) -> (NamePath, TypePathSlot) {
+        match lower_param_type(param_type) {
+            Err(HirLowerError::UnknownTypePath { path, slot, .. }) => (path, slot),
+            other => panic!("expected an unknown type path for `{param_type}`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_type_paths_record_their_syntactic_slot() {
+        let missing = NamePath::local(NameAtom::try_from("Missing").unwrap());
+        for (param_type, slot) in [
+            ("Dimensionless[Missing]", TypePathSlot::IndexAxis),
+            ("Length[M, Missing]", TypePathSlot::IndexAxis),
+            ("Missing", TypePathSlot::DimensionTerm),
+            ("Length / Missing", TypePathSlot::DimensionTerm),
+            ("Vec<Missing>", TypePathSlot::DimensionTerm),
+            // An ambiguous product argument is a dimension product.
+            ("Vec<Length * Missing>", TypePathSlot::DimensionTerm),
+            ("Box<Length / Missing>", TypePathSlot::DimensionTerm),
+        ] {
+            assert_eq!(
+                unknown_type_path(param_type),
+                (missing.clone(), slot),
+                "`{param_type}`"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_arg_arity_accepts_the_defaultable_range() {
+        let exact = GenericArgArity::exactly(1);
+        assert!(!exact.accepts(0));
+        assert!(exact.accepts(1));
+        assert!(!exact.accepts(2));
+        assert_eq!(exact.to_string(), "1");
+
+        let ranged = GenericArgArity {
+            required: 1,
+            max: 3,
+        };
+        assert!(!ranged.accepts(0));
+        assert!(ranged.accepts(1));
+        assert!(ranged.accepts(3));
+        assert!(!ranged.accepts(4));
+        assert_eq!(ranged.to_string(), "1..3");
+    }
+
+    #[test]
+    fn generic_arg_arity_requires_every_parameter_before_the_last_undefaulted_one() {
+        let param = |name: &str, has_default| crate::resolve::symbols::GenericParamSignature {
+            name: GenericParamName::expect_valid(name),
+            constraint: GenericConstraint::Type,
+            has_default,
+        };
+        assert_eq!(GenericArgArity::of_params(&[]), GenericArgArity::exactly(0));
+        assert_eq!(
+            GenericArgArity::of_params(&[param("A", false), param("B", true)]),
+            GenericArgArity {
+                required: 1,
+                max: 2
+            }
+        );
+        assert_eq!(
+            GenericArgArity::of_params(&[param("A", true), param("B", false)]),
+            GenericArgArity::exactly(2)
+        );
+        assert_eq!(
+            GenericArgArity::of_params(&[param("A", true), param("B", true)]),
+            GenericArgArity {
+                required: 0,
+                max: 2
+            }
+        );
+    }
+
+    #[test]
+    fn wrong_generic_arg_count_names_its_target() {
+        for (param_type, message) in [
+            (
+                "Complex<Length, Length>",
+                "`Complex` expects 1 generic argument(s), got 2",
+            ),
+            ("Key<M, J>", "`Key` expects 1 generic argument(s), got 2"),
+            (
+                "Vec<Length, Length>",
+                "`Vec` expects 1 generic argument(s), got 2",
+            ),
+            ("Vec", "`Vec` expects 1 generic argument(s), got 0"),
+        ] {
+            let error = lower_param_type(param_type).unwrap_err();
+            assert!(
+                matches!(error, HirLowerError::WrongGenericArgCount { .. }),
+                "`{param_type}`: {error:?}"
+            );
+            assert_eq!(error.to_string(), message, "`{param_type}`");
+        }
     }
 }
