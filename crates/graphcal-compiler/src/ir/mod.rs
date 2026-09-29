@@ -1,5 +1,6 @@
 //! Graphcal IR: declaration collection and intermediate representation lowering.
 
+pub mod entry;
 pub(crate) mod extern_fns;
 pub mod imported_binding;
 pub(crate) mod include;

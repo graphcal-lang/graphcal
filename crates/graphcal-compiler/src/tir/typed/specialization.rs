@@ -673,9 +673,7 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
             ResolvedDeclName::from_def(specialization.template.clone(), entry.name.leaf().clone());
         entry.declaration_owner = owner.clone();
         if let Some(binding) = edge.value_bindings.get(&template_port) {
-            entry.default = Some(crate::ir::lower::ParamDefault {
-                expr: binding.clone(),
-            });
+            entry.default = Some(binding.clone());
         }
     }
     instance

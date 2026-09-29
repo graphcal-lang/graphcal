@@ -2091,10 +2091,7 @@ impl DagTIR {
     #[must_use]
     pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
         match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot]
-                .default
-                .as_ref()
-                .map(|default| &*default.expr),
+            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot].default.as_deref(),
             Some(ValueDeclarationSlot::Node(slot)) => {
                 self.nodes[*slot].definition.formula().map(|expr| &**expr)
             }
@@ -2193,7 +2190,7 @@ impl DagTIR {
             .chain(
                 self.params
                     .iter()
-                    .filter_map(|entry| entry.default.as_ref().map(|default| &*default.expr)),
+                    .filter_map(|entry| entry.default.as_deref()),
             )
             .chain(
                 self.nodes

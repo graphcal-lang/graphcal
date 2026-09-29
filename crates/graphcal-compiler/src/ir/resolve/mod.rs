@@ -15,17 +15,20 @@ use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBind
 use super::static_interface::{Requirement, StaticInputKind as NominalKind};
 
 use crate::assertion_expectation::ExpectedFail;
+use crate::dag_id::DagId;
 use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,
+    AssertBody, DeclKind, Declaration, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
+    TypeExprKind,
 };
+use crate::ir::entry::{
+    AssertEntry, ConstEntry, FigureEntry, InScope, LayerEntry, NodeEntry, ParamEntry, PlotEntry,
+    PlotSyntax, Syntax,
+};
+use crate::plot_visibility::PlotVisibility;
 use crate::registry::error::GraphcalError;
 use crate::registry::reserved_name::validate_reserved_name;
-use crate::registry::resolve_types::{
-    CollectedAssertEntry, CollectedConstEntry, CollectedExpectedFail, CollectedFigureEntry,
-    CollectedLayerEntry, CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry,
-    ExternalDeclSurface,
-};
+use crate::registry::resolve_types::{CollectedExpectedFail, ExternalDeclSurface};
 use crate::resolve::namespace::Namespace;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::attribute::AttributeName;
@@ -35,7 +38,6 @@ use crate::syntax::phase::never;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
-pub(crate) use crate::registry::resolve_types::CollectedFile;
 pub use crate::registry::resolve_types::{AttributeTarget, DeclarationKind, ImportedValueNames};
 pub use crate::syntax::module_name::ScopedName;
 
@@ -158,15 +160,38 @@ fn check_value_namespace_collisions(
     Ok(())
 }
 
-/// Result of collecting local declarations from the AST.
+/// The result of declaration collection: declarations separated by category,
+/// each entry carrying its complete signature and attribute-derived policy.
+#[derive(Debug)]
+pub(crate) struct CollectedFile {
+    /// Const declarations in source order.
+    pub(crate) consts: Vec<ConstEntry<Syntax>>,
+    /// Param declarations in source order.
+    pub(crate) params: Vec<ParamEntry<Syntax>>,
+    /// Node declarations in source order.
+    pub(crate) nodes: Vec<NodeEntry<Syntax>>,
+    /// Assert declarations in source order.
+    pub(crate) asserts: Vec<AssertEntry<Syntax>>,
+    /// Plot declarations in source order.
+    pub(crate) plots: Vec<PlotEntry<Syntax>>,
+    /// Figure declarations in source order.
+    pub(crate) figures: Vec<FigureEntry<Syntax>>,
+    /// Layer declarations in source order.
+    pub(crate) layers: Vec<LayerEntry<Syntax>>,
+    /// All declaration names in source order with their category.
+    pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
+    /// Mapping from assert name to the list of declarations that assume it.
+    /// Built from `#[assumes(...)]` attributes.
+    pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
+    /// Mapping from assert name to its expected-fail configuration.
+    /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
+    pub(crate) expected_fail: HashMap<DeclName, CollectedExpectedFail>,
+    /// Explicit exports and annotation-free `param` input ports, classified by role.
+    pub(crate) external_surface: ExternalDeclSurface,
+}
+
+/// Result of validating local declaration shells from the AST.
 struct CollectedDeclarations {
-    consts: Vec<CollectedConstEntry>,
-    params: Vec<CollectedParamEntry>,
-    nodes: Vec<CollectedNodeEntry>,
-    asserts: Vec<CollectedAssertEntry>,
-    plots: Vec<CollectedPlotEntry>,
-    figures: Vec<CollectedFigureEntry>,
-    layers: Vec<CollectedLayerEntry>,
     source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
     external_surface: ExternalDeclSurface,
@@ -277,25 +302,15 @@ const fn source_order_category(kind: IntroducedKind) -> Option<DeclCategory> {
     }
 }
 
-/// Collect all local declarations and check for duplicates.
+/// Validate all local declaration shells and check for duplicates.
 ///
-/// Returns the collected declarations and the names map for further processing.
-#[expect(
-    clippy::too_many_lines,
-    reason = "complex declaration collection with multiple passes"
-)]
+/// Returns the evaluated source order and external surface, and records local
+/// names in the names map for further processing.
 fn collect_local_declarations(
     file: &File,
     src: &NamedSource<Arc<String>>,
     names: &mut HashMap<ScopedName, Span>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
-    let mut consts = Vec::new();
-    let mut params = Vec::new();
-    let mut nodes = Vec::new();
-    let mut asserts = Vec::new();
-    let mut plots = Vec::new();
-    let mut figures = Vec::new();
-    let mut layers = Vec::new();
     let mut source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
@@ -336,10 +351,32 @@ fn collect_local_declarations(
         source_order.push((name, category));
     }
 
-    // Second pass: collect declaration entries. Reference validation and
-    // dependency extraction happen after HIR lowering — this pass only
-    // gathers declaration bodies in source order.
-    for decl in &file.declarations {
+    Ok(CollectedDeclarations {
+        source_order,
+        assert_names,
+        external_surface,
+    })
+}
+
+/// Declaration entries built alongside attribute validation.
+#[derive(Default)]
+struct CollectedEntries {
+    consts: Vec<ConstEntry<Syntax>>,
+    params: Vec<ParamEntry<Syntax>>,
+    nodes: Vec<NodeEntry<Syntax>>,
+    asserts: Vec<AssertEntry<Syntax>>,
+    plots: Vec<PlotEntry<Syntax>>,
+    figures: Vec<FigureEntry<Syntax>>,
+    layers: Vec<LayerEntry<Syntax>>,
+    assumes_map: HashMap<DeclName, Vec<DeclName>>,
+    expected_fail_map: HashMap<DeclName, CollectedExpectedFail>,
+}
+
+impl CollectedEntries {
+    /// Record one declaration's entry with its complete signature. Only value
+    /// and sink declarations have entries; `visibility` is meaningful only for
+    /// plots, the sole target that accepts `#[hidden]`.
+    fn push(&mut self, decl: &Declaration, visibility: PlotVisibility, dag_id: &DagId) {
         match &decl.kind {
             DeclKind::BaseDimension(_)
             | DeclKind::Dimension(_)
@@ -355,186 +392,185 @@ fn collect_local_declarations(
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
             DeclKind::Sugar(s) => never(*s),
-            DeclKind::Assert(a) => {
-                asserts.push(CollectedAssertEntry {
-                    name: a.name.value.clone(),
-                    body: a.body.clone(),
-                    span: decl.span,
-                });
-            }
-            DeclKind::Plot(p) => {
-                plots.push(CollectedPlotEntry {
-                    name: p.name.value.clone(),
-                    decl: p.clone(),
-                    span: decl.span,
-                });
-            }
-            DeclKind::Figure(f) => {
-                figures.push(CollectedFigureEntry {
-                    name: f.name.value.clone(),
-                    decl: f.clone(),
-                });
-            }
-            DeclKind::Layer(l) => {
-                layers.push(CollectedLayerEntry {
-                    name: l.name.value.clone(),
-                    decl: l.clone(),
-                });
-            }
-            DeclKind::Param(p) => {
-                params.push(CollectedParamEntry {
-                    name: p.name.value.clone(),
-                    default_expr: p.value.clone(),
-                    span: decl.span,
-                });
-            }
-            DeclKind::ConstNode(c) => {
-                consts.push(CollectedConstEntry {
-                    name: c.name.value.clone(),
-                    expr: c.value.clone(),
-                    span: decl.span,
-                });
-            }
-            DeclKind::Node(n) => {
-                nodes.push(CollectedNodeEntry {
-                    name: n.name.value.clone(),
-                    definition: n.definition.clone(),
-                    span: decl.span,
-                });
-            }
+            DeclKind::Assert(a) => self.asserts.push(AssertEntry {
+                name: ScopedName::local(a.name.value.clone()),
+                declaration_owner: dag_id.clone(),
+                body: InScope::new(a.body.clone(), dag_id.clone()),
+                span: decl.span,
+            }),
+            DeclKind::Plot(p) => self.plots.push(PlotEntry {
+                name: ScopedName::local(p.name.value.clone()),
+                mark_type: p.mark.mark_type,
+                body: InScope::new(
+                    PlotSyntax {
+                        encodings: p.encodings.clone(),
+                        mark_properties: p.mark.properties.clone(),
+                        properties: p.properties.clone(),
+                    },
+                    dag_id.clone(),
+                ),
+                visibility,
+            }),
+            DeclKind::Figure(f) => self.figures.push(FigureEntry {
+                name: ScopedName::local(f.name.value.clone()),
+                plot_names: f.plot_names.clone(),
+                fields: InScope::new(f.fields.clone(), dag_id.clone()),
+            }),
+            DeclKind::Layer(l) => self.layers.push(LayerEntry {
+                name: ScopedName::local(l.name.value.clone()),
+                plot_names: l.plot_names.clone(),
+                fields: InScope::new(l.fields.clone(), dag_id.clone()),
+            }),
+            DeclKind::Param(p) => self.params.push(ParamEntry {
+                name: ScopedName::local(p.name.value.clone()),
+                declaration_owner: dag_id.clone(),
+                type_ann: InScope::new(p.type_ann.clone(), dag_id.clone()),
+                default: p
+                    .value
+                    .as_ref()
+                    .map(|expr| InScope::new(expr.clone(), dag_id.clone())),
+                span: decl.span,
+                override_reconciliations: Vec::new(),
+            }),
+            DeclKind::ConstNode(c) => self.consts.push(ConstEntry {
+                name: ScopedName::local(c.name.value.clone()),
+                declaration_owner: dag_id.clone(),
+                type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
+                expr: InScope::new(c.value.clone(), dag_id.clone()),
+                span: decl.span,
+            }),
+            DeclKind::Node(n) => self.nodes.push(NodeEntry {
+                name: ScopedName::local(n.name.value.clone()),
+                declaration_owner: dag_id.clone(),
+                type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
+                definition: InScope::new(n.definition.clone(), dag_id.clone()),
+                span: decl.span,
+            }),
         }
     }
-
-    Ok(CollectedDeclarations {
-        consts,
-        params,
-        nodes,
-        asserts,
-        plots,
-        figures,
-        layers,
-        source_order,
-        assert_names,
-        external_surface,
-    })
 }
 
-/// Result of attribute validation.
-struct ValidatedAttributes {
-    assumes_map: HashMap<DeclName, Vec<DeclName>>,
-    expected_fail_map: HashMap<DeclName, CollectedExpectedFail>,
-    /// Plot names carrying `#[hidden]`: evaluated and referenceable from
-    /// figures/layers, but excluded from standalone output (#847).
-    hidden_plots: HashSet<DeclName>,
-}
-
-/// Validate attributes and build `assumes_map` / `expected_fail_map`.
-fn validate_attributes(
+/// Validate every declaration's attributes, record `assumes_map` /
+/// `expected_fail_map`, and build each value/sink declaration entry.
+fn collect_entries(
     file: &File,
     src: &NamedSource<Arc<String>>,
     assert_names: &HashSet<DeclName>,
-) -> Result<ValidatedAttributes, GraphcalError> {
-    let mut assumes_map: HashMap<DeclName, Vec<DeclName>> = HashMap::new();
-    let mut expected_fail_map: HashMap<DeclName, CollectedExpectedFail> = HashMap::new();
-    let mut hidden_plots: HashSet<DeclName> = HashSet::new();
-
+    dag_id: &DagId,
+) -> Result<CollectedEntries, GraphcalError> {
+    let mut entries = CollectedEntries::default();
     for decl in &file.declarations {
-        // Attribute applicability limits name-bearing attributes to
-        // param/node (`assumes`), assert (`expected_fail`), and plot
-        // (`hidden`) targets, all of which declare a Term name.
-        let decl_name: Option<DeclName> = decl
-            .kind
-            .declared_name()
-            .map(|introduced| DeclName::classify(introduced.atom().clone()));
-        let declaration_kind = DeclarationKind::from_decl_kind(&decl.kind);
-        let target = AttributeTarget::declaration(declaration_kind);
-        let attributes = attribute_validation::validate_attributes(&decl.attributes, &target)
-            .map_err(|error| {
-                attribute_validation::attribute_validation_error_to_graphcal(error, src)
-            })?;
-        for validated in attributes {
-            let attr = validated.attribute();
-            match validated.name() {
-                AttributeName::Assumes => {
-                    // Shared applicability and structural validation guarantee
-                    // a node/param target with a non-empty set
-                    // of unique, plain assertion names.
-                    for argument in validated.assumes_arguments() {
-                        if !assert_names.contains(&argument.value) {
-                            return Err(GraphcalError::UnknownAssertInAssumes {
-                                name: argument.value.to_string(),
-                                src: src.clone(),
-                                span: argument.span.into(),
-                            });
-                        }
-                        if let Some(ref dname) = decl_name {
-                            assumes_map
-                                .entry(argument.value.clone())
-                                .or_default()
-                                .push(dname.clone());
-                        }
-                    }
-                }
-                AttributeName::ExpectedFail => {
-                    let DeclKind::Assert(assertion) = &decl.kind else {
-                        return Err(GraphcalError::internal_error(
-                            "attribute applicability accepted expected_fail on a non-assert",
-                            src,
-                            crate::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
-                        ));
-                    };
-                    let expected = parse_expected_fail_args(&attr.args, src)?;
-                    // A blanket expected failure on an indexed assertion is
-                    // ambiguous; users must name the expected failing keys.
-                    if matches!(expected, ExpectedFail::All) {
-                        let is_indexed = matches!(
-                            &assertion.body,
-                            AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
-                        );
-                        if is_indexed {
-                            return Err(GraphcalError::ExpectedFailAllOnIndexed {
-                                src: src.clone(),
-                                span: attr.span.into(),
-                            });
-                        }
+        let visibility = validate_declaration_attributes(
+            decl,
+            src,
+            assert_names,
+            &mut entries.assumes_map,
+            &mut entries.expected_fail_map,
+        )?;
+        entries.push(decl, visibility, dag_id);
+    }
+    Ok(entries)
+}
+
+/// Validate one declaration's attributes, recording `#[assumes]` and
+/// `#[expected_fail]` metadata. Returns the plot output visibility requested
+/// by `#[hidden]` (#847); attribute applicability admits it only on plots.
+fn validate_declaration_attributes(
+    decl: &Declaration,
+    src: &NamedSource<Arc<String>>,
+    assert_names: &HashSet<DeclName>,
+    assumes_map: &mut HashMap<DeclName, Vec<DeclName>>,
+    expected_fail_map: &mut HashMap<DeclName, CollectedExpectedFail>,
+) -> Result<PlotVisibility, GraphcalError> {
+    let mut visibility = PlotVisibility::Standalone;
+    // Attribute applicability limits name-bearing attributes to
+    // param/node (`assumes`), assert (`expected_fail`), and plot
+    // (`hidden`) targets, all of which declare a Term name.
+    let decl_name: Option<DeclName> = decl
+        .kind
+        .declared_name()
+        .map(|introduced| DeclName::classify(introduced.atom().clone()));
+    let declaration_kind = DeclarationKind::from_decl_kind(&decl.kind);
+    let target = AttributeTarget::declaration(declaration_kind);
+    let attributes =
+        attribute_validation::validate_attributes(&decl.attributes, &target).map_err(|error| {
+            attribute_validation::attribute_validation_error_to_graphcal(error, src)
+        })?;
+    for validated in attributes {
+        let attr = validated.attribute();
+        match validated.name() {
+            AttributeName::Assumes => {
+                // Shared applicability and structural validation guarantee
+                // a node/param target with a non-empty set
+                // of unique, plain assertion names.
+                for argument in validated.assumes_arguments() {
+                    if !assert_names.contains(&argument.value) {
+                        return Err(GraphcalError::UnknownAssertInAssumes {
+                            name: argument.value.to_string(),
+                            src: src.clone(),
+                            span: argument.span.into(),
+                        });
                     }
                     if let Some(ref dname) = decl_name {
-                        expected_fail_map.insert(
-                            dname.clone(),
-                            CollectedExpectedFail {
-                                expected,
-                                attribute_span: attr.span,
-                            },
-                        );
+                        assumes_map
+                            .entry(argument.value.clone())
+                            .or_default()
+                            .push(dname.clone());
                     }
                 }
-                AttributeName::Hidden => {
-                    if !attr.args.is_empty() {
-                        return Err(GraphcalError::EvalError {
-                            message: "`#[hidden]` takes no arguments".to_string(),
+            }
+            AttributeName::ExpectedFail => {
+                let DeclKind::Assert(assertion) = &decl.kind else {
+                    return Err(GraphcalError::internal_error(
+                        "attribute applicability accepted expected_fail on a non-assert",
+                        src,
+                        crate::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
+                    ));
+                };
+                let expected = parse_expected_fail_args(&attr.args, src)?;
+                // A blanket expected failure on an indexed assertion is
+                // ambiguous; users must name the expected failing keys.
+                if matches!(expected, ExpectedFail::All) {
+                    let is_indexed = matches!(
+                        &assertion.body,
+                        AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
+                    );
+                    if is_indexed {
+                        return Err(GraphcalError::ExpectedFailAllOnIndexed {
                             src: src.clone(),
                             span: attr.span.into(),
                         });
                     }
-                    if let Some(ref dname) = decl_name {
-                        hidden_plots.insert(dname.clone());
-                    }
                 }
-                AttributeName::Lazy => {
-                    return Err(GraphcalError::LazyNotSupported {
+                if let Some(ref dname) = decl_name {
+                    expected_fail_map.insert(
+                        dname.clone(),
+                        CollectedExpectedFail {
+                            expected,
+                            attribute_span: attr.span,
+                        },
+                    );
+                }
+            }
+            AttributeName::Hidden => {
+                if !attr.args.is_empty() {
+                    return Err(GraphcalError::EvalError {
+                        message: "`#[hidden]` takes no arguments".to_string(),
                         src: src.clone(),
                         span: attr.span.into(),
                     });
                 }
+                visibility = PlotVisibility::CompositionOnly;
+            }
+            AttributeName::Lazy => {
+                return Err(GraphcalError::LazyNotSupported {
+                    src: src.clone(),
+                    span: attr.span.into(),
+                });
             }
         }
     }
-
-    Ok(ValidatedAttributes {
-        assumes_map,
-        expected_fail_map,
-        hidden_plots,
-    })
+    Ok(visibility)
 }
 
 /// Validate that every external signature names only exported type-system
@@ -771,7 +807,12 @@ fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::Na
 /// production imported-binding path.
 #[cfg(test)]
 fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile, GraphcalError> {
-    resolve_with_imported_values(file, src, &ImportedValueNames::default())
+    resolve_with_imported_values(
+        file,
+        src,
+        &ImportedValueNames::default(),
+        &DagId::root_in_package("test", "main"),
+    )
 }
 
 /// Resolve names with imported value declarations in lexical scope.
@@ -789,6 +830,7 @@ pub(crate) fn resolve_with_imported_values(
     file: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
+    dag_id: &DagId,
 ) -> Result<CollectedFile, GraphcalError> {
     check_imported_graph_value_names(imported, src)?;
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
@@ -823,24 +865,24 @@ pub(crate) fn resolve_with_imported_values(
     }
     all_assert_names.extend(local.assert_names.iter().cloned());
 
-    // Validate attributes and build assumes_map / expected_fail_map
-    let validated = validate_attributes(file, src, &all_assert_names)?;
+    // Validate attributes, build assumes_map / expected_fail_map, and build
+    // each declaration entry with its complete signature.
+    let entries = collect_entries(file, src, &all_assert_names, dag_id)?;
 
     // Validate external signatures: exports and input ports must not reference private type-system items.
     validate_private_in_public(file, src, &local.external_surface)?;
 
     Ok(CollectedFile {
-        consts: local.consts,
-        params: local.params,
-        nodes: local.nodes,
-        asserts: local.asserts,
-        plots: local.plots,
-        figures: local.figures,
-        layers: local.layers,
+        consts: entries.consts,
+        params: entries.params,
+        nodes: entries.nodes,
+        asserts: entries.asserts,
+        plots: entries.plots,
+        figures: entries.figures,
+        layers: entries.layers,
         source_order: local.source_order,
-        assumes_map: validated.assumes_map,
-        expected_fail: validated.expected_fail_map,
-        hidden_plots: validated.hidden_plots,
+        assumes_map: entries.assumes_map,
+        expected_fail: entries.expected_fail_map,
         external_surface: local.external_surface,
     })
 }

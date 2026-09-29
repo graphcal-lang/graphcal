@@ -1084,3 +1084,63 @@ fn resolve_pub_unit_with_private_dim_fires_v003() {
             if pub_kind == DeclarationKind::Unit && ref_name.as_str() == "Currency")
     );
 }
+
+fn source_text(source: &str, span: crate::syntax::span::Span) -> &str {
+    &source[span.offset()..span.offset() + span.len()]
+}
+
+#[test]
+fn collected_plot_entries_carry_hidden_visibility() {
+    let resolved = parse_and_resolve(
+        "#[hidden]\nplot helper = { mark: line, encode: { x: 1.0, y: 1.0 } };\n\
+         plot shown = { mark: line, encode: { x: 1.0, y: 1.0 } };",
+    )
+    .unwrap();
+    let visibilities: Vec<_> = resolved
+        .plots
+        .iter()
+        .map(|entry| (entry.name.to_string(), entry.visibility))
+        .collect();
+    assert_eq!(
+        visibilities,
+        vec![
+            ("helper".to_string(), PlotVisibility::CompositionOnly),
+            ("shown".to_string(), PlotVisibility::Standalone),
+        ]
+    );
+}
+
+#[test]
+fn collected_value_entries_carry_their_signatures_and_scope() {
+    let source = "const node k: Dimensionless = 1.0;\n\
+                  param p: Length = 2.0 m;\n\
+                  param required: Time;\n\
+                  node n: Length = @p;";
+    let resolved = parse_and_resolve(source).unwrap();
+    let owner = DagId::root_in_package("test", "main");
+    let [constant] = resolved.consts.as_slice() else {
+        panic!("expected one const");
+    };
+    assert!(matches!(
+        constant.type_ann.syntax.kind,
+        crate::desugar::desugared_ast::TypeExprKind::Dimensionless
+    ));
+    assert_eq!(constant.type_ann.resolution_owner, owner);
+    assert_eq!(constant.expr.resolution_owner, owner);
+    let [defaulted, required] = resolved.params.as_slice() else {
+        panic!("expected two params");
+    };
+    assert_eq!(
+        source_text(source, defaulted.type_ann.syntax.span),
+        "Length"
+    );
+    assert!(defaulted.default.is_some());
+    assert!(required.default.is_none());
+    assert_eq!(source_text(source, required.type_ann.syntax.span), "Time");
+    let [node] = resolved.nodes.as_slice() else {
+        panic!("expected one node");
+    };
+    assert_eq!(source_text(source, node.type_ann.syntax.span), "Length");
+    assert_eq!(node.declaration_owner, owner);
+    assert_eq!(node.definition.resolution_owner, owner);
+}

@@ -282,7 +282,7 @@ fn check_instance_defaults(
         let Some(default) = &entry.default else {
             continue;
         };
-        let id = default.expr.id();
+        let id = default.id();
         // Compare this parameter's authoritative default, not every body root.
         let template_declaration = template.require_bound_decl_identity(
             &entry.name,
@@ -295,15 +295,14 @@ fn check_instance_defaults(
             == Some(id);
         if !inherited {
             check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
-            ctx.expression_facts
-                .record_contextual(&default.expr, ctx.src)?;
+            ctx.expression_facts.record_contextual(default, ctx.src)?;
             continue;
         }
         let record = facts.get(id).map_err(|error| {
             GraphcalError::internal_error(
                 error.to_string(),
                 ctx.src,
-                DiagnosticAnchor::Source(default.expr.span),
+                DiagnosticAnchor::Source(default.span),
             )
         })?;
         let declaration = ctx.dag.require_bound_decl_identity(
@@ -316,7 +315,7 @@ fn check_instance_defaults(
             return Err(GraphcalError::internal_error(
                 "parameter default has no value checking result",
                 ctx.src,
-                DiagnosticAnchor::Source(default.expr.span),
+                DiagnosticAnchor::Source(default.span),
             ));
         };
         let specialized = specialize_expression_type(checked_type, substitution, ctx.tir, ctx.src)?;
@@ -332,7 +331,7 @@ fn check_instance_defaults(
                 declared: expected.format(&ctx.registry.dimensions),
                 inferred: specialized.format(&ctx.registry.dimensions),
                 src: ctx.src.clone(),
-                span: default.expr.span.into(),
+                span: default.span.into(),
             });
         }
     }
