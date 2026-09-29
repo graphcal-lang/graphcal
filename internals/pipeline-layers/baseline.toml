@@ -98,14 +98,6 @@ reason = "Observed compiler::tir::dim_check::helpers -> compiler::hir (productio
 
 [[exception]]
 from_package = "compiler"
-from_path = ["tir", "dim_check", "infer", "hir"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::tir::dim_check::infer::hir -> compiler::hir (production) at ./crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs:20 (use import); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["tir", "dim_check", "infer", "rules"]
 to_package = "compiler"
 to_path = ["hir"]
