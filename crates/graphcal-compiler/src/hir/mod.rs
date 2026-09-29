@@ -45,12 +45,13 @@ pub use expr::{
 };
 pub(crate) use expr::{find_extern_call, visit_expr};
 pub use expr_lower::context::ExprLoweringContext;
+pub use expr_lower::context::{BindingOverlay, FrozenBindings};
 pub use expr_lower::error::ExprLowerError;
 pub(crate) use expr_lower::lower::{lower_assert_body, lower_expr};
 pub use expr_lower::lower::{lower_expr_draft, lower_expr_tolerant};
 pub use expr_lower::tolerant::{LoweringFailure, Tolerant};
-pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
-pub(crate) use lower::{TypeLoweringContext, lower_decl_type};
+pub(crate) use lower::lower_decl_type;
+pub use lower::{GenericParamBinding, GenericScope, HirLowerError, ModuleScope, PreludeTypeScope};
 pub use nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
     NominalTypeKind, NominalTypeRegistry,

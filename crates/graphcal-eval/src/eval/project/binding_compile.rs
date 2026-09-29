@@ -10,8 +10,8 @@ use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalContext,
     Expr, ExprLoweringContext, GenericScope, GraphcalError, HirExprKind, HirLocalValueMap,
     ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
-    ModelValueSchema, ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue,
-    PreludeTypeScope, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
+    ModelValueSchema, ModuleScope, ParameterBindingBuilder, ParameterPort, ParameterPosition,
+    ParameterValue, PreparedProject, RuntimeParameterBinding, RuntimeParameterBindings,
     RuntimeValueMap, Span, parameter_domain,
 };
 
@@ -719,14 +719,10 @@ impl PreparedProject {
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::Expr<graphcal_compiler::hir::Draft>, CompileError> {
         let scope = GenericScope::new();
-        let prelude = PreludeTypeScope::graphcal();
         let context = ExprLoweringContext::new(
-            owner,
-            &self.module_resolver,
-            &scope,
+            ModuleScope::new(owner, &self.module_resolver, &scope),
             &self.tir.registry().time_zones,
-        )
-        .with_prelude(&prelude);
+        );
         graphcal_compiler::hir::lower_expr_draft(expr, context).map_err(|error| {
             CompileError::Eval(graphcal_compiler::hir::expr_lower_error_to_graphcal(
                 &error,

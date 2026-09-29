@@ -25,7 +25,7 @@ use crate::hir::expr::{
     ParamBinding, PatternBinding, UnfoldRecurrence,
 };
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
-use crate::hir::lower::{lower_generic_args, lower_nat_expr};
+use crate::hir::lower::{PreludeTypeScope, lower_generic_args, lower_nat_expr};
 
 /// Lower a syntax expression into tolerant HIR.
 ///
@@ -353,7 +353,7 @@ impl ExprLowerer<'_> {
                     constructor.kind().generic_params(),
                     generic_args,
                     expr.span,
-                    self.ctx.type_context(),
+                    self.ctx.scope,
                 )?;
                 ExprKind::ConstructorCall {
                     callee: Spanned::new(resolved, callee.span()),
@@ -420,8 +420,9 @@ impl ExprLowerer<'_> {
             } => {
                 let resolved_axis = self
                     .ctx
+                    .scope
                     .resolver
-                    .resolve_index_path(self.ctx.owner, &axis.value)
+                    .resolve_index_path(self.ctx.scope.owner, &axis.value)
                     .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
@@ -452,8 +453,9 @@ impl ExprLowerer<'_> {
                     crate::syntax::ast::IndexExpr::Name(path) => {
                         let resolved = self
                             .ctx
+                            .scope
                             .resolver
-                            .resolve_index_path(self.ctx.owner, &path.value)
+                            .resolve_index_path(self.ctx.scope.owner, &path.value)
                             .map(crate::resolve::symbols::SymbolRef::into_resolved)
                             .map_err(|source| ExprLowerError::ModuleResolve {
                                 source,
@@ -463,7 +465,7 @@ impl ExprLowerer<'_> {
                     }
                     crate::syntax::ast::IndexExpr::Finite { cardinality, span } => {
                         ForBindingIndex::Finite {
-                            cardinality: lower_nat_expr(cardinality, self.ctx.type_context())?,
+                            cardinality: lower_nat_expr(cardinality, self.ctx.scope)?,
                             span: *span,
                         }
                     }
@@ -492,8 +494,9 @@ impl ExprLowerer<'_> {
             ast::ExprKind::InlineDagRef { path, args, output } => {
                 let target = self
                     .ctx
+                    .scope
                     .resolver
-                    .resolve_module_path(self.ctx.owner, path)
+                    .resolve_module_path(self.ctx.scope.owner, path)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
                         span: path.span(),
@@ -503,6 +506,7 @@ impl ExprLowerer<'_> {
                 let output_path = NamePath::local(output.value.atom().clone());
                 let lowered_output = self
                     .ctx
+                    .scope
                     .resolver
                     .resolve_decl_path(&target, &output_path)
                     .map(crate::resolve::symbols::SymbolRef::into_resolved)
@@ -548,15 +552,15 @@ impl ExprLowerer<'_> {
                     params.push(self.lower_param_binding(target, binding)?);
                 }
                 InputBindingCategory::Type => {
-                    let resolver = self.ctx.resolver;
+                    let resolver = self.ctx.scope.resolver;
                     let input = spanned(
                         resolver.resolve_struct_type_path(target, &input_path),
                         binding.name.span,
                     )?
                     .into_resolved();
-                    let value_path = static_binding_value_path(binding, self.ctx.owner)?;
+                    let value_path = static_binding_value_path(binding, self.ctx.scope.owner)?;
                     let value = spanned(
-                        resolver.resolve_struct_type_path(self.ctx.owner, &value_path),
+                        resolver.resolve_struct_type_path(self.ctx.scope.owner, &value_path),
                         binding.value.span,
                     )?
                     .into_resolved();
@@ -565,26 +569,29 @@ impl ExprLowerer<'_> {
                 InputBindingCategory::Dimension => {
                     let input = spanned(
                         self.ctx
+                            .scope
                             .resolver
                             .resolve_dimension_path(target, &input_path),
                         binding.name.span,
                     )?
                     .into_resolved();
-                    let value_path = static_binding_value_path(binding, self.ctx.owner)?;
+                    let value_path = static_binding_value_path(binding, self.ctx.scope.owner)?;
                     let value = match self
                         .ctx
+                        .scope
                         .resolver
-                        .resolve_dimension_path(self.ctx.owner, &value_path)
+                        .resolve_dimension_path(self.ctx.scope.owner, &value_path)
                         .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     {
                         Ok(value) => value,
-                        Err(source @ ModuleResolveError::UnknownName { .. }) => self
-                            .ctx
-                            .resolve_prelude_dimension_path(&value_path)
-                            .ok_or(ExprLowerError::ModuleResolve {
-                                source,
-                                span: binding.value.span,
-                            })?,
+                        Err(source @ ModuleResolveError::UnknownName { .. }) => {
+                            PreludeTypeScope::graphcal()
+                                .resolve_dimension_path(&value_path)
+                                .ok_or(ExprLowerError::ModuleResolve {
+                                    source,
+                                    span: binding.value.span,
+                                })?
+                        }
                         Err(source) => {
                             return Err(ExprLowerError::ModuleResolve {
                                 source,
@@ -596,15 +603,19 @@ impl ExprLowerer<'_> {
                 }
                 InputBindingCategory::Index => {
                     let input = spanned(
-                        self.ctx.resolver.resolve_index_path(target, &input_path),
+                        self.ctx
+                            .scope
+                            .resolver
+                            .resolve_index_path(target, &input_path),
                         binding.name.span,
                     )?
                     .into_resolved();
                     let value = match binding.value.index_binding_arg() {
                         Some(ast::IndexExpr::Name(path)) => self
                             .ctx
+                            .scope
                             .resolver
-                            .resolve_index_path(self.ctx.owner, &path.value)
+                            .resolve_index_path(self.ctx.scope.owner, &path.value)
                             .map(crate::resolve::symbols::SymbolRef::into_resolved)
                             .map(DagCallIndexBinding::Declared)
                             .map_err(|source| ExprLowerError::ModuleResolve {
@@ -642,6 +653,7 @@ impl ExprLowerer<'_> {
         let path = NamePath::local(binding.name.name.atom().clone());
         let target_name = self
             .ctx
+            .scope
             .resolver
             .resolve_decl_path(target, &path)
             .map(crate::resolve::symbols::SymbolRef::into_resolved)
@@ -729,8 +741,9 @@ impl ExprLowerer<'_> {
             ast::ForBindingIndex::Named(index) => {
                 let resolved = self
                     .ctx
+                    .scope
                     .resolver
-                    .resolve_index_path(self.ctx.owner, &index.value)
+                    .resolve_index_path(self.ctx.scope.owner, &index.value)
                     .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve {
                         source,
@@ -739,7 +752,7 @@ impl ExprLowerer<'_> {
                 ForBindingIndex::Named(Spanned::new(resolved, index.span))
             }
             ast::ForBindingIndex::Finite { cardinality, span } => ForBindingIndex::Finite {
-                cardinality: lower_nat_expr(cardinality, self.ctx.type_context())?,
+                cardinality: lower_nat_expr(cardinality, self.ctx.scope)?,
                 span: *span,
             },
         };
@@ -800,9 +813,10 @@ impl ExprLowerer<'_> {
             } => Ok(MatchPattern::Constructor {
                 constructor: Spanned::new(
                     self.ctx
+                        .scope
                         .resolver
                         .resolve_constructor_path(
-                            self.ctx.owner,
+                            self.ctx.scope.owner,
                             &NamePath::local(name.value.atom().clone()),
                         )
                         .map(crate::resolve::symbols::SymbolRef::into_resolved)
@@ -853,8 +867,9 @@ impl ExprLowerer<'_> {
         let name_path = path.to_name_path();
         match self
             .ctx
+            .scope
             .resolver
-            .resolve_constructor_path(self.ctx.owner, &name_path)
+            .resolve_constructor_path(self.ctx.scope.owner, &name_path)
             .map(crate::resolve::symbols::SymbolRef::into_resolved)
         {
             Ok(constructor) => Ok(MatchPattern::Constructor {

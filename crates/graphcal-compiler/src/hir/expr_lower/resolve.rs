@@ -24,6 +24,7 @@ use crate::hir::expr::{
     ConstRef, ExprKind, ExternFnRef, ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef,
     UnappliedFunctionRef,
 };
+use crate::hir::lower::PreludeTypeScope;
 
 /// Attach the source span of a failed module-resolver lookup.
 pub(super) fn spanned<T>(
@@ -69,24 +70,23 @@ impl<'a> ExprLowerer<'a> {
             .map(|item| {
                 let reference = &item.name.value;
                 let path = reference.to_name_path();
-                let resolved = match self
-                    .ctx
-                    .unit_bindings
-                    .and_then(|bindings| bindings.get(reference))
-                    .cloned()
-                {
+                let resolved = match self.ctx.overlay.unit_binding(reference).cloned() {
                     Some(resolved) => resolved,
                     None => match self
                         .ctx
+                        .scope
                         .resolver
-                        .resolve_unit_path(self.ctx.owner, &path)
+                        .resolve_unit_path(self.ctx.scope.owner, &path)
                         .map(crate::resolve::symbols::SymbolRef::into_resolved)
                     {
                         Ok(resolved) => resolved,
-                        Err(ModuleResolveError::UnknownName { .. }) => self
-                            .ctx
-                            .resolve_prelude_unit_ref(reference)
-                            .or_else(|| self.ctx.resolve_registry_unit_ref(reference))
+                        Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
+                            .resolve_unit_ref(reference)
+                            .or_else(|| {
+                                self.ctx
+                                    .overlay
+                                    .resolve_registry_unit_ref(self.ctx.scope.owner, reference)
+                            })
                             .ok_or_else(|| ExprLowerError::UnknownUnit {
                                 name: reference.clone(),
                                 span: item.name.span,
@@ -165,8 +165,9 @@ impl<'a> ExprLowerer<'a> {
         let path = NamePath::local(ident.name.atom().clone());
         let constructor_result = self
             .ctx
+            .scope
             .resolver
-            .resolve_constructor_path(self.ctx.owner, &path)
+            .resolve_constructor_path(self.ctx.scope.owner, &path)
             .map(crate::resolve::symbols::SymbolRef::into_resolved);
         if let Ok(constructor) = constructor_result {
             return Ok(ExprKind::ConstructorCall {
@@ -181,6 +182,7 @@ impl<'a> ExprLowerer<'a> {
             Ok(resolved) => {
                 let kind = *self
                     .ctx
+                    .scope
                     .resolver
                     .symbol(&resolved)
                     .ok_or_else(|| unknown_decl(&resolved, span))?
@@ -196,7 +198,7 @@ impl<'a> ExprLowerer<'a> {
                     |_| {
                         Err(ExprLowerError::ModuleResolve {
                             source: ModuleResolveError::UnknownName {
-                                owner: self.ctx.owner.clone(),
+                                owner: self.ctx.scope.owner.clone(),
                                 category: NameCategory::Namespace(Namespace::Term),
                                 name: ident.name.atom().clone(),
                             },
@@ -230,15 +232,11 @@ impl<'a> ExprLowerer<'a> {
     ) -> Result<ConstRef, ExprLowerError> {
         let mut first_error = None;
 
-        if let Some(resolved) = self
-            .ctx
-            .decl_bindings
-            .and_then(|bindings| bindings.get(name))
-            .cloned()
-        {
+        if let Some(resolved) = self.ctx.overlay.decl_binding(name).cloned() {
             self.ensure_bound_decl_access(name, &resolved, span)?;
             let actual = *self
                 .ctx
+                .scope
                 .resolver
                 .symbol(&resolved)
                 .ok_or_else(|| unknown_decl(&resolved, span))?
@@ -258,12 +256,13 @@ impl<'a> ExprLowerer<'a> {
         }
 
         // An anonymous include qualifier has no source path; such a name is
-        // only reachable through `decl_bindings` above.
+        // only reachable through the binding overlay above.
         if let Some(path) = name.to_name_path() {
             match self
                 .ctx
+                .scope
                 .resolver
-                .resolve_const_decl_path(self.ctx.owner, &path)
+                .resolve_const_decl_path(self.ctx.scope.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
             {
                 Ok(resolved) => return Ok(ConstRef::Decl(resolved)),
@@ -272,6 +271,7 @@ impl<'a> ExprLowerer<'a> {
             if let Some(resolved) = self.resolve_synthetic_child_decl_path(&path)
                 && self
                     .ctx
+                    .scope
                     .resolver
                     .symbol(&resolved)
                     .is_some_and(|symbol| symbol.kind().is_const())
@@ -280,8 +280,9 @@ impl<'a> ExprLowerer<'a> {
             }
             match self
                 .ctx
+                .scope
                 .resolver
-                .resolve_constructor_path(self.ctx.owner, &path)
+                .resolve_constructor_path(self.ctx.scope.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
             {
                 Ok(resolved) => return Ok(ConstRef::Constructor(resolved)),
@@ -314,11 +315,12 @@ impl<'a> ExprLowerer<'a> {
         name: &Spanned<ScopedName>,
     ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
-        let path_symbol = match name
-            .value
-            .to_name_path()
-            .map(|path| self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path))
-        {
+        let path_symbol = match name.value.to_name_path().map(|path| {
+            self.ctx
+                .scope
+                .resolver
+                .resolve_decl_path(self.ctx.scope.owner, &path)
+        }) {
             Some(Ok(symbol)) => Some(symbol),
             Some(Err(source @ ModuleResolveError::PrivateName { .. })) => {
                 return Err(ExprLowerError::ModuleResolve {
@@ -328,13 +330,9 @@ impl<'a> ExprLowerer<'a> {
             }
             Some(Err(_)) | None => None,
         };
-        let kind = match path_symbol.or_else(|| self.ctx.resolver.symbol(&resolved)) {
+        let kind = match path_symbol.or_else(|| self.ctx.scope.resolver.symbol(&resolved)) {
             Some(symbol) => *symbol.kind(),
-            None if self
-                .ctx
-                .decl_bindings
-                .is_some_and(|bindings| bindings.contains_key(&name.value)) =>
-            {
+            None if self.ctx.overlay.decl_binding(&name.value).is_some() => {
                 return Ok(Spanned::new(resolved, name.span));
             }
             None => return Err(unknown_decl(&resolved, name.span)),
@@ -344,7 +342,12 @@ impl<'a> ExprLowerer<'a> {
             .qualifier()
             .first()
             .and_then(ScopeSegment::alias)
-            .and_then(|alias| self.ctx.resolver.module_alias_role(self.ctx.owner, alias));
+            .and_then(|alias| {
+                self.ctx
+                    .scope
+                    .resolver
+                    .module_alias_role(self.ctx.scope.owner, alias)
+            });
         let permitted = match role {
             Some(ModuleAliasRole::ImportedDag) => kind == DeclSymbolKind::Const,
             Some(ModuleAliasRole::IncludedInstance) | None => {
@@ -379,17 +382,12 @@ impl<'a> ExprLowerer<'a> {
         name: &ScopedName,
         span: Span,
     ) -> Result<ResolvedDeclName, ExprLowerError> {
-        if let Some(resolved) = self
-            .ctx
-            .decl_bindings
-            .and_then(|bindings| bindings.get(name))
-            .cloned()
-        {
+        if let Some(resolved) = self.ctx.overlay.decl_binding(name).cloned() {
             self.ensure_bound_decl_access(name, &resolved, span)?;
             return Ok(resolved);
         }
         // An anonymous include qualifier has no source path; such a name is
-        // only reachable through `decl_bindings` above.
+        // only reachable through the binding overlay above.
         let Some(path) = name.to_name_path() else {
             return Err(ExprLowerError::UnknownGraphRef {
                 name: name.clone(),
@@ -398,8 +396,9 @@ impl<'a> ExprLowerer<'a> {
         };
         let resolved = match self
             .ctx
+            .scope
             .resolver
-            .resolve_decl_path(self.ctx.owner, &path)
+            .resolve_decl_path(self.ctx.scope.owner, &path)
             .map(crate::resolve::symbols::SymbolRef::into_resolved)
         {
             Ok(resolved) => Ok(resolved),
@@ -432,8 +431,9 @@ impl<'a> ExprLowerer<'a> {
 
         match name.to_name_path().map(|path| {
             self.ctx
+                .scope
                 .resolver
-                .resolve_decl_path(self.ctx.owner, &path)
+                .resolve_decl_path(self.ctx.scope.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
         }) {
             Some(Ok(_)) => Ok(()),
@@ -443,20 +443,17 @@ impl<'a> ExprLowerer<'a> {
                 ModuleResolveError::UnknownModuleAlias { .. }
                 | ModuleResolveError::UnknownName { .. },
             )) => {
-                let Some(template) = self
-                    .ctx
-                    .instance_templates
-                    .and_then(|templates| templates.get(resolved.owner()))
-                else {
+                let Some(template) = self.ctx.overlay.instance_template(resolved.owner()) else {
                     return Ok(());
                 };
-                if template == self.ctx.owner {
+                if template == self.ctx.scope.owner {
                     return Ok(());
                 }
 
                 let template_path = NamePath::local(resolved.atom().clone());
                 if self
                     .ctx
+                    .scope
                     .resolver
                     .resolve_decl_path(template, &template_path)
                     .map_err(|source| ExprLowerError::ModuleResolve { source, span })?
@@ -485,10 +482,10 @@ impl<'a> ExprLowerer<'a> {
         let (qualifier, leaf) = path.qualifier_and_leaf()?;
         let owner = qualifier
             .iter()
-            .fold(self.ctx.owner.clone(), |owner, segment| {
+            .fold(self.ctx.scope.owner.clone(), |owner, segment| {
                 owner.inline_dag_child(DeclName::classify(segment.clone()))
             });
-        self.ctx.resolver.symbols(&owner).and_then(|module| {
+        self.ctx.scope.resolver.symbols(&owner).and_then(|module| {
             let decl_name = DeclName::classify(leaf.clone());
             module
                 .decls()
@@ -506,8 +503,9 @@ impl<'a> ExprLowerer<'a> {
     ) -> Result<ResolvedCallable<'a>, ExprLowerError> {
         let constructor = self
             .ctx
+            .scope
             .resolver
-            .resolve_constructor_ident_path(self.ctx.owner, callee);
+            .resolve_constructor_ident_path(self.ctx.scope.owner, callee);
         constructor.map(ResolvedCallable::Constructor).or_else(|_| {
             self.lower_function_ref(callee)
                 .map(ResolvedCallable::Function)
@@ -530,8 +528,8 @@ impl<'a> ExprLowerer<'a> {
         // scope. Extern functions are only callable in this qualified form.
         if let Some((qualifiers, leaf)) = callee.qualifier_and_leaf()
             && let [qualifier] = qualifiers.as_slice()
-            && let Some(target) = self.ctx.resolver.plugin_alias(
-                self.ctx.owner,
+            && let Some(target) = self.ctx.scope.resolver.plugin_alias(
+                self.ctx.scope.owner,
                 &crate::syntax::module_name::ModuleAliasName::classify(
                     qualifier.name.atom().clone(),
                 ),
@@ -565,8 +563,9 @@ impl<'a> ExprLowerer<'a> {
         variant_span: Span,
     ) -> Result<ResolvedIndexVariant, ExprLowerError> {
         self.ctx
+            .scope
             .resolver
-            .resolve_index_variant_parts(self.ctx.owner, index_path, variant)
+            .resolve_index_variant_parts(self.ctx.scope.owner, index_path, variant)
             .map_err(|source| {
                 let span = match source {
                     ModuleResolveError::UnknownIndexVariant { .. } => variant_span,

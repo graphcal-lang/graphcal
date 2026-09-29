@@ -181,14 +181,10 @@ impl<'a> HirRefCollector<'a> {
         table: &mut SymbolTable,
     ) {
         let generic_scope = hir::GenericScope::new();
-        let prelude = hir::PreludeTypeScope::graphcal();
         let ctx = hir::ExprLoweringContext::new(
-            self.dag_id,
-            self.resolver,
-            &generic_scope,
+            hir::ModuleScope::new(self.dag_id, self.resolver, &generic_scope),
             &self.time_zones,
-        )
-        .with_prelude(&prelude);
+        );
         let lowered = hir::lower_expr_tolerant(expr, ctx);
         self.locals.clear();
         self.body_span = expr.span;

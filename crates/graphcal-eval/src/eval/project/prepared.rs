@@ -8,7 +8,7 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::{
-    ExprKind as HirExprKind, ExprLoweringContext, GenericScope, PreludeTypeScope,
+    ExprKind as HirExprKind, ExprLoweringContext, GenericScope, ModuleScope,
 };
 use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::registry::declared_type::DeclaredType;
