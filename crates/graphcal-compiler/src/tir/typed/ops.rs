@@ -1,29 +1,33 @@
 #[cfg(test)]
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
+#[cfg(test)]
 use crate::desugar::desugared_ast::MulDivOp;
-use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 #[cfg(test)]
 use crate::dimension::Rational;
+#[cfg(test)]
 use crate::generic_param::GenericParamId;
 #[cfg(test)]
-use crate::nat::Monomial;
-use crate::nat::NatPolyForm;
-use crate::registry::declared_type::{DeclaredGenericArg, IndexDisplayName, IndexTypeRef};
+use crate::nat::{Monomial, NatPolyForm};
+#[cfg(test)]
+use crate::registry::declared_type::IndexDisplayName;
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 #[cfg(test)]
 use crate::registry::types::FormattingRegistry;
 #[cfg(test)]
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
+#[cfg(test)]
 use crate::tir::dim_check::InferredGenericArg;
 
-use super::{ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
+#[cfg(test)]
+use super::ResolvedDimTerm;
+use super::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
 
 // ---------------------------------------------------------------------------
 // Conversion to DeclaredType
@@ -159,7 +163,7 @@ fn resolved_complex_to_declared(
     }
 }
 
-fn resolved_generic_arg_to_declared(
+pub fn resolved_generic_arg_to_declared(
     resolved: &ResolvedGenericArg,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DeclaredGenericArg, GraphcalError> {
@@ -939,6 +943,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
     }
 }
 
+#[cfg(test)]
 fn resolved_dim_arg_as_type(arg: &ResolvedDimArg) -> ResolvedTypeExpr {
     match arg {
         ResolvedDimArg::Dimensionless => ResolvedTypeExpr::Dimensionless,
@@ -1030,297 +1035,80 @@ fn unify_resolved_generic_arg(
 }
 
 // ---------------------------------------------------------------------------
-// Substitution
+// Embedding concrete types into the symbolic form
 // ---------------------------------------------------------------------------
 
-/// Substitute generic parameters in a resolved type, producing an `InferredType`.
-///
-/// This replaces `resolve_type_with_substitution()` from `dim_check.rs`.
-pub fn substitute_resolved_type(
-    resolved: &ResolvedTypeExpr,
-    dim_sub: &HashMap<GenericParamId, Dimension>,
-    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
-    let no_type_sub = HashMap::new();
-    substitute_resolved_type_with_types(resolved, dim_sub, index_sub, nat_sub, &no_type_sub, src)
-}
-
-pub fn substitute_resolved_generic_arg(
-    resolved: &ResolvedGenericArg,
-    dim_sub: &HashMap<GenericParamId, Dimension>,
-    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamId, u64>,
-    type_sub: &HashMap<GenericParamId, crate::tir::dim_check::InferredType>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredGenericArg, GraphcalError> {
-    match resolved {
-        ResolvedGenericArg::Dim(dim) => {
-            let inferred = substitute_resolved_type_with_types(
-                &resolved_dim_arg_as_type(dim),
-                dim_sub,
-                index_sub,
-                nat_sub,
-                type_sub,
-                src,
-            )?;
-            match inferred {
-                crate::tir::dim_check::InferredType::Quantity(dimension) => {
-                    Ok(InferredGenericArg::Dim(dimension))
-                }
-                _ => Err(GraphcalError::internal_error(
-                    "dimension generic argument substituted to a non-dimension type",
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )),
-            }
+/// Embed a concrete declared type into the symbolic TIR form: the inverse of
+/// [`resolved_to_declared_type`], used to bind a concrete generic argument
+/// in a [`super::Substitution`]. `span` locates the embedded nodes.
+#[must_use]
+pub fn declared_to_resolved_type(
+    declared: &crate::registry::declared_type::DeclaredType,
+    span: Span,
+) -> ResolvedTypeExpr {
+    use crate::registry::declared_type::DeclaredType;
+    match declared {
+        DeclaredType::Quantity(dim) => ResolvedTypeExpr::Quantity(dim.clone()),
+        DeclaredType::Complex(dim) => ResolvedTypeExpr::Complex {
+            dimension: dimension_to_resolved_arg(dim),
+            span,
+        },
+        DeclaredType::Bool => ResolvedTypeExpr::Bool,
+        DeclaredType::Int => ResolvedTypeExpr::Int,
+        DeclaredType::Datetime(scale) => ResolvedTypeExpr::Datetime(*scale),
+        DeclaredType::Key(index) => ResolvedTypeExpr::Key {
+            index: index_ref_to_resolved(index, span),
+            span,
+        },
+        DeclaredType::Struct(name, args) if args.is_empty() => {
+            ResolvedTypeExpr::Struct(name.resolved().clone(), span)
         }
-        ResolvedGenericArg::Index(index) => {
-            substitute_resolved_index(index, index_sub, nat_sub, src).map(InferredGenericArg::Index)
-        }
-        ResolvedGenericArg::Nat(form, span) => {
-            let value = form
-                .evaluate(nat_sub)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("generic Nat argument `{}` is not concrete", form.format()),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })?;
-            Ok(InferredGenericArg::Nat(NatPolyForm::from_constant(value)))
-        }
-        ResolvedGenericArg::Type(type_expr) => substitute_resolved_type_with_types(
-            type_expr, dim_sub, index_sub, nat_sub, type_sub, src,
-        )
-        .map(InferredGenericArg::Type),
-    }
-}
-
-/// Substitute generic index and nat bindings into a [`ResolvedIndex`],
-/// yielding the concrete inferred index identity.
-fn substitute_resolved_index(
-    index: &ResolvedIndex,
-    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
-    match index {
-        ResolvedIndex::Concrete(name, _) => Ok(
-            crate::registry::declared_type::IndexTypeRef::from_resolved(name.clone()),
-        ),
-        ResolvedIndex::GenericParam(name, span) => {
-            Ok(index_sub
-                .get(name)
-                .cloned()
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!("generic index `{name}` is not bound"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })?)
-        }
-        ResolvedIndex::Finite(form, span) => {
-            let value = form
-                .evaluate(nat_sub)
-                .ok_or_else(|| GraphcalError::EvalError {
-                    message: format!(
-                        "generic finite index `{}` is not concrete",
-                        IndexDisplayName::Finite(form.clone())
-                    ),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })?;
-            crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
-                NatPolyForm::from_constant(value),
-            )
-            .map_err(|err| GraphcalError::EvalError {
-                message: err.describe_finite_index(),
-                src: src.clone(),
-                span: (*span).into(),
-            })
-        }
-    }
-}
-
-/// Like [`substitute_resolved_type`], but with generic *type* parameters.
-///
-/// `Type`-sorted generic parameters are substituted from `type_sub`
-/// (used by HIR constructor-call inference, which binds them from
-/// call-site arguments).
-#[expect(
-    clippy::too_many_lines,
-    reason = "single dispatch over ResolvedTypeExpr variants with per-variant generic-substitution + dimension-arithmetic overflow handling"
-)]
-pub fn substitute_resolved_type_with_types(
-    resolved: &ResolvedTypeExpr,
-    dim_sub: &HashMap<GenericParamId, Dimension>,
-    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamId, u64>,
-    type_sub: &HashMap<GenericParamId, crate::tir::dim_check::InferredType>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
-    use crate::tir::dim_check::InferredType;
-
-    match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(InferredType::Quantity(Dimension::dimensionless())),
-        ResolvedTypeExpr::Bool => Ok(InferredType::Bool),
-        ResolvedTypeExpr::Int => Ok(InferredType::Int),
-        ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
-        ResolvedTypeExpr::Quantity(dim) => Ok(InferredType::Quantity(dim.clone())),
-        ResolvedTypeExpr::Complex { dimension, span } => {
-            let resolved_dimension = resolved_dim_arg_as_type(dimension);
-            match substitute_resolved_type_with_types(
-                &resolved_dimension,
-                dim_sub,
-                index_sub,
-                nat_sub,
-                type_sub,
-                src,
-            )? {
-                InferredType::Quantity(dimension) => Ok(InferredType::Complex(dimension)),
-                other => Err(GraphcalError::InternalError {
-                    message: format!(
-                        "complex dimension substituted to non-quantity type {other:?}"
-                    ),
-                    src: src.clone(),
-                    span: (*span).into(),
-                }),
-            }
-        }
-        ResolvedTypeExpr::Key { index, .. } => {
-            substitute_resolved_index(index, index_sub, nat_sub, src).map(InferredType::Key)
-        }
-        ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
-            crate::registry::declared_type::StructTypeRef::from_resolved(name.clone()),
-            vec![],
-        )),
-        ResolvedTypeExpr::GenericStruct {
-            name, generic_args, ..
-        } => {
-            let inferred_args = generic_args
+        DeclaredType::Struct(name, args) => ResolvedTypeExpr::GenericStruct {
+            name: name.resolved().clone(),
+            generic_args: args
                 .iter()
-                .map(|arg| {
-                    substitute_resolved_generic_arg(arg, dim_sub, index_sub, nat_sub, type_sub, src)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(InferredType::Struct(
-                crate::registry::declared_type::StructTypeRef::from_resolved(name.clone()),
-                inferred_args,
-            ))
+                .map(|arg| declared_to_resolved_generic_arg(arg, span))
+                .collect(),
+            span,
+        },
+        DeclaredType::Indexed { element, index } => ResolvedTypeExpr::Indexed {
+            base: Box::new(declared_to_resolved_type(element, span)),
+            indexes: vec![index_ref_to_resolved(index, span)],
+        },
+    }
+}
+
+/// Embed a concrete generic argument into the symbolic form.
+#[must_use]
+pub fn declared_to_resolved_generic_arg(
+    arg: &DeclaredGenericArg,
+    span: Span,
+) -> ResolvedGenericArg {
+    match arg {
+        DeclaredGenericArg::Dim(dim) => ResolvedGenericArg::Dim(dimension_to_resolved_arg(dim)),
+        DeclaredGenericArg::Index(index) => {
+            ResolvedGenericArg::Index(index_ref_to_resolved(index, span))
         }
-
-        ResolvedTypeExpr::GenericDimParam(gp, span) => dim_sub.get(gp).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!("generic `{gp}` not bound during substitution"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |dim| Ok(InferredType::Quantity(dim.clone())),
-        ),
-
-        ResolvedTypeExpr::GenericTypeParam(gp, span) => type_sub.get(gp).map_or_else(
-            || {
-                Err(GraphcalError::EvalError {
-                    message: format!("generic type parameter `{gp}` not bound during substitution"),
-                    src: src.clone(),
-                    span: (*span).into(),
-                })
-            },
-            |ty| Ok(ty.clone()),
-        ),
-
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            let overflow_err = || GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: (*span).into(),
-            };
-            let mut result = Dimension::dimensionless();
-            for term in terms {
-                let term_dim = match term {
-                    ResolvedDimTerm::Concrete { dim, power, .. } => {
-                        dim.pow(*power).map_err(|_| overflow_err())?
-                    }
-                    ResolvedDimTerm::GenericParam {
-                        name: gp,
-                        power,
-                        span: term_span,
-                        ..
-                    } => {
-                        let base = dim_sub.get(gp).ok_or_else(|| GraphcalError::EvalError {
-                            message: format!("generic `{gp}` not bound during substitution"),
-                            src: src.clone(),
-                            span: (*term_span).into(),
-                        })?;
-                        base.pow(*power).map_err(|_| overflow_err())?
-                    }
-                };
-                result = match term.op() {
-                    MulDivOp::Mul => (result * term_dim).map_err(|_| overflow_err())?,
-                    MulDivOp::Div => (result / term_dim).map_err(|_| overflow_err())?,
-                };
-            }
-            Ok(InferredType::Quantity(result))
-        }
-
-        ResolvedTypeExpr::Indexed { base, indexes } => {
-            let mut result = substitute_resolved_type_with_types(
-                base, dim_sub, index_sub, nat_sub, type_sub, src,
-            )?;
-            for idx in indexes.iter().rev() {
-                let resolved_idx = match idx {
-                    ResolvedIndex::Concrete(name, _) => {
-                        result = InferredType::Indexed {
-                            element: Box::new(result),
-                            index: crate::registry::declared_type::IndexTypeRef::from_resolved(
-                                name.clone(),
-                            ),
-                        };
-                        continue;
-                    }
-                    ResolvedIndex::GenericParam(gp, span) => index_sub
-                        .get(gp)
-                        .cloned()
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!("generic index `{gp}` not bound during substitution"),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        })?,
-                    ResolvedIndex::Finite(form, span) => {
-                        let n = form.evaluate(nat_sub).ok_or_else(|| {
-                            let vars = form.variables();
-                            let unbound: Vec<&str> = vars
-                                .iter()
-                                .filter(|k| !nat_sub.contains_key(*k))
-                                .map(|id| id.name.as_str())
-                                .collect();
-                            GraphcalError::EvalError {
-                                message: format!(
-                                    "generic nat parameter(s) [{}] not bound during substitution",
-                                    unbound.join(", ")
-                                ),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            }
-                        })?;
-                        crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
-                            NatPolyForm::from_constant(n),
-                        )
-                        .map_err(|err| GraphcalError::EvalError {
-                            message: err.describe_finite_index(),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        })?
-                    }
-                };
-                result = InferredType::Indexed {
-                    element: Box::new(result),
-                    index: resolved_idx,
-                };
-            }
-            Ok(result)
+        DeclaredGenericArg::Nat(form) => ResolvedGenericArg::Nat(form.clone(), span),
+        DeclaredGenericArg::Type(ty) => {
+            ResolvedGenericArg::Type(declared_to_resolved_type(ty, span))
         }
     }
 }
 
-// ---------------------------------------------------------------------------
+fn dimension_to_resolved_arg(dimension: &Dimension) -> ResolvedDimArg {
+    if dimension.is_dimensionless() {
+        ResolvedDimArg::Dimensionless
+    } else {
+        ResolvedDimArg::Concrete(dimension.clone())
+    }
+}
+
+fn index_ref_to_resolved(index: &IndexTypeRef, span: Span) -> ResolvedIndex {
+    match index {
+        IndexTypeRef::Declared(reference) => {
+            ResolvedIndex::Concrete(reference.resolved().clone(), span)
+        }
+        IndexTypeRef::Finite(finite) => ResolvedIndex::Finite(finite.form(), span),
+    }
+}

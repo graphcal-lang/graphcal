@@ -16,17 +16,6 @@ use crate::tir::typed::specialization::{specialize_expression_type, specialize_i
 use super::expression_axes::{checked_expression_shape, checked_index_cardinality};
 use super::{DimCheckContext, check_decl_expr_type, infer};
 
-#[cfg(test)]
-mod tests;
-
-#[derive(Debug, thiserror::Error)]
-enum BoundNatError {
-    #[error(transparent)]
-    Overflow(#[from] crate::nat::NatOverflowError),
-    #[error("required Nat binding is missing: {0:?}")]
-    MissingBinding(crate::hir::types::GenericParamId),
-}
-
 /// Discharge one bound's retained Nat/type/shape obligations in its canonical
 /// environment. This does not infer the source body and grants no capabilities.
 #[expect(
@@ -47,6 +36,7 @@ pub fn specialize_bound_expression_facts(
         .map_err(|error| diagnostic(error.to_string()))?;
     let mut ids = Vec::new();
     visit_expr(root, &mut |expr| ids.push(expr.id().clone()));
+    let substitution = crate::tir::typed::Substitution::for_nats(bindings);
     let records = ids
         .into_iter()
         .map(|id| {
@@ -57,7 +47,7 @@ pub fn specialize_bound_expression_facts(
                 record,
                 dag,
                 tir,
-                &FactSubstitution::Nat(bindings),
+                &FactSubstitution::Generic(&substitution),
                 src,
                 root.span,
                 &record.environment,
@@ -85,91 +75,6 @@ pub fn specialize_bound_expression_facts(
             }
         }
         error => diagnostic(error.to_string()),
-    })
-}
-
-fn evaluate_bound_nat(
-    form: &crate::nat::NatPolyForm,
-    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-) -> Result<u64, BoundNatError> {
-    form.evaluate_with(|id| {
-        bindings
-            .get(id)
-            .copied()
-            .ok_or_else(|| BoundNatError::MissingBinding(id.clone()))
-    })
-}
-
-fn bind_index_nats(
-    index: &crate::registry::declared_type::IndexTypeRef,
-    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-    span: crate::syntax::span::Span,
-) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
-    match index.finite_index_form() {
-        Some(form) => {
-            let cardinality = evaluate_bound_nat(&form, bindings).map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::Source(span),
-                )
-            })?;
-            let finite = crate::registry::index::FiniteIndex::try_from_u64(cardinality).map_err(
-                |error| GraphcalError::EvalError {
-                    message: error.describe_finite_index(),
-                    src: src.clone(),
-                    span: span.into(),
-                },
-            )?;
-            Ok(crate::registry::declared_type::IndexTypeRef::from_finite_index(finite))
-        }
-        None => Ok(index.clone()),
-    }
-}
-
-fn bind_type_nats(
-    ty: &DeclaredType,
-    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-    span: crate::syntax::span::Span,
-) -> Result<DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
-    let evaluate = |form: &crate::nat::NatPolyForm| {
-        evaluate_bound_nat(form, bindings).map_err(|error: BoundNatError| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::Source(span))
-        })
-    };
-    let bind_index = |index: &IndexTypeRef| bind_index_nats(index, bindings, src, span);
-    let recurse = |ty: &DeclaredType| bind_type_nats(ty, bindings, src, span);
-    Ok(match ty {
-        DeclaredType::Key(index) => DeclaredType::Key(bind_index(index)?),
-        DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
-            element: Box::new(recurse(element)?),
-            index: bind_index(index)?,
-        },
-        DeclaredType::Struct(identity, args) => DeclaredType::Struct(
-            identity.clone(),
-            args.iter()
-                .map(|arg| {
-                    Ok(match arg {
-                        DeclaredGenericArg::Nat(form) => DeclaredGenericArg::Nat(
-                            crate::nat::NatPolyForm::from_constant(evaluate(form)?),
-                        ),
-                        DeclaredGenericArg::Type(ty) => DeclaredGenericArg::Type(recurse(ty)?),
-                        DeclaredGenericArg::Index(index) => {
-                            DeclaredGenericArg::Index(bind_index(index)?)
-                        }
-                        DeclaredGenericArg::Dim(_) => arg.clone(),
-                    })
-                })
-                .collect::<Result<_, GraphcalError>>()?,
-        ),
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_) => ty.clone(),
     })
 }
 
@@ -321,7 +226,7 @@ fn check_instance_defaults(
 
 enum FactSubstitution<'a> {
     Static(&'a crate::ir::static_substitution::StaticSubstitution),
-    Nat(&'a HashMap<crate::hir::types::GenericParamId, u64>),
+    Generic(&'a crate::tir::typed::Substitution),
 }
 
 impl FactSubstitution<'_> {
@@ -334,7 +239,9 @@ impl FactSubstitution<'_> {
     ) -> Result<DeclaredType, GraphcalError> {
         match self {
             Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
-            Self::Nat(bindings) => bind_type_nats(ty, bindings, src, span),
+            Self::Generic(substitution) => substitution
+                .apply_declared(ty, span)
+                .map_err(|error| error.into_graphcal(src)),
         }
     }
 
@@ -346,7 +253,9 @@ impl FactSubstitution<'_> {
     ) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
         match self {
             Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
-            Self::Nat(bindings) => bind_index_nats(index, bindings, src, span),
+            Self::Generic(substitution) => substitution
+                .apply_index_ref(index, span)
+                .map_err(|error| error.into_graphcal(src)),
         }
     }
 }

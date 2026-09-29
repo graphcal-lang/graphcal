@@ -739,58 +739,28 @@ impl UnfrozenIR {
         projection: &crate::resolve::symbols::StaticProjection<
             crate::syntax::type_name::StructTypeNameNamespace,
         >,
-    ) -> Option<crate::hir::nominal_lower::NominalSubstitution> {
-        use crate::hir::nominal_lower::{NominalIndexTarget, NominalSubstitution};
-        use crate::ir::static_substitution::InstanceIndexBindingTarget;
-
+    ) -> Option<crate::ir::static_substitution::StaticSubstitution> {
         let template = projection.template().owner();
         let record = self.semantic_instances.iter().find(|record| {
             record.instance.id().scope() == projection.instance()
                 && record.instance.id().template() == template
         })?;
-        let substitution = &record.instance.specialization().substitution;
-        let projected_dimensions = symbols
-            .dimension_projections()
-            .filter(|(_, dimension)| {
-                dimension.instance() == projection.instance()
-                    && dimension.template().owner() == template
-            })
-            .filter_map(|(local, dimension)| {
-                symbols
-                    .dimensions()
-                    .get(local)
-                    .map(|symbol| (dimension.template().clone(), symbol.resolved().clone()))
-            });
-        Some(NominalSubstitution {
-            types: substitution
-                .types
-                .iter()
-                .map(|(source, target)| (source.clone(), target.clone()))
-                .collect(),
-            dimensions: substitution
-                .dimensions
-                .iter()
-                .map(|(source, target)| (source.clone(), target.clone()))
-                .chain(projected_dimensions)
-                .collect(),
-            indexes: substitution
-                .indexes
-                .iter()
-                .map(|(source, target)| {
-                    (
-                        source.clone(),
-                        match target {
-                            InstanceIndexBindingTarget::Declared(target) => {
-                                NominalIndexTarget::Declared(target.clone())
-                            }
-                            InstanceIndexBindingTarget::Finite(finite) => {
-                                NominalIndexTarget::Finite(*finite)
-                            }
-                        },
-                    )
+        let mut substitution = record.instance.specialization().substitution.clone();
+        substitution.dimensions.extend(
+            symbols
+                .dimension_projections()
+                .filter(|(_, dimension)| {
+                    dimension.instance() == projection.instance()
+                        && dimension.template().owner() == template
                 })
-                .collect(),
-        })
+                .filter_map(|(local, dimension)| {
+                    symbols
+                        .dimensions()
+                        .get(local)
+                        .map(|symbol| (dimension.template().clone(), symbol.resolved().clone()))
+                }),
+        );
+        Some(substitution)
     }
 
     /// Add a const alias: a synthetic const declaration that references another const.

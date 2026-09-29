@@ -27,11 +27,10 @@ pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
 pub use completeness::{Completeness, Draft, NoErrorNode, Strict};
 pub use local_env::LocalEnv;
 pub use model::{
-    AssertBody, ConstRef, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, ExternFnRef,
-    FieldInit, ForBinding, ForBindingIndex, FunctionRef, IndexArg, IndexVariantRef, LocalDef,
-    LocalId, MapEntry, MapEntryKey, MatchArm, MatchPattern, ParamBinding, PatternBinding,
-    ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, TypeSystemRef, UnappliedFunctionRef,
-    UnfoldRecurrence,
+    AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,
+    FunctionRef, IndexArg, IndexVariantRef, LocalDef, LocalId, MapEntry, MapEntryKey, MatchArm,
+    MatchPattern, ParamBinding, PatternBinding, ResolvedUnitExpr, ResolvedUnitExprItem,
+    ResolvedUnitRef, TypeSystemRef, UnappliedFunctionRef, UnfoldRecurrence,
 };
 pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};
 pub(crate) use visit::find_extern_call;

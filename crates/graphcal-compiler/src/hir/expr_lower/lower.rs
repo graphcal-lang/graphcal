@@ -19,12 +19,12 @@ use super::lowerer::ExprLowerer;
 use super::resolve::{ResolvedCallable, spanned};
 use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_draft, into_draft};
 use crate::hir::expr::{
-    AssertBody, DagCallIndexBinding, DagCallStaticBindings, Expr, ExprKind, FieldInit, ForBinding,
-    ForBindingIndex, IndexArg, IndexVariantRef, MapEntry, MapEntryKey, MatchArm, MatchPattern,
-    ParamBinding, PatternBinding, UnfoldRecurrence,
+    AssertBody, Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, IndexArg, IndexVariantRef,
+    MapEntry, MapEntryKey, MatchArm, MatchPattern, ParamBinding, PatternBinding, UnfoldRecurrence,
 };
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
 use crate::hir::lower::{PreludeTypeScope, lower_generic_args, lower_nat_expr};
+use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 
 /// Lower a syntax expression into tolerant HIR.
 ///
@@ -541,9 +541,9 @@ impl ExprLowerer<'_> {
         &mut self,
         target: &DagId,
         bindings: &[ast::ParamBinding],
-    ) -> Result<(Vec<ParamBinding<Tolerant>>, DagCallStaticBindings), ExprLowerError> {
+    ) -> Result<(Vec<ParamBinding<Tolerant>>, StaticSubstitution), ExprLowerError> {
         let mut params = Vec::new();
-        let mut static_bindings = DagCallStaticBindings::default();
+        let mut static_bindings = StaticSubstitution::default();
         for binding in bindings {
             let input_path = NamePath::local(binding.name.name.atom().clone());
             match binding.category {
@@ -616,7 +616,7 @@ impl ExprLowerer<'_> {
                             .resolver
                             .resolve_index_path(self.ctx.scope.owner, &path.value)
                             .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                            .map(DagCallIndexBinding::Declared)
+                            .map(InstanceIndexBindingTarget::Declared)
                             .map_err(|source| ExprLowerError::ModuleResolve {
                                 source,
                                 span: binding.value.span,
@@ -625,7 +625,7 @@ impl ExprLowerer<'_> {
                             cardinality: ast::NatExpr::Literal(cardinality, _),
                             ..
                         }) => crate::registry::types::FiniteIndex::try_from_u64(cardinality)
-                            .map(DagCallIndexBinding::Finite)
+                            .map(InstanceIndexBindingTarget::Finite)
                             .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
                                 name: binding.name.name.atom().clone(),
                                 span: binding.value.span,

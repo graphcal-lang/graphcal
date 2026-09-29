@@ -237,6 +237,7 @@ impl NatPolyForm {
     /// Evaluate to a concrete value given variable bindings.
     ///
     /// Returns `None` if any variable is unbound or arithmetic overflows.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn evaluate(&self, bindings: &HashMap<GenericParamId, u64>) -> Option<u64> {
         self.evaluate_with(|name| bindings.get(name).copied().ok_or(NatOverflowError))
