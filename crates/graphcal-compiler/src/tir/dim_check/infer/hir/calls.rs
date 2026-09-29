@@ -21,12 +21,6 @@ use crate::tir::dim_check::infer::linear_algebra::{
 
 use super::context::Infer;
 
-impl Infer<'_> {
-    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType<Symbolic>, GraphcalError> {
-        self.without_owner().infer_hir_type(arg)
-    }
-}
-
 /// Check a built-in call's argument count against its static entry.
 ///
 /// This is the only arity check for built-in calls: `infer_hir_fn_call` runs

@@ -1,10 +1,15 @@
-//! Expression-fact and nominal-dependency recording for HIR inference.
+//! The single observation sink of one body-checking pass.
+//!
+//! Inference records everything it learns about a body exactly once, while it
+//! checks that body: each expression's checked fact, the static index proofs an
+//! expression relies on, and the nominal uses a checked root makes. Consumers
+//! (fact publication, template-closure validation, override-dependency
+//! summaries) read these observations instead of inferring the body again.
 
-use crate::hir::expr::{ConstRef, Expr, ExprKind, MatchPattern, visit_expr};
+use crate::hir::expr::{ConstRef, Expr, ExprKind, MatchPattern};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -15,7 +20,7 @@ use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::{
     CheckedExpressionRecord, ConstructorApplication, ContextualOperand, ExpressionFact,
-    NominalObservation, ValueFact,
+    NominalObservation, StaticIndexRequirement, ValueFact,
 };
 
 use crate::registry::checked_type::{CheckedType, Symbolic};
@@ -37,85 +42,109 @@ impl TypeDefinitionDependency {
     }
 }
 
-#[derive(Clone, Default)]
-pub(super) struct TypeDefinitionDependencyCollector {
-    dependencies: Rc<RefCell<Vec<TypeDefinitionDependency>>>,
+/// One nominal use observed while checking a root, with the source span of a
+/// use that inspects the nominal type's concrete definition.
+#[derive(Debug, Clone)]
+struct NominalUse {
+    observation: NominalObservation,
+    definition_span: Option<Span>,
 }
 
-impl TypeDefinitionDependencyCollector {
-    fn record(&self, identity: &ResolvedStructTypeName, span: Span) {
-        self.dependencies
-            .borrow_mut()
-            .push(TypeDefinitionDependency {
+impl NominalUse {
+    fn type_definition_dependency(&self) -> Option<TypeDefinitionDependency> {
+        let span = self.definition_span?;
+        match &self.observation {
+            NominalObservation::Field { identity, .. }
+            | NominalObservation::Constructor { identity, .. } => Some(TypeDefinitionDependency {
                 identity: identity.clone(),
                 span,
-            });
-    }
-
-    pub(super) fn snapshot(&self) -> Vec<TypeDefinitionDependency> {
-        self.dependencies.borrow().clone()
-    }
-}
-
-#[derive(Clone, Default)]
-pub(super) enum TypeDefinitionDependencyTracking {
-    #[default]
-    Disabled,
-    Collect(TypeDefinitionDependencyCollector),
-}
-
-impl TypeDefinitionDependencyTracking {
-    pub(super) fn record(&self, identity: &ResolvedStructTypeName, span: Span) {
-        match self {
-            Self::Disabled => {}
-            Self::Collect(collector) => collector.record(identity, span),
+            }),
+            NominalObservation::TypeArgument(_)
+            | NominalObservation::IndexLabel { .. }
+            | NominalObservation::IndexArgument(_) => None,
         }
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(in crate::tir::dim_check) static CONTEXTUAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[derive(Clone)]
-pub(in crate::tir::dim_check) struct ExpressionFactCollector {
+/// Everything one checking pass observed about the bodies of one DAG.
+///
+/// Every expression is recorded at most once: a second record for the same
+/// expression is an internal error, because each body is inferred exactly once.
+pub(in crate::tir::dim_check) struct BodyObservations {
     environment: Arc<crate::tir::expression_facts::CheckingEnvironment>,
-    records: Rc<RefCell<HashMap<ExprId, Box<CheckedExpressionRecord>>>>,
-    observations: Rc<RefCell<HashMap<ExprId, Vec<NominalObservation>>>>,
-    pub(super) static_indexes:
-        Rc<RefCell<HashMap<ExprId, Vec<crate::tir::expression_facts::StaticIndexRequirement>>>>,
+    records: RefCell<HashMap<ExprId, Box<CheckedExpressionRecord>>>,
+    nominal_uses: RefCell<HashMap<ExprId, Vec<NominalUse>>>,
+    static_indexes: RefCell<HashMap<ExprId, Vec<StaticIndexRequirement>>>,
 }
 
-impl ExpressionFactCollector {
+impl BodyObservations {
     pub(in crate::tir::dim_check) fn new(dag: &crate::tir::typed::DagTIR) -> Self {
         Self {
             environment: crate::tir::expression_facts::CheckingEnvironment::new(
                 dag.dag_id().clone(),
                 dag.body_revision().clone(),
             ),
-            records: Rc::default(),
-            observations: Rc::default(),
-            static_indexes: Rc::default(),
+            records: RefCell::default(),
+            nominal_uses: RefCell::default(),
+            static_indexes: RefCell::default(),
         }
     }
 
+    /// The checked expression records, each root carrying its nominal uses.
     pub(in crate::tir::dim_check) fn finish(self) -> HashMap<ExprId, Box<CheckedExpressionRecord>> {
-        let mut records = self.records.take();
-        for (id, observations) in self.observations.take() {
+        let mut records = self.records.into_inner();
+        for (id, uses) in self.nominal_uses.into_inner() {
             if let Some(record) = records.get_mut(&id) {
-                record.nominal_observations = Some(observations.into());
+                record.nominal_observations = Some(
+                    uses.into_iter()
+                        .map(|nominal_use| nominal_use.observation)
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
             }
         }
         records
     }
 
-    pub(super) fn observe(&self, root: &ExprId, observation: NominalObservation) {
-        self.observations
+    /// Record one nominal use made while checking `root`.
+    pub(super) fn observe_nominal(
+        &self,
+        root: &ExprId,
+        observation: NominalObservation,
+        definition_span: Option<Span>,
+    ) {
+        self.nominal_uses
             .borrow_mut()
             .entry(root.clone())
             .or_default()
-            .push(observation);
+            .push(NominalUse {
+                observation,
+                definition_span,
+            });
+    }
+
+    /// The uses of `root` that inspect a nominal type's concrete definition,
+    /// in the order inference made them.
+    pub(in crate::tir::dim_check) fn type_definition_dependencies(
+        &self,
+        root: &ExprId,
+    ) -> Vec<TypeDefinitionDependency> {
+        self.nominal_uses
+            .borrow()
+            .get(root)
+            .into_iter()
+            .flatten()
+            .filter_map(NominalUse::type_definition_dependency)
+            .collect()
+    }
+
+    /// Retain a static index proof `expr` relies on, attached when `expr` is recorded.
+    pub(super) fn retain_static_index(&self, expr: &ExprId, requirement: StaticIndexRequirement) {
+        self.static_indexes
+            .borrow_mut()
+            .entry(expr.clone())
+            .or_default()
+            .push(requirement);
     }
 
     fn insert(
@@ -128,9 +157,6 @@ impl ExpressionFactCollector {
         >,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let diagnostic = |error: String| {
-            GraphcalError::internal_error(error, src, DiagnosticAnchor::Source(expr.span))
-        };
         let id = expr.id().clone();
         let mut record = CheckedExpressionRecord::new(expr, fact, Arc::clone(&self.environment));
         record.constructor_matches = constructor_matches;
@@ -146,44 +172,32 @@ impl ExpressionFactCollector {
                 entry.insert(record);
                 Ok(())
             }
-            std::collections::hash_map::Entry::Occupied(entry) if entry.get() == &record => Ok(()),
-            std::collections::hash_map::Entry::Occupied(_) => Err(diagnostic(
-                "expression inferred with inconsistent facts".into(),
+            std::collections::hash_map::Entry::Occupied(_) => Err(GraphcalError::internal_error(
+                "expression checked more than once in one checking pass",
+                src,
+                DiagnosticAnchor::Source(expr.span),
             )),
         }
     }
 
+    /// Record a contextual literal accepted by the construct that consumes it.
+    ///
+    /// Contextual literals (plot strings, datetime and timezone literals) are
+    /// never values of their own; the consuming rule records them where it
+    /// accepts them. Publication rejects an operand that does not match the
+    /// literal's kind.
     pub(in crate::tir::dim_check) fn record_contextual(
         &self,
-        root: &Expr,
+        expr: &Expr,
+        operand: ContextualOperand,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let mut result = Ok(());
-        visit_expr(root, &mut |expr| {
-            #[cfg(test)]
-            CONTEXTUAL_VISITS.with(|visits| {
-                visits.set(
-                    visits
-                        .get()
-                        .checked_add(1)
-                        .expect("contextual visit counter overflow"),
-                );
-            });
-            if result.is_err() || self.records.borrow().contains_key(expr.id()) {
-                return;
-            }
-            let kind = match expr.kind() {
-                ExprKind::StringLiteral(_) => ContextualOperand::String,
-                ExprKind::OffsetDateTimeLiteral(_) => ContextualOperand::OffsetDateTime,
-                ExprKind::CivilDateTimeLiteral(_) => ContextualOperand::CivilDateTime,
-                ExprKind::ZonedDateTimeLiteral(_) => ContextualOperand::ZonedDateTime,
-                ExprKind::IanaTimeZoneLiteral(_) => ContextualOperand::TimeZone,
-                ExprKind::TypeSystemRef(_) => ContextualOperand::TypeSystem,
-                _ => return,
-            };
-            result = self.insert(expr, ExpressionFact::Contextual(kind), HashMap::new(), src);
-        });
-        result
+        self.insert(
+            expr,
+            ExpressionFact::Contextual(operand),
+            HashMap::new(),
+            src,
+        )
     }
 
     pub(in crate::tir::dim_check) fn record(

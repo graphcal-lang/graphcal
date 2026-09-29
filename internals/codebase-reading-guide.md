@@ -1754,8 +1754,8 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 202. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
 203. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
 204. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-205. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/facts.rs`
-206. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+205. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+206. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/observations.rs`
 207. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/context.rs`
 208. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 209. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/generics.rs`

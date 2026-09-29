@@ -48,13 +48,13 @@ pub use crate::registry::checked_type::CheckedType;
 /// Per-DAG context bundle threaded through the dimension-check passes.
 ///
 /// Bundles the read-only inference environment with the operation-scoped
-/// cancellation token and expression-fact collector, so individual helpers take
-/// a single `&DimCheckContext` instead of positional arguments.
+/// cancellation token and observation sink, so individual helpers take a
+/// single `&DimCheckContext` instead of positional arguments.
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     env: infer::hir::InferEnv<'a>,
     cancellation: &'a crate::cancellation::CancellationToken,
-    expression_facts: &'a infer::hir::ExpressionFactCollector,
+    observations: &'a infer::hir::BodyObservations,
 }
 
 impl DimCheckContext<'_> {
@@ -84,19 +84,15 @@ impl DimCheckContext<'_> {
             })
     }
 
-    /// Infer the type of a module-aware HIR expression, recording its facts in
-    /// this context's collector.
+    /// Infer the type of a checked root, recording its observations in this
+    /// context's sink.
     fn infer_hir(
         &self,
         expr: &crate::hir::Expr,
         owner: Option<&ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
-        self.env.infer_with_expression_facts(
-            expr,
-            owner,
-            self.cancellation,
-            self.expression_facts.clone(),
-        )
+        self.env
+            .infer_root(expr, owner, self.cancellation, self.observations)
     }
 }
 
@@ -143,7 +139,7 @@ fn check_decl_expr_type(
     {
         // Projection bodies are generated from the already checked instance
         // interface. Retain that proof rather than treating them as unchecked.
-        return ctx.expression_facts.record(
+        return ctx.observations.record(
             hir_expr,
             &declared.to_symbolic(),
             ctx.env.dag,
@@ -697,23 +693,21 @@ pub fn check_dimensions_tir_with_cancellation(
         .filter(|(_, dag)| !dag.is_semantic_instance())
         .map(|(dag_id, dag)| {
             cancellation.checkpoint()?;
-            let collector = infer::hir::ExpressionFactCollector::new(dag);
+            let observations = infer::hir::BodyObservations::new(dag);
             let plot_shapes =
-                check_dimensions_dag(dag, tir, &tir.registry, src, cancellation, &collector)?;
-            dag.owned_expression_roots()
-                .try_for_each(|root| collector.record_contextual(root, src))?;
-            Ok((dag_id.clone(), collector, plot_shapes))
+                check_dimensions_dag(dag, tir, &tir.registry, src, cancellation, &observations)?;
+            Ok((dag_id.clone(), observations, plot_shapes))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let collectors: HashMap<_, _> = checked_dag_facts
+    let sinks: HashMap<_, _> = checked_dag_facts
         .iter()
-        .map(|(owner, collector, _)| (owner.clone(), collector.clone()))
+        .map(|(owner, observations, _)| (owner, observations))
         .collect();
     check_field_domain_constraint_targets(tir, src)?;
-    check_field_domain_constraint_dimensions(tir, &tir.registry, src, cancellation, &collectors)?;
-    drop(collectors);
+    check_field_domain_constraint_dimensions(tir, &tir.registry, src, cancellation, &sinks)?;
+    drop(sinks);
     let mut checked_plot_shapes = HashMap::new();
-    for (dag_id, collector, plot_shapes) in checked_dag_facts {
+    for (dag_id, observations, plot_shapes) in checked_dag_facts {
         let dag = tir.dags.get(&dag_id).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
@@ -725,7 +719,7 @@ pub fn check_dimensions_tir_with_cancellation(
             dag.dag_id().clone(),
             dag.body_revision().clone(),
             &dag.owned_expression_roots().collect::<Vec<_>>(),
-            collector.finish(),
+            observations.finish(),
             &|index| expression_axes::checked_index_cardinality(tir, index),
         )
         .map_err(|error| {
@@ -930,18 +924,18 @@ pub fn check_external_value_expr_type(
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
-    let collector = infer::hir::ExpressionFactCollector::new(tir.root());
+    let observations = infer::hir::BodyObservations::new(tir.root());
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
         tir,
         registry: &tir.registry,
         src,
     }
-    .infer_with_expression_facts(
+    .infer_root(
         expr,
         None,
         &crate::cancellation::CancellationToken::unbounded(),
-        collector.clone(),
+        &observations,
     )?;
     concrete_obligations::validate_concrete_type_obligations(
         &inferred,
@@ -952,12 +946,11 @@ pub fn check_external_value_expr_type(
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if expected.to_symbolic() == inferred {
-        collector.record_contextual(expr, src)?;
         crate::tir::expression_facts::CheckedExpressionFacts::publish(
             tir.root_dag_id().clone(),
             tir.root().body_revision().clone(),
             &[expr],
-            collector.finish(),
+            observations.finish(),
             &|index| expression_axes::checked_index_cardinality(tir, index),
         )
         .map_err(|error| {
@@ -997,7 +990,7 @@ fn check_dimensions_dag(
     registry: &crate::registry::types::FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-    expression_facts: &infer::hir::ExpressionFactCollector,
+    observations: &infer::hir::BodyObservations,
 ) -> Result<plot::CheckedPlotChannelShapes, GraphcalError> {
     cancellation.checkpoint()?;
     let ctx = DimCheckContext {
@@ -1008,7 +1001,7 @@ fn check_dimensions_dag(
             src,
         },
         cancellation,
-        expression_facts,
+        observations,
     };
 
     for entry in dag.consts() {
@@ -1281,16 +1274,12 @@ fn field_constraint_definition_dag<'a>(
 /// Field bounds cross into HIR with their nominal definition; the same
 /// owner-qualified field can be referenced
 /// from several DAGs, so a seen-set dedupes the checks.
-#[expect(
-    clippy::too_many_lines,
-    reason = "checks each nominal field's target and definition-scoped bounds together"
-)]
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-    collectors: &HashMap<crate::dag_id::DagId, infer::hir::ExpressionFactCollector>,
+    sinks: &HashMap<&crate::dag_id::DagId, &infer::hir::BodyObservations>,
 ) -> Result<(), GraphcalError> {
     let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
@@ -1361,7 +1350,7 @@ fn check_field_domain_constraint_dimensions(
             };
             let definition_dag =
                 field_constraint_definition_dag(tir, key, diagnostic_src, diagnostic_span)?;
-            let Some(collector) = collectors.get(definition_dag.dag_id()) else {
+            let Some(observations) = sinks.get(definition_dag.dag_id()) else {
                 // Imported definitions already carry their canonical proof.
                 continue;
             };
@@ -1372,12 +1361,7 @@ fn check_field_domain_constraint_dimensions(
                     registry,
                     src: &bound.src,
                 }
-                .infer_with_expression_facts(
-                    &bound.value,
-                    None,
-                    cancellation,
-                    collector.clone(),
-                )?;
+                .infer_root(&bound.value, None, cancellation, observations)?;
                 match &expected {
                     Some(expected) => check_one_bound_with_display_name(
                         &display_name,

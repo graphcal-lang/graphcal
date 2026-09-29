@@ -71,15 +71,16 @@ fn emit_violation(
     }
 }
 
+/// Report a checked root's first use of an optional type port's definition.
+///
+/// The uses are the ones the body's own checking pass observed; the body is
+/// not inferred again.
 fn check_expr(
     ctx: &DimCheckContext<'_>,
-    owner: Option<&ResolvedDeclName>,
     body: &TemplateBodyIdentity,
     expr: &hir::Expr,
 ) -> Result<(), GraphcalError> {
-    let dependencies =
-        ctx.env
-            .collect_type_definition_dependencies(expr, owner, ctx.cancellation)?;
+    let dependencies = ctx.observations.type_definition_dependencies(expr.id());
     dependencies.into_iter().try_for_each(|dependency| {
         optional_type_port(ctx.env.dag, dependency.identity()).map_or(Ok(()), |port| {
             emit_violation(ctx, body, port, dependency.span())
@@ -238,6 +239,10 @@ fn check_rigid_plot_bodies(
             name: entry.name().atom().clone(),
         };
         for (_, expression) in &entry.body.encodings {
+            if matches!(expression.kind(), hir::ExprKind::StringLiteral(_)) {
+                // A contextual string channel has no type to depend on a port.
+                continue;
+            }
             rigid_dimension_error(
                 ctx,
                 &body,
@@ -326,8 +331,9 @@ type ExpressionRecords = std::collections::HashMap<
 >;
 
 /// Check every source-authored executable body of `template` in the view
-/// where the optional dimension `ports` are rigid, then run `extra` in that
-/// view. Returns `extra`'s result and the facts the rigid inference recorded.
+/// where the optional dimension `ports` are rigid, checking the template's
+/// plots with `plots`. Returns `plots`'s result and the facts the rigid
+/// inference recorded.
 fn check_in_rigid_view<R>(
     tir: &crate::tir::typed::TIR,
     template: &crate::tir::typed::DagTIR,
@@ -335,7 +341,7 @@ fn check_in_rigid_view<R>(
     failure: RigidFailure<'_>,
     src: &miette::NamedSource<std::sync::Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
-    extra: impl FnOnce(&DimCheckContext<'_>) -> Result<R, GraphcalError>,
+    plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, GraphcalError>,
 ) -> Result<(R, ExpressionRecords), GraphcalError> {
     let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template.dag_id(), ports, src)?;
     let rigid_dag = rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
@@ -345,7 +351,7 @@ fn check_in_rigid_view<R>(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let expression_facts = infer::hir::ExpressionFactCollector::new(rigid_dag);
+    let observations = infer::hir::BodyObservations::new(rigid_dag);
     let rigid_ctx = DimCheckContext {
         env: infer::hir::InferEnv {
             dag: rigid_dag,
@@ -354,15 +360,14 @@ fn check_in_rigid_view<R>(
             src,
         },
         cancellation,
-        expression_facts: &expression_facts,
+        observations: &observations,
     };
     check_rigid_value_bodies(&rigid_ctx, failure)?;
     check_rigid_assertion_bodies(&rigid_ctx, failure)?;
-    check_rigid_plot_bodies(&rigid_ctx, failure)?;
+    let result = plots(&rigid_ctx)?;
     check_rigid_composition_bodies(&rigid_ctx, failure)?;
     check_rigid_unit_bodies(&rigid_ctx, failure)?;
-    let result = extra(&rigid_ctx)?;
-    Ok((result, expression_facts.finish()))
+    Ok((result, observations.finish()))
 }
 
 fn check_rigid_dimension_port(
@@ -370,14 +375,15 @@ fn check_rigid_dimension_port(
     port: &crate::hir::StaticPort,
     dimension: &crate::resolved_name::ResolvedDimName,
 ) -> Result<(), GraphcalError> {
+    let failure = RigidFailure::Violation(port);
     check_in_rigid_view(
         ctx.env.tir,
         ctx.env.dag,
         std::slice::from_ref(dimension),
-        RigidFailure::Violation(port),
+        failure,
         ctx.env.src,
         ctx.cancellation,
-        |_| Ok(()),
+        |rigid| check_rigid_plot_bodies(rigid, failure),
     )
     .map(drop)
 }
@@ -467,14 +473,14 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
         }))
     {
         ctx.checkpoint()?;
-        let Some(owner) = local_owner(ctx, declaration) else {
+        if local_owner(ctx, declaration).is_none() {
             continue;
-        };
+        }
         let identity = TemplateBodyIdentity {
             kind,
             name: name.atom().clone(),
         };
-        check_expr(ctx, Some(&owner), &identity, expr)?;
+        check_expr(ctx, &identity, expr)?;
     }
     Ok(())
 }
@@ -482,23 +488,23 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
 fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in ctx.env.dag.asserts() {
         ctx.checkpoint()?;
-        let Some(owner) = local_owner(ctx, entry.identity()) else {
+        if local_owner(ctx, entry.identity()).is_none() {
             continue;
-        };
+        }
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
             name: entry.name().atom().clone(),
         };
         match &*entry.body {
-            hir::AssertBody::Expr(expr) => check_expr(ctx, Some(&owner), &identity, expr)?,
+            hir::AssertBody::Expr(expr) => check_expr(ctx, &identity, expr)?,
             hir::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
             } => {
-                check_expr(ctx, Some(&owner), &identity, actual)?;
-                check_expr(ctx, Some(&owner), &identity, expected)?;
-                check_expr(ctx, Some(&owner), &identity, tolerance)?;
+                check_expr(ctx, &identity, actual)?;
+                check_expr(ctx, &identity, expected)?;
+                check_expr(ctx, &identity, tolerance)?;
             }
         }
     }
@@ -507,9 +513,9 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
 
 fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in ctx.env.dag.plots() {
-        let Some(owner) = local_owner(ctx, entry.identity()) else {
+        if local_owner(ctx, entry.identity()).is_none() {
             continue;
-        };
+        }
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Plot,
             name: entry.name().atom().clone(),
@@ -522,7 +528,7 @@ fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
             .chain(entry.body.mark_properties.iter().map(|field| &field.value))
             .chain(entry.body.properties.iter().map(|field| &field.value))
         {
-            check_expr(ctx, Some(&owner), &identity, expr)?;
+            check_expr(ctx, &identity, expr)?;
         }
     }
     Ok(())
@@ -550,15 +556,15 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
             )
         }))
     {
-        let Some(owner) = local_owner(ctx, declaration) else {
+        if local_owner(ctx, declaration).is_none() {
             continue;
-        };
+        }
         let identity = TemplateBodyIdentity {
             kind,
             name: name.atom().clone(),
         };
         for field in fields {
-            check_expr(ctx, Some(&owner), &identity, &field.value)?;
+            check_expr(ctx, &identity, &field.value)?;
         }
     }
     Ok(())
@@ -573,7 +579,7 @@ fn check_template_unit_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
             kind: DeclarationKind::Unit,
             name: entry.unit.atom().clone(),
         };
-        check_expr(ctx, None, &identity, &entry.expr)?;
+        check_expr(ctx, &identity, &entry.expr)?;
     }
     Ok(())
 }

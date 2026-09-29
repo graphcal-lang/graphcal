@@ -191,8 +191,6 @@ fn check_instance_defaults(
         let inherited = template_defaults.contains(id);
         if !inherited {
             check_decl_expr_type(ctx, entry.name(), &entry.identity(), &entry.type_ann)?;
-            ctx.expression_facts
-                .record_contextual(default, ctx.env.src)?;
             continue;
         }
         let record = facts.get(id).map_err(|error| {
@@ -405,7 +403,7 @@ pub(super) fn install_instance_expression_facts(
             port_generic_plot_channels.insert(owner.clone(), generic.plot_channels);
             generic.records
         };
-        let collector = infer::hir::ExpressionFactCollector::new(dag);
+        let observations = infer::hir::BodyObservations::new(dag);
         let ctx = DimCheckContext {
             env: infer::hir::InferEnv {
                 dag,
@@ -414,10 +412,10 @@ pub(super) fn install_instance_expression_facts(
                 src,
             },
             cancellation,
-            expression_facts: &collector,
+            observations: &observations,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;
-        let mut records = collector.finish();
+        let mut records = observations.finish();
         let environment =
             CheckingEnvironment::new(dag.dag_id().clone(), dag.body_revision().clone());
         let mut inventory = Vec::new();

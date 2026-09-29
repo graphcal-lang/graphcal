@@ -39,31 +39,22 @@ impl Infer<'_> {
         actual: &ResolvedStructTypeName,
         nominal_use: TypeNominalUse<'_>,
     ) -> Result<(), GraphcalError> {
-        if let Some((collector, root)) = &self.control.expression_facts {
-            collector.observe(
-                root,
-                match nominal_use {
-                    TypeNominalUse::Field { field, .. } => NominalObservation::Field {
-                        identity: actual.clone(),
-                        field: field.clone(),
-                    },
-                    TypeNominalUse::Constructor { constructor, .. } => {
-                        NominalObservation::Constructor {
-                            identity: actual.clone(),
-                            constructor: constructor.clone(),
-                        }
-                    }
-                    TypeNominalUse::TypeArgument => {
-                        NominalObservation::TypeArgument(actual.clone())
-                    }
+        self.control.observe_nominal(
+            match nominal_use {
+                TypeNominalUse::Field { field, .. } => NominalObservation::Field {
+                    identity: actual.clone(),
+                    field: field.clone(),
                 },
-            );
-        }
-        if let Some(span) = nominal_use.definition_span() {
-            self.control
-                .type_definition_dependencies
-                .record(actual, span);
-        }
+                TypeNominalUse::Constructor { constructor, .. } => {
+                    NominalObservation::Constructor {
+                        identity: actual.clone(),
+                        constructor: constructor.clone(),
+                    }
+                }
+                TypeNominalUse::TypeArgument => NominalObservation::TypeArgument(actual.clone()),
+            },
+            nominal_use.definition_span(),
+        );
         let Some(owner) = self.owner else {
             return Ok(());
         };
@@ -121,20 +112,16 @@ impl Infer<'_> {
         actual: &IndexTypeRef<Symbolic>,
         nominal_use: IndexNominalUse<'_>,
     ) -> Result<(), GraphcalError> {
-        if let Some((collector, root)) = &self.control.expression_facts {
-            collector.observe(
-                root,
-                match nominal_use {
-                    IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
-                        identity: actual.clone(),
-                        variant: variant.clone(),
-                    },
-                    IndexNominalUse::TypeArgument => {
-                        NominalObservation::IndexArgument(actual.clone())
-                    }
+        self.control.observe_nominal(
+            match nominal_use {
+                IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
+                    identity: actual.clone(),
+                    variant: variant.clone(),
                 },
-            );
-        }
+                IndexNominalUse::TypeArgument => NominalObservation::IndexArgument(actual.clone()),
+            },
+            None,
+        );
         let Some(owner) = self.owner else {
             return Ok(());
         };
