@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::declared_type::{
-    DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
+use graphcal_compiler::registry::checked_type::{
+    CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef,
 };
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
@@ -71,11 +71,11 @@ pub enum ModelIndexKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModelTypeId {
     identity: StructTypeRef,
-    generic_args: Vec<DeclaredGenericArg>,
+    generic_args: Vec<CheckedGenericArg>,
 }
 
 impl ModelTypeId {
-    const fn new(identity: StructTypeRef, generic_args: Vec<DeclaredGenericArg>) -> Self {
+    const fn new(identity: StructTypeRef, generic_args: Vec<CheckedGenericArg>) -> Self {
         Self {
             identity,
             generic_args,
@@ -90,7 +90,7 @@ impl ModelTypeId {
 
     /// Concrete sorted generic arguments.
     #[must_use]
-    pub fn generic_args(&self) -> &[DeclaredGenericArg] {
+    pub fn generic_args(&self) -> &[CheckedGenericArg] {
         &self.generic_args
     }
 }
@@ -208,18 +208,18 @@ pub enum ModelValueSchema {
 impl ModelValueSchema {
     /// Recover the checked concrete declared type represented by this schema.
     #[must_use]
-    pub fn declared_type(&self) -> DeclaredType {
+    pub fn declared_type(&self) -> CheckedType {
         match self {
-            Self::Quantity(quantity) => DeclaredType::Quantity(quantity.dimension.clone()),
-            Self::Complex(quantity) => DeclaredType::Complex(quantity.dimension.clone()),
-            Self::Bool => DeclaredType::Bool,
-            Self::Int => DeclaredType::Int,
-            Self::Datetime(scale) => DeclaredType::Datetime(*scale),
-            Self::Key(index) => DeclaredType::Key(index.identity.clone()),
+            Self::Quantity(quantity) => CheckedType::Quantity(quantity.dimension.clone()),
+            Self::Complex(quantity) => CheckedType::Complex(quantity.dimension.clone()),
+            Self::Bool => CheckedType::Bool,
+            Self::Int => CheckedType::Int,
+            Self::Datetime(scale) => CheckedType::Datetime(*scale),
+            Self::Key(index) => CheckedType::Key(index.identity.clone()),
             Self::Algebraic(id) => {
-                DeclaredType::Struct(id.identity.clone(), id.generic_args.clone())
+                CheckedType::Struct(id.identity.clone(), id.generic_args.clone())
             }
-            Self::Indexed { element, axis } => DeclaredType::Indexed {
+            Self::Indexed { element, axis } => CheckedType::Indexed {
                 element: Box::new(element.declared_type()),
                 index: axis.identity.clone(),
             },
@@ -386,26 +386,26 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
 
     pub(super) fn value_schema(
         &mut self,
-        declared_type: &DeclaredType,
+        declared_type: &CheckedType,
     ) -> Result<ModelValueSchema, GraphcalError> {
         match declared_type {
-            DeclaredType::Quantity(dimension) => Ok(ModelValueSchema::Quantity(
+            CheckedType::Quantity(dimension) => Ok(ModelValueSchema::Quantity(
                 model_quantity_schema(dimension, self.tir),
             )),
-            DeclaredType::Complex(dimension) => Ok(ModelValueSchema::Complex(
+            CheckedType::Complex(dimension) => Ok(ModelValueSchema::Complex(
                 model_quantity_schema(dimension, self.tir),
             )),
-            DeclaredType::Bool => Ok(ModelValueSchema::Bool),
-            DeclaredType::Int => Ok(ModelValueSchema::Int),
-            DeclaredType::Datetime(scale) => Ok(ModelValueSchema::Datetime(*scale)),
-            DeclaredType::Key(index) => {
+            CheckedType::Bool => Ok(ModelValueSchema::Bool),
+            CheckedType::Int => Ok(ModelValueSchema::Int),
+            CheckedType::Datetime(scale) => Ok(ModelValueSchema::Datetime(*scale)),
+            CheckedType::Key(index) => {
                 model_index_schema(index, self.tir, self.source).map(ModelValueSchema::Key)
             }
-            DeclaredType::Indexed { element, index } => Ok(ModelValueSchema::Indexed {
+            CheckedType::Indexed { element, index } => Ok(ModelValueSchema::Indexed {
                 element: Box::new(self.value_schema(element)?),
                 axis: model_index_schema(index, self.tir, self.source)?,
             }),
-            DeclaredType::Struct(identity, generic_args) => {
+            CheckedType::Struct(identity, generic_args) => {
                 let id = ModelTypeId::new(identity.clone(), generic_args.clone());
                 self.ensure_algebraic_definition(&id)?;
                 Ok(ModelValueSchema::Algebraic(id))

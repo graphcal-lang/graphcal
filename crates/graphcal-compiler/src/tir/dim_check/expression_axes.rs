@@ -4,7 +4,7 @@ use miette::NamedSource;
 use std::sync::Arc;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::declared_type::{DeclaredType, IndexTypeRef};
+use crate::registry::checked_type::{CheckedType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::index::IndexCardinality;
 use crate::syntax::non_empty::NonEmpty;
@@ -29,14 +29,14 @@ pub(super) fn checked_index_cardinality(
 }
 
 pub(super) fn checked_expression_shape(
-    ty: &DeclaredType,
+    ty: &CheckedType,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<ExpressionShape, GraphcalError> {
     let mut axes = Vec::new();
     let mut current = ty;
-    while let DeclaredType::Indexed { element, index } = current {
+    while let CheckedType::Indexed { element, index } = current {
         axes.push(index);
         current = element;
     }

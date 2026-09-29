@@ -209,19 +209,19 @@ fn declared_types_close_only_under_complete_nat_bindings() {
         )
         .unwrap()
     };
-    let declared = DeclaredType::Indexed {
-        element: Box::new(DeclaredType::Bool),
+    let declared = CheckedType::Indexed {
+        element: Box::new(CheckedType::Bool),
         index: symbolic_axis(&n),
     };
     let substitution = Substitution::for_nats([(&n, &2)]);
     assert_eq!(
         substitution.apply_declared(&declared, span()).unwrap(),
-        DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Bool),
+        CheckedType::Indexed {
+            element: Box::new(CheckedType::Bool),
             index: IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(3).unwrap()),
         }
     );
-    let unbound = DeclaredType::Key(symbolic_axis(&other));
+    let unbound = CheckedType::Key(symbolic_axis(&other));
     assert_eq!(
         substitution.apply_declared(&unbound, span()),
         Err(SubstitutionError::UnboundNat {
@@ -229,7 +229,7 @@ fn declared_types_close_only_under_complete_nat_bindings() {
             span: span(),
         })
     );
-    let overflowing = DeclaredType::Key(
+    let overflowing = CheckedType::Key(
         IndexTypeRef::from_finite_index_form(nat(&n).mul(&nat(&n)).unwrap()).unwrap(),
     );
     assert_eq!(

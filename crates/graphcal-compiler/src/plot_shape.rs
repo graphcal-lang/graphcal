@@ -7,7 +7,7 @@
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::time_scale::TimeScale;
 
 /// A leaf value that can be represented by a plot encoding channel.

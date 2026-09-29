@@ -7,14 +7,14 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 use crate::syntax::type_name::FieldName;
 
-use crate::tir::dim_check::helpers::{format_inferred_type, struct_type_def_for_inferred};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
+use crate::tir::dim_check::helpers::{format_checked_type, struct_type_def_for_inferred};
 use crate::tir::dim_check::infer::rules;
-use crate::tir::dim_check::{InferredGenericArg, InferredType};
 
 use super::context::{Infer, InferEnv};
 use super::generics::{resolved_field_type, resolved_type_field_key};
@@ -27,8 +27,8 @@ impl InferEnv<'_> {
         variant: &NominalConstructor,
         owning_type: &ResolvedStructTypeName,
         type_def: &NominalTypeDef,
-        scrutinee_type_args: &[InferredGenericArg],
-    ) -> Result<InferredType, GraphcalError> {
+        scrutinee_type_args: &[CheckedGenericArg],
+    ) -> Result<CheckedType, GraphcalError> {
         if !variant
             .fields()
             .iter()
@@ -59,10 +59,10 @@ impl Infer<'_> {
         expr: &Expr,
         scrutinee: &Expr,
         arms: &[MatchArm],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let scrutinee_type = self.infer_hir_type(scrutinee)?;
         match &scrutinee_type {
-            InferredType::Key(index_identity) => {
+            CheckedType::Key(index_identity) => {
                 if index_identity.finite_index_form().is_some() {
                     return Err(GraphcalError::EvalError {
                         message: format!(
@@ -151,7 +151,7 @@ impl Infer<'_> {
                 }
                 hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
             }
-            InferredType::Struct(type_name, scrutinee_type_args) => {
+            CheckedType::Struct(type_name, scrutinee_type_args) => {
                 let type_def =
                     struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
                         .ok_or_else(|| GraphcalError::UnknownStructType {
@@ -279,7 +279,7 @@ impl Infer<'_> {
             _ => Err(GraphcalError::EvalError {
                 message: format!(
                     "cannot match on type `{}`; expected a tagged union or label value",
-                    format_inferred_type(&scrutinee_type, self.env.registry)
+                    format_checked_type(&scrutinee_type, self.env.registry)
                 ),
                 src: self.env.src.clone(),
                 span: scrutinee.span.into(),
@@ -289,11 +289,11 @@ impl Infer<'_> {
 }
 
 fn hir_arm_types_match(
-    arm_types: &[InferredType],
+    arm_types: &[CheckedType],
     arms: &[MatchArm],
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     expr: &Expr,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }

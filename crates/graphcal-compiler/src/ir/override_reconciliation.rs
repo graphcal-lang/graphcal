@@ -11,7 +11,7 @@ use miette::NamedSource;
 
 use crate::dag_id::DagId;
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;

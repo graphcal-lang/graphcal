@@ -6,7 +6,7 @@ use crate::eval::runtime::{evaluate_assertions, root_source_names};
 use crate::eval::types::NodeUnavailable;
 
 use super::{
-    Arc, AssertResult, CompileError, ConcreteIndexKind, DeclName, DeclaredType, Error, EvalContext,
+    Arc, AssertResult, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, EvalContext,
     EvalLoopResult, GraphcalError, HashSet, IndexKind, IndexVariantName, ModelSchemaGraph,
     ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName,
     Span, TimeScale, Value, index_def_for_ref, remap_include_debug_name,
@@ -55,7 +55,7 @@ pub enum ParameterDomain {
 pub struct ParameterPort {
     pub(super) name: DeclName,
     pub(super) position: ParameterPosition,
-    pub(super) declared_type: DeclaredType,
+    pub(super) declared_type: CheckedType,
     pub(super) value_schema: ModelValueSchema,
     pub(super) domain: Option<ParameterDomain>,
     pub(super) has_default: bool,
@@ -78,7 +78,7 @@ impl ParameterPort {
 
     /// Fully concrete Graphcal declared type.
     #[must_use]
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 
@@ -105,7 +105,7 @@ impl ParameterPort {
 #[derive(Debug, Clone)]
 pub struct ModelOutputPort {
     pub(super) name: DeclName,
-    pub(super) declared_type: DeclaredType,
+    pub(super) declared_type: CheckedType,
     pub(super) value_schema: ModelValueSchema,
     pub(super) is_public: bool,
     pub(super) runtime_key: ResolvedDeclName,
@@ -120,7 +120,7 @@ impl ModelOutputPort {
 
     /// Fully concrete Graphcal output type.
     #[must_use]
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 
@@ -222,7 +222,7 @@ impl PreparedProject {
             return Err(ModelDefinitionError::NoInputs);
         }
         for port in &prepared_model.outputs {
-            if port.declared_type != DeclaredType::Bool {
+            if port.declared_type != CheckedType::Bool {
                 return Err(ModelDefinitionError::UnsupportedOutputType {
                     name: port.name.clone(),
                     actual: port.declared_type.format(&self.tir.registry().dimensions),
@@ -421,7 +421,7 @@ impl PreparedProject {
             });
         }
         let kind = match (&port.declared_type, &port.domain) {
-            (DeclaredType::Quantity(dimension), Some(ParameterDomain::Quantity(bounds))) => {
+            (CheckedType::Quantity(dimension), Some(ParameterDomain::Quantity(bounds))) => {
                 let (Some(lower), Some(upper)) = (bounds.lower, bounds.upper) else {
                     return Err(ModelDefinitionError::MissingClosedDomain {
                         name: port.name.clone(),
@@ -458,7 +458,7 @@ impl PreparedProject {
                     scale_to_si: 1.0,
                 }
             }
-            (DeclaredType::Int, Some(ParameterDomain::Integer(bounds))) => {
+            (CheckedType::Int, Some(ParameterDomain::Integer(bounds))) => {
                 let (Some(lower), Some(upper)) = (bounds.lower, bounds.upper) else {
                     return Err(ModelDefinitionError::MissingClosedDomain {
                         name: port.name.clone(),
@@ -466,7 +466,7 @@ impl PreparedProject {
                 };
                 TenaxV2InputKind::Integer { lower, upper }
             }
-            (DeclaredType::Key(index), None) => {
+            (CheckedType::Key(index), None) => {
                 let Some(definition) = index_def_for_ref(index, &self.tir) else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),

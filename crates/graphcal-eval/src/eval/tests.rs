@@ -6560,7 +6560,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
 
-    let graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } =
+    let graphcal_compiler::registry::checked_type::CheckedType::Indexed { index, .. } =
         root_decl_type(&tir, "series").declared()
     else {
         panic!("expected indexed declared type for `series`");
@@ -6587,12 +6587,12 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
 
-    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(item, _) =
+    let graphcal_compiler::registry::checked_type::CheckedType::Struct(item, _) =
         root_decl_type(&tir, "item").declared()
     else {
         panic!("expected struct declared type for `item`");
     };
-    let graphcal_compiler::registry::declared_type::DeclaredType::Struct(other, _) =
+    let graphcal_compiler::registry::checked_type::CheckedType::Struct(other, _) =
         root_decl_type(&tir, "other").declared()
     else {
         panic!("expected struct declared type for `other`");
@@ -7355,7 +7355,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
             .into_bound()
             .unwrap(),
         crate::eval_expr::RuntimeValue::Indexed {
-            index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+            index_name: graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
                 b_owner,
             ),
             entries,
@@ -7418,7 +7418,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         binding.local.id,
         crate::runtime_presentation::EvaluatedRuntimeValue::plain(
             crate::eval_expr::RuntimeValue::Label {
-                index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
+                index_name: graphcal_compiler::registry::checked_type::IndexTypeRef::from_resolved(
                     b_owner,
                 ),
                 variant: graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(

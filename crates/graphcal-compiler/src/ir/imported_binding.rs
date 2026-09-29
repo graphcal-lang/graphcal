@@ -4,7 +4,7 @@
 //! are attached when HIR becomes TIR; compile-time values remain in owner
 //! execution-fact stores.
 
-use crate::registry::declared_type::DeclaredType;
+use crate::registry::checked_type::CheckedType;
 use crate::resolved_name::ResolvedDeclName;
 
 /// Whether an imported value comes from checked constants or a runtime frame.
@@ -22,7 +22,7 @@ pub enum ImportedValueKind {
 #[derive(Debug, Clone)]
 pub struct ImportedBinding {
     target: ResolvedDeclName,
-    declared_type: DeclaredType,
+    declared_type: CheckedType,
     kind: ImportedValueKind,
 }
 
@@ -31,7 +31,7 @@ impl ImportedBinding {
     #[must_use]
     pub const fn new(
         target: ResolvedDeclName,
-        declared_type: DeclaredType,
+        declared_type: CheckedType,
         kind: ImportedValueKind,
     ) -> Self {
         Self {
@@ -55,7 +55,7 @@ impl ImportedBinding {
 
     /// Declared type of the canonical target.
     #[must_use]
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 }

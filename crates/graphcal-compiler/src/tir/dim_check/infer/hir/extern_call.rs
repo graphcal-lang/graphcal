@@ -3,12 +3,12 @@
 use crate::hir::expr::{Expr, ExternFnRef};
 use std::collections::HashMap;
 
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
 
@@ -21,7 +21,7 @@ impl Infer<'_> {
         ext: &ExternFnRef,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
 
         use crate::tir::dim_check::builtins::SignatureDimWalk;
@@ -55,10 +55,10 @@ impl Infer<'_> {
             let arg_type = self.infer_arg(arg)?;
             match &param.kind {
                 ParamKind::Scalar(ScalarValueKind::Bool) => {
-                    if !matches!(arg_type, InferredType::Bool) {
+                    if !matches!(arg_type, CheckedType::Bool) {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: "Bool".to_string(),
-                            found: format_inferred_type(&arg_type, self.env.registry),
+                            found: format_checked_type(&arg_type, self.env.registry),
                             help: format!("parameter `{}` requires Bool", param.name),
                             src: self.env.src.clone(),
                             span: arg.span.into(),
@@ -66,10 +66,10 @@ impl Infer<'_> {
                     }
                 }
                 ParamKind::Scalar(ScalarValueKind::Int) => {
-                    if arg_type != InferredType::Int {
+                    if arg_type != CheckedType::Int {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: "Int".to_string(),
-                            found: format_inferred_type(&arg_type, self.env.registry),
+                            found: format_checked_type(&arg_type, self.env.registry),
                             help: format!("parameter `{}` requires Int", param.name),
                             src: self.env.src.clone(),
                             span: arg.span.into(),
@@ -85,14 +85,14 @@ impl Infer<'_> {
                     let mut current = &arg_type;
                     let mut arg_indexes = Vec::with_capacity(indexes.len());
                     for _ in indexes {
-                        let InferredType::Indexed {
+                        let CheckedType::Indexed {
                             element,
                             index: arg_index,
                         } = current
                         else {
                             return Err(GraphcalError::DimensionMismatch {
                                 expected: format!("a rank-{} indexed collection", indexes.len()),
-                                found: format_inferred_type(&arg_type, self.env.registry),
+                                found: format_checked_type(&arg_type, self.env.registry),
                                 help: format!(
                                     "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
                                     param.name
@@ -112,7 +112,7 @@ impl Infer<'_> {
                                         "a rank-{} indexed quantity collection",
                                         indexes.len()
                                     ),
-                                    found: format_inferred_type(&arg_type, self.env.registry),
+                                    found: format_checked_type(&arg_type, self.env.registry),
                                     help: format!(
                                         "parameter `{}` of `{display_name}` requires quantity elements",
                                         param.name
@@ -136,8 +136,8 @@ impl Infer<'_> {
                             };
                             let matches = matches!(
                                 (scalar, current),
-                                (ScalarValueKind::Bool, InferredType::Bool)
-                                    | (ScalarValueKind::Int, InferredType::Int)
+                                (ScalarValueKind::Bool, CheckedType::Bool)
+                                    | (ScalarValueKind::Int, CheckedType::Int)
                             );
                             if !matches {
                                 return Err(GraphcalError::DimensionMismatch {
@@ -145,7 +145,7 @@ impl Infer<'_> {
                                         "{name} with exactly {} indexed axes",
                                         indexes.len()
                                     ),
-                                    found: format_inferred_type(&arg_type, self.env.registry),
+                                    found: format_checked_type(&arg_type, self.env.registry),
                                     help: format!(
                                         "parameter `{}` of `{display_name}` requires {name} elements",
                                         param.name
@@ -168,7 +168,7 @@ impl Infer<'_> {
                                             "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
                                             bound.get()
                                         ),
-                                        found: format_inferred_type(&arg_type, self.env.registry),
+                                        found: format_checked_type(&arg_type, self.env.registry),
                                         help: format!(
                                             "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
                                         ),
@@ -184,18 +184,18 @@ impl Infer<'_> {
         }
 
         match sig.result() {
-            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(InferredType::Bool),
-            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(InferredType::Int),
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(CheckedType::Bool),
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(CheckedType::Int),
             ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => dim_walk
                 .result(monomial, callee_span)
-                .map(InferredType::Quantity),
+                .map(CheckedType::Quantity),
             ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
                 let leaf = match element {
                     ScalarValueKind::Quantity(monomial) => dim_walk
                         .result(monomial, callee_span)
-                        .map(InferredType::Quantity)?,
-                    ScalarValueKind::Bool => InferredType::Bool,
-                    ScalarValueKind::Int => InferredType::Int,
+                        .map(CheckedType::Quantity)?,
+                    ScalarValueKind::Bool => CheckedType::Bool,
+                    ScalarValueKind::Int => CheckedType::Int,
                 };
                 indexes.iter().rev().try_fold(leaf, |element, index| {
                 let Some(bound) = index_bindings.get(index) else {
@@ -209,7 +209,7 @@ impl Infer<'_> {
                         span: callee_span.into(),
                     });
                 };
-                Ok(InferredType::Indexed {
+                Ok(CheckedType::Indexed {
                     element: Box::new(element),
                     index: bound.clone(),
                 })
@@ -217,7 +217,7 @@ impl Infer<'_> {
             }
             // Extern struct returns are non-generic records, so the argument
             // list is empty.
-            ResultKind::Struct(result_struct) => Ok(InferredType::Struct(
+            ResultKind::Struct(result_struct) => Ok(CheckedType::Struct(
                 StructTypeRef::from_resolved(result_struct.resolved.clone()),
                 Vec::new(),
             )),

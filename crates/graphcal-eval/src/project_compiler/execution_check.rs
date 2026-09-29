@@ -41,19 +41,6 @@ pub(super) fn resolve_struct_field_constraints(
     domain_resolve::resolve_struct_field_constraints(tir, const_values, src)
 }
 
-fn visible_values_with_imports(
-    local_const_values: &RuntimeValueMap,
-    known_const_values: &RuntimeValueMap,
-) -> RuntimeValueMap {
-    let mut values = known_const_values.clone();
-    values.extend(
-        local_const_values
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    values
-}
-
 fn known_const_values(
     facts: &HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
 ) -> RuntimeValueMap {

@@ -2,13 +2,10 @@
 //! This pass follows expression publication; it never infers bound source HIR.
 
 use super::infer::hir::concrete_generic_substitutions;
-use super::{InferredGenericArg, InferredType};
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef};
-use crate::registry::declared_type::{
-    DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
-};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::ExpressionFact;
@@ -19,7 +16,7 @@ use std::sync::Arc;
 #[derive(Clone, PartialEq, Eq)]
 struct Application {
     identity: StructTypeRef,
-    arguments: Vec<DeclaredGenericArg>,
+    arguments: Vec<CheckedGenericArg>,
 }
 
 struct Context<'a> {
@@ -31,7 +28,7 @@ struct Context<'a> {
 }
 
 pub(super) fn validate_concrete_type_obligations(
-    inferred: &DeclaredType,
+    inferred: &CheckedType,
     dag: &DagTIR,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
@@ -99,16 +96,16 @@ pub(super) fn validate_project(
 }
 
 fn validate(
-    inferred: &DeclaredType,
+    inferred: &CheckedType,
     ctx: &Context<'_>,
     stack: &mut Vec<Application>,
 ) -> Result<(), GraphcalError> {
     ctx.cancellation.checkpoint()?;
     super::expression_axes::checked_expression_shape(inferred, ctx.tir, ctx.src, ctx.span)?;
     match inferred {
-        DeclaredType::Struct(identity, arguments) => {
+        CheckedType::Struct(identity, arguments) => {
             for arg in arguments {
-                if let DeclaredGenericArg::Type(ty) = arg {
+                if let CheckedGenericArg::Type(ty) = arg {
                     validate(ty, ctx, stack)?;
                 }
             }
@@ -124,12 +121,8 @@ fn validate(
                 identity: identity.clone(),
                 arguments: arguments.clone(),
             };
-            let inferred_args = arguments
-                .iter()
-                .map(InferredGenericArg::from)
-                .collect::<Vec<_>>();
             let substitutions =
-                concrete_generic_substitutions(definition, &inferred_args, ctx.src, ctx.span)?;
+                concrete_generic_substitutions(definition, arguments, ctx.src, ctx.span)?;
             if let Some(ancestor) = stack.iter().find(|ancestor| ancestor.identity == *identity) {
                 if ancestor == &application {
                     return Ok(());
@@ -174,22 +167,22 @@ fn validate(
                             ctx,
                         )?;
                     }
-                    validate(&DeclaredType::from(&ty), ctx, stack)?;
+                    validate(&ty, ctx, stack)?;
                 }
             }
             stack.pop();
             Ok(())
         }
-        DeclaredType::Indexed { element, index } => {
+        CheckedType::Indexed { element, index } => {
             validate_index(index, ctx)?;
             validate(element, ctx, stack)
         }
-        DeclaredType::Key(index) => validate_index(index, ctx),
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_) => Ok(()),
+        CheckedType::Key(index) => validate_index(index, ctx),
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_) => Ok(()),
     }
 }
 
@@ -214,13 +207,13 @@ fn check_bound(
     definition: &NominalTypeDef,
     member: &NominalConstructor,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    target: &InferredType,
+    target: &CheckedType,
     nats: &std::collections::HashMap<crate::hir::types::GenericParamId, u64>,
     ctx: &Context<'_>,
 ) -> Result<(), GraphcalError> {
     let expected = super::expected_bound_from_inferred(target).ok_or_else(|| {
         GraphcalError::InvalidDomainTarget {
-            type_kind: super::format_inferred_type(target, &ctx.tir.registry),
+            type_kind: super::format_checked_type(target, &ctx.tir.registry),
             src: bound.src.clone(),
             span: bound.span.into(),
         }
@@ -266,7 +259,7 @@ fn check_bound(
     super::check_one_bound_with_display_name(
         &display,
         bound,
-        &InferredType::from(checked_type),
+        checked_type,
         &expected,
         &ctx.tir.registry,
         &bound.src,

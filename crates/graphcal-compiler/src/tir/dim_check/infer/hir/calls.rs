@@ -12,9 +12,9 @@ use crate::dimension::{Dimension, Rational};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
-use crate::tir::dim_check::InferredType;
+use crate::registry::checked_type::CheckedType;
 use crate::tir::dim_check::builtins::infer_fn_dim;
-use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
+use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::linear_algebra::{
     LinearAlgebraTypeError, infer_linear_algebra_type,
 };
@@ -22,7 +22,7 @@ use crate::tir::dim_check::infer::linear_algebra::{
 use super::context::Infer;
 
 impl Infer<'_> {
-    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<InferredType, GraphcalError> {
+    pub(super) fn infer_arg(&self, arg: &Expr) -> Result<CheckedType, GraphcalError> {
         self.without_owner().infer_hir_type(arg)
     }
 }
@@ -62,7 +62,7 @@ impl Infer<'_> {
         function: crate::builtin::LinearAlgebraFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let argument_types = args
             .iter()
             .map(|arg| self.infer_arg(arg))
@@ -75,7 +75,7 @@ impl Infer<'_> {
         LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
             GraphcalError::DimensionMismatch {
                 expected: format!("rank-{rank} indexed quantity"),
-                found: format_inferred_type(&argument_types[argument], self.env.registry),
+                found: format_checked_type(&argument_types[argument], self.env.registry),
                 help: format!(
                     "{}() requires argument {} to be a rank-{rank} indexed quantity",
                     function.as_str(),
@@ -137,7 +137,7 @@ impl Infer<'_> {
         &self,
         callee: &crate::syntax::span::Spanned<FunctionRef>,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let (builtin, epoch_scale) = match &callee.value {
             FunctionRef::Builtin(builtin) => (builtin.function(), None),
             FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
@@ -153,10 +153,10 @@ impl Infer<'_> {
             BuiltinFn::Complex(function) => self.infer_hir_complex_call(function, args),
             BuiltinFn::Aggregation(kind) => {
                 let arg_type = self.infer_arg(&args[0])?;
-                let InferredType::Indexed { element, index } = &arg_type else {
+                let CheckedType::Indexed { element, index } = &arg_type else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed collection".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: format!("{}() requires an indexed value", builtin.as_str()),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
@@ -172,7 +172,7 @@ impl Infer<'_> {
                     });
                 }
                 if kind == AggregationFn::Value(ValueAggregation::Count) {
-                    return Ok(InferredType::Int);
+                    return Ok(CheckedType::Int);
                 }
                 if matches!(kind, AggregationFn::Key(_)) {
                     // The extremum's identity: a key of the reduced axis. The
@@ -181,7 +181,7 @@ impl Infer<'_> {
                     if element.quantity_dimension().is_none() {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: "indexed quantity collection".to_string(),
-                            found: format_inferred_type(element, self.env.registry),
+                            found: format_checked_type(element, self.env.registry),
                             help: format!(
                                 "{}() requires every indexed element to be quantity",
                                 builtin.as_str()
@@ -190,12 +190,12 @@ impl Infer<'_> {
                             span: args[0].span.into(),
                         });
                     }
-                    return Ok(InferredType::Key(index.clone()));
+                    return Ok(CheckedType::Key(index.clone()));
                 }
                 let Some(dimension) = element.quantity_dimension().cloned() else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed quantity collection".to_string(),
-                        found: format_inferred_type(element, self.env.registry),
+                        found: format_checked_type(element, self.env.registry),
                         help: format!(
                             "{}() requires every indexed element to be quantity",
                             builtin.as_str()
@@ -207,7 +207,7 @@ impl Infer<'_> {
                 if kind != AggregationFn::Value(ValueAggregation::Product)
                     || dimension.is_dimensionless()
                 {
-                    return Ok(InferredType::Quantity(dimension));
+                    return Ok(CheckedType::Quantity(dimension));
                 }
                 let cardinality = crate::tir::dim_check::infer::concrete_cardinality_for_inferred(
                     index,
@@ -222,7 +222,7 @@ impl Infer<'_> {
                     .ok()
                     .and_then(|exponent| Rational::integer(exponent).ok())
                     .and_then(|exponent| dimension.pow(exponent).ok())
-                    .map(InferredType::Quantity)
+                    .map(CheckedType::Quantity)
                     .ok_or_else(|| GraphcalError::DimensionOverflow {
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
@@ -239,7 +239,7 @@ impl Infer<'_> {
                 self.infer_hir_datetime_constructor(kind, epoch_scale, callee.span, args)
             }
             BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
-                self.infer_hir_datetime_unary(builtin, args, InferredType::Int)
+                self.infer_hir_datetime_unary(builtin, args, CheckedType::Int)
             }
             BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
                 let arg_type = self.infer_arg(&args[0])?;
@@ -247,11 +247,11 @@ impl Infer<'_> {
                     t if t
                         .quantity_dimension()
                         .is_some_and(Dimension::is_dimensionless) => {}
-                    InferredType::Int => {}
+                    CheckedType::Int => {}
                     _ => {
                         return Err(GraphcalError::DimensionMismatch {
                             expected: "Dimensionless or Int".to_string(),
-                            found: format_inferred_type(&arg_type, self.env.registry),
+                            found: format_checked_type(&arg_type, self.env.registry),
                             help: format!(
                                 "{}() requires a dimensionless numeric argument",
                                 builtin.as_str()
@@ -261,14 +261,14 @@ impl Infer<'_> {
                         });
                     }
                 }
-                Ok(InferredType::Datetime(
+                Ok(CheckedType::Datetime(
                     crate::registry::time_scale::TimeScale::UTC,
                 ))
             }
             BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
                 builtin,
                 args,
-                InferredType::Quantity(Dimension::dimensionless()),
+                CheckedType::Quantity(Dimension::dimensionless()),
             ),
             BuiltinFn::Scalar(function) => self.infer_hir_builtin_fn(function, callee.span, args),
         }
@@ -278,7 +278,7 @@ impl Infer<'_> {
         &self,
         function: crate::builtin::ComplexFn,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         use crate::tir::dim_check::infer::complex::ComplexTypeError;
 
         let inferred = args
@@ -290,7 +290,7 @@ impl Infer<'_> {
                 ComplexTypeError::ExpectedQuantity { argument } => {
                     GraphcalError::DimensionMismatch {
                         expected: "quantity type".to_string(),
-                        found: format_inferred_type(&inferred[argument], self.env.registry),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
                             "{}() requires a quantity in argument {}",
                             function.as_str(),
@@ -303,7 +303,7 @@ impl Infer<'_> {
                 ComplexTypeError::ExpectedComplex { argument } => {
                     GraphcalError::DimensionMismatch {
                         expected: "Complex<D>".to_string(),
-                        found: format_inferred_type(&inferred[argument], self.env.registry),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!("{}() requires a complex quantity", function.as_str()),
                         src: self.env.src.clone(),
                         span: args[argument].span.into(),
@@ -312,7 +312,7 @@ impl Infer<'_> {
                 ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
                     GraphcalError::DimensionMismatch {
                         expected: "a real or complex quantity".to_string(),
-                        found: format_inferred_type(&inferred[argument], self.env.registry),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
                         help: format!(
                             "{}() requires a real or complex quantity",
                             function.as_str()
@@ -323,8 +323,8 @@ impl Infer<'_> {
                 }
                 ComplexTypeError::DimensionMismatch { left, right } => {
                     GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(&inferred[left], self.env.registry),
-                        found: format_inferred_type(&inferred[right], self.env.registry),
+                        expected: format_checked_type(&inferred[left], self.env.registry),
+                        found: format_checked_type(&inferred[right], self.env.registry),
                         help: "real and imaginary components must have the same dimension"
                             .to_string(),
                         src: self.env.src.clone(),
@@ -333,7 +333,7 @@ impl Infer<'_> {
                 }
                 ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
                     expected: "Angle".to_string(),
-                    found: format_inferred_type(&inferred[argument], self.env.registry),
+                    found: format_checked_type(&inferred[argument], self.env.registry),
                     help: "polar() phase must be an Angle quantity".to_string(),
                     src: self.env.src.clone(),
                     span: args[argument].span.into(),
@@ -341,7 +341,7 @@ impl Infer<'_> {
                 ComplexTypeError::ExpectedDimensionless { argument } => {
                     GraphcalError::DimensionMismatch {
                         expected: "Dimensionless or Complex<Dimensionless>".to_string(),
-                        found: format_inferred_type(&inferred[argument], self.env.registry),
+                        found: format_checked_type(&inferred[argument], self.env.registry),
                         help: "exp() requires a dimensionless real or complex argument".to_string(),
                         src: self.env.src.clone(),
                         span: args[argument].span.into(),
@@ -356,7 +356,7 @@ impl Infer<'_> {
         name: ScalarFn,
         callee_span: Span,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let func = crate::registry::builtins::scalar_function(name);
         let dimension_args = args
             .iter()
@@ -375,6 +375,6 @@ impl Infer<'_> {
             self.env.registry,
             self.env.src,
         )
-        .map(InferredType::Quantity)
+        .map(CheckedType::Quantity)
     }
 }

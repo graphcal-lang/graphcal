@@ -23,7 +23,7 @@ use crate::presentation_evidence::{
 };
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::plot_shape::PlotLeafKind;
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 
 use super::display::attach_presentation;
@@ -114,7 +114,7 @@ impl RuntimeResultValueAssembly {
 
 fn project_runtime_value(
     runtime: &RuntimeValue,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
     presentation_instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     diagnostics: &std::cell::RefCell<Vec<PresentationDiagnostic>>,
@@ -232,7 +232,7 @@ fn checked_declared_type<'a>(
     tir: &'a graphcal_compiler::tir::typed::TIR,
     declaration: &ResolvedDeclName,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'a DeclaredType, GraphcalError> {
+) -> Result<&'a CheckedType, GraphcalError> {
     tir.decl_type(declaration)
         .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
         .ok_or_else(|| {
@@ -1251,13 +1251,13 @@ fn plot_declared_type(
     shape: &graphcal_compiler::plot_shape::PlotChannelShape,
     ctx: &EvalContext<'_>,
     span: Span,
-) -> Result<DeclaredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let leaf = match shape.leaf() {
-        PlotLeafKind::Quantity(dimension) => DeclaredType::Quantity(dimension.clone()),
-        PlotLeafKind::Int => DeclaredType::Int,
-        PlotLeafKind::Bool => DeclaredType::Bool,
-        PlotLeafKind::Datetime(scale) => DeclaredType::Datetime(*scale),
-        PlotLeafKind::Key(index) => DeclaredType::Key(index.clone()),
+        PlotLeafKind::Quantity(dimension) => CheckedType::Quantity(dimension.clone()),
+        PlotLeafKind::Int => CheckedType::Int,
+        PlotLeafKind::Bool => CheckedType::Bool,
+        PlotLeafKind::Datetime(scale) => CheckedType::Datetime(*scale),
+        PlotLeafKind::Key(index) => CheckedType::Key(index.clone()),
         PlotLeafKind::ContextualString => {
             return Err(ctx.internal_error(
                 "contextual string plot channel reached runtime projection",
@@ -1269,7 +1269,7 @@ fn plot_declared_type(
         .axes()
         .iter()
         .rev()
-        .fold(leaf, |element, index| DeclaredType::Indexed {
+        .fold(leaf, |element, index| CheckedType::Indexed {
             element: Box::new(element),
             index: index.clone(),
         }))

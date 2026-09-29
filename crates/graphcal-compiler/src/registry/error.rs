@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::declared_type::IndexDisplayName;
+use crate::registry::checked_type::IndexDisplayName;
 use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::IanaTimeZoneId;

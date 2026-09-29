@@ -7,12 +7,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::registry::declared_type::StructTypeRef;
+use crate::registry::checked_type::StructTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
-use crate::tir::dim_check::InferredType;
+use crate::registry::checked_type::CheckedType;
 use crate::tir::dim_check::infer::rules;
 
 use super::context::{Infer, InferEnv};
@@ -22,9 +22,9 @@ pub(super) fn infer_hir_quantity_literal(
     unit: &ResolvedUnitExpr,
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;
-    Ok(InferredType::Quantity(dim))
+    Ok(CheckedType::Quantity(dim))
 }
 
 impl InferEnv<'_> {
@@ -32,7 +32,7 @@ impl InferEnv<'_> {
         &self,
         target: &ResolvedDeclName,
         span: Span,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         // HIR references preserve their definition-time owner. A concrete semantic
         // instance is the authoritative boundary that maps those references to the
         // corresponding runtime declaration before any type lookup.
@@ -45,7 +45,7 @@ impl InferEnv<'_> {
                     src: self.src.clone(),
                     span: span.into(),
                 })?;
-        Ok(InferredType::from(checked.declared()))
+        Ok(checked.declared().clone())
     }
 }
 
@@ -53,12 +53,12 @@ impl Infer<'_> {
     pub(super) fn infer_hir_const_ref(
         &self,
         target: &crate::syntax::span::Spanned<ConstRef>,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         match &target.value {
             ConstRef::Decl(resolved) => {
                 self.env.infer_resolved_decl_ref_type(resolved, target.span)
             }
-            ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
+            ConstRef::Builtin(_) => Ok(CheckedType::Quantity(Dimension::dimensionless())),
             ConstRef::Constructor(constructor) => {
                 let target_def = self.env.resolved_constructor(constructor, target.span)?;
                 self.check_type_override_dependency(
@@ -83,7 +83,7 @@ impl Infer<'_> {
                     &[],
                     target.span,
                 )?;
-                Ok(InferredType::Struct(
+                Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(target_def.owning_type().clone()),
                     type_args,
                 ))

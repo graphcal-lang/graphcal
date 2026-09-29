@@ -6,13 +6,13 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::registry::declared_type::{IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -33,7 +33,7 @@ impl Infer<'_> {
         axis: &ForBindingIndex,
         axis_span: Span,
         arg: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         use crate::syntax::ast::KeyFormKind;
 
         let arg_type = self.infer_hir_type(arg)?;
@@ -70,10 +70,10 @@ impl Infer<'_> {
                         span: axis_span.into(),
                     });
                 };
-                if arg_type != InferredType::Int {
+                if arg_type != CheckedType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "a static Nat position".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "key(Fin(N), position) takes an integer position".to_string(),
                         src: self.env.src.clone(),
                         span: arg.span.into(),
@@ -122,7 +122,7 @@ impl Infer<'_> {
                     })?,
                     crate::tir::expression_facts::StaticIndexUse::Key,
                 );
-                Ok(InferredType::Key(index_identity))
+                Ok(CheckedType::Key(index_identity))
             }
             KeyFormKind::Fin => {
                 if finite_form.is_none() {
@@ -134,10 +134,10 @@ impl Infer<'_> {
                         span: axis_span.into(),
                     });
                 }
-                if arg_type != InferredType::Int {
+                if arg_type != CheckedType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "fin_key(Fin(N), position) takes an Int position, checked at \
                            runtime"
                             .to_string(),
@@ -145,7 +145,7 @@ impl Infer<'_> {
                         span: arg.span.into(),
                     });
                 }
-                Ok(InferredType::Key(index_identity))
+                Ok(CheckedType::Key(index_identity))
             }
             KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
                 let idx_def = crate::tir::dim_check::infer::index_def_for_inferred(
@@ -180,7 +180,7 @@ impl Infer<'_> {
                         span: arg.span.into(),
                     });
                 }
-                Ok(InferredType::Key(index_identity))
+                Ok(CheckedType::Key(index_identity))
             }
         }
     }
@@ -189,7 +189,7 @@ impl Infer<'_> {
         &self,
         bindings: &[ForBinding],
         body: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let mut inner_locals = self.locals.child(Vec::new());
         for binding in bindings {
             // Every loop variable is a key of its axis. Coordinate arithmetic
@@ -206,11 +206,11 @@ impl Infer<'_> {
                         src: self.env.src.clone(),
                         span: index.span.into(),
                     })?;
-                    InferredType::Key(index_identity)
+                    CheckedType::Key(index_identity)
                 }
                 ForBindingIndex::Finite { cardinality, span } => {
                     let form = cardinality.value.clone();
-                    InferredType::Key(
+                    CheckedType::Key(
                         IndexTypeRef::from_finite_index_form(form)
                             .map_err(|err| finite_index_error(err, self.env.src, *span))?,
                     )
@@ -228,7 +228,7 @@ impl Infer<'_> {
                         .map_err(|err| finite_index_error(err, self.env.src, *span))?
                 }
             };
-            result = InferredType::Indexed {
+            result = CheckedType::Indexed {
                 element: Box::new(result),
                 index,
             };
@@ -269,10 +269,10 @@ impl Infer<'_> {
         expr: &Expr,
         inner: &Expr,
         args: &[IndexArg],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let mut current = self.infer_hir_type(inner)?;
         for arg in args {
-            let InferredType::Indexed { element, index } = current else {
+            let CheckedType::Indexed { element, index } = current else {
                 return Err(GraphcalError::EvalError {
                     message: "indexing a non-indexed value".to_string(),
                     src: self.env.src.clone(),
@@ -306,7 +306,7 @@ impl Infer<'_> {
                     match var_type {
                         // Loop variables are keys of their axes: accept on axis
                         // identity, with Fin widening (`N <= M`).
-                        InferredType::Key(key_index) => {
+                        CheckedType::Key(key_index) => {
                             let axis_form = finite_axis_form(
                                 &index,
                                 crate::tir::dim_check::infer::index_def_for_inferred(
@@ -330,7 +330,7 @@ impl Infer<'_> {
                                 });
                             }
                         }
-                        InferredType::Quantity(_) => {
+                        CheckedType::Quantity(_) => {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
                                     "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
@@ -362,7 +362,7 @@ impl Infer<'_> {
                     )?;
                     // A key-typed expression selects by axis identity: exact for
                     // named and coordinate axes, widening (`N <= M`) for Fin.
-                    if let InferredType::Key(key_index) = &expr_type {
+                    if let CheckedType::Key(key_index) = &expr_type {
                         let accepted = match (key_index.finite_index_form(), &index_form) {
                             (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
                             _ => *key_index == index,
@@ -388,7 +388,7 @@ impl Infer<'_> {
                         });
                     };
                     match expr_type {
-                        InferredType::Int => {
+                        CheckedType::Int => {
                             // Runtime-checked Int indexing was removed: only a
                             // statically discharged constant selects implicitly;
                             // a runtime Int goes through the explicit fin_key().
@@ -420,7 +420,7 @@ impl Infer<'_> {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
                                     "index expression must be an integer type, got {}",
-                                    format_inferred_type(&expr_type, self.env.registry)
+                                    format_checked_type(&expr_type, self.env.registry)
                                 ),
                                 src: self.env.src.clone(),
                                 span: index_expr.span.into(),

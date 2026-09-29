@@ -6,13 +6,12 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
+use graphcal_compiler::registry::checked_type::{CheckedGenericArg, CheckedType, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
-use super::visible_values_with_imports;
 use crate::domain_constraint::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
@@ -294,19 +293,19 @@ fn domain_bound_value_error(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConcreteNominalApplication {
     identity: StructTypeRef,
-    generic_args: Vec<DeclaredGenericArg>,
+    generic_args: Vec<CheckedGenericArg>,
 }
 
 fn collect_concrete_nominal_applications(
-    declared: &DeclaredType,
+    declared: &CheckedType,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
     applications: &mut HashSet<ConcreteNominalApplication>,
 ) -> Result<(), GraphcalError> {
     match declared {
-        DeclaredType::Struct(identity, generic_args) => {
+        CheckedType::Struct(identity, generic_args) => {
             for arg in generic_args {
-                if let DeclaredGenericArg::Type(type_arg) = arg {
+                if let CheckedGenericArg::Type(type_arg) = arg {
                     collect_concrete_nominal_applications(type_arg, tir, src, applications)?;
                 }
             }
@@ -336,21 +335,21 @@ fn collect_concrete_nominal_applications(
             }
             Ok(())
         }
-        DeclaredType::Indexed { element, .. } => {
+        CheckedType::Indexed { element, .. } => {
             collect_concrete_nominal_applications(element, tir, src, applications)
         }
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_)
-        | DeclaredType::Key(_) => Ok(()),
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_)
+        | CheckedType::Key(_) => Ok(()),
     }
 }
 
 fn generic_nat_bindings(
     type_def: &graphcal_compiler::hir::NominalTypeDef,
-    generic_args: &[DeclaredGenericArg],
+    generic_args: &[CheckedGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<HashMap<graphcal_compiler::hir::types::GenericParamId, u64>, GraphcalError> {
@@ -371,10 +370,10 @@ fn generic_nat_bindings(
         .iter()
         .zip(generic_args)
         .filter_map(|(param, arg)| match arg {
-            DeclaredGenericArg::Nat(form) => Some((param, form)),
-            DeclaredGenericArg::Dim(_)
-            | DeclaredGenericArg::Index(_)
-            | DeclaredGenericArg::Type(_) => None,
+            CheckedGenericArg::Nat(form) => Some((param, form)),
+            CheckedGenericArg::Dim(_)
+            | CheckedGenericArg::Index(_)
+            | CheckedGenericArg::Type(_) => None,
         })
         .map(|(param, form)| {
             form.constant_value()
@@ -696,7 +695,7 @@ fn struct_type_ref_from_resolved_type(
 fn find_struct_field_constraint<'a>(
     field_constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     owning_type: Option<&StructTypeRef>,
-    generic_args: &[graphcal_compiler::registry::declared_type::DeclaredGenericArg],
+    generic_args: &[graphcal_compiler::registry::checked_type::CheckedGenericArg],
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
@@ -913,4 +912,18 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
         // Fallback: display the already-evaluated SI value.
         _ => graphcal_compiler::registry::format::format_number(si_value),
     }
+}
+
+/// Local constants shadow the constants visible from every checked DAG.
+fn visible_values_with_imports(
+    local_const_values: &RuntimeValueMap,
+    known_const_values: &RuntimeValueMap,
+) -> RuntimeValueMap {
+    let mut values = known_const_values.clone();
+    values.extend(
+        local_const_values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone())),
+    );
+    values
 }

@@ -416,7 +416,7 @@ pub fn format_indexed_table(
 mod tests {
     use super::*;
     use graphcal_compiler::complex_value::ComplexValue;
-    use graphcal_compiler::registry::declared_type::IndexTypeRef;
+    use graphcal_compiler::registry::checked_type::IndexTypeRef;
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::registry::unit::PositiveFiniteScale;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};

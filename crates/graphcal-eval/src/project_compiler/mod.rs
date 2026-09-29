@@ -13,7 +13,7 @@ use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::desugar::desugared_ast::ModulePath;
 use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexBindingTarget;

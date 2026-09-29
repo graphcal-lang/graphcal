@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::expr::visit_expr;
-use crate::registry::declared_type::DeclaredType;
+use crate::registry::checked_type::CheckedType;
 use crate::registry::error::GraphcalError;
 use crate::tir::expression_facts::{CheckedExpressionFacts, CheckingEnvironment, ExpressionFact};
 use crate::tir::typed::model::TIR;
@@ -232,11 +232,11 @@ enum FactSubstitution<'a> {
 impl FactSubstitution<'_> {
     fn value_type(
         &self,
-        ty: &DeclaredType,
+        ty: &CheckedType,
         tir: &TIR,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
-    ) -> Result<DeclaredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         match self {
             Self::Static(substitution) => specialize_expression_type(ty, substitution, tir, src),
             Self::Generic(substitution) => substitution
@@ -247,10 +247,10 @@ impl FactSubstitution<'_> {
 
     fn index(
         &self,
-        index: &crate::registry::declared_type::IndexTypeRef,
+        index: &crate::registry::checked_type::IndexTypeRef,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
-    ) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
+    ) -> Result<crate::registry::checked_type::IndexTypeRef, GraphcalError> {
         match self {
             Self::Static(substitution) => Ok(specialize_index_ref(index, substitution)),
             Self::Generic(substitution) => substitution
@@ -286,7 +286,7 @@ fn specialize_record(
             let constructor = constructor
                 .as_ref()
                 .map(|application| {
-                    let DeclaredType::Struct(_, args) = &checked_type else {
+                    let CheckedType::Struct(_, args) = &checked_type else {
                         return Err(GraphcalError::internal_error(
                             "constructor specialization has no nominal result",
                             src,

@@ -777,7 +777,7 @@ fn resolve_projection_expected_fail(
     src: &NamedSource<Arc<String>>,
 ) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, CompileError> {
     use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
-    use graphcal_compiler::registry::declared_type::IndexTypeRef;
+    use graphcal_compiler::registry::checked_type::IndexTypeRef;
     use graphcal_compiler::syntax::attribute::AttributeName;
 
     request

@@ -11,7 +11,7 @@ use graphcal_compiler::hir::{
     ExprKind as HirExprKind, ExprLoweringContext, GenericScope, ModuleScope,
 };
 use graphcal_compiler::ir::static_interface::StaticInputKind;
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
@@ -149,7 +149,7 @@ impl ParameterBindingBuilder<'_> {
         si_value: f64,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        if !matches!(port.declared_type, DeclaredType::Quantity(_)) {
+        if !matches!(port.declared_type, CheckedType::Quantity(_)) {
             return Err(self.project.binding_kind_error(port, "Quantity"));
         }
         let value = RuntimeValue::quantity(si_value).map_err(|_| {
@@ -172,7 +172,7 @@ impl ParameterBindingBuilder<'_> {
         value: i64,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        if port.declared_type != DeclaredType::Int {
+        if port.declared_type != CheckedType::Int {
             return Err(self.project.binding_kind_error(port, "Int"));
         }
         self.insert(
@@ -191,7 +191,7 @@ impl ParameterBindingBuilder<'_> {
         value: bool,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        if port.declared_type != DeclaredType::Bool {
+        if port.declared_type != CheckedType::Bool {
             return Err(self.project.binding_kind_error(port, "Bool"));
         }
         self.insert(
@@ -210,7 +210,7 @@ impl ParameterBindingBuilder<'_> {
         variant: &IndexVariantName,
     ) -> Result<(), CompileError> {
         let port = self.project.port_at(position)?;
-        let DeclaredType::Key(index) = &port.declared_type else {
+        let CheckedType::Key(index) = &port.declared_type else {
             return Err(self.project.binding_kind_error(port, "Key"));
         };
         let Some(definition) = index_def_for_ref(index, &self.project.tir) else {
@@ -244,7 +244,7 @@ impl ParameterBindingBuilder<'_> {
 struct ImportedConstantOutput {
     declaration: ResolvedDeclName,
     value: RuntimeValue,
-    declared_type: DeclaredType,
+    declared_type: CheckedType,
 }
 
 struct ProjectOutputAssembly {

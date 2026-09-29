@@ -863,7 +863,7 @@ mod tests {
             .constrained_fields()
             .map(|field| {
                 graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
-                    graphcal_compiler::registry::declared_type::StructTypeRef::from_resolved(
+                    graphcal_compiler::registry::checked_type::StructTypeRef::from_resolved(
                         application.definition().clone(),
                     ),
                     application.generic_args.clone(),

@@ -1,7 +1,7 @@
 //! Retained static membership checks, independent of expression result shape.
 
 use crate::expression_id::ExprId;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::index::{FiniteIndex, IndexCardinality};
 use thiserror::Error;
 

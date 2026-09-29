@@ -7,11 +7,11 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::expression_id::ExprId;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::FormattingRegistry;
 
-use crate::tir::dim_check::InferredType;
+use crate::registry::checked_type::CheckedType;
 
 use super::facts::{
     ExpressionFactCollector, TypeDefinitionDependency, TypeDefinitionDependencyCollector,
@@ -53,7 +53,7 @@ impl<'a> InferEnv<'a> {
         owner: Option<&ResolvedDeclName>,
         cancellation: &crate::cancellation::CancellationToken,
         collector: ExpressionFactCollector,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let control = InferenceControl {
             cancellation: cancellation.clone(),
             type_definition_dependencies: TypeDefinitionDependencyTracking::Disabled,
@@ -137,12 +137,12 @@ impl InferenceControl {
 pub(super) struct Infer<'a> {
     pub(super) env: InferEnv<'a>,
     pub(super) owner: Option<&'a ResolvedDeclName>,
-    pub(super) locals: &'a LocalEnv<'a, InferredType>,
+    pub(super) locals: &'a LocalEnv<'a, CheckedType>,
     pub(super) control: &'a InferenceControl,
 }
 
 /// The empty lexical scope every inference operation starts from.
-const ROOT_LOCALS: &LocalEnv<'static, InferredType> = &LocalEnv::root();
+const ROOT_LOCALS: &LocalEnv<'static, CheckedType> = &LocalEnv::root();
 
 impl<'a> Infer<'a> {
     const fn root(
@@ -159,7 +159,7 @@ impl<'a> Infer<'a> {
     }
 
     /// Continue inference inside a nested lexical scope.
-    pub(super) const fn with_locals<'b>(self, locals: &'b LocalEnv<'b, InferredType>) -> Infer<'b>
+    pub(super) const fn with_locals<'b>(self, locals: &'b LocalEnv<'b, CheckedType>) -> Infer<'b>
     where
         'a: 'b,
     {

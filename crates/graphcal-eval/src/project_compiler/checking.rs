@@ -13,13 +13,13 @@ use graphcal_compiler::resolve::category::DeclSymbolKind;
 use super::*;
 
 /// Checked value-declaration types of the DAGs in the file being checked.
-type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, DeclaredType>;
+type LocalInterfaces = HashMap<graphcal_compiler::resolved_name::ResolvedDeclName, CheckedType>;
 
 fn declared_type_for_target(
     target: &graphcal_compiler::resolved_name::ResolvedDeclName,
     local_interfaces: &LocalInterfaces,
     module_artifacts: &ModuleArtifactStore,
-) -> Option<DeclaredType> {
+) -> Option<CheckedType> {
     local_interfaces
         .get(target)
         .or_else(|| {
@@ -76,7 +76,7 @@ fn checked_imported_values(
     tir: &graphcal_compiler::tir::typed::TIR,
     facts: &crate::execution_facts::CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, (RuntimeValue, DeclaredType)>, CompileError> {
+) -> Result<HashMap<ScopedName, (RuntimeValue, CheckedType)>, CompileError> {
     tir.root()
         .imported_bindings()
         .iter()

@@ -12,7 +12,7 @@ use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::ratio::ExponentStyle;
-use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::registry::unit::PositiveFiniteScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -112,7 +112,7 @@ pub enum Value {
         /// Constructor member identity within `type_name`; also the rendered value leaf.
         constructor: ConstructorName,
         /// Concrete generic arguments of the nominal type (part of value identity).
-        generic_args: Vec<DeclaredGenericArg>,
+        generic_args: Vec<CheckedGenericArg>,
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
@@ -1212,7 +1212,7 @@ mod tests {
 
     fn struct_value(
         constructor: &str,
-        generic_args: Vec<DeclaredGenericArg>,
+        generic_args: Vec<CheckedGenericArg>,
         fields: IndexMap<FieldName, Value>,
     ) -> Value {
         let owner = DagId::root_in_package("test", "main");
@@ -1238,12 +1238,12 @@ mod tests {
         let fields = IndexMap::from([(FieldName::expect_valid("v"), Value::Int(1))]);
         let length = struct_value(
             "Mode",
-            vec![DeclaredGenericArg::Dim(Dimension::base(dim_id("Length")))],
+            vec![CheckedGenericArg::Dim(Dimension::base(dim_id("Length")))],
             fields.clone(),
         );
         let time = struct_value(
             "Mode",
-            vec![DeclaredGenericArg::Dim(Dimension::base(dim_id("Time")))],
+            vec![CheckedGenericArg::Dim(Dimension::base(dim_id("Time")))],
             fields,
         );
 

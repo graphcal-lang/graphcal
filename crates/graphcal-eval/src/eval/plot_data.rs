@@ -20,7 +20,7 @@
 //!   never substituted for data.
 
 use graphcal_compiler::plot_shape::align_plot_channel_axes;
-use graphcal_compiler::registry::declared_type::IndexTypeRef;
+use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;

@@ -7,7 +7,7 @@ use graphcal_compiler::builtin::{
 };
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
@@ -399,7 +399,7 @@ fn eval_hir_const_ref(
 fn checked_value_type<'a>(
     expr: &hir::Expr,
     ctx: &'a EvalContext<'_>,
-) -> Result<&'a DeclaredType, GraphcalError> {
+) -> Result<&'a CheckedType, GraphcalError> {
     match &ctx.expression_fact(expr)?.fact {
         graphcal_compiler::tir::expression_facts::ExpressionFact::Value {
             checked_type, ..
@@ -415,7 +415,7 @@ fn checked_key_axis<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Result<&'a IndexTypeRef, GraphcalError> {
     match checked_value_type(expr, ctx)? {
-        DeclaredType::Key(index) => Ok(index),
+        CheckedType::Key(index) => Ok(index),
         _ => Err(ctx.internal_error("key expression has no retained axis", expr.span)),
     }
 }
@@ -1212,7 +1212,7 @@ fn eval_hir_datetime_constructor(
 /// declaration order. Result arrays are rebuilt over exactly these keys.
 #[derive(Clone)]
 struct BoundExternIndex {
-    index_name: graphcal_compiler::registry::declared_type::IndexTypeRef,
+    index_name: graphcal_compiler::registry::checked_type::IndexTypeRef,
     keys: Vec<IndexEntryKey>,
 }
 
@@ -1701,7 +1701,7 @@ fn eval_hir_field_access(
             generic_args,
             fields,
         } => {
-            let DeclaredType::Struct(expected, expected_args) = checked_value_type(inner, ctx)?
+            let CheckedType::Struct(expected, expected_args) = checked_value_type(inner, ctx)?
             else {
                 return Err(ctx.internal_error(
                     "field access has no retained struct operand type",
@@ -1872,7 +1872,7 @@ fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
     reason = "recursive map evaluation keeps values and sparse presentation entries reordered atomically"
 )]
 fn eval_hir_map_literal(
-    checked_type: &DeclaredType,
+    checked_type: &CheckedType,
     map_span: Span,
     entries: &[hir::expr::MapEntry],
     values: &RuntimeValueMap,
@@ -1885,7 +1885,7 @@ fn eval_hir_map_literal(
         .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
-    let DeclaredType::Indexed { element, index } = checked_type else {
+    let CheckedType::Indexed { element, index } = checked_type else {
         return Err(ctx.internal_error("map has no retained indexed type", map_span));
     };
     let idx_name = index.clone();
@@ -2031,7 +2031,7 @@ fn eval_hir_for_comp(
 }
 
 fn eval_hir_for_comp_bindings(
-    checked_type: &DeclaredType,
+    checked_type: &CheckedType,
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
@@ -2040,7 +2040,7 @@ fn eval_hir_for_comp_bindings(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let binding = &bindings[0];
-    let DeclaredType::Indexed { element, index } = checked_type else {
+    let CheckedType::Indexed { element, index } = checked_type else {
         return Err(ctx.internal_error(
             "comprehension binding has no retained indexed type",
             binding.local.span,
@@ -2369,7 +2369,7 @@ fn eval_hir_unfold(
         return Err(ctx.internal_error("unfold evaluator received another operation", expr.span));
     };
     let axis = &recurrence.axis;
-    let DeclaredType::Indexed { index, .. } = checked_value_type(expr, ctx)? else {
+    let CheckedType::Indexed { index, .. } = checked_value_type(expr, ctx)? else {
         return Err(ctx.internal_error("unfold has no retained indexed type", expr.span));
     };
     let index_ref = index.clone();

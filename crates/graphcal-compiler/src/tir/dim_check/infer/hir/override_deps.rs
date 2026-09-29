@@ -3,7 +3,7 @@
 use crate::hir::types::{GenericArg, IndexRef, ValueType, ValueTypeKind};
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::FieldName;

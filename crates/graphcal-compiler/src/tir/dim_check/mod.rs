@@ -7,18 +7,17 @@ use miette::NamedSource;
 use crate::assertion_expectation::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::IndexTypeRef;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 
 use crate::registry::error::GraphcalError;
-use crate::registry::time_scale::TimeScale;
 use crate::registry::types::FormattingRegistry;
 
-pub(crate) use helpers::{expect_quantity, format_inferred_type};
+pub(crate) use helpers::{expect_quantity, format_checked_type};
 
-use helpers::{format_declared_type, is_bool_type, resolved_type_matches_inferred, types_match};
+use helpers::is_bool_type;
 
 mod builtins;
 mod concrete_obligations;
@@ -43,63 +42,7 @@ pub use model_schema::{
 #[cfg(test)]
 mod tests;
 
-pub use crate::registry::declared_type::DeclaredType;
-
-/// A generic argument inferred at a constructor or type-application site.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InferredGenericArg {
-    Dim(Dimension),
-    Index(IndexTypeRef),
-    Nat(crate::nat::NatPolyForm),
-    Type(InferredType),
-}
-
-/// The inferred type of an expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InferredType {
-    Quantity(Dimension),
-    /// A complex quantity whose real and imaginary components share one dimension.
-    Complex(Dimension),
-    Bool,
-    Int,
-    /// A datetime instant in a specific time scale.
-    Datetime(TimeScale),
-    /// An index-key value of type `Key<I>`: a first-class element key of
-    /// axis `I`.
-    Key(IndexTypeRef),
-    /// A struct type with sort-aware generic arguments.
-    Struct(StructTypeRef, Vec<InferredGenericArg>),
-    Indexed {
-        element: Box<Self>,
-        index: IndexTypeRef,
-    },
-}
-
-impl InferredType {
-    #[must_use]
-    pub(crate) const fn complex_dimension(&self) -> Option<&Dimension> {
-        match self {
-            Self::Complex(dimension) => Some(dimension),
-            _ => None,
-        }
-    }
-
-    const fn quantity_dimension(&self) -> Option<&Dimension> {
-        match self {
-            Self::Quantity(dimension) => Some(dimension),
-            _ => None,
-        }
-    }
-
-    /// Number of index axes carried by this type.
-    #[must_use]
-    fn indexed_rank(&self) -> usize {
-        match self {
-            Self::Indexed { element, .. } => element.indexed_rank().saturating_add(1),
-            _ => 0,
-        }
-    }
-}
+pub use crate::registry::checked_type::CheckedType;
 
 /// Per-DAG context bundle threaded through the dimension-check passes.
 ///
@@ -146,7 +89,7 @@ impl DimCheckContext<'_> {
         &self,
         expr: &crate::hir::Expr,
         owner: Option<&ResolvedDeclName>,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         self.env.infer_with_expression_facts(
             expr,
             owner,
@@ -202,17 +145,17 @@ fn check_decl_expr_type(
         // interface. Retain that proof rather than treating them as unchecked.
         return ctx.expression_facts.record(
             hir_expr,
-            &InferredType::from(declared),
+            declared,
             ctx.env.dag,
             ctx.env.tir,
             ctx.env.src,
         );
     }
     let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
-    if !resolved_type_matches_inferred(annotation.checked().resolved(), &inferred) {
+    if declared != &inferred {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(declared, ctx.env.registry),
-            inferred: format_inferred_type(&inferred, ctx.env.registry),
+            declared: format_checked_type(declared, ctx.env.registry),
+            inferred: format_checked_type(&inferred, ctx.env.registry),
             src: ctx.env.src.clone(),
             span: (*type_ann_span).into(),
         });
@@ -256,11 +199,11 @@ fn check_dynamic_unit_scale_type(
     let inferred = ctx.infer_hir(&entry.expr, None)?;
     if !matches!(
         &inferred,
-        InferredType::Quantity(dimension) if dimension.is_dimensionless()
+        CheckedType::Quantity(dimension) if dimension.is_dimensionless()
     ) {
         return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
             name: entry.spelling.clone(),
-            found: format_inferred_type(&inferred, ctx.env.registry),
+            found: format_checked_type(&inferred, ctx.env.registry),
             src: ctx.env.src.clone(),
             span: entry.expr.span.into(),
         });
@@ -404,7 +347,7 @@ struct AssertionIndexShape {
 }
 
 impl AssertionIndexShape {
-    fn from_bool_type(ty: &InferredType) -> Self {
+    fn from_bool_type(ty: &CheckedType) -> Self {
         Self {
             axes: peel_index_axes(ty).0,
         }
@@ -433,7 +376,7 @@ fn check_hir_assert_body(
             let inferred = ctx.infer_hir(body_expr, Some(owner))?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
-                    found: format_inferred_type(&inferred, registry),
+                    found: format_checked_type(&inferred, registry),
                     src: src.clone(),
                     span: span.into(),
                 });
@@ -487,7 +430,7 @@ fn check_hir_assert_body(
             if tolerance_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(&actual_dim),
-                    found: format_inferred_type(&tolerance_type, registry),
+                    found: format_checked_type(&tolerance_type, registry),
                     help: "absolute tolerance must have the same dimension as actual/expected"
                         .to_string(),
                     src: src.clone(),
@@ -518,10 +461,10 @@ fn check_hir_assert_body(
 }
 
 /// Peel the index axes off an inferred type, outermost first.
-fn peel_index_axes(ty: &InferredType) -> (Vec<IndexTypeRef>, &InferredType) {
+fn peel_index_axes(ty: &CheckedType) -> (Vec<IndexTypeRef>, &CheckedType) {
     let mut axes = Vec::new();
     let mut current = ty;
-    while let InferredType::Indexed { element, index } = current {
+    while let CheckedType::Indexed { element, index } = current {
         axes.push(index.clone());
         current = element;
     }
@@ -534,18 +477,18 @@ fn peel_index_axes(ty: &InferredType) -> (Vec<IndexTypeRef>, &InferredType) {
 /// type.
 fn broadcast_operand_element<'a>(
     actual_axes: &[IndexTypeRef],
-    actual_type: &InferredType,
-    operand_type: &'a InferredType,
+    actual_type: &CheckedType,
+    operand_type: &'a CheckedType,
     operand_span: crate::syntax::span::Span,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'a InferredType, GraphcalError> {
+) -> Result<&'a CheckedType, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
     if !operand_axes.is_empty() && operand_axes != *actual_axes {
         return Err(GraphcalError::IndexedShapeMismatch {
             context: "tolerance assertion".to_string(),
-            lhs: format_inferred_type(actual_type, registry),
-            rhs: format_inferred_type(operand_type, registry),
+            lhs: format_checked_type(actual_type, registry),
+            rhs: format_checked_type(operand_type, registry),
             src: src.clone(),
             span: operand_span.into(),
         });
@@ -980,7 +923,7 @@ fn is_bindable_nominal(
 pub fn check_external_value_expr_type(
     tir: &crate::tir::typed::TIR,
     expr: &crate::hir::Expr,
-    expected: &DeclaredType,
+    expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
     let collector = infer::hir::ExpressionFactCollector::new(tir.root());
@@ -997,14 +940,14 @@ pub fn check_external_value_expr_type(
         collector.clone(),
     )?;
     concrete_obligations::validate_concrete_type_obligations(
-        &DeclaredType::from(&inferred),
+        &inferred,
         tir.root(),
         tir,
         src,
         expr.span,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    if types_match(expected, &inferred) {
+    if expected == &inferred {
         collector.record_contextual(expr, src)?;
         crate::tir::expression_facts::CheckedExpressionFacts::publish(
             tir.root_dag_id().clone(),
@@ -1022,8 +965,8 @@ pub fn check_external_value_expr_type(
         })
     } else {
         Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(expected, &tir.registry),
-            inferred: format_inferred_type(&inferred, &tir.registry),
+            declared: format_checked_type(expected, &tir.registry),
+            inferred: format_checked_type(&inferred, &tir.registry),
             src: src.clone(),
             span: expr.span.into(),
         })
@@ -1187,7 +1130,7 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
 fn check_one_bound(
     name: &DeclName,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &InferredType,
+    inferred: &CheckedType,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
@@ -1482,16 +1425,16 @@ fn expected_bound_from_resolved(
     }
 }
 
-fn expected_bound_from_inferred(inferred: &InferredType) -> Option<ExpectedBound> {
+fn expected_bound_from_inferred(inferred: &CheckedType) -> Option<ExpectedBound> {
     match inferred {
-        InferredType::Indexed { element, .. } => expected_bound_from_inferred(element),
-        InferredType::Quantity(dimension) => Some(ExpectedBound::Quantity(dimension.clone())),
-        InferredType::Int => Some(ExpectedBound::Int),
-        InferredType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
-        InferredType::Complex(_)
-        | InferredType::Bool
-        | InferredType::Key(_)
-        | InferredType::Struct(..) => None,
+        CheckedType::Indexed { element, .. } => expected_bound_from_inferred(element),
+        CheckedType::Quantity(dimension) => Some(ExpectedBound::Quantity(dimension.clone())),
+        CheckedType::Int => Some(ExpectedBound::Int),
+        CheckedType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
+        CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Key(_)
+        | CheckedType::Struct(..) => None,
     }
 }
 
@@ -1499,17 +1442,17 @@ fn check_deferred_generic_quantity_bound(
     display_name: &str,
     resolved_target: &crate::tir::typed::ResolvedTypeExpr,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &InferredType,
+    inferred: &CheckedType,
     registry: &FormattingRegistry,
 ) -> Result<(), GraphcalError> {
-    if inferred.quantity_dimension().is_some() || matches!(inferred, InferredType::Int) {
+    if inferred.quantity_dimension().is_some() || matches!(inferred, CheckedType::Int) {
         return Ok(());
     }
     Err(GraphcalError::DomainDimensionMismatch {
         name: display_name.to_string(),
         type_dim: resolved_target.format(registry),
         bound_name: bound.kind.to_string(),
-        bound_dim: format_inferred_type(inferred, registry),
+        bound_dim: format_checked_type(inferred, registry),
         src: bound.src.clone(),
         span: bound.span.into(),
     })
@@ -1521,7 +1464,7 @@ fn check_deferred_generic_quantity_bound(
 fn check_one_bound_with_display_name(
     display_name: &str,
     bound: &crate::tir::typed::ResolvedDomainBound,
-    inferred: &InferredType,
+    inferred: &CheckedType,
     expected: &ExpectedBound,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
@@ -1529,14 +1472,14 @@ fn check_one_bound_with_display_name(
     match expected {
         ExpectedBound::Quantity(target_dim) => {
             let ok = match inferred {
-                InferredType::Int => target_dim.is_dimensionless(),
+                CheckedType::Int => target_dim.is_dimensionless(),
                 other => other.quantity_dimension() == Some(target_dim),
             };
             if ok {
                 return Ok(());
             }
             let bound_dim_str = inferred.quantity_dimension().map_or_else(
-                || format_inferred_type(inferred, registry),
+                || format_checked_type(inferred, registry),
                 |d| registry.dimensions.format_dimension(d),
             );
             Err(GraphcalError::DomainDimensionMismatch {
@@ -1549,27 +1492,27 @@ fn check_one_bound_with_display_name(
             })
         }
         ExpectedBound::Int => {
-            if matches!(inferred, InferredType::Int) {
+            if matches!(inferred, CheckedType::Int) {
                 return Ok(());
             }
             Err(GraphcalError::IntDomainBoundTypeMismatch {
                 name: display_name.to_string(),
                 bound_name: bound.kind.to_string(),
-                bound_type: format_inferred_type(inferred, registry),
+                bound_type: format_checked_type(inferred, registry),
                 src: src.clone(),
                 span: bound.span.into(),
             })
         }
         ExpectedBound::Datetime(target_scale) => {
-            if matches!(inferred, InferredType::Datetime(bound_scale) if bound_scale == target_scale)
+            if matches!(inferred, CheckedType::Datetime(bound_scale) if bound_scale == target_scale)
             {
                 return Ok(());
             }
             Err(GraphcalError::DatetimeDomainBoundTypeMismatch {
                 name: display_name.to_string(),
-                target_type: format_inferred_type(&InferredType::Datetime(*target_scale), registry),
+                target_type: format_checked_type(&CheckedType::Datetime(*target_scale), registry),
                 bound_name: bound.kind.to_string(),
-                bound_type: format_inferred_type(inferred, registry),
+                bound_type: format_checked_type(inferred, registry),
                 src: src.clone(),
                 span: bound.span.into(),
             })

@@ -8,8 +8,8 @@
 use crate::builtin::LinearAlgebraFn;
 use crate::dimension::{Dimension, Rational};
 
-use super::super::InferredType;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::CheckedType;
+use crate::registry::checked_type::IndexTypeRef;
 
 /// A linear-algebra call cannot be typed from the supplied argument shapes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,16 +50,16 @@ impl IndexedQuantity<'_> {
 
 fn indexed_quantity(
     argument: usize,
-    ty: &InferredType,
+    ty: &CheckedType,
     rank: usize,
 ) -> Result<IndexedQuantity<'_>, LinearAlgebraTypeError> {
     let mut current = ty;
     let mut axes = Vec::new();
-    while let InferredType::Indexed { element, index } = current {
+    while let CheckedType::Indexed { element, index } = current {
         axes.push(index);
         current = element;
     }
-    let InferredType::Quantity(dimension) = current else {
+    let CheckedType::Quantity(dimension) = current else {
         return Err(LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank });
     };
     if axes.len() != rank {
@@ -84,11 +84,11 @@ fn require_same_axis(
     }
 }
 
-fn quantity_over(dimension: Dimension, axes: &[&IndexTypeRef]) -> InferredType {
+fn quantity_over(dimension: Dimension, axes: &[&IndexTypeRef]) -> CheckedType {
     axes.iter()
         .rev()
-        .fold(InferredType::Quantity(dimension), |element, index| {
-            InferredType::Indexed {
+        .fold(CheckedType::Quantity(dimension), |element, index| {
+            CheckedType::Indexed {
                 element: Box::new(element),
                 index: (*index).clone(),
             }
@@ -128,15 +128,15 @@ fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebr
 /// types; this rule does not re-check the count.
 pub(super) fn infer_linear_algebra_type(
     function: LinearAlgebraFn,
-    arguments: &[InferredType],
+    arguments: &[CheckedType],
     mut cardinality: impl FnMut(&IndexTypeRef) -> Option<usize>,
-) -> Result<InferredType, LinearAlgebraTypeError> {
+) -> Result<CheckedType, LinearAlgebraTypeError> {
     match function {
         LinearAlgebraFn::Dot => {
             let lhs = indexed_quantity(0, &arguments[0], 1)?;
             let rhs = indexed_quantity(1, &arguments[1], 1)?;
             require_same_axis(lhs.axis(0), 1, rhs.axis(0))?;
-            Ok(InferredType::Quantity(product_dimension(
+            Ok(CheckedType::Quantity(product_dimension(
                 lhs.dimension,
                 rhs.dimension,
             )?))
@@ -160,11 +160,11 @@ pub(super) fn infer_linear_algebra_type(
         LinearAlgebraFn::Trace => {
             let matrix = indexed_quantity(0, &arguments[0], 2)?;
             require_same_axis(matrix.axis(0), 0, matrix.axis(1))?;
-            Ok(InferredType::Quantity(matrix.dimension.clone()))
+            Ok(CheckedType::Quantity(matrix.dimension.clone()))
         }
         LinearAlgebraFn::Norm => {
             let vector = indexed_quantity(0, &arguments[0], 1)?;
-            Ok(InferredType::Quantity(vector.dimension.clone()))
+            Ok(CheckedType::Quantity(vector.dimension.clone()))
         }
         LinearAlgebraFn::Cross => {
             let lhs = indexed_quantity(0, &arguments[0], 1)?;
@@ -219,7 +219,7 @@ pub(super) fn infer_linear_algebra_type(
                 .and_then(|exponent| Rational::integer(exponent).ok())
                 .and_then(|exponent| matrix.dimension.pow(exponent).ok())
                 .ok_or(LinearAlgebraTypeError::DimensionOverflow)?;
-            Ok(InferredType::Quantity(dimension))
+            Ok(CheckedType::Quantity(dimension))
         }
     }
 }

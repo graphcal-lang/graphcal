@@ -19,7 +19,7 @@ use crate::expression_id::ExprId;
 use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
 use crate::hir::expr::{ConstRef, Expr, ExprKind, FunctionRef, visit_expr_children};
 use crate::hir::nominal::ResolvedConstructor;
-use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType, IndexTypeRef};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef};
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
@@ -36,7 +36,7 @@ pub enum ExpressionShape {
 impl ExpressionShape {
     fn matches_type(
         &self,
-        checked_type: &DeclaredType,
+        checked_type: &CheckedType,
         cardinality: &dyn Fn(
             &IndexTypeRef,
         ) -> Result<
@@ -46,7 +46,7 @@ impl ExpressionShape {
     ) -> Result<bool, ExpressionFactsError> {
         let mut axes = Vec::new();
         let mut ty = checked_type;
-        while let DeclaredType::Indexed { element, index } = ty {
+        while let CheckedType::Indexed { element, index } = ty {
             axes.push(index);
             ty = element;
         }
@@ -78,7 +78,7 @@ pub struct ConstructorApplication {
     /// field annotations are the application's field constraints.
     pub constructor: ResolvedConstructor,
     pub runtime_type: ResolvedStructTypeName,
-    pub generic_args: Vec<DeclaredGenericArg>,
+    pub generic_args: Vec<CheckedGenericArg>,
 }
 
 impl ConstructorApplication {
@@ -109,7 +109,7 @@ pub enum ContextualOperand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpressionFact {
     Value {
-        checked_type: DeclaredType,
+        checked_type: CheckedType,
         shape: ExpressionShape,
         constructor: Option<Box<ConstructorApplication>>,
     },
@@ -368,7 +368,7 @@ impl CheckedExpressionRecord {
 }
 
 fn type_is_ready(
-    ty: &DeclaredType,
+    ty: &CheckedType,
     cardinality: &dyn Fn(
         &IndexTypeRef,
     ) -> Result<
@@ -377,26 +377,26 @@ fn type_is_ready(
     >,
 ) -> Result<bool, ExpressionFactsError> {
     Ok(match ty {
-        DeclaredType::Indexed { element, index } => {
+        CheckedType::Indexed { element, index } => {
             cardinality(index)?.is_some() & type_is_ready(element, cardinality)?
         }
-        DeclaredType::Key(index) => cardinality(index)?.is_some(),
-        DeclaredType::Struct(_, args) => args.iter().try_fold(true, |ready, arg| {
+        CheckedType::Key(index) => cardinality(index)?.is_some(),
+        CheckedType::Struct(_, args) => args.iter().try_fold(true, |ready, arg| {
             Ok::<_, ExpressionFactsError>(
                 ready
                     & match arg {
-                        DeclaredGenericArg::Nat(form) => form.is_constant(),
-                        DeclaredGenericArg::Type(ty) => type_is_ready(ty, cardinality)?,
-                        DeclaredGenericArg::Index(index) => cardinality(index)?.is_some(),
-                        DeclaredGenericArg::Dim(_) => true,
+                        CheckedGenericArg::Nat(form) => form.is_constant(),
+                        CheckedGenericArg::Type(ty) => type_is_ready(ty, cardinality)?,
+                        CheckedGenericArg::Index(index) => cardinality(index)?.is_some(),
+                        CheckedGenericArg::Dim(_) => true,
                     },
             )
         })?,
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_) => true,
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_) => true,
     })
 }
 
@@ -446,7 +446,7 @@ fn matches_constructor_targets(expr: &Expr, record: &CheckedExpressionRecord) ->
 fn value_type<'a>(
     records: &'a HashMap<ExprId, Box<CheckedExpressionRecord>>,
     expr: &Expr,
-) -> Result<&'a DeclaredType, ExpressionFactsError> {
+) -> Result<&'a CheckedType, ExpressionFactsError> {
     let id = expr.id();
     match &records
         .get(id)
@@ -479,7 +479,7 @@ fn static_requirement_coverage(
             arg,
             ..
         } => {
-            let DeclaredType::Key(axis) = value_type(records, expr)? else {
+            let CheckedType::Key(axis) = value_type(records, expr)? else {
                 return Ok(false);
             };
             consume_requirement(arg.id(), axis, StaticIndexUse::Key)
@@ -487,11 +487,11 @@ fn static_requirement_coverage(
         ExprKind::IndexAccess { expr: inner, args } => {
             let mut ty = value_type(records, inner)?;
             for arg in args {
-                let DeclaredType::Indexed { element, index } = ty else {
+                let CheckedType::Indexed { element, index } = ty else {
                     return Ok(false);
                 };
                 if let crate::hir::expr::IndexArg::Expr(operand) = arg
-                    && matches!(value_type(records, operand)?, DeclaredType::Int)
+                    && matches!(value_type(records, operand)?, CheckedType::Int)
                     && !consume_requirement(operand.id(), index, StaticIndexUse::Selection)
                 {
                     return Ok(false);
@@ -610,7 +610,7 @@ impl CheckedExpressionFacts {
                                 constructor
                                     .as_ref()
                                     .is_none_or(|application| match checked_type {
-                                        DeclaredType::Struct(identity, args) => {
+                                        CheckedType::Struct(identity, args) => {
                                             identity.resolved() == &application.runtime_type
                                                 && args == &application.generic_args
                                         }

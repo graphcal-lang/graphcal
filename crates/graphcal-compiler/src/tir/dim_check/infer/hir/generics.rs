@@ -12,14 +12,14 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
 
-use crate::tir::dim_check::{InferredGenericArg, InferredType};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
 use crate::tir::typed::Substitution;
 
 use super::context::InferEnv;
@@ -39,7 +39,7 @@ pub(in crate::tir::dim_check) fn resolved_type_field_key(
 
 fn generic_substitution_prefix(
     type_def: &NominalTypeDef,
-    type_args: &[InferredGenericArg],
+    type_args: &[CheckedGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Substitution, GraphcalError> {
@@ -57,24 +57,20 @@ fn generic_substitution_prefix(
     }
 
     // A validated concrete argument, embedded into the symbolic form.
-    let bound = |arg: &InferredGenericArg| {
-        crate::tir::typed::declared_to_resolved_generic_arg(
-            &crate::registry::declared_type::DeclaredGenericArg::from(arg),
-            span,
-        )
-    };
+    let bound =
+        |arg: &CheckedGenericArg| crate::tir::typed::declared_to_resolved_generic_arg(arg, span);
     let mut subs = Substitution::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint() {
             GenericConstraint::Dim => match arg {
-                InferredGenericArg::Dim(_) => subs.bind(param.id().clone(), bound(arg)),
+                CheckedGenericArg::Dim(_) => subs.bind(param.id().clone(), bound(arg)),
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Index => match arg {
-                InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
+                CheckedGenericArg::Index(index) if inferred_index_is_concrete(index) => {
                     subs.bind(param.id().clone(), bound(arg));
                 }
-                InferredGenericArg::Index(index) => {
+                CheckedGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
                         param.name(),
                         &index.to_string(),
@@ -85,10 +81,10 @@ fn generic_substitution_prefix(
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Nat => match arg {
-                InferredGenericArg::Nat(form) if form.is_constant() => {
+                CheckedGenericArg::Nat(form) if form.is_constant() => {
                     subs.bind(param.id().clone(), bound(arg));
                 }
-                InferredGenericArg::Nat(form) => {
+                CheckedGenericArg::Nat(form) => {
                     return Err(non_concrete_generic_argument(
                         param.name(),
                         &form.format(),
@@ -99,10 +95,10 @@ fn generic_substitution_prefix(
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Type => match arg {
-                InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
+                CheckedGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
                     subs.bind(param.id().clone(), bound(arg));
                 }
-                InferredGenericArg::Type(type_expr) => {
+                CheckedGenericArg::Type(type_expr) => {
                     return Err(non_concrete_generic_argument(
                         param.name(),
                         &format!("{type_expr:?}"),
@@ -119,7 +115,7 @@ fn generic_substitution_prefix(
 
 pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
     type_def: &NominalTypeDef,
-    type_args: &[InferredGenericArg],
+    type_args: &[CheckedGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<ConcreteGenericSubstitutions, GraphcalError> {
@@ -141,12 +137,12 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
         .iter()
         .zip(type_args)
         .filter_map(|(parameter, arg)| match arg {
-            InferredGenericArg::Nat(form) => form
+            CheckedGenericArg::Nat(form) => form
                 .constant_value()
                 .map(|value| (parameter.id().clone(), value)),
-            InferredGenericArg::Dim(_)
-            | InferredGenericArg::Index(_)
-            | InferredGenericArg::Type(_) => None,
+            CheckedGenericArg::Dim(_)
+            | CheckedGenericArg::Index(_)
+            | CheckedGenericArg::Type(_) => None,
         })
         .collect();
     Ok(ConcreteGenericSubstitutions { substitution, nats })
@@ -158,23 +154,23 @@ fn inferred_index_is_concrete(index: &IndexTypeRef) -> bool {
         .is_none_or(|form| form.is_constant())
 }
 
-fn inferred_type_is_concrete(inferred: &InferredType) -> bool {
+fn inferred_type_is_concrete(inferred: &CheckedType) -> bool {
     match inferred {
-        InferredType::Key(index) => inferred_index_is_concrete(index),
-        InferredType::Struct(_, args) => args.iter().all(|arg| match arg {
-            InferredGenericArg::Dim(_) => true,
-            InferredGenericArg::Index(index) => inferred_index_is_concrete(index),
-            InferredGenericArg::Nat(form) => form.is_constant(),
-            InferredGenericArg::Type(type_expr) => inferred_type_is_concrete(type_expr),
+        CheckedType::Key(index) => inferred_index_is_concrete(index),
+        CheckedType::Struct(_, args) => args.iter().all(|arg| match arg {
+            CheckedGenericArg::Dim(_) => true,
+            CheckedGenericArg::Index(index) => inferred_index_is_concrete(index),
+            CheckedGenericArg::Nat(form) => form.is_constant(),
+            CheckedGenericArg::Type(type_expr) => inferred_type_is_concrete(type_expr),
         }),
-        InferredType::Indexed { element, index } => {
+        CheckedType::Indexed { element, index } => {
             inferred_index_is_concrete(index) && inferred_type_is_concrete(element)
         }
-        InferredType::Quantity(_)
-        | InferredType::Complex(_)
-        | InferredType::Bool
-        | InferredType::Int
-        | InferredType::Datetime(_) => true,
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_) => true,
     }
 }
 
@@ -225,7 +221,7 @@ impl ConcreteGenericSubstitutions {
         &self,
         resolved: &crate::tir::typed::ResolvedTypeExpr,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         instantiate_concrete_type(resolved, &self.substitution, src)
     }
 }
@@ -236,34 +232,32 @@ pub(super) fn instantiate_concrete_type(
     resolved: &crate::tir::typed::ResolvedTypeExpr,
     substitution: &Substitution,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let instantiated = substitution
         .apply(resolved)
         .map_err(|error| error.into_graphcal(src))?;
     crate::tir::typed::resolved_to_declared_type(&instantiated, src)
-        .map(|declared| InferredType::from(&declared))
 }
 
 fn instantiate_concrete_generic_arg(
     resolved: &crate::tir::typed::ResolvedGenericArg,
     substitution: &Substitution,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredGenericArg, GraphcalError> {
+) -> Result<CheckedGenericArg, GraphcalError> {
     let instantiated = substitution
         .apply_generic_arg(resolved)
         .map_err(|error| error.into_graphcal(src))?;
     crate::tir::typed::resolved_generic_arg_to_declared(&instantiated, src)
-        .map(|declared| InferredGenericArg::from(&declared))
 }
 
 pub(in crate::tir::dim_check) fn resolved_field_type(
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
     type_def: &NominalTypeDef,
-    type_args: &[InferredGenericArg],
+    type_args: &[CheckedGenericArg],
     dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let resolved =
         dag.semantic
             .type_defs
@@ -283,29 +277,29 @@ impl InferEnv<'_> {
     fn infer_hir_generic_type_arg(
         &self,
         value_type: &ValueType,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         match &value_type.kind {
             ValueTypeKind::Builtin(BuiltinType::Dimensionless) => {
-                Ok(InferredType::Quantity(Dimension::dimensionless()))
+                Ok(CheckedType::Quantity(Dimension::dimensionless()))
             }
-            ValueTypeKind::Builtin(BuiltinType::Bool) => Ok(InferredType::Bool),
-            ValueTypeKind::Builtin(BuiltinType::Int) => Ok(InferredType::Int),
+            ValueTypeKind::Builtin(BuiltinType::Bool) => Ok(CheckedType::Bool),
+            ValueTypeKind::Builtin(BuiltinType::Int) => Ok(CheckedType::Int),
             ValueTypeKind::Builtin(BuiltinType::Datetime(scale)) => {
-                Ok(InferredType::Datetime(*scale))
+                Ok(CheckedType::Datetime(*scale))
             }
             ValueTypeKind::DimExpr(dim_expr) => {
-                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredType::Quantity)
+                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(CheckedType::Quantity)
             }
             ValueTypeKind::Complex(dimension) => match dimension {
-                DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
+                DimArg::Dimensionless(_) => Ok(CheckedType::Complex(Dimension::dimensionless())),
                 DimArg::Expr(dim_expr) => {
-                    infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredType::Complex)
+                    infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(CheckedType::Complex)
                 }
             },
-            ValueTypeKind::Key(index) => Ok(InferredType::Key(inferred_index_from_type_arg(
+            ValueTypeKind::Key(index) => Ok(CheckedType::Key(inferred_index_from_type_arg(
                 index, self.src,
             )?)),
-            ValueTypeKind::Struct(name) => Ok(InferredType::Struct(
+            ValueTypeKind::Struct(name) => Ok(CheckedType::Struct(
                 StructTypeRef::from_resolved(name.value.clone()),
                 vec![],
             )),
@@ -332,7 +326,7 @@ impl InferEnv<'_> {
                         src: self.src.clone(),
                         span: name.span.into(),
                     })?;
-                Ok(InferredType::Struct(
+                Ok(CheckedType::Struct(
                     StructTypeRef::from_resolved(name.value.clone()),
                     self.resolve_applied_generic_args(type_def, generic_args, name.span)?,
                 ))
@@ -343,21 +337,21 @@ impl InferEnv<'_> {
     fn infer_hir_sorted_generic_arg(
         &self,
         arg: &GenericArg,
-    ) -> Result<InferredGenericArg, GraphcalError> {
+    ) -> Result<CheckedGenericArg, GraphcalError> {
         match arg {
             GenericArg::Dim(DimArg::Dimensionless(_)) => {
-                Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
+                Ok(CheckedGenericArg::Dim(Dimension::dimensionless()))
             }
             GenericArg::Dim(DimArg::Expr(dim_expr)) => {
-                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredGenericArg::Dim)
+                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(CheckedGenericArg::Dim)
             }
             GenericArg::Index(index) => {
-                inferred_index_from_type_arg(index, self.src).map(InferredGenericArg::Index)
+                inferred_index_from_type_arg(index, self.src).map(CheckedGenericArg::Index)
             }
-            GenericArg::Nat(nat) => Ok(InferredGenericArg::Nat(nat.value.clone())),
+            GenericArg::Nat(nat) => Ok(CheckedGenericArg::Nat(nat.value.clone())),
             GenericArg::Type(value_type) => self
                 .infer_hir_generic_type_arg(value_type)
-                .map(InferredGenericArg::Type),
+                .map(CheckedGenericArg::Type),
         }
     }
 }
@@ -443,7 +437,7 @@ impl InferEnv<'_> {
         type_def: &NominalTypeDef,
         applied_generic_args: &[GenericArg],
         span: Span,
-    ) -> Result<Vec<InferredGenericArg>, GraphcalError> {
+    ) -> Result<Vec<CheckedGenericArg>, GraphcalError> {
         if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
             return Ok(Vec::new());
         }
@@ -475,10 +469,10 @@ impl InferEnv<'_> {
             let inferred = self.infer_hir_sorted_generic_arg(arg)?;
             let matches_sort = matches!(
                 (param.constraint(), &inferred),
-                (GenericConstraint::Dim, InferredGenericArg::Dim(_))
-                    | (GenericConstraint::Index, InferredGenericArg::Index(_))
-                    | (GenericConstraint::Nat, InferredGenericArg::Nat(_))
-                    | (GenericConstraint::Type, InferredGenericArg::Type(_))
+                (GenericConstraint::Dim, CheckedGenericArg::Dim(_))
+                    | (GenericConstraint::Index, CheckedGenericArg::Index(_))
+                    | (GenericConstraint::Nat, CheckedGenericArg::Nat(_))
+                    | (GenericConstraint::Type, CheckedGenericArg::Type(_))
             );
             if !matches_sort {
                 return Err(generic_arg_internal_sort_error(param, self.src, arg.span()));

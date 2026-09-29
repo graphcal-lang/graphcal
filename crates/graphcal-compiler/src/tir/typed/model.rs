@@ -11,7 +11,7 @@ use crate::generic_param::GenericParamId;
 use crate::hir;
 use crate::hir::NominalTypeDef;
 use crate::nat::NatPolyForm;
-use crate::registry::declared_type::{DeclaredType, IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{CheckedType, IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{BaseDimensionInfo, FormattingRegistry, IndexDef, UnitInfo};
@@ -645,8 +645,8 @@ impl<'a> ModuleTypeContext<'a> {
 /// members can share the same field names with different constraints.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructFieldConstraintKey {
-    pub owning_type: crate::registry::declared_type::StructTypeRef,
-    pub generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
+    pub owning_type: crate::registry::checked_type::StructTypeRef,
+    pub generic_args: Vec<crate::registry::checked_type::CheckedGenericArg>,
     pub constructor: ConstructorName,
     pub field: FieldName,
 }
@@ -655,7 +655,7 @@ impl StructFieldConstraintKey {
     /// Construct a key for a non-generic nominal type.
     #[must_use]
     pub const fn new(
-        owning_type: crate::registry::declared_type::StructTypeRef,
+        owning_type: crate::registry::checked_type::StructTypeRef,
         constructor: ConstructorName,
         field: FieldName,
     ) -> Self {
@@ -670,8 +670,8 @@ impl StructFieldConstraintKey {
     /// Construct a key for one concrete generic nominal application.
     #[must_use]
     pub const fn for_application(
-        owning_type: crate::registry::declared_type::StructTypeRef,
-        generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
+        owning_type: crate::registry::checked_type::StructTypeRef,
+        generic_args: Vec<crate::registry::checked_type::CheckedGenericArg>,
         constructor: ConstructorName,
         field: FieldName,
     ) -> Self {
@@ -1126,7 +1126,7 @@ pub struct ResolvedDomainBound {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedDeclType {
     resolved: ResolvedTypeExpr,
-    declared: DeclaredType,
+    declared: CheckedType,
 }
 
 impl CheckedDeclType {
@@ -1152,7 +1152,7 @@ impl CheckedDeclType {
 
     /// The concrete declared type.
     #[must_use]
-    pub const fn declared(&self) -> &DeclaredType {
+    pub const fn declared(&self) -> &CheckedType {
         &self.declared
     }
 }

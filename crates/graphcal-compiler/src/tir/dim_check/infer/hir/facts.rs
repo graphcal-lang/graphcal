@@ -18,7 +18,7 @@ use crate::tir::expression_facts::{
     NominalObservation,
 };
 
-use crate::tir::dim_check::{DeclaredType, InferredType};
+use crate::registry::checked_type::CheckedType;
 
 /// One executable use that observes a nominal type's concrete definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,12 +189,12 @@ impl ExpressionFactCollector {
     pub(in crate::tir::dim_check) fn record(
         &self,
         expr: &Expr,
-        inferred: &InferredType,
+        inferred: &CheckedType,
         dag: &crate::tir::typed::DagTIR,
         tir: &crate::tir::typed::TIR,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
-        let checked_type = DeclaredType::from(inferred);
+        let checked_type = inferred.clone();
         let shape = crate::tir::dim_check::expression_axes::checked_expression_shape(
             &checked_type,
             tir,
@@ -222,7 +222,7 @@ impl ExpressionFactCollector {
         }
         .map(|name| {
             let target = resolved_constructor(name)?;
-            let DeclaredType::Struct(_, args) = &checked_type else {
+            let CheckedType::Struct(_, args) = &checked_type else {
                 return Err(GraphcalError::internal_error(
                     "constructor inferred a non-nominal type",
                     src,

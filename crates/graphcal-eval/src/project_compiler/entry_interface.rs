@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::SourceDeclaration;
-use graphcal_compiler::registry::declared_type::DeclaredType;
+use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::Visibility;
@@ -21,7 +21,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 #[derive(Debug)]
 pub struct CheckedEntryParameter {
     name: DeclName,
-    declared_type: DeclaredType,
+    declared_type: CheckedType,
     has_default: bool,
     runtime_key: ResolvedDeclName,
     span: Span,
@@ -32,7 +32,7 @@ impl CheckedEntryParameter {
         &self.name
     }
 
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 
@@ -53,7 +53,7 @@ impl CheckedEntryParameter {
 #[derive(Debug)]
 pub struct CheckedEntryOutput {
     name: DeclName,
-    declared_type: DeclaredType,
+    declared_type: CheckedType,
     visibility: Visibility,
     runtime_key: ResolvedDeclName,
 }
@@ -63,7 +63,7 @@ impl CheckedEntryOutput {
         &self.name
     }
 
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 
