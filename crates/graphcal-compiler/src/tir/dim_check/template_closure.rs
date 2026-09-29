@@ -103,14 +103,12 @@ fn check_expr(
     })
 }
 
+/// The declaration identity when this DAG authored it.
 fn local_owner(
     ctx: &DimCheckContext<'_>,
-    name: &crate::syntax::module_name::ScopedName,
-    span: Option<Span>,
-) -> Result<Option<ResolvedDeclName>, GraphcalError> {
-    let anchor = span.map_or(DiagnosticAnchor::WholeFile, DiagnosticAnchor::Source);
-    let owner = ctx.dag.require_bound_decl_identity(name, ctx.src, anchor)?;
-    Ok((owner.owner() == ctx.dag.dag_id()).then_some(owner))
+    declaration: ResolvedDeclName,
+) -> Option<ResolvedDeclName> {
+    (declaration.owner() == ctx.dag.dag_id()).then_some(declaration)
 }
 
 fn rigid_dimension_error(
@@ -165,7 +163,7 @@ fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
-    for (kind, name, annotation_span, body_span) in ctx
+    for (kind, name, declaration, annotation_span, body_span) in ctx
         .dag
         .consts
         .iter()
@@ -173,6 +171,7 @@ fn check_rigid_value_bodies(
             (
                 DeclarationKind::ConstNode,
                 &entry.name,
+                entry.identity(),
                 entry.type_ann.span,
                 entry.expr.span,
             )
@@ -182,13 +181,14 @@ fn check_rigid_value_bodies(
                 (
                     DeclarationKind::Node,
                     &entry.name,
+                    entry.identity(),
                     entry.type_ann.span,
                     expression.span,
                 )
             })
         }))
     {
-        let Some(_) = local_owner(ctx, name, Some(annotation_span))? else {
+        let Some(declaration) = local_owner(ctx, declaration) else {
             continue;
         };
         let body = TemplateBodyIdentity {
@@ -200,7 +200,7 @@ fn check_rigid_value_bodies(
             &body,
             port,
             body_span,
-            check_decl_expr_type(ctx, name, &annotation_span),
+            check_decl_expr_type(ctx, name, &declaration, &annotation_span),
         )?;
     }
     Ok(())
@@ -211,10 +211,10 @@ fn check_rigid_assertion_bodies(
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.asserts {
-        let Some(owner) = local_owner(ctx, &entry.name, Some(entry.span))? else {
+        let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
-        let assertion = ctx.hir_assert_body(&entry.name, entry.span)?;
+        let assertion = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
             name: entry.name.leaf().atom().clone(),
@@ -235,20 +235,7 @@ fn check_rigid_plot_bodies(
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.plots {
-        let body_span = entry
-            .body
-            .encodings
-            .first()
-            .map(|(_, expr)| expr.span)
-            .or_else(|| {
-                entry
-                    .body
-                    .mark_properties
-                    .first()
-                    .map(|field| field.value.span)
-            })
-            .or_else(|| entry.body.properties.first().map(|field| field.value.span));
-        let Some(owner) = local_owner(ctx, &entry.name, body_span)? else {
+        let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
         let body = TemplateBodyIdentity {
@@ -280,7 +267,7 @@ fn check_rigid_composition_bodies(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
-    for (kind, name, fields) in ctx
+    for (kind, name, declaration, fields) in ctx
         .dag
         .figures
         .iter()
@@ -288,18 +275,20 @@ fn check_rigid_composition_bodies(
             (
                 DeclarationKind::Figure,
                 &entry.name,
+                entry.identity(),
                 entry.fields.as_slice(),
             )
         })
-        .chain(
-            ctx.dag
-                .layers
-                .iter()
-                .map(|entry| (DeclarationKind::Layer, &entry.name, entry.fields.as_slice())),
-        )
+        .chain(ctx.dag.layers.iter().map(|entry| {
+            (
+                DeclarationKind::Layer,
+                &entry.name,
+                entry.identity(),
+                entry.fields.as_slice(),
+            )
+        }))
     {
-        let Some(owner) = local_owner(ctx, name, fields.first().map(|field| field.value.span))?
-        else {
+        let Some(owner) = local_owner(ctx, declaration) else {
             continue;
         };
         let body = TemplateBodyIdentity {
@@ -383,7 +372,7 @@ fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError
 }
 
 fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for (kind, name, expr, span) in ctx
+    for (kind, name, declaration, expr) in ctx
         .dag
         .consts
         .iter()
@@ -391,19 +380,23 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
             (
                 DeclarationKind::ConstNode,
                 &entry.name,
+                entry.identity(),
                 &entry.expr,
-                entry.span,
             )
         })
         .chain(ctx.dag.nodes.iter().filter_map(|entry| {
-            entry
-                .definition
-                .formula()
-                .map(|expression| (DeclarationKind::Node, &entry.name, expression, entry.span))
+            entry.definition.formula().map(|expression| {
+                (
+                    DeclarationKind::Node,
+                    &entry.name,
+                    entry.identity(),
+                    expression,
+                )
+            })
         }))
     {
         ctx.checkpoint()?;
-        let Some(owner) = local_owner(ctx, name, Some(span))? else {
+        let Some(owner) = local_owner(ctx, declaration) else {
             continue;
         };
         let identity = TemplateBodyIdentity {
@@ -418,7 +411,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
 fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.asserts {
         ctx.checkpoint()?;
-        let Some(owner) = local_owner(ctx, &entry.name, Some(entry.span))? else {
+        let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
         let identity = TemplateBodyIdentity {
@@ -443,21 +436,7 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
 
 fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.dag.plots {
-        let body_span = entry
-            .body
-            .encodings
-            .iter()
-            .map(|(_, expr)| expr.span)
-            .chain(
-                entry
-                    .body
-                    .mark_properties
-                    .iter()
-                    .map(|field| field.value.span),
-            )
-            .chain(entry.body.properties.iter().map(|field| field.value.span))
-            .next();
-        let Some(owner) = local_owner(ctx, &entry.name, body_span)? else {
+        let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
         let identity = TemplateBodyIdentity {
@@ -479,7 +458,7 @@ fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
 }
 
 fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for (kind, name, fields, span) in ctx
+    for (kind, name, declaration, fields) in ctx
         .dag
         .figures
         .iter()
@@ -487,28 +466,20 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
             (
                 DeclarationKind::Figure,
                 &entry.name,
+                entry.identity(),
                 entry.fields.as_slice(),
-                entry
-                    .fields
-                    .first()
-                    .map(|field| field.value.span)
-                    .or_else(|| entry.plot_names.first().map(|plot| plot.span)),
             )
         })
         .chain(ctx.dag.layers.iter().map(|entry| {
             (
                 DeclarationKind::Layer,
                 &entry.name,
+                entry.identity(),
                 entry.fields.as_slice(),
-                entry
-                    .fields
-                    .first()
-                    .map(|field| field.value.span)
-                    .or_else(|| entry.plot_names.first().map(|plot| plot.span)),
             )
         }))
     {
-        let Some(owner) = local_owner(ctx, name, span)? else {
+        let Some(owner) = local_owner(ctx, declaration) else {
             continue;
         };
         let identity = TemplateBodyIdentity {

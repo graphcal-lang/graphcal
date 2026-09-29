@@ -44,11 +44,7 @@ pub(super) fn eval_const_pools_for_dags(
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         for entry in entries {
             cancellation.checkpoint()?;
-            let key = dag.require_bound_decl_identity(
-                &entry.name,
-                src,
-                DiagnosticAnchor::Source(entry.span),
-            )?;
+            let key = entry.identity();
             index_map.insert(key.clone(), graph.add_node(key.clone()));
             declaration_by_key.insert(key, (dag_id.clone(), entry.name.clone(), entry.span));
         }
@@ -164,11 +160,18 @@ pub(super) fn build_runtime_dag(
                 Self::Node(e) => e.span,
             }
         }
+
+        fn identity(&self) -> ResolvedDeclName {
+            match self {
+                Self::Param(e) => e.identity(),
+                Self::Node(e) => e.identity(),
+            }
+        }
     }
 
     cancellation.checkpoint()?;
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
-    let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
+    let mut decl_spans: Vec<(ScopedName, ResolvedDeclName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
         .params()
@@ -180,37 +183,27 @@ pub(super) fn build_runtime_dag(
 
     for decl in &all_decls {
         cancellation.checkpoint()?;
-        decl_spans.push((decl.name().clone(), decl.span()));
+        decl_spans.push((decl.name().clone(), decl.identity(), decl.span()));
     }
 
-    runtime_eval_order(
-        dag,
-        &decl_spans,
-        &dag.semantic().dependencies,
-        src,
-        cancellation,
-    )?
-    .into_iter()
-    .map(|name| dag.require_bound_decl_identity(&name, src, DiagnosticAnchor::WholeFile))
-    .collect()
+    runtime_eval_order(&decl_spans, &dag.semantic().dependencies, src, cancellation)
 }
 
 fn runtime_eval_order(
-    dag: &DagTIR,
-    decl_spans: &[(ScopedName, Span)],
+    decl_spans: &[(ScopedName, ResolvedDeclName, Span)],
     deps: &ResolvedDagDependencies,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<ScopedName>, GraphcalError> {
+) -> Result<Vec<ResolvedDeclName>, GraphcalError> {
     cancellation.checkpoint()?;
     let mut graph = DiGraph::<ResolvedDeclName, ()>::new();
     let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
     let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
     let mut span_by_key: HashMap<ResolvedDeclName, Span> = HashMap::new();
 
-    for (name, span) in decl_spans {
+    for (name, key, span) in decl_spans {
         cancellation.checkpoint()?;
-        let key = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(*span))?;
+        let key = key.clone();
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
         local_name_by_key.insert(key.clone(), name.clone());
@@ -250,6 +243,6 @@ fn runtime_eval_order(
 
     Ok(topo_indices
         .into_iter()
-        .filter_map(|idx| local_name_by_key.get(&graph[idx]).cloned())
+        .map(|idx| graph[idx].clone())
         .collect())
 }

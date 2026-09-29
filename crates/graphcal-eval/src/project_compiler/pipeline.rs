@@ -141,11 +141,7 @@ fn validate_dag_constant_values(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     dag.consts().iter().try_for_each(|entry| {
-        let key = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let key = entry.identity();
         const_values.get(&key).map(|_| ()).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked constant `{key}` has no value at module publication"),

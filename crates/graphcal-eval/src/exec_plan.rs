@@ -96,20 +96,18 @@ pub fn combined_runtime_order_for(
         .flat_map(|dag| {
             dag.source_order()
                 .iter()
-                .filter(|(_, category)| {
+                .filter(|entry| {
                     matches!(
-                        category,
+                        entry.category,
                         graphcal_compiler::declaration_category::DeclCategory::Value(
                             graphcal_compiler::declaration_category::ValueDeclCategory::Param
                                 | graphcal_compiler::declaration_category::ValueDeclCategory::Node
                         )
                     )
                 })
-                .map(|(name, _)| {
-                    dag.require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
-                })
+                .map(|entry| entry.identity.clone())
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Vec<_>>();
     let mut graph = DependencyGraph::new();
     for candidate in candidates {
         graph.add_node(candidate);
@@ -241,11 +239,7 @@ fn prepare_callable_plan(
         imports: prepare_imports(tir, facts, &semantic_dags, declaration_locations, src)?,
         dependencies: prepare_dependencies(tir, &topo_order, declaration_locations, src)?,
         topo_order,
-        assumes_map: semantic_dags
-            .iter()
-            .flat_map(|dag| dag.assumes_map().iter())
-            .map(|(assertion, assumers)| (assertion.clone(), assumers.clone()))
-            .collect(),
+        assumes_map: merge_assumes_maps(semantic_dags.iter().map(|dag| dag.assumes_map())),
         expected_fail: semantic_dags
             .iter()
             .flat_map(|dag| dag.expected_fail_entries())
@@ -253,6 +247,25 @@ fn prepare_callable_plan(
             .collect(),
         domain_constraints,
     })
+}
+
+/// Merge per-DAG `#[assumes]` tables keyed by runtime identity.
+///
+/// One assertion can be assumed both inside its semantic instance and by the
+/// importer through a projection, so tables of different DAGs share keys.
+fn merge_assumes_maps<'a>(
+    maps: impl IntoIterator<Item = &'a HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>>,
+) -> HashMap<ResolvedDeclName, Vec<ResolvedDeclName>> {
+    let mut merged = HashMap::<ResolvedDeclName, Vec<ResolvedDeclName>>::new();
+    for (assertion, assumers) in maps.into_iter().flatten() {
+        let entry = merged.entry(assertion.clone()).or_default();
+        for assumer in assumers {
+            if !entry.contains(assumer) {
+                entry.push(assumer.clone());
+            }
+        }
+    }
+    merged
 }
 
 fn prepare_dependencies(
@@ -431,16 +444,14 @@ fn validate_execution_facts(
         let expected = dag
             .source_order()
             .iter()
-            .filter(|(_, category)| {
+            .filter(|entry| {
                 matches!(
-                    category,
+                    entry.category,
                     DeclCategory::Value(ValueDeclCategory::Param | ValueDeclCategory::Node)
                 )
             })
-            .map(|(name, _)| {
-                dag.require_bound_decl_identity(name, facts.source(), DiagnosticAnchor::WholeFile)
-            })
-            .collect::<Result<HashSet<_>, _>>()?;
+            .map(|entry| entry.identity.clone())
+            .collect::<HashSet<_>>();
         let scheduled = facts.topo_order.iter().cloned().collect::<HashSet<_>>();
         if scheduled != expected || scheduled.len() != facts.topo_order.len() {
             return Err(invalid(format!(
@@ -449,11 +460,7 @@ fn validate_execution_facts(
             )));
         }
         for entry in dag.consts() {
-            let key = dag.require_bound_decl_identity(
-                &entry.name,
-                facts.source(),
-                DiagnosticAnchor::Source(entry.span),
-            )?;
+            let key = entry.identity();
             if !facts.const_values.contains_key(&key) {
                 return Err(invalid(format!(
                     "checked constant `{key}` has no evaluated value"

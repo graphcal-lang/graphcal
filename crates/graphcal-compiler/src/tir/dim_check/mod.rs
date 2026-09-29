@@ -126,25 +126,19 @@ impl DimCheckContext<'_> {
     }
 
     /// Look up the module-aware HIR expression for a local declaration.
-    fn hir_expr_for_decl(
-        &self,
-        name: &crate::syntax::module_name::ScopedName,
-    ) -> Option<&crate::hir::Expr> {
-        let key = self.dag.bound_decl_identity(name)?;
-        self.dag.value_expr(key)
+    fn hir_expr_for_decl(&self, declaration: &ResolvedDeclName) -> Option<&crate::hir::Expr> {
+        self.dag.value_expr(declaration)
     }
 
     /// Look up the module-aware HIR assertion body for a local assertion.
     fn hir_assert_body(
         &self,
         name: &crate::syntax::module_name::ScopedName,
+        declaration: &ResolvedDeclName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::AssertBody, GraphcalError> {
-        let key =
-            self.dag
-                .require_bound_decl_identity(name, self.src, DiagnosticAnchor::Source(span))?;
         self.dag
-            .assert_body(&key)
+            .assert_body(declaration)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("TIR assertion entry missing for `{name}`"),
                 src: self.src.clone(),
@@ -191,6 +185,7 @@ fn validate_declared_shape(
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
     name: &crate::syntax::module_name::ScopedName,
+    identity: &ResolvedDeclName,
     type_ann_span: &crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
     let declared = ctx
@@ -201,18 +196,13 @@ fn check_decl_expr_type(
             src: ctx.src.clone(),
             span: (*type_ann_span).into(),
         })?;
-    let identity = ctx.dag.require_bound_decl_identity(
-        name,
-        ctx.src,
-        DiagnosticAnchor::Source(*type_ann_span),
-    )?;
-    if ctx.dag.todo(&identity).is_some() {
+    if ctx.dag.todo(identity).is_some() {
         // The explicit declaration type is the entire contract; there is no
         // formula to infer or expression fact to fabricate.
         return Ok(());
     }
     let hir_expr = ctx
-        .hir_expr_for_decl(name)
+        .hir_expr_for_decl(identity)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("value declaration record missing while checking `{name}`"),
             src: ctx.src.clone(),
@@ -235,14 +225,9 @@ fn check_decl_expr_type(
             ctx.src,
         );
     }
-    let owner = ctx.dag.require_bound_decl_identity(
-        name,
-        ctx.src,
-        DiagnosticAnchor::Source(*type_ann_span),
-    )?;
     let inferred = infer::hir::infer_hir_type_with_expression_facts_and_cancellation(
         hir_expr,
-        Some(&owner),
+        Some(identity),
         ctx.declared_types,
         ctx.dag,
         ctx.tir,
@@ -969,11 +954,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
                 continue;
             };
             cancellation.checkpoint()?;
-            let owner = dag.require_bound_decl_identity(
-                &param.name,
-                src,
-                DiagnosticAnchor::Source(param.span),
-            )?;
+            let owner = param.identity();
             let record = facts.get(default.id()).map_err(|error| {
                 GraphcalError::internal_error(
                     error.to_string(),
@@ -1100,7 +1081,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> 
         if entry.default.is_none() {
             continue;
         }
-        check_decl_expr_type(ctx, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
     }
     Ok(())
 }
@@ -1130,12 +1111,12 @@ fn check_dimensions_dag(
     for entry in &dag.consts {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.type_ann.span)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
     }
     check_param_defaults(&ctx)?;
 
@@ -1144,8 +1125,8 @@ fn check_dimensions_dag(
 
     for entry in &dag.asserts {
         ctx.checkpoint()?;
-        let body = ctx.hir_assert_body(&entry.name, entry.span)?;
         let owner = entry.identity();
+        let body = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
         let shape = check_hir_assert_body(&ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&owner) {
             validate_expected_fail(&metadata.expected, &shape, src, metadata.attribute_span)?;
@@ -1210,12 +1191,11 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| &e.name)
-        .chain(dag.params.iter().map(|e| &e.name))
-        .chain(dag.nodes.iter().map(|e| &e.name));
+        .map(|e| (&e.name, e.identity()))
+        .chain(dag.params.iter().map(|e| (&e.name, e.identity())))
+        .chain(dag.nodes.iter().map(|e| (&e.name, e.identity())));
 
-    for name in decl_iter {
-        let key = dag.require_bound_decl_identity(name, ctx.src, DiagnosticAnchor::WholeFile)?;
+    for (name, key) in decl_iter {
         let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
@@ -1280,13 +1260,19 @@ fn check_domain_constraint_targets_dag(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|entry| (&entry.name, entry.span))
-        .chain(dag.params.iter().map(|entry| (&entry.name, entry.span)))
-        .chain(dag.nodes.iter().map(|entry| (&entry.name, entry.span)));
+        .map(|entry| (&entry.name, entry.identity(), entry.span))
+        .chain(
+            dag.params
+                .iter()
+                .map(|entry| (&entry.name, entry.identity(), entry.span)),
+        )
+        .chain(
+            dag.nodes
+                .iter()
+                .map(|entry| (&entry.name, entry.identity(), entry.span)),
+        );
 
-    for (name, decl_span) in decl_iter {
-        let key =
-            dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(decl_span))?;
+    for (name, key, decl_span) in decl_iter {
         if !dag.semantic.domain_bounds.contains_key(&key) {
             continue;
         }
@@ -1712,8 +1698,9 @@ fn detect_decl_cycles(
     use crate::syntax::module_name::ScopedName;
 
     fn check_resolved<'a>(
-        dag: &crate::tir::typed::DagTIR,
-        names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
+        declarations: impl Iterator<
+            Item = (&'a ScopedName, ResolvedDeclName, crate::syntax::span::Span),
+        >,
         deps: &HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
@@ -1721,8 +1708,7 @@ fn detect_decl_cycles(
         let mut index_map: HashMap<ResolvedDeclName, petgraph::graph::NodeIndex> = HashMap::new();
         let mut local_name_by_key: HashMap<ResolvedDeclName, ScopedName> = HashMap::new();
         let mut span_by_key: HashMap<ResolvedDeclName, crate::syntax::span::Span> = HashMap::new();
-        for (name, span) in names_with_spans {
-            let key = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(span))?;
+        for (name, key, span) in declarations {
             let idx = graph.add_node(key.clone());
             index_map.insert(key.clone(), idx);
             local_name_by_key.insert(key.clone(), name.clone());
@@ -1764,17 +1750,15 @@ fn detect_decl_cycles(
     for dag in tir.dags.values() {
         let deps = &dag.semantic.dependencies;
         check_resolved(
-            dag,
-            dag.consts.iter().map(|e| (&e.name, e.span)),
+            dag.consts.iter().map(|e| (&e.name, e.identity(), e.span)),
             &deps.const_deps,
             src,
         )?;
         check_resolved(
-            dag,
             dag.params
                 .iter()
-                .map(|e| (&e.name, e.span))
-                .chain(dag.nodes.iter().map(|e| (&e.name, e.span))),
+                .map(|e| (&e.name, e.identity(), e.span))
+                .chain(dag.nodes.iter().map(|e| (&e.name, e.identity(), e.span))),
             &deps.runtime_deps,
             src,
         )?;

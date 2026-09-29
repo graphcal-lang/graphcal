@@ -46,22 +46,20 @@ pub(super) fn resolve_domain_constraints_for_dag(
     let decl_iter = dag
         .consts()
         .iter()
-        .map(|entry| (&entry.name, entry.span, true))
+        .map(|entry| (&entry.name, entry.identity(), entry.span, true))
         .chain(
             dag.params()
                 .iter()
-                .map(|entry| (&entry.name, entry.span, false)),
+                .map(|entry| (&entry.name, entry.identity(), entry.span, false)),
         )
         .chain(
             dag.nodes()
                 .iter()
-                .map(|entry| (&entry.name, entry.span, false)),
+                .map(|entry| (&entry.name, entry.identity(), entry.span, false)),
         );
 
-    for (name, decl_span, is_const) in decl_iter {
+    for (name, resolved_key, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
-        let resolved_key =
-            dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(decl_span))?;
         let Some(domain_bounds) = dag.semantic().domain_bounds.get(&resolved_key) else {
             continue;
         };
@@ -637,11 +635,7 @@ pub(super) fn check_dag_const_struct_field_constraints_at_compile_time(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for entry in dag.consts() {
-        let key = dag.require_bound_decl_identity(
-            &entry.name,
-            src,
-            DiagnosticAnchor::Source(entry.span),
-        )?;
+        let key = entry.identity();
         let value = const_values.get(&key).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("checked constant `{key}` has no evaluated value"),

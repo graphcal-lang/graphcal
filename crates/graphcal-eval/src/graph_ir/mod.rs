@@ -171,10 +171,7 @@ pub fn project_tir(tir: &TIR) -> Result<GraphIr, GraphProjectionError> {
 
     let nodes = local_dags
         .iter()
-        .map(|dag| project_dag_nodes(tir, dag, &output_names))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
+        .flat_map(|dag| project_dag_nodes(tir, dag, &output_names))
         .collect::<Vec<_>>();
 
     for node in &nodes {
@@ -335,11 +332,11 @@ fn project_dag_nodes(
     tir: &TIR,
     dag: &DagTIR,
     output_names: &BTreeMap<DagId, HashSet<DeclName>>,
-) -> Result<Vec<GraphNode>, DiagnosticDeclProbe> {
+) -> Vec<GraphNode> {
     dag.source_order()
         .iter()
-        .filter_map(|(name, category)| {
-            let kind = match category {
+        .filter_map(|entry| {
+            let kind = match entry.category {
                 DeclCategory::Value(ValueDeclCategory::Const) => GraphNodeKind::Const,
                 DeclCategory::Value(ValueDeclCategory::Param) => GraphNodeKind::Param,
                 DeclCategory::Value(ValueDeclCategory::Node) => GraphNodeKind::Node,
@@ -348,25 +345,25 @@ fn project_dag_nodes(
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            Some((name, kind))
+            Some((entry, kind))
         })
-        .map(|(name, kind)| {
-            let id = dag.lookup_decl_identity(name).into_bound()?;
+        .map(|(entry, kind)| {
+            let id = entry.identity.clone();
             let is_public_output = kind == GraphNodeKind::Node
                 && output_names
                     .get(id.owner())
                     .is_some_and(|names| names.contains(&id.to_unowned_def_name()));
             let type_label = dag
                 .resolved_decl_types()
-                .get(name)
+                .get(&entry.name)
                 .map(|ty| ty.format(tir.registry()));
-            Ok(GraphNode {
+            GraphNode {
                 is_unfinished: dag.todo(&id).is_some(),
                 id,
                 kind,
                 is_public_output,
                 type_label,
-            })
+            }
         })
         .collect()
 }

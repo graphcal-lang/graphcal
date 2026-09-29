@@ -9731,3 +9731,26 @@ fn public_value_equality_distinguishes_constructor_and_generic_args() {
         matches!(node("a"), Value::Struct { ref constructor, .. } if constructor.as_str() == "Coast")
     );
 }
+
+#[test]
+fn assumes_targets_resolve_through_semantic_instances() {
+    let source = "dag producer {\n\
+                      pub node x: Dimensionless = 1.0;\n\
+                      pub assert okay = @x == 2.0;\n\
+                      #[assumes(okay)]\n\
+                      pub node y: Dimensionless = @x;\n\
+                  }\n\
+                  include producer()::{ okay as check, y as y_out };\n\
+                  #[assumes(check)]\n\
+                  node dependent: Dimensionless = 1.0;\n";
+    let result = compile_and_eval_named(source, "test.gcl").unwrap();
+    let mut assumers = result
+        .assumes_map
+        .get(&scoped_name("check"))
+        .expect("the projected assertion keeps its assumers")
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assumers.sort();
+    assert_eq!(assumers, ["dependent", "y_out"]);
+}

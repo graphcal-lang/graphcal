@@ -440,7 +440,7 @@ impl PreparedProject {
                 .root()
                 .source_order()
                 .iter()
-                .find_map(|(candidate, kind)| (candidate.leaf() == name).then_some(*kind));
+                .find_map(|entry| (entry.name.leaf() == name).then_some(entry.category));
             actual_kind.map_or_else(
                 || CompileError::Eval(GraphcalError::OverrideUnknownParam { name: name.clone() }),
                 |actual_kind| {

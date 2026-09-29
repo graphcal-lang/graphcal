@@ -1138,7 +1138,7 @@ DagTIR
   dag_id: DagId
   consts, params, nodes, asserts, plots, figures, layers
   semantic: DagSemanticBody
-  source_order
+  source_order: Vec<SourceOrderEntry>  // spelling + (runtime) identity + category
   assert_names
   assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>
   expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>
