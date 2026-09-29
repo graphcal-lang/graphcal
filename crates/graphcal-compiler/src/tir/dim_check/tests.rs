@@ -3850,3 +3850,90 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
     check_dimensions_tir(&mut tir, &src).unwrap();
     assert_eq!(tir.root().expression_facts().unwrap().records().count(), 5);
 }
+
+#[test]
+fn inference_emits_typed_trees_carrying_node_facts() {
+    use crate::tir::texpr::{TArg, TBody, TConstRef, TExprKind, TIndexArg, TMatchPattern};
+
+    let source = "type Maneuver { Impulsive(delta_v: Dimensionless), Coast }\n\
+                  node burn: Maneuver = Impulsive(delta_v: 2.0);\n\
+                  node coast: Maneuver = Coast;\n\
+                  node picked: Dimensionless = match @burn {\n\
+                      Impulsive(delta_v: dv) => dv,\n\
+                      Coast => 0.0,\n\
+                  };\n\
+                  node v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };\n\
+                  node picked_entry: Dimensionless = @v[1];\n\
+                  node when: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");\n\
+                  plot p = { mark: point, encode: { x: @v, y: @v, color: \"red\" } };";
+    let (mut tir, src) = module_aware_tir(source);
+    check_dimensions_tir(&mut tir, &src).unwrap();
+    let dag = tir.root();
+    let bodies = dag.typed_bodies().unwrap();
+    crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts().unwrap()).unwrap();
+    let root = |name: &str| {
+        let formula = dag
+            .nodes()
+            .find(|entry| entry.name().as_str() == name)
+            .and_then(|entry| entry.definition.formula())
+            .unwrap();
+        match bodies.get(formula.id()) {
+            Some(TBody::Value(root)) => root,
+            other => panic!("`{name}` has no typed value root: {other:?}"),
+        }
+    };
+
+    let TExprKind::Construct {
+        application,
+        fields,
+    } = root("burn").kind()
+    else {
+        panic!("expected a constructor application");
+    };
+    assert_eq!(application.constructor.name().as_str(), "Impulsive");
+    assert_eq!(fields.len(), 1);
+    let coast = match root("coast").kind() {
+        TExprKind::Const(TConstRef::Constructor(application))
+        | TExprKind::Construct { application, .. } => application,
+        other => panic!("expected a constructor application, got {other:?}"),
+    };
+    assert_eq!(coast.constructor.name().as_str(), "Coast");
+
+    let TExprKind::Match { arms, .. } = root("picked").kind() else {
+        panic!("expected a match");
+    };
+    let targets: Vec<_> = arms
+        .iter()
+        .map(|arm| match &arm.pattern {
+            TMatchPattern::Constructor { target, .. } => target.constructor.as_str().to_string(),
+            TMatchPattern::IndexLabel(_) => panic!("expected constructor arms"),
+        })
+        .collect();
+    assert_eq!(targets, ["Impulsive", "Coast"]);
+
+    let TExprKind::Index { args, .. } = root("picked_entry").kind() else {
+        panic!("expected an index access");
+    };
+    assert!(matches!(
+        args.first(),
+        TIndexArg::Expr {
+            static_position: Some(position),
+            ..
+        } if position.position == 1
+    ));
+
+    let TExprKind::Call { args, .. } = root("when").kind() else {
+        panic!("expected a datetime call");
+    };
+    assert!(matches!(args.as_slice(), [TArg::Contextual(_)]));
+
+    let plot = dag.plots().next().unwrap();
+    let color = plot
+        .body
+        .encodings
+        .iter()
+        .map(|(_, expr)| expr)
+        .find(|expr| matches!(expr.kind(), crate::hir::ExprKind::StringLiteral(_)))
+        .unwrap();
+    assert!(matches!(bodies.get(color.id()), Some(TBody::Contextual(_))));
+}

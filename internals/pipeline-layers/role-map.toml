@@ -1437,6 +1437,36 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "texpr"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "assembly"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "fact_agreement"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "model"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "texpr", "typed_bodies"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "builtins"]
 role = "checking"
 

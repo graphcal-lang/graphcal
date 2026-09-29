@@ -367,7 +367,7 @@ fn check_in_rigid_view<R>(
     let result = plots(&rigid_ctx)?;
     check_rigid_composition_bodies(&rigid_ctx, failure)?;
     check_rigid_unit_bodies(&rigid_ctx, failure)?;
-    Ok((result, observations.finish()))
+    Ok((result, observations.finish().records))
 }
 
 fn check_rigid_dimension_port(
