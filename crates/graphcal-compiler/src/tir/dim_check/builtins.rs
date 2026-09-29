@@ -208,7 +208,6 @@ fn first_binding_param<'a, S: StructResult>(
 mod tests {
     use super::*;
     use crate::dimension::{BaseDimId, PreludeBaseDimension};
-    use crate::registry::types::RegistryBuilder;
     use crate::syntax::function_name::FnParamName;
 
     #[test]
@@ -218,10 +217,10 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = RegistryBuilder::new()
-            .build()
-            .into_semantic()
-            .into_formatting();
+        let registry = crate::registry::types::FormattingRegistry::new(
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        );
         let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
         let argument_span = Span::new(7, 3);
         // A binder from a different signature: `signature` has no parameter
@@ -268,10 +267,10 @@ mod tests {
             Dimension::dimensionless(),
             Dimension::dimensionless(),
         );
-        let registry = RegistryBuilder::new()
-            .build()
-            .into_semantic()
-            .into_formatting();
+        let registry = crate::registry::types::FormattingRegistry::new(
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        );
         let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));
         let call_span = Span::new(0, 3);
 

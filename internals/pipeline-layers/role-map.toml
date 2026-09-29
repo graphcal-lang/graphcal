@@ -527,6 +527,26 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["ir", "module_definitions"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "module_definitions", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_definitions"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_definitions", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["ir", "module_interface"]
 role = "checking"
 
@@ -673,11 +693,6 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["registry", "builtins", "tests"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["registry", "dag"]
 role = "contracts"
 
 [[module]]

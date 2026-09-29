@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::TypeExpr;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::type_def::TypeRegistry;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
@@ -84,8 +84,36 @@ impl crate::function_signature::StructResult for ExternStructResult {
     }
 }
 
-/// Resolve every `import plugin` block's declared signatures against the
-/// frozen registry.
+/// The declaring module's view of the dimensions and record types an extern
+/// signature may name.
+pub(super) struct ExternSignatureScope<'s, 'a> {
+    pub(super) owner: &'s crate::dag_id::DagId,
+    pub(super) types: &'s TypeRegistry,
+    pub(super) definitions: &'s mut super::static_definitions::StaticDefinitionEvaluator<'a>,
+}
+
+impl ExternSignatureScope<'_, '_> {
+    const fn resolver(&self) -> &crate::resolve::ModuleResolver {
+        self.definitions.resolver()
+    }
+
+    /// The dimension a bare name denotes in the declaring module, if any.
+    fn dimension(
+        &mut self,
+        name: &crate::syntax::names::NameAtom,
+    ) -> Result<Option<crate::dimension::Dimension>, GraphcalError> {
+        let reference = crate::syntax::dimension::DimRef::local(
+            crate::syntax::dimension::DimName::classify(name.clone()),
+        );
+        self.definitions
+            .resolve_dimension(self.owner, &reference)
+            .map(|identity| self.definitions.dimension(&identity))
+            .transpose()
+    }
+}
+
+/// Resolve every `import plugin` block's declared signatures in the
+/// declaring module's scope.
 ///
 /// Dimension names resolve in the importing scope (prelude + user dims);
 /// dimension variables come from each function's explicit `<...>` binders;
@@ -93,15 +121,13 @@ impl crate::function_signature::StructResult for ExternStructResult {
 /// importing scope.
 pub(super) fn resolve_plugin_imports(
     decls: &[crate::desugar::desugared_ast::PluginImportDecl],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    resolver: &crate::resolve::ModuleResolver,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>, GraphcalError> {
     let mut map = HashMap::new();
     for decl in decls {
         for function in &decl.functions {
-            let entry = resolve_extern_function(decl, function, registry, owner, resolver, src)?;
+            let entry = resolve_extern_function(decl, function, scope, src)?;
             merge_extern_function(&mut map, entry, src)?;
         }
     }
@@ -174,7 +200,7 @@ fn resolve_extern_value_kind(
     type_ann: &TypeExpr,
     dim_vars: &[crate::syntax::dimension::DimVarName],
     index_vars: &[crate::syntax::index_name::IndexVarName],
-    registry: &Registry,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
@@ -192,7 +218,7 @@ fn resolve_extern_value_kind(
         TypeExprKind::Int => Ok(ParamKind::int()),
         TypeExprKind::Dimensionless => Ok(ParamKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
-            resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
+            resolve_extern_dim_monomial(dim_expr, dim_vars, scope, src)
                 .map(ParamKind::quantity_monomial)
         }
         TypeExprKind::Indexed { base, indexes } => {
@@ -201,7 +227,7 @@ fn resolve_extern_value_kind(
                 indexes.as_slice(),
                 dim_vars,
                 index_vars,
-                registry,
+                scope,
                 src,
             )
         }
@@ -225,9 +251,7 @@ fn resolve_extern_value_kind(
 fn resolve_extern_function(
     decl: &crate::desugar::desugared_ast::PluginImportDecl,
     function: &crate::desugar::desugared_ast::ExternFnDecl,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    resolver: &crate::resolve::ModuleResolver,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ExternFunctionEntry, GraphcalError> {
     // Binder idents share one lexical namespace regardless of
@@ -266,22 +290,14 @@ fn resolve_extern_function(
         .iter()
         .map(|param| {
             let kind =
-                resolve_extern_value_kind(&param.type_ann, &dim_vars, &index_vars, registry, src)?;
+                resolve_extern_value_kind(&param.type_ann, &dim_vars, &index_vars, scope, src)?;
             Ok(crate::function_signature::FunctionParam {
                 name: param.name.value.clone(),
                 kind,
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let result = resolve_extern_result_kind(
-        &function.result,
-        &dim_vars,
-        &index_vars,
-        registry,
-        owner,
-        resolver,
-        src,
-    )?;
+    let result = resolve_extern_result_kind(&function.result, &dim_vars, &index_vars, scope, src)?;
     let signature = crate::function_signature::FunctionSignature::try_from_parts(
         dim_vars, index_vars, params, result,
     )
@@ -308,7 +324,10 @@ fn resolve_extern_function(
         }
     })?;
     Ok(ExternFunctionEntry {
-        plugin: crate::plugin_identity::PluginIdentity::resolve(&decl.path.value, owner.package()),
+        plugin: crate::plugin_identity::PluginIdentity::resolve(
+            &decl.path.value,
+            scope.owner.package(),
+        ),
         alias: decl.alias.value.clone(),
         name: function.name.value.clone(),
         signature,
@@ -329,9 +348,7 @@ fn resolve_extern_result_kind(
     type_ann: &TypeExpr,
     dim_vars: &[crate::syntax::dimension::DimVarName],
     index_vars: &[crate::syntax::index_name::IndexVarName],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    resolver: &crate::resolve::ModuleResolver,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
@@ -342,20 +359,13 @@ fn resolve_extern_result_kind(
         && item.term.power.is_none()
         && let Some(atom) = item.term.name.value.as_bare()
         && !dim_vars.iter().any(|var| var.as_str() == atom.as_str())
-        && registry
-            .dimensions
-            .get_dimension(&crate::syntax::dimension::DimRef::local(
-                crate::syntax::dimension::DimName::classify(atom.clone()),
-            ))
-            .is_none()
+        && scope.dimension(atom)?.is_none()
     {
         // Not a dimension: the only remaining reading is a record type.
         return resolve_extern_struct_return(
             &item.term.name.value,
             item.term.name.span,
-            registry,
-            owner,
-            resolver,
+            scope,
             src,
         );
     }
@@ -368,7 +378,7 @@ fn resolve_extern_result_kind(
             span: type_ann.span.into(),
         });
     }
-    resolve_extern_value_kind(type_ann, dim_vars, index_vars, registry, src).map(Into::into)
+    resolve_extern_value_kind(type_ann, dim_vars, index_vars, scope, src).map(Into::into)
 }
 
 /// Resolve a record-type extern result: nominal identity through the
@@ -376,9 +386,7 @@ fn resolve_extern_result_kind(
 pub(super) fn resolve_extern_struct_return(
     path: &NamePath,
     span: Span,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    resolver: &crate::resolve::ModuleResolver,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedResultKind<ExternStructResult>, GraphcalError> {
     use crate::function_signature::{ResultKind, StructShape, StructShapeField};
@@ -388,8 +396,9 @@ pub(super) fn resolve_extern_struct_return(
         src: src.clone(),
         span: span.into(),
     };
-    let Ok(resolved_type) = resolver
-        .resolve_struct_type_path(owner, path)
+    let Ok(resolved_type) = scope
+        .resolver()
+        .resolve_struct_type_path(scope.owner, path)
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
     else {
         // Neither a dimension nor a type in scope: report it the way any
@@ -401,7 +410,7 @@ pub(super) fn resolve_extern_struct_return(
         });
     };
     let leaf = resolved_type.to_unowned_def_name();
-    let Some(type_def) = registry.types.get_type(&leaf) else {
+    let Some(type_def) = scope.types.get_type(&leaf).cloned() else {
         return Err(invalid(format!(
             "record type `{leaf}` is not available in this file's registry; extern struct \
              returns must use a type declared in (or imported into) the declaring file"
@@ -424,7 +433,7 @@ pub(super) fn resolve_extern_struct_return(
         .fields()
         .iter()
         .map(|field| {
-            let kind = resolve_extern_struct_field(field, registry, src)?;
+            let kind = resolve_extern_struct_field(field, scope, src)?;
             Ok(StructShapeField {
                 name: field.name().clone(),
                 kind,
@@ -442,7 +451,7 @@ pub(super) fn resolve_extern_struct_return(
 /// Resolve one record field to its concrete boundary kind.
 fn resolve_extern_struct_field(
     field: &crate::registry::type_def::StructField,
-    registry: &Registry,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::StructFieldKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
@@ -469,7 +478,7 @@ fn resolve_extern_struct_field(
         TypeExprKind::DimExpr(dim_expr) => {
             // No dimension variables are in scope inside a record's fields;
             // the monomial is therefore concrete by construction.
-            let monomial = resolve_extern_dim_monomial(dim_expr, &[], registry, src)?;
+            let monomial = resolve_extern_dim_monomial(dim_expr, &[], scope, src)?;
             Ok(StructFieldKind::Quantity(monomial.fixed_factor().clone()))
         }
         TypeExprKind::IndexLabel { .. }
@@ -494,7 +503,7 @@ fn resolve_extern_array_kind(
     indexes: &[crate::syntax::ast::IndexExpr],
     dim_vars: &[crate::syntax::dimension::DimVarName],
     index_vars: &[crate::syntax::index_name::IndexVarName],
-    registry: &Registry,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedParamKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
@@ -542,9 +551,9 @@ fn resolve_extern_array_kind(
         TypeExprKind::Bool => ScalarValueKind::Bool,
         TypeExprKind::Int => ScalarValueKind::Int,
         TypeExprKind::Dimensionless => ScalarValueKind::Quantity(DimMonomial::dimensionless()),
-        TypeExprKind::DimExpr(dim_expr) => ScalarValueKind::Quantity(resolve_extern_dim_monomial(
-            dim_expr, dim_vars, registry, src,
-        )?),
+        TypeExprKind::DimExpr(dim_expr) => {
+            ScalarValueKind::Quantity(resolve_extern_dim_monomial(dim_expr, dim_vars, scope, src)?)
+        }
         _ => {
             return Err(GraphcalError::InvalidExternSignature {
                 message: "extern array elements must be Bool, Int, or quantities".to_string(),
@@ -573,7 +582,7 @@ fn type_ann_indexes_span(
 fn resolve_extern_dim_monomial(
     dim_expr: &crate::desugar::desugared_ast::DimExpr,
     dim_vars: &[crate::syntax::dimension::DimVarName],
-    registry: &Registry,
+    scope: &mut ExternSignatureScope<'_, '_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::NamedDimMonomial, GraphcalError> {
     use crate::syntax::ast::MulDivOp;
@@ -609,13 +618,7 @@ fn resolve_extern_dim_monomial(
                 span: term.span.into(),
             });
         };
-        let Some(dim) =
-            registry
-                .dimensions
-                .get_dimension(&crate::syntax::dimension::DimRef::local(
-                    crate::syntax::dimension::DimName::classify(leaf.clone()),
-                ))
-        else {
+        let Some(dim) = scope.dimension(leaf)? else {
             return Err(GraphcalError::UnknownDimension {
                 name: NamePath::from(leaf.clone()),
                 src: src.clone(),

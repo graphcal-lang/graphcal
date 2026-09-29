@@ -11,18 +11,16 @@ use crate::dimension::{Dimension, Rational};
 use crate::hir;
 use crate::hir::{NominalConstructor, NominalTypeDef};
 use crate::nat::NatPolyForm;
-use crate::ratio::RatioError;
 use crate::registry::declared_type::{DeclaredType, IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{FormattingRegistry, IndexDef, RegistryBuilder, UnitInfo};
+use crate::registry::types::{BaseDimensionInfo, FormattingRegistry, IndexDef, UnitInfo};
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
     ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
@@ -338,13 +336,15 @@ pub struct ProjectConstructorDef {
 /// Authoritative project type-system definitions keyed by
 /// [`ResolvedName`](crate::resolved_name::ResolvedName) identities.
 ///
-/// HIR keeps its source-name registries only until TIR construction consumes
-/// them. Checked TIR retains a [`FormattingRegistry`] for diagnostics and input
-/// boundaries; every canonical type-system lookup reads this store. Nominal
-/// resolution maps source spellings through [`ModuleResolver`], and imported
-/// aliases are never installed as additional canonical definitions.
+/// Every module's owner-qualified
+/// [`ModuleDefinitions`](crate::ir::module_definitions::ModuleDefinitions)
+/// fill this store directly. Checked TIR retains a [`FormattingRegistry`] for
+/// diagnostics and input boundaries; every canonical type-system lookup reads
+/// this store. Source spellings are resolved through [`ModuleResolver`], and
+/// imported aliases are never installed as additional canonical definitions.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectTypeStore {
+    base_dimensions: std::collections::BTreeMap<crate::dimension::BaseDimId, BaseDimensionInfo>,
     dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
@@ -352,16 +352,9 @@ pub struct ProjectTypeStore {
     constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
 }
 
-/// Failure to transfer one complete HIR module into the semantic project type store.
+/// Failure to transfer one module's definitions into the semantic project type store.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProjectTypeStoreInsertError {
-    #[error("module resolver is missing HIR DAG `{owner}`")]
-    MissingModule { owner: crate::dag_id::DagId },
-    #[error("HIR nominal type `{identity}` is stored on DAG `{actual_owner}`")]
-    NominalOwnerMismatch {
-        identity: ResolvedStructTypeName,
-        actual_owner: crate::dag_id::DagId,
-    },
     #[error(
         "project type store already contains a different dimension definition for `{identity}`"
     )]
@@ -377,52 +370,48 @@ pub enum ProjectTypeStoreInsertError {
         constructor: ResolvedConstructorName,
         first_owner: ResolvedStructTypeName,
     },
-    #[error("HIR semantic registry is missing dimension `{identity}`")]
-    MissingDimension { identity: ResolvedDimName },
-    #[error("HIR semantic registry is missing unit `{identity}`")]
-    MissingUnit { identity: ResolvedUnitName },
-    #[error("HIR semantic registry is missing index `{identity}`")]
-    MissingIndex { identity: ResolvedIndexName },
 }
 
 impl ProjectTypeStore {
-    /// Insert canonical Graphcal prelude dimensions under the synthetic prelude owner.
+    /// Insert canonical Graphcal prelude dimensions, units, and base-dimension
+    /// metadata under the synthetic prelude owner.
     ///
     /// # Errors
     ///
     /// Returns an error only if the built-in prelude itself fails to construct,
     /// which would be a compiler bug.
-    pub fn insert_graphcal_prelude(&mut self) -> Result<(), RatioError> {
-        let mut builder = RegistryBuilder::new();
-        crate::registry::prelude::load_prelude(&mut builder)?;
-        let registry = builder.build();
-        let owner = crate::registry::prelude::prelude_dag_id();
-        for name in crate::registry::prelude::prelude_dimension_names() {
-            if let Some(dim) =
-                registry
-                    .dimensions
-                    .get_dimension(&crate::syntax::dimension::DimRef::local(
-                        DimName::expect_valid(name),
-                    ))
-            {
-                self.dimensions.insert(
-                    ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name)),
-                    dim.clone(),
-                );
-            }
+    pub fn insert_graphcal_prelude(
+        &mut self,
+    ) -> Result<(), crate::registry::prelude::PreludeDefinitionError> {
+        let prelude = crate::registry::prelude::prelude_definitions()?;
+        self.merge_base_dimensions(&prelude);
+        for (identity, dimension) in prelude.dimensions() {
+            self.dimensions.insert(identity.clone(), dimension.clone());
         }
-        for name in crate::registry::prelude::prelude_unit_names() {
-            let reference = crate::syntax::dimension::UnitRef::local(
-                crate::syntax::dimension::UnitName::expect_valid(name),
-            );
-            if let Some(info) = registry.units.get_unit(&reference) {
-                self.units.insert(
-                    ResolvedUnitName::from_def(owner.clone(), reference.leaf().clone()),
-                    info.clone(),
-                );
-            }
+        for (identity, info) in prelude.units() {
+            self.units.insert(identity.clone(), info.clone());
         }
         Ok(())
+    }
+
+    fn merge_base_dimensions(
+        &mut self,
+        statics: &crate::ir::module_definitions::StaticDefinitions,
+    ) {
+        for (id, info) in statics.base_dimensions() {
+            self.base_dimensions
+                .entry(id.clone())
+                .or_default()
+                .merge_missing(info);
+        }
+    }
+
+    /// Metadata of every base dimension in the project.
+    #[must_use]
+    pub const fn base_dimensions(
+        &self,
+    ) -> &std::collections::BTreeMap<crate::dimension::BaseDimId, BaseDimensionInfo> {
+        &self.base_dimensions
     }
 
     fn insert_dimension_definition(
@@ -476,125 +465,38 @@ impl ProjectTypeStore {
         }
     }
 
-    /// Insert a standalone HIR DAG whose semantic registry contains only its
-    /// local non-nominal definitions. The DAG identity comes from the body.
+    /// Insert every definition one module owns.
+    ///
+    /// The definitions are already keyed by canonical identities owned by the
+    /// module, so no source spelling is looked up.
     ///
     /// # Errors
     ///
-    /// Returns an invariant error if another HIR body already claims the same
-    /// canonical semantic identity with a different definition.
-    pub fn insert_local_hir(
+    /// Returns an invariant error if another module already claims the same
+    /// canonical identity with a different definition.
+    pub fn insert_module(
         &mut self,
-        hir: &crate::ir::lower::HirDag,
+        definitions: &crate::ir::module_definitions::ModuleDefinitions,
     ) -> Result<(), ProjectTypeStoreInsertError> {
-        let owner = hir.dag_id();
-        for (reference, dimension) in hir.registry.dimensions.all_dimensions() {
-            if reference.is_qualified() {
-                continue;
-            }
-            self.insert_dimension_definition(
-                ResolvedDimName::from_def(owner.clone(), reference.leaf().clone()),
-                dimension,
-            )?;
+        let statics = definitions.statics();
+        self.merge_base_dimensions(statics);
+        for (identity, dimension) in statics.dimensions() {
+            self.insert_dimension_definition(identity.clone(), dimension)?;
         }
-        for (reference, info) in hir.registry.units.all_units() {
-            if reference.is_qualified() {
-                continue;
-            }
-            self.insert_unit_definition(
-                ResolvedUnitName::from_def(owner.clone(), reference.leaf().clone()),
-                info,
-            )?;
+        for (identity, info) in statics.units() {
+            self.insert_unit_definition(identity.clone(), info)?;
         }
-        for (name, index) in hir.registry.indexes.declared_indexes() {
-            self.insert_index_definition(
-                ResolvedIndexName::from_def(owner.clone(), name.clone()),
-                index,
-            )?;
+        for (identity, index) in statics.indexes() {
+            self.insert_index_definition(identity.clone(), index)?;
         }
-        self.insert_nominal_types(hir)?;
-        Ok(())
-    }
-
-    /// Insert exactly one resolver-owned HIR module.
-    ///
-    /// Unlike the former subtree scan, this operation cannot accidentally copy
-    /// a nested DAG or selected import under the caller's owner. Every nominal
-    /// definition comes from the HIR DAG's invariant-preserving registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an invariant error for missing frontend facts, owner mismatch,
-    /// or a competing canonical nominal definition.
-    pub fn insert_resolver_module(
-        &mut self,
-        hir: &crate::ir::lower::HirDag,
-        resolver: &ModuleResolver,
-    ) -> Result<(), ProjectTypeStoreInsertError> {
-        let owner = hir.dag_id();
-        let symbols =
-            resolver
-                .symbols(owner)
-                .ok_or_else(|| ProjectTypeStoreInsertError::MissingModule {
-                    owner: owner.clone(),
-                })?;
-
-        for name in symbols.dimensions().keys() {
-            let identity = ResolvedDimName::from_def(owner.clone(), name.clone());
-            let dimension = hir
-                .registry
-                .dimensions
-                .get_dimension(&crate::syntax::dimension::DimRef::local(name.clone()))
-                .ok_or_else(|| ProjectTypeStoreInsertError::MissingDimension {
-                    identity: identity.clone(),
-                })?;
-            self.insert_dimension_definition(identity, dimension)?;
-        }
-        for name in symbols.units().keys() {
-            let identity = ResolvedUnitName::from_def(owner.clone(), name.clone());
-            let reference = crate::syntax::dimension::UnitRef::local(name.clone());
-            let info = hir.registry.units.get_unit(&reference).ok_or_else(|| {
-                ProjectTypeStoreInsertError::MissingUnit {
-                    identity: identity.clone(),
-                }
-            })?;
-            self.insert_unit_definition(identity, info)?;
-        }
-        for dynamic in hir.dynamic_unit_scales() {
-            let info = hir
-                .registry
-                .units
-                .get_unit(&dynamic.spelling)
-                .ok_or_else(|| ProjectTypeStoreInsertError::MissingUnit {
-                    identity: dynamic.unit.clone(),
-                })?;
-            self.insert_unit_definition(dynamic.unit.clone(), info)?;
-        }
-        for name in symbols.indexes().keys() {
-            let identity = ResolvedIndexName::from_def(owner.clone(), name.clone());
-            let index = hir.registry.indexes.get_index(name).ok_or_else(|| {
-                ProjectTypeStoreInsertError::MissingIndex {
-                    identity: identity.clone(),
-                }
-            })?;
-            self.insert_index_definition(identity, index)?;
-        }
-        self.insert_nominal_types(hir)?;
-        Ok(())
+        self.insert_nominal_types(definitions.nominal_types())
     }
 
     fn insert_nominal_types(
         &mut self,
-        hir: &crate::ir::lower::HirDag,
+        nominal_types: &crate::hir::NominalTypeRegistry,
     ) -> Result<(), ProjectTypeStoreInsertError> {
-        let owner = hir.dag_id();
-        for definition in hir.nominal_types().values() {
-            if definition.identity().owner() != owner {
-                return Err(ProjectTypeStoreInsertError::NominalOwnerMismatch {
-                    identity: definition.identity().clone(),
-                    actual_owner: owner.clone(),
-                });
-            }
+        for definition in nominal_types.values() {
             if let Some(existing) = self.struct_types.get(definition.identity())
                 && !Arc::ptr_eq(existing, definition)
             {
@@ -617,7 +519,7 @@ impl ProjectTypeStore {
             }
         }
 
-        for definition in hir.nominal_types().values() {
+        for definition in nominal_types.values() {
             let identity = definition.identity().clone();
             let handle = Arc::clone(
                 self.struct_types

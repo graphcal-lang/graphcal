@@ -1,481 +1,32 @@
-//! Frontend registry seeding and concrete-instance registry composition.
+//! Frontend nominal-type seeding and concrete-instance type composition.
+//!
+//! Dimensions, units, and indexes are canonical definitions evaluated through
+//! the module resolver; only syntax-backed nominal type definitions still
+//! reach an importer's frontend type table by source name.
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::static_interface::StaticImportRejections;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
-use graphcal_compiler::syntax::dimension::DimRef;
 
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
-    reason = "registry composition consumes project compiler model types"
+    reason = "type composition consumes project compiler model types"
 )]
 use super::*;
 
-pub(super) fn merge_registry_into_builder(
-    builder: &mut RegistryBuilder,
-    dep_registry: &Registry,
+/// Install a template's nominal types, specialized through one include's
+/// Static bindings, into the including module's frontend type table.
+///
+/// Bound types are replaced by the importer's own type and are skipped.
+pub(super) fn merge_instance_types(
+    types: &mut TypeRegistry,
+    dep_types: &TypeRegistry,
     index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
-) -> Result<(), UnitMergeConflict> {
-    merge_registry_into_builder_filtered(
-        builder,
-        dep_registry,
-        index_bindings,
-        type_bindings,
-        dim_bindings,
-        None,
-        None,
-        RuntimeUnitBoundary::ConcreteInstance,
-        None,
-    )
-}
-
-/// Merge imported type-system declarations into a registry builder: selective
-/// imports register the selected declarations from each dependency's AST, and
-/// module imports merge each dependency's `pub` registry entries under the
-/// import alias.
-///
-/// Runs as the registry-seed hook of file lowering — before the file's own
-/// declarations register — so local definitions (e.g. `const unit halfmile: Length
-/// = 0.5 u.mile;`) resolve against the imported entries.
-pub(super) fn seed_imported_type_system(
-    builder: &mut RegistryBuilder,
-    project: &crate::loader::LoadedProject,
-    imported_type_system_names: &HashMap<
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::SelectedDeclarations,
-    >,
-    frontend_registry_imports: &[FrontendRegistryImport<'_>],
-    projected_static_aliases: &[graphcal_compiler::syntax::span::Spanned<ProjectedStaticAlias>],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    for (dep_dag_id, names) in imported_type_system_names {
-        if let Some(dep_loaded) = project.files().get(dep_dag_id) {
-            let artifact = module_artifacts.get(dep_dag_id).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("HIR interface for imported module `{dep_dag_id}` is unavailable"),
-                    file_src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-            register_selected_resolved_dimensions_and_units(
-                builder,
-                artifact.frontend_registry(),
-                dep_dag_id,
-                names,
-                dep_loaded.named_source(),
-                file_src,
-            )?;
-            graphcal_compiler::ir::lower::register_selected_declarations(
-                dep_loaded.ast(),
-                builder,
-                dep_loaded.named_source(),
-                &names.without_resolved_dimensions_and_units(),
-                dep_dag_id,
-            )?;
-        } else {
-            let Some((owner_file, inline_dag)) = project.inline_dag(dep_dag_id) else {
-                return Err(GraphcalError::internal_error(
-                    format!("selected Static projection owner `{dep_dag_id}` is unavailable"),
-                    file_src,
-                    DiagnosticAnchor::WholeFile,
-                ));
-            };
-            let inline_body = graphcal_compiler::desugar::desugared_ast::File {
-                declarations: inline_dag.body(owner_file).to_vec(),
-            };
-            // Resolve the selected declarations, together with the sibling
-            // dimensions their definitions reference, in a scratch copy of
-            // this scope. Then bind dimensions and units under their
-            // importer-local names only (`dim Rate as R` binds `R`, never
-            // `Rate`), exactly like a selective import from a file module.
-            let mut scratch = builder.clone();
-            graphcal_compiler::ir::lower::register_selected_declarations(
-                &inline_body,
-                &mut scratch,
-                owner_file.named_source(),
-                &names.with_dimension_dependencies(&inline_body),
-                dep_dag_id,
-            )?;
-            register_selected_resolved_dimensions_and_units(
-                builder,
-                &scratch.build(),
-                dep_dag_id,
-                names,
-                owner_file.named_source(),
-                file_src,
-            )?;
-            graphcal_compiler::ir::lower::register_selected_declarations(
-                &inline_body,
-                builder,
-                owner_file.named_source(),
-                &names.without_resolved_dimensions_and_units(),
-                dep_dag_id,
-            )?;
-        }
-    }
-    for projection in projected_static_aliases {
-        let cycle = |alias: String| GraphcalError::CyclicDependency {
-            name: alias,
-            src: file_src.clone(),
-            span: projection.span.into(),
-        };
-        match &projection.value {
-            ProjectedStaticAlias::Type { alias, target, .. } => builder
-                .register_type_alias(alias.clone(), target.clone())
-                .map_err(|error| cycle(error.alias.to_string())),
-            ProjectedStaticAlias::Dimension { alias, target } => builder
-                .register_dimension_alias(
-                    DimRef::local(alias.clone()),
-                    DimRef::local(target.clone()),
-                )
-                .map_err(|error| cycle(error.alias.to_string())),
-            ProjectedStaticAlias::Index { alias, target } => builder
-                .register_index_alias(alias.clone(), target.clone())
-                .map_err(|error| cycle(error.alias.to_string())),
-            ProjectedStaticAlias::Unit { alias, target } => builder
-                .register_unit_alias(
-                    graphcal_compiler::syntax::dimension::UnitRef::local(alias.clone()),
-                    graphcal_compiler::syntax::dimension::UnitRef::local(target.clone()),
-                )
-                .map_err(|error| cycle(error.alias.to_string())),
-        }?;
-    }
-    for import in frontend_registry_imports {
-        merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
-            GraphcalError::ConflictingImportedUnit {
-                name: conflict.name,
-                src: file_src.clone(),
-                span: import.import_span.into(),
-            }
-        })?;
-    }
-    Ok(())
-}
-
-/// Import selected dimensions and units from the dependency's resolved registry.
-///
-/// Re-registering only a selected declaration's source AST loses sibling
-/// dimensions used by a dimension definition (`Weighted = Base * Mass`) or by
-/// a unit annotation (`point: Score`). Both declarations are closed semantic
-/// values after the dependency compiles, so copy them together with the base
-/// dimension metadata needed to preserve canonical identities and formatting.
-fn register_selected_resolved_dimensions_and_units(
-    builder: &mut RegistryBuilder,
-    dep_registry: &Registry,
-    dep_dag_id: &graphcal_compiler::dag_id::DagId,
-    selected: &graphcal_compiler::ir::lower::SelectedDeclarations,
-    dep_src: &NamedSource<Arc<String>>,
-    importer_src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    fn register_base_dimension_metadata(
-        builder: &mut RegistryBuilder,
-        dep_registry: &Registry,
-        dimension: &graphcal_compiler::dimension::Dimension,
-    ) {
-        for (base_id, _) in dimension.iter() {
-            // Metadata only: the base dimension may be private to the
-            // dependency, so it must not become source-visible here.
-            match dep_registry.dimensions.base_dimension(base_id) {
-                Some(info) => builder.import_base_dimension(base_id.clone(), info),
-                None => builder.record_base_dimension(base_id.clone()),
-            }
-        }
-    }
-
-    for (local, selected_dimension) in selected.dimensions() {
-        let source = selected_dimension.source();
-        let dimension = dep_registry
-            .dimensions
-            .get_dimension(&DimRef::local(source.clone()))
-            .cloned()
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "resolved dependency registry is missing selected dimension `{source}`"
-                    ),
-                    dep_src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        let dimension = specialize_projected_dimension(
-            &dimension,
-            dep_dag_id,
-            selected_dimension,
-            builder,
-            importer_src,
-        )?;
-        register_base_dimension_metadata(builder, dep_registry, &dimension);
-        // Only the importer-local binding is source-visible (`dim Rate as R`
-        // binds `R`, not `Rate`).
-        builder.register_dimension(DimRef::local(local.clone()), dimension);
-    }
-
-    for (local, source) in selected.units() {
-        use graphcal_compiler::syntax::dimension::UnitRef;
-
-        let info = dep_registry
-            .units
-            .get_unit(&UnitRef::local(source.clone()))
-            .cloned()
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!("resolved dependency registry is missing selected unit `{source}`"),
-                    dep_src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?;
-        register_base_dimension_metadata(builder, dep_registry, &info.dimension);
-        // Only the importer-local binding is source-visible (`unit spd as s`
-        // binds `s`, not `spd`).
-        builder.register_unit_with_scale(UnitRef::local(local.clone()), info.dimension, info.scale);
-    }
-
-    Ok(())
-}
-
-/// Specialize a projected dimension through its include's dimension bindings.
-///
-/// A required dimension port is an opaque base dimension owned by the
-/// dependency, so a dimension defined over it (`QR = Q / Time`) keeps that
-/// base. Each such base bound by the projecting include is replaced with the
-/// importer's bound dimension (`dim Q: Length` makes `QR` `Length / Time`).
-/// An unknown binding target is left opaque here; the include's binding
-/// validation reports it.
-fn specialize_projected_dimension(
-    dimension: &graphcal_compiler::dimension::Dimension,
-    dep_dag_id: &graphcal_compiler::dag_id::DagId,
-    selected: &graphcal_compiler::ir::lower::SelectedDimension,
-    builder: &RegistryBuilder,
-    importer_src: &NamedSource<Arc<String>>,
-) -> Result<graphcal_compiler::dimension::Dimension, GraphcalError> {
-    use graphcal_compiler::dimension::{BaseDimId, Dimension};
-
-    dimension
-        .iter()
-        .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
-            let bound = match base {
-                BaseDimId::UserDefined(port) if port.owner() == dep_dag_id => selected
-                    .include_binding(&base.source_name())
-                    .and_then(|target| builder.get_dimension(&DimRef::local(target.clone()))),
-                BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
-            };
-            bound
-                .cloned()
-                .unwrap_or_else(|| Dimension::base(base.clone()))
-                .pow(*exponent)
-                .and_then(|factor| acc.checked_mul(&factor))
-        })
-        .map_err(|_| GraphcalError::DimensionOverflow {
-            src: importer_src.clone(),
-            span: graphcal_compiler::syntax::span::Span::new(0, importer_src.inner().len()).into(),
-        })
-}
-
-/// Merge type-system declarations from a dependency's frozen registry into a
-/// builder, restricted to its explicit export surface. Param input ports are
-/// intentionally irrelevant here because they are not type-system exports.
-fn merge_registry_into_builder_export_filtered(
-    builder: &mut RegistryBuilder,
-    import: &FrontendRegistryImport<'_>,
-) -> Result<(), UnitMergeConflict> {
-    merge_registry_into_builder_filtered(
-        builder,
-        import.registry,
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
-        Some(import.external_surface),
-        Some(&import.unit_alias),
-        import.runtime_unit_boundary,
-        import.pure_import_rejections.as_ref(),
-    )
-}
-
-/// A unit reference reached the importing file with two different definitions.
-///
-/// Includes inline the dependency's body into the importer, so the bodies of
-/// two included modules share one unit scope; a silent last-write-wins merge
-/// would make their references resolve to whichever include happened to land
-/// last. The conflict is surfaced as a loud error instead.
-#[derive(Debug)]
-pub(in crate::project_compiler) struct UnitMergeConflict {
-    pub name: graphcal_compiler::syntax::dimension::UnitRef,
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "registry merge keeps typed binding and module-boundary policies explicit in one ordered pass"
-)]
-fn merge_registry_into_builder_filtered(
-    builder: &mut RegistryBuilder,
-    dep_registry: &Registry,
-    index_bindings: &IndexBindings,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    external_surface: Option<&ExternalDeclSurface>,
-    module_alias: Option<&ModuleAliasName>,
-    runtime_unit_boundary: RuntimeUnitBoundary,
-    pure_import_rejections: Option<&StaticImportRejections>,
-) -> Result<(), UnitMergeConflict> {
-    let pure_import_rejects = |name: &graphcal_compiler::syntax::names::NameAtom,
-                               namespace: ImportItemNamespace| {
-        pure_import_rejections.is_some_and(|rejections| rejections.rejects(name, namespace))
-    };
-    // Import base-dimension metadata (canonical units, affine policy). This
-    // includes private transitive dependencies of exported dimensions and
-    // units. Module imports record metadata only so those names never become
-    // source-visible in the importer; include merges inline the dependency's
-    // body and keep its bare base-dimension scope.
-    for (id, info) in dep_registry.dimensions.base_dimensions() {
-        builder.import_base_dimension(id.clone(), info);
-        let dimension_name = id.source_name();
-        if module_alias.is_some()
-            || dim_bindings.contains_key(&dimension_name)
-            || pure_import_rejects(dimension_name.atom(), ImportItemNamespace::Dimension)
-            || builder
-                .get_dimension(&DimRef::local(dimension_name.clone()))
-                .is_some()
-        {
-            continue;
-        }
-        builder.register_base_dimension(id.clone());
-    }
-
-    // Import named dimensions (derived dimensions like Velocity = Length/Time).
-    //
-    // Like units below: module imports expose only the dependency's own `pub`
-    // dimensions, re-keyed under the import alias (`alias::Rate`), so two
-    // modules exporting the same leaf never collide and nothing lands in the
-    // importer's bare dimension scope. Include merges copy the dependency's
-    // dimension scope unchanged.
-    for (reference, dim) in dep_registry.dimensions.all_dimensions() {
-        let name = reference.leaf();
-        if (!reference.is_qualified() && dim_bindings.contains_key(name))
-            || pure_import_rejects(name.atom(), ImportItemNamespace::Dimension)
-        {
-            continue;
-        }
-        if external_surface.is_some_and(|surface| !surface.is_static_explicit_export(name.atom())) {
-            continue;
-        }
-        let target = match module_alias {
-            Some(alias) => {
-                if reference.is_qualified() {
-                    continue;
-                }
-                DimRef::qualified(
-                    graphcal_compiler::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
-                    name.clone(),
-                )
-            }
-            None => reference.clone(),
-        };
-        // The importer's own bindings (its declarations and specialized
-        // include projections) shadow the dependency's same-named scope.
-        if builder.get_dimension(&target).is_some() {
-            continue;
-        }
-        builder.register_dimension(target, dim.clone());
-    }
-
-    // Import units.
-    //
-    // Module imports (`module_alias` present) expose only the dependency's own
-    // `pub` units, re-keyed under the import alias (`alias::unit`); the
-    // dependency's alias-qualified imports and non-pub units stay internal to
-    // it, and nothing lands in the importer's bare unit scope. Bare names in
-    // the importer come only from its own declarations, selective imports,
-    // and the prelude.
-    //
-    // Include merges (`module_alias` absent) copy the dependency's full unit
-    // scope unchanged because the dependency's body is inlined into the
-    // importer and its unit references must keep resolving. Re-merging an
-    // identical definition (diamond includes, prelude units present in every
-    // dep registry) is idempotent; a *different* definition under the same
-    // reference is a conflict.
-    for (name, info) in dep_registry.units.all_units() {
-        if pure_import_rejects(name.leaf().atom(), ImportItemNamespace::Unit)
-            || (!info.scale.constness().is_const()
-                && !runtime_unit_boundary.includes_runtime_units())
-        {
-            continue;
-        }
-        let target = if let Some(alias) = module_alias {
-            if name.is_qualified() {
-                continue;
-            }
-            if external_surface
-                .is_some_and(|surface| !surface.is_unit_explicit_export(name.leaf().atom()))
-            {
-                continue;
-            }
-            graphcal_compiler::syntax::dimension::UnitRef::qualified(
-                graphcal_compiler::syntax::non_empty::NonEmpty::singleton(alias.atom().clone()),
-                name.leaf().clone(),
-            )
-        } else {
-            if external_surface
-                .is_some_and(|surface| !surface.is_unit_explicit_export(name.leaf().atom()))
-            {
-                continue;
-            }
-            name.clone()
-        };
-        if let Some(existing) = builder.get_unit(&target) {
-            // Compatible definitions agree on dimension, scale, and constness
-            // (all carried by `UnitInfo`). Dynamic scales cannot be compared
-            // structurally; two dynamic definitions with the same base-unit
-            // scale are assumed to be the same declaration reached through a
-            // diamond import.
-            if existing == info {
-                continue;
-            }
-            return Err(UnitMergeConflict { name: target });
-        }
-        builder.register_unit_with_scale(target, info.dimension.clone(), info.scale.clone());
-    }
-
-    // Import indexes — skip bound indexes (they are replaced by the importer's index).
-    // Module imports use explicit-export filtering and keep required indexes in the
-    // dependency's frontend module scope only; pulling an unbound `pub(bind)` index
-    // into the importer would incorrectly make the importer a library even if
-    // it only needs a qualified type from the dependency.
-    for (name, idx_def) in dep_registry.indexes.declared_indexes() {
-        if pure_import_rejects(name.atom(), ImportItemNamespace::Index)
-            || (external_surface.is_some() && idx_def.is_required())
-        {
-            continue;
-        }
-        if !index_bindings.contains_key(name) {
-            if external_surface
-                .is_some_and(|surface| !surface.is_static_explicit_export(name.atom()))
-            {
-                continue;
-            }
-            builder.register_index(name.clone(), idx_def.kind.clone());
-        }
-    }
-    // Structural indexes have no module visibility or alias. Preserve their
-    // typed identities so imported indexed types and values can resolve them.
-    for finite_index in dep_registry.indexes.finite_indexes() {
-        builder.ensure_finite_index(finite_index.cardinality());
-    }
-
-    // Import struct types — skip bound types (they are replaced by the importer's type).
-    for type_def in dep_registry.types.all_types() {
-        if type_bindings.contains_key(type_def.name())
-            || pure_import_rejects(type_def.name().atom(), ImportItemNamespace::Type)
-        {
-            continue;
-        }
-        if external_surface
-            .is_some_and(|surface| !surface.is_static_explicit_export(type_def.name().atom()))
-        {
+) {
+    for type_def in dep_types.all_types() {
+        if type_bindings.contains_key(type_def.name()) {
             continue;
         }
         let mut specialized = type_def.clone();
@@ -485,7 +36,76 @@ fn merge_registry_into_builder_filtered(
             type_bindings,
             dim_bindings,
         );
-        builder.register_type(specialized);
+        types.register_type(specialized);
+    }
+}
+
+/// Install imported nominal types into a module's frontend type table:
+/// selective imports register the selected declarations from each
+/// dependency's AST, projection aliases bind their local names, and module
+/// imports merge each dependency's explicitly exported types.
+///
+/// Runs before the module's own types register.
+pub(super) fn seed_imported_types(
+    types: &mut TypeRegistry,
+    project: &crate::loader::LoadedProject,
+    imported_types: &HashMap<graphcal_compiler::dag_id::DagId, HashSet<StructTypeName>>,
+    frontend_type_imports: &[FrontendTypeImport<'_>],
+    projected_type_aliases: &[graphcal_compiler::syntax::span::Spanned<ProjectedTypeAlias>],
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for (dep_dag_id, names) in imported_types {
+        if let Some(dep_loaded) = project.files().get(dep_dag_id) {
+            graphcal_compiler::ir::lower::register_selected_types(
+                dep_loaded.ast(),
+                types,
+                dep_loaded.named_source(),
+                names,
+            )?;
+        } else {
+            let Some((owner_file, inline_dag)) = project.inline_dag(dep_dag_id) else {
+                return Err(GraphcalError::internal_error(
+                    format!("selected type owner `{dep_dag_id}` is unavailable"),
+                    file_src,
+                    DiagnosticAnchor::WholeFile,
+                ));
+            };
+            let inline_body = graphcal_compiler::desugar::desugared_ast::File {
+                declarations: inline_dag.body(owner_file).to_vec(),
+            };
+            graphcal_compiler::ir::lower::register_selected_types(
+                &inline_body,
+                types,
+                owner_file.named_source(),
+                names,
+            )?;
+        }
+    }
+    for projection in projected_type_aliases {
+        types
+            .register_type_alias(
+                projection.value.alias.clone(),
+                projection.value.target.clone(),
+            )
+            .map_err(|error| GraphcalError::CyclicDependency {
+                name: error.alias.to_string(),
+                src: file_src.clone(),
+                span: projection.span.into(),
+            })?;
+    }
+    for import in frontend_type_imports {
+        for type_def in import.types.all_types() {
+            let name = type_def.name().atom();
+            if import
+                .pure_import_rejections
+                .as_ref()
+                .is_some_and(|rejections| rejections.rejects(name, ImportItemNamespace::Type))
+                || !import.external_surface.is_static_explicit_export(name)
+            {
+                continue;
+            }
+            types.register_type(type_def.clone());
+        }
     }
     Ok(())
 }

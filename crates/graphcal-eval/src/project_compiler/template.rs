@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::lower::UnfrozenIR;
-use graphcal_compiler::registry::types::Registry;
+use graphcal_compiler::registry::types::TypeRegistry;
 
 /// Reusable elaborated pre-HIR template shared by every concrete instance.
 #[derive(Debug)]
 pub(super) struct ElaboratedModuleTemplate {
     pub(super) unfrozen: UnfrozenIR,
-    pub(super) frontend_registry: Registry,
+    pub(super) frontend_types: TypeRegistry,
 }
 
 /// Project-session cache containing exactly one elaborated template per DAG.

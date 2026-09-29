@@ -1,8 +1,7 @@
 use super::*;
 use crate::dimension::{BaseDimId, Rational};
-use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{FormattingRegistry, RegistryBuilder};
+use crate::registry::types::FormattingRegistry;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName};
 use crate::syntax::dimension::UnitName;
 use crate::syntax::index_name::IndexName;
@@ -10,9 +9,7 @@ use crate::syntax::parser::Parser;
 use crate::syntax::type_name::StructTypeName;
 
 fn make_registry() -> FormattingRegistry {
-    let mut b = RegistryBuilder::new();
-    load_prelude(&mut b).unwrap();
-    b.build().into_semantic().into_formatting()
+    FormattingRegistry::graphcal_prelude().unwrap()
 }
 
 fn make_src() -> NamedSource<Arc<String>> {
@@ -380,11 +377,11 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     );
     let type_name = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Item"));
     let mut store = ProjectTypeStore::default();
-    store.insert_local_hir(&ir).unwrap();
+    store.insert_module(ir.definitions()).unwrap();
     let first_index = Arc::clone(store.get_index_handle(&index_name).unwrap());
     let first_type = Arc::clone(store.get_struct_type_handle(&type_name).unwrap());
 
-    store.insert_local_hir(&ir).unwrap();
+    store.insert_module(ir.definitions()).unwrap();
 
     assert!(Arc::ptr_eq(
         &first_index,
@@ -525,10 +522,10 @@ fn project_type_store_rejects_competing_dimension_definitions() {
         crate::syntax::dimension::DimName::expect_valid("Custom"),
     );
     let mut store = ProjectTypeStore::default();
-    store.insert_local_hir(&first).unwrap();
+    store.insert_module(first.definitions()).unwrap();
 
     assert!(matches!(
-        store.insert_local_hir(&competing),
+        store.insert_module(competing.definitions()),
         Err(ProjectTypeStoreInsertError::CompetingDimensionDefinition {
             identity: found,
         }) if found == identity
@@ -544,10 +541,10 @@ fn project_type_store_rejects_competing_unit_definitions() {
         crate::syntax::dimension::UnitName::expect_valid("custom"),
     );
     let mut store = ProjectTypeStore::default();
-    store.insert_local_hir(&first).unwrap();
+    store.insert_module(first.definitions()).unwrap();
 
     assert!(matches!(
-        store.insert_local_hir(&competing),
+        store.insert_module(competing.definitions()),
         Err(ProjectTypeStoreInsertError::CompetingUnitDefinition {
             identity: found,
         }) if found == identity
@@ -563,10 +560,10 @@ fn project_type_store_rejects_competing_index_definitions() {
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     );
     let mut store = ProjectTypeStore::default();
-    store.insert_local_hir(&first).unwrap();
+    store.insert_module(first.definitions()).unwrap();
 
     assert!(matches!(
-        store.insert_local_hir(&competing),
+        store.insert_module(competing.definitions()),
         Err(ProjectTypeStoreInsertError::CompetingIndexDefinition {
             identity: found,
         }) if found == identity
@@ -582,10 +579,10 @@ fn project_type_store_rejects_competing_nominal_definitions() {
         StructTypeName::expect_valid("Item"),
     );
     let mut store = ProjectTypeStore::default();
-    store.insert_local_hir(&first).unwrap();
+    store.insert_module(first.definitions()).unwrap();
 
     assert!(matches!(
-        store.insert_local_hir(&competing),
+        store.insert_module(competing.definitions()),
         Err(ProjectTypeStoreInsertError::CompetingNominalDefinition {
             identity: found,
         }) if found == identity
@@ -649,19 +646,8 @@ fn parse_and_type_resolve_builder_named(
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = NamedSource::new(path, Arc::new(source.to_string()));
-    let (ir, parent_registry) =
-        crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
-    let parent_dag_id =
-        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(path)).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add_file(&parent_dag_id, &file.declarations);
-    let resolver = modules.build().map_err(|err| {
-        internal_error(
-            format!("test module resolver failed: {err}"),
-            &src,
-            Span::new(0, 0),
-        )
-    })?;
+    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, &src)?;
+    let resolver = lowered.resolver;
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|err| {
         internal_error(
@@ -670,12 +656,14 @@ fn parse_and_type_resolve_builder_named(
             Span::new(0, 0),
         )
     })?;
-    project_types
-        .insert_local_hir(&ir)
-        .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
+    for dag in std::iter::once(&lowered.root).chain(&lowered.inline_dags) {
+        project_types
+            .insert_module(dag.definitions())
+            .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
+    }
     let cancellation = crate::cancellation::CancellationToken::unbounded();
     let signed = resolve_hir_signature_with_modules_and_cancellation(
-        ir,
+        lowered.root,
         &src,
         &resolver,
         &project_types,
@@ -686,72 +674,17 @@ fn parse_and_type_resolve_builder_named(
         HashMap::new(),
         &src,
         &resolver,
-        Arc::new(project_types),
+        Arc::new(project_types.clone()),
         &cancellation,
     )?;
-    compile_inline_dag_bodies_test(
-        &mut builder,
-        &src,
-        &parent_dag_id,
-        &file.declarations,
-        &parent_registry,
-    )?;
-    Ok(builder)
-}
-
-/// Compile each inline dag body in `tir` with no self-import
-/// preprocessing. Used by compiler-side integration tests that don't
-/// have access to the eval crate's project pipeline.
-fn compile_inline_dag_bodies_test(
-    tir: &mut TirBuilder,
-    src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::dag_id::DagId,
-    parent_declarations: &[crate::desugar::desugared_ast::Declaration],
-    parent_registry: &crate::registry::types::Registry,
-) -> Result<(), GraphcalError> {
-    let dag_bodies = parent_declarations
-        .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            crate::desugar::desugared_ast::DeclKind::Dag(dag) => {
-                Some((dag.name.value.clone(), dag.body.clone()))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(parent_dag_id.clone(), parent_declarations);
-    for (name, body) in &dag_bodies {
-        modules.add(parent_dag_id.inline_dag_child(name.clone()), body);
-    }
-    let resolver = modules.build().map_err(|err| {
-        internal_error(
-            format!("test module resolver failed: {err}"),
-            src,
-            Span::new(0, 0),
-        )
-    })?;
-    let mut project_types = tir.project_type_store().clone();
-
-    for (name, body) in dag_bodies {
-        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            &name,
-            &body,
-            parent_registry,
-            &resolver,
-            &crate::ir::resolve::ImportedValueNames::default(),
-            HashMap::new(),
-            src,
-            parent_dag_id,
-        )?;
-        project_types
-            .insert_local_hir(&dag_body_ir)
-            .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
+    for dag_body_ir in lowered.inline_dags {
         let compiled_dag =
-            type_resolve_single_with_modules(dag_body_ir, src, &resolver, &project_types)?;
-        tir.insert_dag(compiled_dag)
-            .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
+            type_resolve_single_with_modules(dag_body_ir, &src, &resolver, &project_types)?;
+        builder
+            .insert_dag(compiled_dag)
+            .map_err(|error| internal_error(error.to_string(), &src, Span::new(0, 0)))?;
     }
-    Ok(())
+    Ok(builder)
 }
 
 #[test]
@@ -768,7 +701,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     let resolver = modules.build().unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_hir(&ir).unwrap();
+    project_types.insert_module(ir.definitions()).unwrap();
     let mut builder = type_resolve_builder_with_modules_and_cancellation(
         ir,
         &src,
@@ -833,7 +766,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
     let resolver = modules.build().unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_hir(&ir).unwrap();
+    project_types.insert_module(ir.definitions()).unwrap();
 
     let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
     let deps = &tir.root().semantic.dependencies;

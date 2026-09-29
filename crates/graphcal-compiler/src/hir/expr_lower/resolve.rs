@@ -144,11 +144,6 @@ impl<'a> ExprLowerer<'a> {
                         Ok(resolved) => resolved,
                         Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
                             .resolve_unit_ref(reference)
-                            .or_else(|| {
-                                self.ctx
-                                    .overlay
-                                    .resolve_registry_unit_ref(self.ctx.scope.owner, reference)
-                            })
                             .ok_or_else(|| ExprLowerError::UnknownUnit {
                                 name: reference.clone(),
                                 span: item.name.span,

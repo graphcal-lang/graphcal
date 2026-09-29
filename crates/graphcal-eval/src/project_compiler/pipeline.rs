@@ -62,11 +62,9 @@ fn template_name(template: &DagId) -> String {
 
 /// Lower one physical file after every dependency HIR interface is available.
 fn lower_single_file_to_hir(
-    project: &crate::loader::LoadedProject,
+    semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<
     (
@@ -83,53 +81,44 @@ fn lower_single_file_to_hir(
         imported_names: ImportedValueNames::default(),
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
-        imported_type_system_names: HashMap::new(),
-        projected_static_aliases: Vec::new(),
+        imported_types: HashMap::new(),
+        projected_type_aliases: Vec::new(),
         module_map: HashMap::new(),
-        frontend_registry_imports: Vec::new(),
+        frontend_type_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
     imports::process_file_body_declarations(
-        project,
+        semantic.project,
         loaded_file,
         module_artifacts,
-        module_resolver,
+        semantic.module_resolver,
         &mut ctx,
         cancellation,
     )?;
 
-    let (hir, root_interface) = lowering::lower_file_to_hir(
-        ProjectSemanticContext {
-            project,
-            module_resolver,
-            module_templates,
-        },
-        loaded_file,
-        ctx,
-        module_artifacts,
-        cancellation,
-    )?;
+    let (hir, root_interface) =
+        lowering::lower_file_to_hir(semantic, loaded_file, ctx, module_artifacts, cancellation)?;
     let mut interfaces = vec![(file_dag_id.clone(), root_interface)];
     // Each lowered inline DAG publishes its own frozen surface, not that of
     // whichever module first elaborated its template.
     for frozen in &hir.inline_dags {
-        let template = module_templates.get(frozen.dag_id()).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!(
-                    "inline module template `{}` was not retained",
-                    frozen.dag_id()
-                ),
-                file_src,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })?;
+        let template = semantic
+            .module_templates
+            .get(frozen.dag_id())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::internal_error(
+                    format!(
+                        "inline module template `{}` was not retained",
+                        frozen.dag_id()
+                    ),
+                    file_src,
+                    DiagnosticAnchor::WholeFile,
+                ))
+            })?;
         interfaces.push((
             frozen.dag_id().clone(),
-            LoweringModuleInterface::new(
-                template.frontend_registry.clone(),
-                frozen.external_surface.clone(),
-            ),
+            LoweringModuleInterface::new(template.frontend_types.clone(), frozen),
         ));
     }
     Ok((hir, interfaces))
@@ -231,21 +220,50 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     let mut module_interfaces = HashMap::new();
     let mut module_templates = ModuleTemplateStore::default();
 
-    // Dependency order guarantees every imported HIR interface is available
-    // before its dependents are lowered.
-    let files = project.files().ordered().as_ref().try_map(|loaded_file| {
-        cancellation.checkpoint()?;
-        let (hir, lowering_interfaces) = lower_single_file_to_hir(
-            project,
-            loaded_file,
-            &module_interfaces,
+    let files = {
+        let mut definitions = graphcal_compiler::ir::lower::definition_evaluator(
             &module_resolver,
-            &mut module_templates,
-            cancellation,
+            project.files().iter().flat_map(|loaded_file| {
+                let src = loaded_file.named_source();
+                std::iter::once((
+                    loaded_file.dag_id().clone(),
+                    graphcal_compiler::ir::static_definitions::DefinitionSource {
+                        declarations: &loaded_file.ast().declarations,
+                        src,
+                    },
+                ))
+                .chain(loaded_file.inline_dags().iter().map(move |inline| {
+                    (
+                        inline.dag_id().clone(),
+                        graphcal_compiler::ir::static_definitions::DefinitionSource {
+                            declarations: inline.body(loaded_file),
+                            src,
+                        },
+                    )
+                }))
+            }),
+            project.root_file().named_source(),
         )?;
-        module_interfaces.extend(lowering_interfaces);
-        Ok::<_, CompileError>(hir)
-    })?;
+        let mut semantic = ProjectSemanticContext {
+            project,
+            module_resolver: &module_resolver,
+            module_templates: &mut module_templates,
+            definitions: &mut definitions,
+        };
+        // Dependency order guarantees every imported HIR interface is available
+        // before its dependents are lowered.
+        project.files().ordered().as_ref().try_map(|loaded_file| {
+            cancellation.checkpoint()?;
+            let (hir, lowering_interfaces) = lower_single_file_to_hir(
+                &mut semantic,
+                loaded_file,
+                &module_interfaces,
+                cancellation,
+            )?;
+            module_interfaces.extend(lowering_interfaces);
+            Ok::<_, CompileError>(hir)
+        })?
+    };
 
     let exported_runtime_units = module_interfaces
         .iter()
@@ -279,7 +297,7 @@ fn build_project_type_store(
             .chain(&file.inline_dags)
             .try_for_each(|dag| {
                 project_types
-                    .insert_resolver_module(dag, &hir.module_resolver)
+                    .insert_module(dag.definitions())
                     .map_err(|error| {
                         GraphcalError::internal_error(
                             format!("cannot build project type store: {error}"),

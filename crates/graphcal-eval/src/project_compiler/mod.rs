@@ -17,7 +17,7 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{IndexBindingTarget, Registry, RegistryBuilder};
+use graphcal_compiler::registry::types::{IndexBindingTarget, TypeRegistry};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::DimName;
@@ -71,12 +71,12 @@ pub(crate) fn resolve_struct_field_constraints(
     execution_check::resolve_struct_field_constraints(tir, const_values, src)
 }
 pub use hir_project::HirProject;
+use lowering::ProjectSemanticContext;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, FrontendRegistryImport, HirFile, ImportAlias, ImportContext,
-    IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
-    ModuleArtifactStore, ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias,
-    RuntimeUnitBoundary, UnitProjectionAlias,
+    DepToImporter, FrontendTypeImport, HirFile, ImportAlias, ImportContext, IncludeInstanceRequest,
+    IndexBindings, LoweringModuleInterface, ModuleArtifact, ModuleArtifactStore,
+    ProjectModuleBinding, ProjectedTypeAlias, UnitProjectionAlias,
 };
 pub(crate) use session::CheckedProjectRuntimeParts;
 pub use session::{CheckedProject, ProjectCompiler, check_project};

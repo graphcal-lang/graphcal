@@ -3,17 +3,8 @@ use thiserror::Error;
 use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use crate::dimension::{Dimension, Rational};
 use crate::ratio::RatioError;
-use crate::registry::aliased_table::AliasedTable;
 use crate::syntax::ast::UnitConstness;
-use crate::syntax::dimension::{UnitName, UnitRef};
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum BaseUnitRegistrationError {
-    #[error("the declared dimension is not a base dimension")]
-    NotBaseDimension,
-    #[error("the dimension already has canonical base unit `{existing}`")]
-    AlreadyRegistered { existing: UnitName },
-}
+use crate::syntax::dimension::UnitRef;
 
 /// A raw value that is not a valid [`PositiveFiniteScale`].
 ///
@@ -267,16 +258,22 @@ impl From<RatioError> for UnitResolveError {
     }
 }
 
-/// Shared implementation for resolving a `UnitExpr` to its dimension and static scale factor.
-pub(crate) fn resolve_unit_expr_impl(
-    units: &AliasedTable<UnitRef, UnitInfo>,
+/// Resolve a `UnitExpr` to its dimension and static scale factor, looking
+/// each written unit reference up with `lookup`.
+///
+/// # Errors
+///
+/// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale unit,
+/// the invalid compound scale, or the exponent overflow.
+pub(crate) fn resolve_unit_expr_with<'a>(
     expr: &UnitExpr,
+    mut lookup: impl FnMut(&UnitRef) -> Option<&'a UnitInfo>,
 ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
     let mut dim = Dimension::dimensionless();
     let scale = try_fold_unit_scale(
         &expr.terms,
         |item| {
-            let Some(info) = units.get(&item.name.value) else {
+            let Some(info) = lookup(&item.name.value) else {
                 return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
             };
             let power = item.effective_power();
@@ -299,57 +296,6 @@ pub(crate) fn resolve_unit_expr_impl(
         },
     )?;
     Ok((dim, scale))
-}
-
-/// Shared implementation for resolving a `UnitExpr` to its dimension only (ignoring scales).
-///
-/// Works for both static and dynamic units.
-pub(crate) fn resolve_unit_dimension_impl(
-    units: &AliasedTable<UnitRef, UnitInfo>,
-    expr: &UnitExpr,
-) -> Result<Dimension, UnitResolveError> {
-    let mut dim = Dimension::dimensionless();
-    for item in &expr.terms {
-        let Some(info) = units.get(&item.name.value) else {
-            return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
-        };
-        let exp = item.effective_power();
-        let powered_dim = info.dimension.pow(exp)?;
-        dim = match item.op {
-            MulDivOp::Mul => (dim * powered_dim)?,
-            MulDivOp::Div => (dim / powered_dim)?,
-        };
-    }
-    Ok(dim)
-}
-
-/// Unit registry: maps unit names to `UnitInfo` (dimension + scale).
-#[derive(Debug, Clone)]
-pub struct UnitRegistry {
-    pub(crate) units: AliasedTable<UnitRef, UnitInfo>,
-}
-
-impl UnitRegistry {
-    /// Look up a unit by reference (bare or module-alias-qualified),
-    /// following source-visible aliases.
-    #[must_use]
-    pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
-        self.units.get(name)
-    }
-
-    /// Iterate over every unit reference and its complete semantic definition.
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &UnitInfo)> {
-        self.units.iter()
-    }
-
-    /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
-    #[cfg(test)]
-    pub(crate) fn resolve_unit_expr(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {
-        resolve_unit_expr_impl(&self.units, expr)
-    }
 }
 
 #[cfg(test)]

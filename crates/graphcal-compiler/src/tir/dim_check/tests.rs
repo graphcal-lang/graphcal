@@ -27,18 +27,8 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let (ir, parent_registry) =
-        crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
-    let parent_dag_id = test_dag_id();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add_file(&parent_dag_id, &file.declarations);
-    let resolver = modules
-        .build()
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module resolver failed: {err}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
+    let lowered = crate::ir::lower::lower_file_with_inline_dags_for_test(&file, &src)?;
+    let resolver = lowered.resolver;
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types
         .insert_graphcal_prelude()
@@ -47,27 +37,37 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    project_types
-        .insert_local_hir(&ir)
-        .map_err(|error| GraphcalError::InternalError {
-            message: format!("test HIR type store failed: {error}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
+    for dag in std::iter::once(&lowered.root).chain(&lowered.inline_dags) {
+        project_types
+            .insert_module(dag.definitions())
+            .map_err(|error| GraphcalError::InternalError {
+                message: format!("test HIR type store failed: {error}"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    }
     let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
-        ir,
+        lowered.root,
         &src,
         &resolver,
-        Arc::new(project_types),
+        Arc::new(project_types.clone()),
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    compile_inline_dag_bodies_test(
-        &mut builder,
-        &src,
-        &parent_dag_id,
-        &file.declarations,
-        &parent_registry,
-    )?;
+    for dag_body_ir in lowered.inline_dags {
+        let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
+            dag_body_ir,
+            &src,
+            &resolver,
+            &project_types,
+        )?;
+        builder
+            .insert_dag(compiled_dag)
+            .map_err(|error| GraphcalError::InternalError {
+                message: error.to_string(),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    }
     let mut tir = builder.finish();
     check_dimensions_tir(&mut tir, &src)?;
     tir.build_declared_types(&src)
@@ -84,7 +84,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let resolver = modules.build().unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_hir(&ir).unwrap();
+    project_types.insert_module(ir.definitions()).unwrap();
     let tir =
         crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types))
             .unwrap();
@@ -165,80 +165,6 @@ fn model_port_application(
         panic!("expected `port` to be a concrete model struct");
     };
     (tir, src, identity.clone(), generic_args.clone())
-}
-
-/// Compile each inline dag body in `tir` with no self-import preprocessing.
-/// Used by compiler-side integration tests that don't have access to the
-/// eval crate's project pipeline.
-fn compile_inline_dag_bodies_test(
-    tir: &mut crate::tir::typed::TirBuilder,
-    src: &NamedSource<Arc<String>>,
-    parent_dag_id: &crate::dag_id::DagId,
-    parent_declarations: &[crate::desugar::desugared_ast::Declaration],
-    parent_registry: &crate::registry::types::Registry,
-) -> Result<(), GraphcalError> {
-    let dag_bodies = parent_declarations
-        .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            crate::desugar::desugared_ast::DeclKind::Dag(dag) => {
-                Some((dag.name.value.clone(), dag.body.clone()))
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(parent_dag_id.clone(), parent_declarations);
-    for (name, body) in &dag_bodies {
-        let owner = parent_dag_id.inline_dag_child(name.clone());
-        modules.add(owner.clone(), body);
-        for decl in body {
-            if let crate::desugar::desugared_ast::DeclKind::Import(import) = &decl.kind {
-                modules.import(&owner, import, parent_dag_id);
-            }
-        }
-    }
-    let resolver = modules
-        .build()
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module resolver failed: {err}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
-    let mut project_types = tir.project_type_store().clone();
-
-    for (name, body) in dag_bodies {
-        let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
-            &name,
-            &body,
-            parent_registry,
-            &resolver,
-            &crate::ir::resolve::ImportedValueNames::default(),
-            HashMap::new(),
-            src,
-            parent_dag_id,
-        )?;
-        project_types
-            .insert_local_hir(&dag_body_ir)
-            .map_err(|error| GraphcalError::InternalError {
-                message: format!("test inline HIR type store failed: {error}"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
-        let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
-            dag_body_ir,
-            src,
-            &resolver,
-            &project_types,
-        )?;
-        tir.insert_dag(compiled_dag)
-            .map_err(|error| GraphcalError::InternalError {
-                message: error.to_string(),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
-    }
-    Ok(())
 }
 
 #[test]

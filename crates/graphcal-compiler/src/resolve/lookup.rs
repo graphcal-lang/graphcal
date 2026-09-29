@@ -308,6 +308,54 @@ impl ModuleResolver {
         })
     }
 
+    /// Every source spelling of a dimension visible in `owner`, with the
+    /// canonical dimension it denotes.
+    ///
+    /// Own declarations and selective imports are bare names; each public
+    /// dimension of a module alias's target is spelled `alias::Name`. The
+    /// implicit prelude is not included.
+    pub(crate) fn visible_dimension_spellings(
+        &self,
+        owner: &DagId,
+    ) -> Vec<(
+        crate::syntax::dimension::DimRef,
+        &crate::resolved_name::ResolvedDimName,
+    )> {
+        use crate::syntax::dimension::DimRef;
+
+        let Some(entry) = self.modules.get(owner) else {
+            return Vec::new();
+        };
+        let bare = entry
+            .symbols
+            .dimensions
+            .iter()
+            .chain(&entry.scope.selected_dimensions)
+            .map(|(name, symbol)| (DimRef::local(name.clone()), symbol.resolved()));
+        let qualified = entry
+            .scope
+            .module_aliases
+            .iter()
+            .flat_map(|(alias, binding)| {
+                self.modules
+                    .get(binding.target())
+                    .into_iter()
+                    .flat_map(|target| {
+                        public_symbols::<DimNameNamespace>(&target.symbols, &target.scope)
+                    })
+                    .map(|(name, symbol)| {
+                        (
+                            DimRef::qualified(
+                                NonEmpty::singleton(alias.atom().clone()),
+                                crate::syntax::dimension::DimName::classify(name.clone()),
+                            ),
+                            symbol.resolved(),
+                        )
+                    })
+            });
+        bare.chain(qualified).collect()
+    }
+
     /// Resolve a syntactic index path to a canonical owner + leaf.
     pub fn resolve_index_path(
         &self,
