@@ -543,7 +543,14 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     )
     .unwrap()
     .for_decl(&owner);
-    let original = tir.root().nodes()[0].definition.formula().unwrap();
+    let original = tir
+        .root()
+        .nodes()
+        .next()
+        .unwrap()
+        .definition
+        .formula()
+        .unwrap();
     let mut shifted = (**original).clone();
     shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
     assert_ne!(shifted.span, original.span);
@@ -577,8 +584,23 @@ fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shar
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut revised, &src).unwrap();
     assert_eq!(revised.root_dag_id(), tir.root_dag_id());
     assert_eq!(
-        revised.root().nodes()[0].definition.formula().unwrap().id(),
-        tir.root().nodes()[0].definition.formula().unwrap().id()
+        revised
+            .root()
+            .nodes()
+            .next()
+            .unwrap()
+            .definition
+            .formula()
+            .unwrap()
+            .id(),
+        tir.root()
+            .nodes()
+            .next()
+            .unwrap()
+            .definition
+            .formula()
+            .unwrap()
+            .id()
     );
     assert_ne!(revised.root().body_revision(), tir.root().body_revision());
     assert!(matches!(
@@ -3473,8 +3495,15 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } =
-        tir.root().nodes()[0].definition.formula().unwrap().kind()
+    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = tir
+        .root()
+        .nodes()
+        .next()
+        .unwrap()
+        .definition
+        .formula()
+        .unwrap()
+        .kind()
     else {
         panic!("expected datetime function call");
     };

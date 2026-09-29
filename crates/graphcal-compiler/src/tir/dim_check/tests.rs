@@ -78,18 +78,9 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
 fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, DeclaredType> {
     let root = tir.root();
     root.consts()
-        .iter()
         .map(|entry| (&entry.name, &entry.type_ann))
-        .chain(
-            root.params()
-                .iter()
-                .map(|entry| (&entry.name, &entry.type_ann)),
-        )
-        .chain(
-            root.nodes()
-                .iter()
-                .map(|entry| (&entry.name, &entry.type_ann)),
-        )
+        .chain(root.params().map(|entry| (&entry.name, &entry.type_ann)))
+        .chain(root.nodes().map(|entry| (&entry.name, &entry.type_ann)))
         .map(|(name, annotation)| {
             (
                 ScopedName::local(name.clone()),
@@ -102,6 +93,14 @@ fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, Decl
                 .map(|(name, binding)| (name.clone(), binding.declared_type().clone())),
         )
         .collect()
+}
+
+/// Edit the root DAG's declaration records in place.
+fn edit_root_decls(
+    tir: &mut crate::tir::typed::TIR,
+    edit: impl FnMut(&mut crate::tir::typed::TypedDecl),
+) {
+    tir.root_mut().decls.update(edit);
 }
 
 fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
@@ -165,7 +164,7 @@ fn contextual_completion_visits_each_owned_or_independent_root_once() {
     };
     assert_eq!(infer::hir::CONTEXTUAL_VISITS.with(std::cell::Cell::get), 2);
     assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
-    let node = &tir.root().nodes[0];
+    let node = tir.root().nodes().next().unwrap();
     infer::hir::CONTEXTUAL_VISITS.with(|visits| visits.set(0));
     let independent = check_external_value_expr_type(
         &tir,
@@ -309,7 +308,13 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let (mut tir, src) = module_aware_tir(source);
     let mut ids = Vec::new();
     crate::hir::visit_expr(
-        tir.root().nodes()[0].definition.formula().unwrap(),
+        tir.root()
+            .nodes()
+            .next()
+            .unwrap()
+            .definition
+            .formula()
+            .unwrap(),
         &mut |expr| {
             if matches!(expr.kind(), crate::hir::ExprKind::ForComp { .. }) {
                 ids.push(expr.id().clone());
@@ -317,11 +322,15 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         },
     );
     assert_eq!(ids.len(), 2);
-    tir.root_mut().nodes[0]
-        .definition
-        .formula_mut()
-        .unwrap()
-        .map_spans_for_test(|_| Span::new(0, 1));
+    edit_root_decls(&mut tir, |decl| {
+        if let crate::ir::entry::Decl::Node(entry) = decl {
+            entry
+                .definition
+                .formula_mut()
+                .unwrap()
+                .map_spans_for_test(|_| Span::new(0, 1));
+        }
+    });
     check_dimensions_tir(&mut tir, &src).unwrap();
     let totals = |body: &crate::tir::typed::DagTIR| {
         ids.iter()
@@ -337,11 +346,15 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
             .collect::<Vec<_>>()
     };
     assert_eq!(totals(tir.root()), vec![2, 3]);
-    tir.root_mut().nodes[0]
-        .definition
-        .formula_mut()
-        .unwrap()
-        .map_spans_for_test(|_| Span::new(2, 3));
+    edit_root_decls(&mut tir, |decl| {
+        if let crate::ir::entry::Decl::Node(entry) = decl {
+            entry
+                .definition
+                .formula_mut()
+                .unwrap()
+                .map_spans_for_test(|_| Span::new(2, 3));
+        }
+    });
     check_dimensions_tir(&mut tir, &src).unwrap();
     assert_eq!(totals(tir.root()), vec![2, 3]);
     let (mut rebuilt, rebuilt_src) = module_aware_tir(source);
@@ -355,13 +368,17 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
 #[test]
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    tir.root_mut().nodes[0]
-        .definition
-        .formula_mut()
-        .unwrap()
-        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
-            "not dimensionless".to_string(),
-        ));
+    edit_root_decls(&mut tir, |decl| {
+        if let crate::ir::entry::Decl::Node(entry) = decl {
+            entry
+                .definition
+                .formula_mut()
+                .unwrap()
+                .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+                    "not dimensionless".to_string(),
+                ));
+        }
+    });
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -372,13 +389,17 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         "index Phase = { Burn };\n\
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
-    tir.root_mut().nodes[0]
-        .definition
-        .formula_mut()
-        .unwrap()
-        .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
-            "not indexed".to_string(),
-        ));
+    edit_root_decls(&mut tir, |decl| {
+        if let crate::ir::entry::Decl::Node(entry) = decl {
+            entry
+                .definition
+                .formula_mut()
+                .unwrap()
+                .replace_kind_for_test(crate::hir::ExprKind::StringLiteral(
+                    "not indexed".to_string(),
+                ));
+        }
+    });
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -386,13 +407,16 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
 #[test]
 fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
-    let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body = crate::hir::CheckedAssertBody::from_assert_body_for_test(
-        crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
-            crate::hir::ExprKind::StringLiteral("not bool".to_string()),
-            span,
-        ))),
-    );
+    edit_root_decls(&mut tir, |decl| {
+        if let crate::ir::entry::Decl::Assert(entry) = decl {
+            entry.body = crate::hir::CheckedAssertBody::from_assert_body_for_test(
+                crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
+                    crate::hir::ExprKind::StringLiteral("not bool".to_string()),
+                    entry.span,
+                ))),
+            );
+        }
+    });
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -1298,7 +1322,7 @@ node bad: Dimensionless = @x ^ @n;";
 #[test]
 fn hir_normalizes_omitted_dimension_and_unit_powers() {
     let (tir, _) = module_aware_tir("param distance: Length = 1.0 m;");
-    let param = tir.root().params().first().unwrap();
+    let param = tir.root().params().next().unwrap();
     let crate::hir::DeclType::Value(crate::hir::ValueType {
         kind: crate::hir::ValueTypeKind::DimExpr(dimension),
         ..
@@ -1324,7 +1348,7 @@ fn hir_preserves_exact_power_metadata() {
     let expression = &tir
         .root()
         .nodes()
-        .first()
+        .next()
         .unwrap()
         .definition
         .formula()

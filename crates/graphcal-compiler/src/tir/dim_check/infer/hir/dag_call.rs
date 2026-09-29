@@ -248,8 +248,7 @@ impl Infer<'_> {
             ResolvedDeclName,
             &crate::tir::typed::ResolvedTypeExpr,
         > = dag_tir
-            .params
-            .iter()
+            .params()
             .map(|param| {
                 let key = param.identity();
                 if param.default.is_none() {
@@ -262,8 +261,7 @@ impl Infer<'_> {
             ResolvedDeclName,
             &crate::tir::typed::ResolvedTypeExpr,
         > = dag_tir
-            .nodes
-            .iter()
+            .nodes()
             .map(|node| (node.identity(), node.type_ann.checked().resolved()))
             .collect();
 

@@ -94,18 +94,18 @@ pub fn combined_runtime_order_for(
     let candidates = dags
         .iter()
         .flat_map(|dag| {
-            dag.source_order()
+            dag.decls()
                 .iter()
                 .filter(|entry| {
                     matches!(
-                        entry.category,
+                        entry.category(),
                         graphcal_compiler::declaration_category::DeclCategory::Value(
                             graphcal_compiler::declaration_category::ValueDeclCategory::Param
                                 | graphcal_compiler::declaration_category::ValueDeclCategory::Node
                         )
                     )
                 })
-                .map(|entry| entry.identity.clone())
+                .map(graphcal_compiler::ir::entry::Decl::identity)
         })
         .collect::<Vec<_>>();
     let mut graph = DependencyGraph::new();
@@ -166,11 +166,10 @@ pub fn compile_checked_with_cancellation(
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
     Ok(ExecPlan {
-        has_unfinished_definitions: tir.dag_registry().values().any(|dag| {
-            dag.nodes()
-                .iter()
-                .any(|node| node.definition.todo().is_some())
-        }),
+        has_unfinished_definitions: tir
+            .dag_registry()
+            .values()
+            .any(|dag| dag.nodes().any(|node| node.definition.todo().is_some())),
         declaration_locations,
         root,
         callables,
@@ -420,15 +419,15 @@ fn validate_execution_facts(
                 .map_err(|error| invalid(error.to_string()))
         })?;
         let expected = dag
-            .source_order()
+            .decls()
             .iter()
             .filter(|entry| {
                 matches!(
-                    entry.category,
+                    entry.category(),
                     DeclCategory::Value(ValueDeclCategory::Param | ValueDeclCategory::Node)
                 )
             })
-            .map(|entry| entry.identity.clone())
+            .map(graphcal_compiler::ir::entry::Decl::identity)
             .collect::<HashSet<_>>();
         let scheduled = facts.topo_order.iter().cloned().collect::<HashSet<_>>();
         if scheduled != expected || scheduled.len() != facts.topo_order.len() {

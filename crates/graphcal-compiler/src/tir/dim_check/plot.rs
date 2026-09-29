@@ -31,15 +31,13 @@ pub(super) fn check_plot_properties_dag(
 ) -> Result<CheckedPlotChannelShapes, GraphcalError> {
     check_plot_references(ctx, dag)?;
     let mut channel_types = HashMap::new();
-    for entry in &dag.plots {
+    for entry in dag.plots() {
         let (owner, types) = check_plot_entry(ctx, entry)?;
         channel_types.insert(owner, types);
     }
-    dag.figures
-        .iter()
+    dag.figures()
         .try_for_each(|entry| check_figure_entry(ctx, entry))?;
-    dag.layers
-        .iter()
+    dag.layers()
         .try_for_each(|entry| check_layer_entry(ctx, entry))?;
     Ok(channel_types)
 }
@@ -154,19 +152,18 @@ fn check_plot_references(
     dag: &crate::tir::typed::DagTIR,
 ) -> Result<(), GraphcalError> {
     let owners = dag
-        .figures
-        .iter()
+        .figures()
         .map(|f| ("figure", &f.name, &f.plot_names))
-        .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
+        .chain(dag.layers().map(|l| ("layer", &l.name, &l.plot_names)));
     for (owner_kind, owner, plot_names) in owners {
         for (i, reference) in plot_names.iter().enumerate() {
             let local = reference.value.as_bare();
-            let is_known_plot = dag.plots.iter().any(|p| Some(&p.name) == local)
+            let is_known_plot = dag.plots().any(|p| Some(&p.name) == local)
                 || dag.included_plots.iter().any(|p| p.name == reference.value);
             if !is_known_plot {
-                let actual_kind = if dag.figures.iter().any(|f| Some(&f.name) == local) {
+                let actual_kind = if dag.figures().any(|f| Some(&f.name) == local) {
                     Some("figure")
-                } else if dag.layers.iter().any(|l| Some(&l.name) == local) {
+                } else if dag.layers().any(|l| Some(&l.name) == local) {
                     Some("layer")
                 } else {
                     None

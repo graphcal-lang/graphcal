@@ -437,9 +437,9 @@ impl PreparedProject {
             let actual_kind = self
                 .tir
                 .root()
-                .source_order()
+                .decls()
                 .iter()
-                .find_map(|entry| (&entry.name == name).then_some(entry.category));
+                .find_map(|entry| (entry.name() == name).then_some(entry.category()));
             actual_kind.map_or_else(
                 || CompileError::Eval(GraphcalError::OverrideUnknownParam { name: name.clone() }),
                 |actual_kind| {

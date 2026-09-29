@@ -132,6 +132,48 @@ impl<P: BodyPhase> DeclTable<P> {
         })
     }
 
+    /// Update declaration bodies in place, in source order.
+    ///
+    /// `update` must preserve each declaration's name and owner; use
+    /// [`Self::rebase`] to move declarations to another DAG.
+    pub(crate) fn update(&mut self, mut update: impl FnMut(&mut Decl<P>)) {
+        for identity in &self.order {
+            if let Some(decl) = self.decls.get_mut(identity) {
+                update(decl);
+                debug_assert_eq!(
+                    &decl.identity(),
+                    identity,
+                    "an in-place update preserves the declaration identity"
+                );
+            }
+        }
+    }
+
+    /// Move every declaration to DAG `owner` under its unchanged name.
+    ///
+    /// `transform` sees each declaration in source order under its original
+    /// identity, before the move.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DeclTableError`] when the transformed declarations do not
+    /// form a valid table.
+    pub(crate) fn rebase(
+        self,
+        owner: &DagId,
+        mut transform: impl FnMut(Decl<P>) -> Decl<P>,
+    ) -> Result<Self, DeclTableError> {
+        let (decls, _) = self.into_parts();
+        Self::new(
+            owner,
+            decls.into_iter().map(|decl| {
+                let mut decl = transform(decl);
+                decl.set_declaration_owner(owner.clone());
+                decl
+            }),
+        )
+    }
+
     /// Canonical identities in source order.
     #[must_use]
     pub fn order(&self) -> &[ResolvedDeclName] {

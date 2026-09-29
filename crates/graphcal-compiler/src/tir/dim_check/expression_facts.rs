@@ -281,12 +281,11 @@ fn check_instance_defaults(
     // expression identities are unique across lowered bodies, so a default is
     // inherited exactly when it is one of the template's parameter defaults.
     let template_defaults = template
-        .params
-        .iter()
+        .params()
         .filter_map(|entry| entry.default.as_deref())
         .map(crate::hir::expr::Expr::id)
         .collect::<std::collections::HashSet<_>>();
-    for entry in &ctx.env.dag.params {
+    for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         let Some(default) = &entry.default else {
             continue;

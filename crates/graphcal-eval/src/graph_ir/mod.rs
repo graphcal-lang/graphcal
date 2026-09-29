@@ -333,10 +333,10 @@ fn project_dag_nodes(
     dag: &DagTIR,
     output_names: &BTreeMap<DagId, HashSet<DeclName>>,
 ) -> Vec<GraphNode> {
-    dag.source_order()
+    dag.decls()
         .iter()
         .filter_map(|entry| {
-            let kind = match entry.category {
+            let kind = match entry.category() {
                 DeclCategory::Value(ValueDeclCategory::Const) => GraphNodeKind::Const,
                 DeclCategory::Value(ValueDeclCategory::Param) => GraphNodeKind::Param,
                 DeclCategory::Value(ValueDeclCategory::Node) => GraphNodeKind::Node,
@@ -348,7 +348,7 @@ fn project_dag_nodes(
             Some((entry, kind))
         })
         .map(|(entry, kind)| {
-            let id = entry.identity.clone();
+            let id = entry.identity();
             let is_public_output = kind == GraphNodeKind::Node
                 && output_names
                     .get(id.owner())

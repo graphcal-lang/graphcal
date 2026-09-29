@@ -40,7 +40,7 @@ pub(super) fn eval_const_pools_for_dags(
     sorted_dag_ids.sort();
     for dag_id in sorted_dag_ids {
         let dag = &tir.dag_registry()[dag_id];
-        let mut entries = dag.consts().iter().collect::<Vec<_>>();
+        let mut entries = dag.consts().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         for entry in entries {
             cancellation.checkpoint()?;
@@ -175,9 +175,8 @@ pub(super) fn build_runtime_dag(
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
         .params()
-        .iter()
         .map(DeclRef::Param)
-        .chain(dag.nodes().iter().map(DeclRef::Node))
+        .chain(dag.nodes().map(DeclRef::Node))
         .collect();
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 

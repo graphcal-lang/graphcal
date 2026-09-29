@@ -325,16 +325,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         };
 
     let mut result_values = RuntimeResultValueAssembly::default();
-    for entry in tir.root().source_order() {
-        let name = &entry.name;
-        let decl_type = match entry.category {
+    for entry in tir.root().decls().iter() {
+        let name = entry.name();
+        let decl_type = match entry.category() {
             DeclCategory::Value(decl_type) => decl_type,
             DeclCategory::Assert
             | DeclCategory::Plot
             | DeclCategory::Figure
             | DeclCategory::Layer => continue,
         };
-        let key = entry.identity.clone();
+        let key = entry.identity().clone();
         let value = match decl_type {
             ValueDeclCategory::Const => plan.root.const_values.get(&key).map_or_else(
                 || {
@@ -393,19 +393,19 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         for projection in &record.output_projections {
             if tir
                 .root()
-                .source_order()
+                .decls()
                 .iter()
-                .any(|entry| projection.exposed_name.as_bare() == Some(&entry.name))
+                .any(|entry| projection.exposed_name.as_bare() == Some(entry.name()))
             {
                 continue;
             }
             let declaration = instance_dag.runtime_decl_identity(&projection.target);
             let key = declaration.clone();
             let decl_type = instance_dag
-                .source_order()
+                .decls()
                 .iter()
                 .find_map(|entry| {
-                    (entry.identity == declaration).then_some(match entry.category {
+                    (entry.identity() == declaration).then_some(match entry.category() {
                         DeclCategory::Value(decl_type) => Some(decl_type),
                         DeclCategory::Assert
                         | DeclCategory::Plot
@@ -449,16 +449,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 src,
             )?;
         }
-        for entry in instance_dag.source_order() {
-            let name = &entry.name;
-            let decl_type = match entry.category {
+        for entry in instance_dag.decls().iter() {
+            let name = entry.name();
+            let decl_type = match entry.category() {
                 DeclCategory::Value(decl_type) => decl_type,
                 DeclCategory::Assert
                 | DeclCategory::Plot
                 | DeclCategory::Figure
                 | DeclCategory::Layer => continue,
             };
-            let declaration = entry.identity.clone();
+            let declaration = entry.identity().clone();
             let key = declaration.clone();
             let value = if let Some(error) = errors.get(&key) {
                 Err(error.clone())
@@ -515,7 +515,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let mut plots = tir
         .root()
         .plots()
-        .iter()
         .try_fold(Vec::new(), |mut plots, entry| {
             let owner = entry.identity();
             match evaluate_plot(
@@ -555,7 +554,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let entry = tir.dag_registry().get(owner.owner()).and_then(|plot_dag| {
                 plot_dag
                     .plots()
-                    .iter()
                     .find(|entry| entry.identity() == owner)
                     .map(|entry| (plot_dag, entry))
             });
@@ -595,7 +593,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let figures: Vec<super::types::FigureSpec> = tir
         .root()
         .figures()
-        .iter()
         .map(|entry| {
             let owner = entry.identity();
             Ok(
@@ -634,7 +631,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let layers: Vec<super::types::LayerSpec> = tir
         .root()
         .layers()
-        .iter()
         .map(|entry| {
             let owner = entry.identity();
             Ok(
@@ -675,13 +671,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // maps use, so output entries keep their alias qualification (#813).
     let domain_constraints: HashMap<ScopedName, _> = tir
         .root()
-        .source_order()
+        .decls()
         .iter()
         .filter_map(|entry| {
             plan.root
                 .domain_constraints
-                .get(&entry.identity)
-                .map(|constraint| (ScopedName::local(entry.name.clone()), constraint.clone()))
+                .get(&entry.identity())
+                .map(|constraint| (ScopedName::local(entry.name().clone()), constraint.clone()))
         })
         .collect();
     cancellation.checkpoint()?;
@@ -784,7 +780,6 @@ pub(super) fn evaluate_assertions(
     let mut assertions: Vec<(ScopedName, AssertResult, Span)> = tir
         .root()
         .asserts()
-        .iter()
         .map(|entry| {
             let owner = entry.identity();
             let entry_ctx = ctx.for_decl(&owner);
@@ -815,7 +810,6 @@ pub(super) fn evaluate_assertions(
                 let owner = instance_dag.runtime_decl_identity(&projection.target);
                 let entry = instance_dag
                     .asserts()
-                    .iter()
                     .find(|entry| entry.identity() == owner)
                     .ok_or_else(|| {
                         GraphcalError::internal_error(
@@ -862,14 +856,9 @@ pub(super) fn root_source_names(
 ) -> Result<Vec<(ResolvedDeclName, ScopedName)>, GraphcalError> {
     let mut names = tir
         .root()
-        .source_order()
+        .decls()
         .iter()
-        .map(|entry| {
-            (
-                entry.identity.clone(),
-                ScopedName::local(entry.name.clone()),
-            )
-        })
+        .map(|entry| (entry.identity(), ScopedName::local(entry.name().clone())))
         .collect::<Vec<_>>();
     for record in tir.root().semantic_instances() {
         let instance_dag = semantic_instance_dag(tir, record, src)?;

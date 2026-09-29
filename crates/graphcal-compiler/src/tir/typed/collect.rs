@@ -28,15 +28,14 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
             })
             .collect();
     let runtime_units = dag
-        .params
-        .iter()
+        .params()
         .filter_map(|entry| {
             entry
                 .default
                 .as_ref()
                 .map(|default| (entry.identity(), collect_unit_names(default)))
         })
-        .chain(dag.nodes.iter().map(|entry| {
+        .chain(dag.nodes().map(|entry| {
             (
                 entry.identity(),
                 entry
@@ -98,16 +97,14 @@ fn collect_unit_names_from_hir(
 }
 
 pub(super) fn collect_resolved_dag_dependencies(
-    consts: &[super::TypedConstEntry],
-    params: &[super::TypedParamEntry],
-    nodes: &[super::TypedNodeEntry],
+    decls: &crate::ir::decl_table::DeclTable<super::Typed>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDagDependencies, GraphcalError> {
     let mut resolved = ResolvedDagDependencies::default();
 
-    for entry in consts {
-        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
+    for entry in decls.consts() {
+        let key = entry.identity();
         let mut deps = hir::collect_expr_dependencies(&entry.expr);
         for graph_ref in &deps.graph_refs {
             // `@const_name` in a const body is a const dependency. Non-const
@@ -137,8 +134,8 @@ pub(super) fn collect_resolved_dag_dependencies(
         resolved.const_deps.insert(key, deps.const_refs);
     }
 
-    for entry in params {
-        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
+    for entry in decls.params() {
+        let key = entry.identity();
         let deps = entry
             .default
             .as_ref()
@@ -148,8 +145,8 @@ pub(super) fn collect_resolved_dag_dependencies(
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
-    for entry in nodes {
-        let key = ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone());
+    for entry in decls.nodes() {
+        let key = entry.identity();
         let dependencies = match &entry.definition {
             crate::node_definition::NodeDefinition::Formula(expression) => {
                 hir::collect_expr_dependencies(expression).graph_refs

@@ -184,9 +184,9 @@ impl PreparedProject {
                 let actual_kind = self
                     .tir
                     .root()
-                    .source_order()
+                    .decls()
                     .iter()
-                    .find_map(|entry| (&entry.name == name).then_some(entry.category));
+                    .find_map(|entry| (entry.name() == name).then_some(entry.category()));
                 return Err(actual_kind.map_or_else(
                     || ModelDefinitionError::UnknownOutput { name: name.clone() },
                     |actual_kind| ModelDefinitionError::OutputNotNode {

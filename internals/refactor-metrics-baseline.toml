@@ -1,7 +1,7 @@
 internal_error_calls = 268
-resolved_name_from_def_outside_resolver = 37
+resolved_name_from_def_outside_resolver = 33
 expect_valid_format = 0
-too_many_arguments_expects = 10
+too_many_arguments_expects = 9
 build_declared_types_calls = 0
 module_resolve_str_key_lookups = 0
 pipeline_layers_exceptions = 67

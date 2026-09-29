@@ -272,6 +272,20 @@ impl<P: BodyPhase> Decl<P> {
         entry_identity(self.declaration_owner(), self.name())
     }
 
+    /// Move the declaration to DAG `owner`.
+    pub(crate) fn set_declaration_owner(&mut self, owner: DagId) {
+        let slot = match self {
+            Self::Const(entry) => &mut entry.declaration_owner,
+            Self::Param(entry) => &mut entry.declaration_owner,
+            Self::Node(entry) => &mut entry.declaration_owner,
+            Self::Assert(entry) => &mut entry.declaration_owner,
+            Self::Plot(entry) => &mut entry.declaration_owner,
+            Self::Figure(entry) => &mut entry.declaration_owner,
+            Self::Layer(entry) => &mut entry.declaration_owner,
+        };
+        *slot = owner;
+    }
+
     /// Evaluation source-order category of the declaration.
     #[must_use]
     pub const fn category(&self) -> DeclCategory {

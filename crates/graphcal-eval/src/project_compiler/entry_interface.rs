@@ -144,7 +144,6 @@ pub(super) fn build_checked_entry_interface(
                 let entry = tir
                     .root()
                     .params()
-                    .iter()
                     .find(|entry| &entry.name == name)
                     .ok_or_else(|| {
                         missing_interface_fact(
@@ -165,7 +164,6 @@ pub(super) fn build_checked_entry_interface(
                 let entry = tir
                     .root()
                     .nodes()
-                    .iter()
                     .find(|entry| &entry.name == name)
                     .ok_or_else(|| {
                         missing_interface_fact(

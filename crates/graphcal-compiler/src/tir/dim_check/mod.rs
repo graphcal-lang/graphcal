@@ -909,7 +909,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
         let facts = dag.expression_facts().map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
-        for param in &dag.params {
+        for param in dag.params() {
             let Some(default) = &param.default else {
                 continue;
             };
@@ -1031,7 +1031,7 @@ pub fn check_external_value_expr_type(
 }
 
 fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for entry in &ctx.env.dag.params {
+    for entry in ctx.env.dag.params() {
         ctx.checkpoint()?;
         validate_declared_shape(ctx, &entry.type_ann)?;
         if entry.default.is_none() {
@@ -1064,12 +1064,12 @@ fn check_dimensions_dag(
         expression_facts,
     };
 
-    for entry in &dag.consts {
+    for entry in dag.consts() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
     }
-    for entry in &dag.nodes {
+    for entry in dag.nodes() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
@@ -1079,7 +1079,7 @@ fn check_dimensions_dag(
     ctx.checkpoint()?;
     check_dynamic_unit_scale_types(&ctx)?;
 
-    for entry in &dag.asserts {
+    for entry in dag.asserts() {
         ctx.checkpoint()?;
         let owner = entry.identity();
         let body = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
@@ -1145,19 +1145,10 @@ enum ExpectedBound {
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     let dag = ctx.env.dag;
     let decl_iter = dag
-        .consts
-        .iter()
+        .consts()
         .map(|e| (&e.name, e.identity(), &e.type_ann))
-        .chain(
-            dag.params
-                .iter()
-                .map(|e| (&e.name, e.identity(), &e.type_ann)),
-        )
-        .chain(
-            dag.nodes
-                .iter()
-                .map(|e| (&e.name, e.identity(), &e.type_ann)),
-        );
+        .chain(dag.params().map(|e| (&e.name, e.identity(), &e.type_ann)))
+        .chain(dag.nodes().map(|e| (&e.name, e.identity(), &e.type_ann)));
 
     for (name, key, annotation) in decl_iter {
         let bounds = dag.semantic.domain_bounds.get(&key);
@@ -1215,17 +1206,14 @@ fn check_domain_constraint_targets_dag(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let decl_iter = dag
-        .consts
-        .iter()
+        .consts()
         .map(|entry| (entry.identity(), &entry.type_ann, entry.span))
         .chain(
-            dag.params
-                .iter()
+            dag.params()
                 .map(|entry| (entry.identity(), &entry.type_ann, entry.span)),
         )
         .chain(
-            dag.nodes
-                .iter()
+            dag.nodes()
                 .map(|entry| (entry.identity(), &entry.type_ann, entry.span)),
         );
 
@@ -1700,15 +1688,14 @@ fn detect_decl_cycles(
     for dag in tir.dags.values() {
         let deps = &dag.semantic.dependencies;
         check_resolved(
-            dag.consts.iter().map(|e| (&e.name, e.identity(), e.span)),
+            dag.consts().map(|e| (&e.name, e.identity(), e.span)),
             &deps.const_deps,
             src,
         )?;
         check_resolved(
-            dag.params
-                .iter()
+            dag.params()
                 .map(|e| (&e.name, e.identity(), e.span))
-                .chain(dag.nodes.iter().map(|e| (&e.name, e.identity(), e.span))),
+                .chain(dag.nodes().map(|e| (&e.name, e.identity(), e.span))),
             &deps.runtime_deps,
             src,
         )?;

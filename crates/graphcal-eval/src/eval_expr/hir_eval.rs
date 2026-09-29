@@ -2781,12 +2781,12 @@ fn check_inline_dag_asserts(
         .execution_plan()?
         .callable(dag_tir.dag_id())
         .map_err(|error| ctx.internal_error(error.to_string(), call_span))?;
-    for entry in dag_tir.source_order() {
-        if !matches!(entry.category, DeclCategory::Assert) {
+    for entry in dag_tir.decls().iter() {
+        if !matches!(entry.category(), DeclCategory::Assert) {
             continue;
         }
-        let name = &entry.name;
-        let key = entry.identity.clone();
+        let name = &entry.name();
+        let key = entry.identity().clone();
         let body = dag_tir.assert_body(&key).ok_or_else(|| {
             ctx.internal_error(
                 format!("TIR assertion entry missing for DAG assertion `{name}`"),

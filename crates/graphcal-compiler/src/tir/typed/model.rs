@@ -5,7 +5,6 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::assertion_expectation::ExpectedFail;
-use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::hir;
@@ -1526,7 +1525,7 @@ impl TIR {
     pub fn dag_containing_declaration(&self, declaration: &ResolvedDeclName) -> Option<&DagTIR> {
         self.dags
             .get(declaration.owner())
-            .filter(|dag| dag.declaration_index.values.contains_key(declaration))
+            .filter(|dag| dag.value_decl_type(declaration).is_some())
     }
 
     /// The checked type of any value declaration in the project.
@@ -1638,67 +1637,14 @@ impl TIR {
     /// Returns true if this file declares any required param or required index.
     #[must_use]
     pub fn is_library(&self) -> bool {
-        self.root()
-            .params
-            .iter()
-            .any(|param| param.default.is_none())
+        self.root().params().any(|param| param.default.is_none())
             || self
                 .root_declared_indexes()
                 .any(crate::registry::types::IndexDef::is_required)
     }
 }
 
-/// Index into an authoritative value-declaration record.
-#[derive(Debug, Clone, Copy)]
-enum ValueDeclarationSlot {
-    Const(usize),
-    Param(usize),
-    Node(usize),
-}
-
-/// Derived lookup indexes for declaration records. Bodies remain owned solely
-/// by the category-specific vectors on [`DagTIR`].
-#[derive(Debug, Clone, Default)]
-pub(super) struct DagDeclarationIndex {
-    values: HashMap<ResolvedDeclName, ValueDeclarationSlot>,
-    assertions: HashMap<ResolvedDeclName, usize>,
-}
-
-/// Checked declaration records could not be indexed.
-#[derive(Debug, Error)]
-pub(super) enum DeclarationRecordError {
-    /// Two records share one canonical identity.
-    #[error("duplicate checked declaration record `{name}`")]
-    Duplicate { name: DeclName, span: Span },
-    /// A record is owned by a different DAG than the one storing it.
-    #[error("checked declaration record `{identity}` is stored in DAG `{dag_id}`")]
-    ForeignOwner {
-        identity: ResolvedDeclName,
-        dag_id: crate::dag_id::DagId,
-        span: Span,
-    },
-}
-
-impl DeclarationRecordError {
-    pub(super) const fn span(&self) -> Span {
-        match self {
-            Self::Duplicate { span, .. } | Self::ForeignOwner { span, .. } => *span,
-        }
-    }
-}
-
 pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
-
-/// One value, assertion, or visualization declaration in evaluation source
-/// order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceOrderEntry {
-    /// Local name in this DAG body.
-    pub name: DeclName,
-    /// Canonical identity; concrete instances carry their runtime identity.
-    pub identity: ResolvedDeclName,
-    pub category: DeclCategory,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExpressionRootScope {
@@ -1716,17 +1662,11 @@ enum ExpressionRootScope {
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,
     pub(crate) body_revision: crate::body_revision::BodyRevision,
-    pub(crate) consts: Vec<TypedConstEntry>,
-    pub(crate) params: Vec<TypedParamEntry>,
-    pub(crate) nodes: Vec<TypedNodeEntry>,
-    pub(crate) asserts: Vec<TypedAssertEntry>,
-    pub(crate) plots: Vec<TypedPlotEntry>,
-    pub(crate) figures: Vec<TypedFigureEntry>,
-    pub(crate) layers: Vec<TypedLayerEntry>,
+    /// Every declaration owned by this DAG, keyed by canonical identity, in
+    /// source order.
+    pub(crate) decls: crate::ir::decl_table::DeclTable<Typed>,
     pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
-    pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
-    pub(crate) source_order: Vec<SourceOrderEntry>,
     pub(crate) static_ports: Vec<crate::hir::StaticPort>,
     pub(crate) assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
@@ -1755,39 +1695,45 @@ impl DagTIR {
         &self.dag_id
     }
 
+    /// Every declaration owned by this DAG, in source order.
     #[must_use]
-    pub fn consts(&self) -> &[TypedConstEntry] {
-        &self.consts
+    pub const fn decls(&self) -> &crate::ir::decl_table::DeclTable<Typed> {
+        &self.decls
     }
 
-    #[must_use]
-    pub fn params(&self) -> &[TypedParamEntry] {
-        &self.params
+    /// Const declarations in source order.
+    pub fn consts(&self) -> impl Iterator<Item = &TypedConstEntry> {
+        self.decls.consts()
     }
 
-    #[must_use]
-    pub fn nodes(&self) -> &[TypedNodeEntry] {
-        &self.nodes
+    /// Param declarations in source order.
+    pub fn params(&self) -> impl Iterator<Item = &TypedParamEntry> {
+        self.decls.params()
     }
 
-    #[must_use]
-    pub fn asserts(&self) -> &[TypedAssertEntry] {
-        &self.asserts
+    /// Node declarations in source order.
+    pub fn nodes(&self) -> impl Iterator<Item = &TypedNodeEntry> {
+        self.decls.nodes()
     }
 
-    #[must_use]
-    pub fn plots(&self) -> &[TypedPlotEntry] {
-        &self.plots
+    /// Assert declarations in source order.
+    pub fn asserts(&self) -> impl Iterator<Item = &TypedAssertEntry> {
+        self.decls.asserts()
     }
 
-    #[must_use]
-    pub fn figures(&self) -> &[TypedFigureEntry] {
-        &self.figures
+    /// Plot declarations in source order.
+    pub fn plots(&self) -> impl Iterator<Item = &TypedPlotEntry> {
+        self.decls.plots()
     }
 
-    #[must_use]
-    pub fn layers(&self) -> &[TypedLayerEntry] {
-        &self.layers
+    /// Figure declarations in source order.
+    pub fn figures(&self) -> impl Iterator<Item = &TypedFigureEntry> {
+        self.decls.figures()
+    }
+
+    /// Layer declarations in source order.
+    pub fn layers(&self) -> impl Iterator<Item = &TypedLayerEntry> {
+        self.decls.layers()
     }
 
     #[must_use]
@@ -1916,83 +1862,24 @@ impl DagTIR {
         &self.projectable_outputs
     }
 
-    /// Build identity-to-record indexes after all declaration vectors are installed.
-    ///
-    /// Every record must be owned by this DAG, so a declaration's owner alone
-    /// locates its record project-wide.
-    pub(super) fn index_declaration_records(&mut self) -> Result<(), DeclarationRecordError> {
-        let mut index = DagDeclarationIndex::default();
-        let own = |identity: &ResolvedDeclName, span: Span| {
-            if identity.owner() == &self.dag_id {
-                Ok(())
-            } else {
-                Err(DeclarationRecordError::ForeignOwner {
-                    identity: identity.clone(),
-                    dag_id: self.dag_id.clone(),
-                    span,
-                })
-            }
-        };
-        for (slot, name, key, span) in self
-            .consts
-            .iter()
-            .enumerate()
-            .map(|(slot, entry)| {
-                (
-                    ValueDeclarationSlot::Const(slot),
-                    &entry.name,
-                    entry.identity(),
-                    entry.span,
-                )
-            })
-            .chain(self.params.iter().enumerate().map(|(slot, entry)| {
-                (
-                    ValueDeclarationSlot::Param(slot),
-                    &entry.name,
-                    entry.identity(),
-                    entry.span,
-                )
-            }))
-            .chain(self.nodes.iter().enumerate().map(|(slot, entry)| {
-                (
-                    ValueDeclarationSlot::Node(slot),
-                    &entry.name,
-                    entry.identity(),
-                    entry.span,
-                )
-            }))
-        {
-            own(&key, span)?;
-            if index.values.insert(key, slot).is_some() {
-                return Err(DeclarationRecordError::Duplicate {
-                    name: name.clone(),
-                    span,
-                });
-            }
+    /// The checked type annotation of one of this DAG's value declarations.
+    fn value_decl_annotation(&self, key: &ResolvedDeclName) -> Option<&CheckedTypeAnnotation> {
+        match self.decls.get(key)? {
+            crate::ir::entry::Decl::Const(entry) => Some(&entry.type_ann),
+            crate::ir::entry::Decl::Param(entry) => Some(&entry.type_ann),
+            crate::ir::entry::Decl::Node(entry) => Some(&entry.type_ann),
+            crate::ir::entry::Decl::Assert(_)
+            | crate::ir::entry::Decl::Plot(_)
+            | crate::ir::entry::Decl::Figure(_)
+            | crate::ir::entry::Decl::Layer(_) => None,
         }
-        for (slot, entry) in self.asserts.iter().enumerate() {
-            let key = entry.identity();
-            own(&key, entry.span)?;
-            if index.assertions.insert(key, slot).is_some() {
-                return Err(DeclarationRecordError::Duplicate {
-                    name: entry.name.clone(),
-                    span: entry.span,
-                });
-            }
-        }
-        self.declaration_index = index;
-        Ok(())
     }
 
     /// The checked type of one of this DAG's value declarations.
     #[must_use]
     pub fn value_decl_type(&self, key: &ResolvedDeclName) -> Option<&CheckedDeclType> {
-        let annotation = match self.declaration_index.values.get(key)? {
-            ValueDeclarationSlot::Const(slot) => &self.consts[*slot].type_ann,
-            ValueDeclarationSlot::Param(slot) => &self.params[*slot].type_ann,
-            ValueDeclarationSlot::Node(slot) => &self.nodes[*slot].type_ann,
-        };
-        Some(&annotation.checked)
+        self.value_decl_annotation(key)
+            .map(CheckedTypeAnnotation::checked)
     }
 
     /// Replace the checked types of the value declarations named in `types`.
@@ -2000,71 +1887,64 @@ impl DagTIR {
         &mut self,
         mut types: HashMap<ResolvedDeclName, CheckedDeclType>,
     ) {
-        let annotations = self
-            .consts
-            .iter_mut()
-            .map(|entry| (entry.identity(), &mut entry.type_ann))
-            .chain(
-                self.params
-                    .iter_mut()
-                    .map(|entry| (entry.identity(), &mut entry.type_ann)),
-            )
-            .chain(
-                self.nodes
-                    .iter_mut()
-                    .map(|entry| (entry.identity(), &mut entry.type_ann)),
-            );
-        for (identity, annotation) in annotations {
+        self.decls.update(|decl| {
+            let identity = decl.identity();
+            let annotation = match decl {
+                crate::ir::entry::Decl::Const(entry) => &mut entry.type_ann,
+                crate::ir::entry::Decl::Param(entry) => &mut entry.type_ann,
+                crate::ir::entry::Decl::Node(entry) => &mut entry.type_ann,
+                crate::ir::entry::Decl::Assert(_)
+                | crate::ir::entry::Decl::Plot(_)
+                | crate::ir::entry::Decl::Figure(_)
+                | crate::ir::entry::Decl::Layer(_) => return,
+            };
             if let Some(checked) = types.remove(&identity) {
                 annotation.checked = checked;
             }
-        }
+        });
     }
 
     /// Every value declaration's identity and checked type annotation, in
-    /// const, param, node order.
+    /// source order.
     pub fn value_decl_types(
         &self,
     ) -> impl Iterator<Item = (ResolvedDeclName, &CheckedTypeAnnotation)> {
-        self.consts
-            .iter()
-            .map(|entry| (entry.identity(), &entry.type_ann))
-            .chain(
-                self.params
-                    .iter()
-                    .map(|entry| (entry.identity(), &entry.type_ann)),
-            )
-            .chain(
-                self.nodes
-                    .iter()
-                    .map(|entry| (entry.identity(), &entry.type_ann)),
-            )
+        self.decls.iter().filter_map(|decl| match decl {
+            crate::ir::entry::Decl::Const(entry) => Some((entry.identity(), &entry.type_ann)),
+            crate::ir::entry::Decl::Param(entry) => Some((entry.identity(), &entry.type_ann)),
+            crate::ir::entry::Decl::Node(entry) => Some((entry.identity(), &entry.type_ann)),
+            crate::ir::entry::Decl::Assert(_)
+            | crate::ir::entry::Decl::Plot(_)
+            | crate::ir::entry::Decl::Figure(_)
+            | crate::ir::entry::Decl::Layer(_) => None,
+        })
     }
 
-    /// Iterate identities from the authoritative value-record index, including
-    /// required parameters that have no default expression.
+    /// Identities of every value declaration, including required parameters
+    /// that have no default expression, in source order.
     pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
-        self.declaration_index.values.keys()
+        self.decls
+            .order()
+            .iter()
+            .filter(|identity| self.value_decl_annotation(identity).is_some())
     }
 
     /// Look up the single authoritative HIR expression owned by a const.
     #[must_use]
     pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
-        match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Const(slot)) => Some(&*self.consts[*slot].expr),
-            Some(ValueDeclarationSlot::Param(_) | ValueDeclarationSlot::Node(_)) | None => None,
+        match self.decls.get(key)? {
+            crate::ir::entry::Decl::Const(entry) => Some(&*entry.expr),
+            _ => None,
         }
     }
 
     /// Look up the single authoritative HIR expression owned by a param or node.
     #[must_use]
     pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
-        match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot].default.as_deref(),
-            Some(ValueDeclarationSlot::Node(slot)) => {
-                self.nodes[*slot].definition.formula().map(|expr| &**expr)
-            }
-            Some(ValueDeclarationSlot::Const(_)) | None => None,
+        match self.decls.get(key)? {
+            crate::ir::entry::Decl::Param(entry) => entry.default.as_deref(),
+            crate::ir::entry::Decl::Node(entry) => entry.definition.formula().map(|expr| &**expr),
+            _ => None,
         }
     }
 
@@ -2075,8 +1955,8 @@ impl DagTIR {
         key: &ResolvedDeclName,
     ) -> Option<&crate::syntax::span::Spanned<Vec<crate::syntax::span::Spanned<ResolvedDeclName>>>>
     {
-        match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Node(slot)) => self.nodes[*slot].definition.todo(),
+        match self.decls.get(key)? {
+            crate::ir::entry::Decl::Node(entry) => entry.definition.todo(),
             _ => None,
         }
     }
@@ -2090,10 +1970,10 @@ impl DagTIR {
     /// Look up the single authoritative HIR body owned by an assertion.
     #[must_use]
     pub fn assert_body(&self, key: &ResolvedDeclName) -> Option<&hir::AssertBody> {
-        self.declaration_index
-            .assertions
-            .get(key)
-            .map(|slot| &*self.asserts[*slot].body)
+        match self.decls.get(key)? {
+            crate::ir::entry::Decl::Assert(entry) => Some(&*entry.body),
+            _ => None,
+        }
     }
 
     /// Visit every source unit reference used by this DAG.
@@ -2153,17 +2033,17 @@ impl DagTIR {
     }
 
     fn declaration_expression_roots(&self) -> impl Iterator<Item = &hir::Expr> {
-        self.consts
-            .iter()
+        self.decls
+            .consts()
             .map(|entry| &*entry.expr)
             .chain(
-                self.params
-                    .iter()
+                self.decls
+                    .params()
                     .filter_map(|entry| entry.default.as_deref()),
             )
             .chain(
-                self.nodes
-                    .iter()
+                self.decls
+                    .nodes()
                     .filter_map(|entry| entry.definition.formula().map(|expr| &**expr)),
             )
             .chain(
@@ -2173,7 +2053,7 @@ impl DagTIR {
                     .flatten()
                     .map(|bound| &*bound.value),
             )
-            .chain(self.plots.iter().flat_map(|entry| {
+            .chain(self.decls.plots().flat_map(|entry| {
                 entry
                     .body
                     .encodings
@@ -2183,10 +2063,10 @@ impl DagTIR {
                     .chain(entry.body.properties.iter().map(|field| &*field.value))
             }))
             .chain(
-                self.figures
-                    .iter()
+                self.decls
+                    .figures()
                     .flat_map(|entry| &entry.fields)
-                    .chain(self.layers.iter().flat_map(|entry| &entry.fields))
+                    .chain(self.decls.layers().flat_map(|entry| &entry.fields))
                     .map(|field| &*field.value),
             )
             .chain(
@@ -2196,15 +2076,10 @@ impl DagTIR {
                     .map(|entry| &*entry.expr),
             )
             .chain(
-                self.asserts
-                    .iter()
+                self.decls
+                    .asserts()
                     .flat_map(|entry| entry.body.expressions()),
             )
-    }
-
-    #[must_use]
-    pub fn source_order(&self) -> &[SourceOrderEntry] {
-        &self.source_order
     }
 
     #[must_use]
