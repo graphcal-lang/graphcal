@@ -6,8 +6,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use super::{
-    DagTIR, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
-    ResolvedTypeExpr, TIR,
+    DagTIR, ProjectTypeStore, ResolvedDeclType, ResolvedDim, ResolvedDimTerm, ResolvedGenericArg,
+    ResolvedIndex, ResolvedValueType, TIR,
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
@@ -107,16 +107,16 @@ fn specialize_index(index: &ResolvedIndex, substitution: &StaticSubstitution) ->
 }
 
 fn specialize_dim_arg(
-    dimension: &ResolvedDimArg,
+    dimension: &ResolvedDim,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDimArg, GraphcalError> {
+) -> Result<ResolvedDim, GraphcalError> {
     match dimension {
-        ResolvedDimArg::Concrete(dimension) => {
-            specialize_dimension(dimension, substitution, types, src).map(ResolvedDimArg::Concrete)
+        ResolvedDim::Concrete(dimension) => {
+            specialize_dimension(dimension, substitution, types, src).map(ResolvedDim::Concrete)
         }
-        ResolvedDimArg::Expr { terms, span } => terms
+        ResolvedDim::Symbolic { terms, span } => terms
             .iter()
             .map(|term| match term {
                 ResolvedDimTerm::Concrete { dim, power, op } => {
@@ -131,42 +131,33 @@ fn specialize_dim_arg(
                 ResolvedDimTerm::GenericParam { .. } => Ok(term.clone()),
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(|terms| ResolvedDimArg::Expr { terms, span: *span }),
-        ResolvedDimArg::Dimensionless | ResolvedDimArg::GenericParam(_, _) => Ok(dimension.clone()),
+            .map(|terms| ResolvedDim::Symbolic { terms, span: *span }),
     }
 }
 
-pub fn specialize_type(
-    resolved: &ResolvedTypeExpr,
+fn specialize_value_type(
+    resolved: &ResolvedValueType,
     substitution: &StaticSubstitution,
     types: &ProjectTypeStore,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let recurse = |resolved: &ResolvedTypeExpr| specialize_type(resolved, substitution, types, src);
+) -> Result<ResolvedValueType, GraphcalError> {
     match resolved {
-        ResolvedTypeExpr::Quantity(dimension) => {
-            specialize_dimension(dimension, substitution, types, src)
-                .map(ResolvedTypeExpr::Quantity)
+        ResolvedValueType::Quantity(dimension) => {
+            specialize_dim_arg(dimension, substitution, types, src).map(ResolvedValueType::Quantity)
         }
-        ResolvedTypeExpr::Complex { dimension, span } => {
+        ResolvedValueType::Complex { dimension, span } => {
             specialize_dim_arg(dimension, substitution, types, src).map(|dimension| {
-                ResolvedTypeExpr::Complex {
+                ResolvedValueType::Complex {
                     dimension,
                     span: *span,
                 }
             })
         }
-        ResolvedTypeExpr::Key { index, span } => Ok(ResolvedTypeExpr::Key {
+        ResolvedValueType::Key { index, span } => Ok(ResolvedValueType::Key {
             index: specialize_index(index, substitution),
             span: *span,
         }),
-        ResolvedTypeExpr::Struct(name, span) => Ok(ResolvedTypeExpr::Struct(
-            type_substitution(substitution, name)
-                .unwrap_or(name)
-                .clone(),
-            *span,
-        )),
-        ResolvedTypeExpr::GenericStruct {
+        ResolvedValueType::Struct {
             name,
             generic_args,
             span,
@@ -183,11 +174,12 @@ pub fn specialize_type(
                     )),
                     ResolvedGenericArg::Nat(_, _) => Ok(argument.clone()),
                     ResolvedGenericArg::Type(resolved) => {
-                        recurse(resolved).map(ResolvedGenericArg::Type)
+                        specialize_value_type(resolved, substitution, types, src)
+                            .map(ResolvedGenericArg::Type)
                     }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(ResolvedTypeExpr::GenericStruct {
+            Ok(ResolvedValueType::Struct {
                 name: type_substitution(substitution, name)
                     .unwrap_or(name)
                     .clone(),
@@ -195,37 +187,27 @@ pub fn specialize_type(
                 span: *span,
             })
         }
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            let terms = terms
-                .iter()
-                .map(|term| match term {
-                    ResolvedDimTerm::Concrete { dim, power, op } => {
-                        specialize_dimension(dim, substitution, types, src).map(|dim| {
-                            ResolvedDimTerm::Concrete {
-                                dim,
-                                power: *power,
-                                op: *op,
-                            }
-                        })
-                    }
-                    ResolvedDimTerm::GenericParam { .. } => Ok(term.clone()),
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(ResolvedTypeExpr::GenericDimExpr { terms, span: *span })
+        ResolvedValueType::Bool
+        | ResolvedValueType::Int
+        | ResolvedValueType::Datetime(_)
+        | ResolvedValueType::GenericTypeParam(_, _) => Ok(resolved.clone()),
+    }
+}
+
+pub fn specialize_type(
+    resolved: &ResolvedDeclType,
+    substitution: &StaticSubstitution,
+    types: &ProjectTypeStore,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedDeclType, GraphcalError> {
+    match resolved {
+        ResolvedDeclType::Value(value_type) => {
+            specialize_value_type(value_type, substitution, types, src).map(ResolvedDeclType::Value)
         }
-        ResolvedTypeExpr::Indexed { base, indexes } => Ok(ResolvedTypeExpr::Indexed {
-            base: Box::new(recurse(base)?),
-            indexes: indexes
-                .iter()
-                .map(|index| specialize_index(index, substitution))
-                .collect(),
+        ResolvedDeclType::Indexed { element, indexes } => Ok(ResolvedDeclType::Indexed {
+            element: specialize_value_type(element, substitution, types, src)?,
+            indexes: indexes.map_ref(|index| specialize_index(index, substitution)),
         }),
-        ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::Bool
-        | ResolvedTypeExpr::Int
-        | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::GenericDimParam(_, _)
-        | ResolvedTypeExpr::GenericTypeParam(_, _) => Ok(resolved.clone()),
     }
 }
 

@@ -32,7 +32,7 @@ use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{
     ConcreteIndexKind, FormattingRegistry, IndexKind, RequiredIndexKind, UnitScale,
 };
-use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedTypeExpr, TIR};
+use graphcal_compiler::tir::typed::{ResolvedDeclType, ResolvedDomainBound, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
@@ -2500,18 +2500,21 @@ fn format_constraints(constraints: &[ResolvedDomainBound]) -> String {
 /// For indexed types like `Velocity[Maneuver]`, inserts the constraint clause
 /// between the base type and the index suffix: `Velocity(min: 0 m/s)[Maneuver]`.
 fn format_type_with_constraints(
-    resolved: &ResolvedTypeExpr,
+    resolved: &ResolvedDeclType,
     constraints: &[ResolvedDomainBound],
     registry: &FormattingRegistry,
 ) -> String {
     let constraint_str = format_constraints(constraints);
-    if let ResolvedTypeExpr::Indexed { base, indexes } = resolved {
-        let base_str = base.format(registry);
-        let idx_strs: Vec<String> = indexes.iter().map(ToString::to_string).collect();
-        format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
-    } else {
-        let type_str = resolved.format(registry);
-        format!("{type_str}{constraint_str}")
+    match resolved {
+        ResolvedDeclType::Indexed { element, indexes } => {
+            let base_str = element.format(registry);
+            let idx_strs: Vec<String> = indexes.iter().map(ToString::to_string).collect();
+            format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
+        }
+        ResolvedDeclType::Value(value_type) => {
+            let type_str = value_type.format(registry);
+            format!("{type_str}{constraint_str}")
+        }
     }
 }
 

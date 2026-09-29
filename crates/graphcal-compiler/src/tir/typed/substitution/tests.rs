@@ -6,6 +6,7 @@ use crate::generic_param::test_support::type_param;
 use crate::registry::types::FiniteIndex;
 use crate::resolved_name::{ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::index_name::IndexName;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::type_name::{GenericParamName, StructTypeName};
 
 fn span() -> Span {
@@ -36,7 +37,10 @@ fn dim_term(param: &GenericParamId, power: i16, op: MulDivOp) -> ResolvedDimTerm
 #[test]
 fn unbound_parameters_stay_symbolic() {
     let d = type_param("D");
-    let generic = ResolvedTypeExpr::GenericDimParam(d, span());
+    let generic = ResolvedDeclType::Value(ResolvedValueType::Quantity(ResolvedDim::Symbolic {
+        terms: vec![dim_term(&d, 1, MulDivOp::Mul)],
+        span: span(),
+    }));
     assert_eq!(Substitution::default().apply(&generic), Ok(generic));
 }
 
@@ -45,19 +49,19 @@ fn dimension_products_collapse_once_every_term_is_bound() {
     let d = type_param("D");
     let e = type_param("E");
     // D^2 / E
-    let product = ResolvedTypeExpr::GenericDimExpr {
+    let product = ResolvedDeclType::Value(ResolvedValueType::Quantity(ResolvedDim::Symbolic {
         terms: vec![
             dim_term(&d, 2, MulDivOp::Mul),
             dim_term(&e, 1, MulDivOp::Div),
         ],
         span: span(),
-    };
+    }));
     let mut partial = Substitution::default();
-    partial.bind(
-        d,
-        ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(length())),
-    );
-    let ResolvedTypeExpr::GenericDimExpr { terms, .. } = partial.apply(&product).unwrap() else {
+    partial.bind(d, ResolvedGenericArg::Dim(ResolvedDim::Concrete(length())));
+    let ResolvedDeclType::Value(ResolvedValueType::Quantity(ResolvedDim::Symbolic {
+        terms, ..
+    })) = partial.apply(&product).unwrap()
+    else {
         panic!("a product with an unbound term stays symbolic");
     };
     assert!(matches!(terms.as_slice(), [
@@ -66,14 +70,14 @@ fn dimension_products_collapse_once_every_term_is_bound() {
     ] if name == &e));
 
     let mut full = partial;
-    full.bind(e, ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(time())));
+    full.bind(e, ResolvedGenericArg::Dim(ResolvedDim::Concrete(time())));
     let expected = length()
         .pow(2)
         .and_then(|squared| squared.checked_div(&time()))
         .unwrap();
     assert_eq!(
         full.apply(&product).unwrap(),
-        ResolvedTypeExpr::Quantity(expected)
+        ResolvedDeclType::Value(ResolvedValueType::Quantity(ResolvedDim::Concrete(expected)))
     );
 }
 
@@ -82,7 +86,7 @@ fn dimension_parameters_bound_to_products_are_expanded_with_their_power() {
     let d = type_param("D");
     let e = type_param("E");
     // D / Time with D := E^2 gives E^2 / Time, still symbolic in E.
-    let quotient = ResolvedDimArg::Expr {
+    let quotient = ResolvedDim::Symbolic {
         terms: vec![
             dim_term(&d, 1, MulDivOp::Mul),
             ResolvedDimTerm::Concrete {
@@ -96,12 +100,12 @@ fn dimension_parameters_bound_to_products_are_expanded_with_their_power() {
     let mut substitution = Substitution::default();
     substitution.bind(
         d,
-        ResolvedGenericArg::Dim(ResolvedDimArg::Expr {
+        ResolvedGenericArg::Dim(ResolvedDim::Symbolic {
             terms: vec![dim_term(&e, 2, MulDivOp::Mul)],
             span: span(),
         }),
     );
-    let ResolvedGenericArg::Dim(ResolvedDimArg::Expr { terms, .. }) = substitution
+    let ResolvedGenericArg::Dim(ResolvedDim::Symbolic { terms, .. }) = substitution
         .apply_generic_arg(&ResolvedGenericArg::Dim(quotient))
         .unwrap()
     else {
@@ -124,41 +128,41 @@ fn index_type_and_nat_parameters_are_replaced_everywhere() {
     // Wrap<T, N + 1>[I, Fin(2 * N)]
     let doubled = NatPolyForm::from_constant(2).mul(&nat(&n)).unwrap();
     let successor = nat(&n).add(&NatPolyForm::from_constant(1)).unwrap();
-    let symbolic = ResolvedTypeExpr::Indexed {
-        base: Box::new(ResolvedTypeExpr::GenericStruct {
+    let symbolic = ResolvedDeclType::Indexed {
+        element: ResolvedValueType::Struct {
             name: wrapper.clone(),
             generic_args: vec![
-                ResolvedGenericArg::Type(ResolvedTypeExpr::GenericTypeParam(t.clone(), span())),
+                ResolvedGenericArg::Type(ResolvedValueType::GenericTypeParam(t.clone(), span())),
                 ResolvedGenericArg::Nat(successor, span()),
             ],
             span: span(),
-        }),
-        indexes: vec![
+        },
+        indexes: NonEmpty::new(
             ResolvedIndex::GenericParam(i.clone(), span()),
-            ResolvedIndex::Finite(doubled, span()),
-        ],
+            vec![ResolvedIndex::Finite(doubled, span())],
+        ),
     };
     let mut substitution = Substitution::for_nats([(&n, &3)]);
     substitution.bind(
         i,
         ResolvedGenericArg::Index(ResolvedIndex::Concrete(phase.clone(), span())),
     );
-    substitution.bind(t, ResolvedGenericArg::Type(ResolvedTypeExpr::Bool));
+    substitution.bind(t, ResolvedGenericArg::Type(ResolvedValueType::Bool));
     assert_eq!(
         substitution.apply(&symbolic).unwrap(),
-        ResolvedTypeExpr::Indexed {
-            base: Box::new(ResolvedTypeExpr::GenericStruct {
+        ResolvedDeclType::Indexed {
+            element: ResolvedValueType::Struct {
                 name: wrapper,
                 generic_args: vec![
-                    ResolvedGenericArg::Type(ResolvedTypeExpr::Bool),
+                    ResolvedGenericArg::Type(ResolvedValueType::Bool),
                     ResolvedGenericArg::Nat(NatPolyForm::from_constant(4), span()),
                 ],
                 span: span(),
-            }),
-            indexes: vec![
+            },
+            indexes: NonEmpty::new(
                 ResolvedIndex::Concrete(phase, span()),
-                ResolvedIndex::Finite(NatPolyForm::from_constant(6), span()),
-            ],
+                vec![ResolvedIndex::Finite(NatPolyForm::from_constant(6), span())],
+            ),
         }
     );
 }

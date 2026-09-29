@@ -66,27 +66,6 @@ fn evaluate_monomial<E: From<NatOverflowError>>(
         })
 }
 
-/// Substitute bound variables, returning the monomial over the unbound
-/// variables and the multiplicative factor contributed by bound variables.
-///
-/// Returns `None` if arithmetic overflows.
-#[cfg(test)]
-pub(crate) fn substitute_monomial(
-    monomial: &Monomial,
-    bindings: &HashMap<GenericParamId, u64>,
-) -> Option<(Monomial, u64)> {
-    let mut remaining = Vec::new();
-    let mut factor: u64 = 1;
-    for (var, &exp) in monomial.iter() {
-        if let Some(&val) = bindings.get(var) {
-            factor = factor.checked_mul(eval_factor::<NatOverflowError>(val, exp).ok()?)?;
-        } else {
-            remaining.push((var.clone(), exp));
-        }
-    }
-    Some((Monomial::try_from_factors(remaining).ok()?, factor))
-}
-
 /// Format a monomial, e.g. `""`, `"N"`, `"M * N"`, `"N^2"`.
 fn format_monomial(monomial: &Monomial) -> String {
     monomial

@@ -6953,17 +6953,22 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
     let marker_owner = |decl: &str| {
-        let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
-            name: wrap,
-            generic_args,
-            ..
-        } = root_decl_type(&tir, decl).resolved()
+        let graphcal_compiler::tir::typed::ResolvedDeclType::Value(
+            graphcal_compiler::tir::typed::ResolvedValueType::Struct {
+                name: wrap,
+                generic_args,
+                ..
+            },
+        ) = root_decl_type(&tir, decl).resolved()
         else {
             panic!("expected generic struct annotation for `{decl}`");
         };
         assert_eq!(wrap.as_str(), "Wrap");
         let graphcal_compiler::tir::typed::ResolvedGenericArg::Type(
-            graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(marker_resolved, _),
+            graphcal_compiler::tir::typed::ResolvedValueType::Struct {
+                name: marker_resolved,
+                ..
+            },
         ) = &generic_args[1]
         else {
             panic!(

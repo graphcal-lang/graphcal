@@ -5,15 +5,12 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use crate::assertion_expectation::ExpectedFail;
-use crate::desugar::desugared_ast::MulDivOp;
-use crate::dimension::{Dimension, Rational};
+use crate::dimension::Dimension;
 use crate::generic_param::GenericParamId;
 use crate::hir;
 use crate::hir::NominalTypeDef;
-use crate::nat::NatPolyForm;
-use crate::registry::checked_type::{CheckedType, IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{CheckedType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
-use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{BaseDimensionInfo, FormattingRegistry, IndexDef, UnitInfo};
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::{
@@ -25,222 +22,7 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
 
-// ---------------------------------------------------------------------------
-// Resolved type types
-// ---------------------------------------------------------------------------
-
-/// A resolved argument of sort `Dim`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedDimArg {
-    Dimensionless,
-    Concrete(Dimension),
-    GenericParam(GenericParamId, Span),
-    Expr {
-        terms: Vec<ResolvedDimTerm>,
-        span: Span,
-    },
-}
-
-impl ResolvedDimArg {
-    #[must_use]
-    pub(crate) fn format(&self, registry: &FormattingRegistry) -> String {
-        match self {
-            Self::Dimensionless => "Dimensionless".to_string(),
-            Self::Concrete(dim) => {
-                let formatted = registry.dimensions.format_dimension(dim);
-                if formatted.is_empty() {
-                    "Dimensionless".to_string()
-                } else {
-                    formatted
-                }
-            }
-            Self::GenericParam(name, _) => name.to_string(),
-            Self::Expr { terms, .. } => terms
-                .iter()
-                .map(|term| term.format(registry))
-                .collect::<Vec<_>>()
-                .join(" "),
-        }
-    }
-}
-
-/// A generic argument resolved according to its declared sort.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedGenericArg {
-    Dim(ResolvedDimArg),
-    Index(ResolvedIndex),
-    Nat(NatPolyForm, Span),
-    Type(ResolvedTypeExpr),
-}
-
-impl ResolvedGenericArg {
-    #[must_use]
-    pub(crate) fn format(&self, registry: &FormattingRegistry) -> String {
-        match self {
-            Self::Dim(dim) => dim.format(registry),
-            Self::Index(index) => index.to_string(),
-            Self::Nat(form, _) => form.format(),
-            Self::Type(type_expr) => type_expr.format(registry),
-        }
-    }
-}
-
-/// A fully-resolved type expression.
-///
-/// Unlike the raw AST `TypeExpr`, every name here has been classified as a
-/// concrete dimension, struct, or generic parameter. Index arguments are
-/// never type expressions; they live only in [`ResolvedGenericArg::Index`]
-/// and the index axes of `Key` / `Indexed`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedTypeExpr {
-    /// `Dimensionless`
-    Dimensionless,
-    /// `Bool`
-    Bool,
-    /// `Int`
-    Int,
-    /// A datetime instant in a specific time scale (e.g., `Datetime` = UTC, `Datetime<TT>`).
-    Datetime(TimeScale),
-    /// A concrete quantity type, e.g. `Length * Time^-2`.
-    Quantity(Dimension),
-    /// A dimension-aware complex quantity type, e.g. `Complex<Length>`.
-    Complex {
-        dimension: ResolvedDimArg,
-        span: Span,
-    },
-    /// An index-key type, e.g. `Key<Maneuver>` or `Key<Fin(3)>`.
-    Key { index: ResolvedIndex, span: Span },
-    /// A non-generic struct type name, e.g. `TransferResult`.
-    Struct(ResolvedStructTypeName, Span),
-    /// A generic struct with sort-aware arguments, e.g. `Vec3<Length, ECI>`
-    /// or `FixedVec<3>`.
-    GenericStruct {
-        name: ResolvedStructTypeName,
-        generic_args: Vec<ResolvedGenericArg>,
-        span: Span,
-    },
-    /// A single generic dimension parameter, e.g. `D`
-    GenericDimParam(GenericParamId, Span),
-    /// A generic type parameter, e.g. `F: Type`.
-    GenericTypeParam(GenericParamId, Span),
-    /// A compound dimension expression containing at least one generic param, e.g. `D^2`
-    GenericDimExpr {
-        terms: Vec<ResolvedDimTerm>,
-        span: Span,
-    },
-    /// An indexed type, e.g. `Velocity[Maneuver]` or `D[I]`
-    Indexed {
-        base: Box<Self>,
-        indexes: Vec<ResolvedIndex>,
-    },
-}
-
-impl ResolvedTypeExpr {
-    /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
-    #[must_use]
-    pub fn format(&self, registry: &FormattingRegistry) -> String {
-        match self {
-            Self::Dimensionless => "Dimensionless".to_string(),
-            Self::Bool => "Bool".to_string(),
-            Self::Int => "Int".to_string(),
-            Self::Datetime(scale) => {
-                if scale.is_utc() {
-                    "Datetime".to_string()
-                } else {
-                    format!("Datetime<{scale}>")
-                }
-            }
-            Self::Quantity(dim) => {
-                let formatted = registry.dimensions.format_dimension(dim);
-                if formatted.is_empty() {
-                    "Dimensionless".to_string()
-                } else {
-                    formatted
-                }
-            }
-            Self::Complex { dimension, .. } => {
-                format!("Complex<{}>", dimension.format(registry))
-            }
-            Self::Key { index, .. } => {
-                format!("Key<{index}>")
-            }
-            Self::Struct(name, _) => name.as_str().to_string(),
-            Self::GenericStruct {
-                name, generic_args, ..
-            } => {
-                let args: Vec<String> = generic_args
-                    .iter()
-                    .map(|arg| arg.format(registry))
-                    .collect();
-                format!("{}<{}>", name.as_str(), args.join(", "))
-            }
-            Self::GenericDimParam(name, _) | Self::GenericTypeParam(name, _) => name.to_string(),
-            Self::GenericDimExpr { terms, .. } => {
-                let parts: Vec<String> = terms.iter().map(|t| t.format(registry)).collect();
-                parts.join(" ")
-            }
-            Self::Indexed { base, indexes } => {
-                let base_str = base.format(registry);
-                let idx_strs: Vec<String> = indexes.iter().map(ToString::to_string).collect();
-                format!("{base_str}[{}]", idx_strs.join(", "))
-            }
-        }
-    }
-}
-
-/// A single term in a resolved dimension expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedDimTerm {
-    /// A concrete dimension with power and combining operator.
-    Concrete {
-        dim: Dimension,
-        power: Rational,
-        op: MulDivOp,
-    },
-    /// A generic dimension parameter with power and combining operator.
-    GenericParam {
-        name: GenericParamId,
-        power: Rational,
-        op: MulDivOp,
-        span: Span,
-    },
-}
-
-impl ResolvedDimTerm {
-    /// Get the combining operator for this term.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) const fn op(&self) -> MulDivOp {
-        match self {
-            Self::Concrete { op, .. } | Self::GenericParam { op, .. } => *op,
-        }
-    }
-
-    /// Format this term as a human-readable string, e.g. `"Length"`, `"/ Time^2"`, `"D^2"`.
-    #[must_use]
-    fn format(&self, registry: &FormattingRegistry) -> String {
-        let (name, power, op) = match self {
-            Self::Concrete { dim, power, op } => {
-                (registry.dimensions.format_dimension(dim), *power, *op)
-            }
-            Self::GenericParam {
-                name, power, op, ..
-            } => (name.to_string(), *power, *op),
-        };
-        let prefix = match op {
-            MulDivOp::Mul => "",
-            MulDivOp::Div => "/ ",
-        };
-        if power == Rational::ONE {
-            format!("{prefix}{name}")
-        } else {
-            format!(
-                "{prefix}{name}{}",
-                power.fmt_exponent(crate::ratio::ExponentStyle::Source)
-            )
-        }
-    }
-}
+use super::resolved_type::{ResolvedDeclType, ResolvedGenericArg};
 
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
 /// into a spanned [`GraphcalError`].
@@ -254,29 +36,6 @@ pub fn nat_overflow_error(
         message: err.to_string(),
         src: src.clone(),
         span: span.into(),
-    }
-}
-
-/// A resolved index in an indexed type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResolvedIndex {
-    /// A concrete index name, e.g. `Maneuver`.
-    Concrete(ResolvedIndexName, Span),
-    /// A generic index parameter, e.g. `I`
-    GenericParam(GenericParamId, Span),
-    /// A structural finite index `Fin(N)` carrying a normalized Nat cardinality.
-    Finite(NatPolyForm, Span),
-}
-
-/// Renders the source-facing spelling: the declared leaf name, the generic
-/// parameter, or `Fin(<Nat form>)` through [`IndexDisplayName`].
-impl std::fmt::Display for ResolvedIndex {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Concrete(name, _) => f.write_str(name.as_str()),
-            Self::GenericParam(name, _) => name.fmt(f),
-            Self::Finite(form, _) => IndexDisplayName::Finite(form.clone()).fmt(f),
-        }
     }
 }
 
@@ -1000,14 +759,14 @@ pub(crate) struct ResolvedGenericDefault {
 /// field from existing without the type needed to validate those bounds.
 #[derive(Debug, Clone)]
 pub struct ResolvedStructFieldSemantics {
-    resolved_type: ResolvedTypeExpr,
+    resolved_type: ResolvedDeclType,
     domain_bounds: Vec<ResolvedDomainBound>,
 }
 
 impl ResolvedStructFieldSemantics {
     #[must_use]
     pub const fn new(
-        resolved_type: ResolvedTypeExpr,
+        resolved_type: ResolvedDeclType,
         domain_bounds: Vec<ResolvedDomainBound>,
     ) -> Self {
         Self {
@@ -1018,7 +777,7 @@ impl ResolvedStructFieldSemantics {
 
     /// Return the field annotation resolved in its owning generic scope.
     #[must_use]
-    pub const fn resolved_type(&self) -> &ResolvedTypeExpr {
+    pub const fn resolved_type(&self) -> &ResolvedDeclType {
         &self.resolved_type
     }
 
@@ -1095,7 +854,7 @@ impl ResolvedTypeDefs {
 
     /// Return a field annotation resolved in its owning type's generic scope.
     #[must_use]
-    pub fn field_type(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedTypeExpr> {
+    pub fn field_type(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedDeclType> {
         self.field(key)
             .map(ResolvedStructFieldSemantics::resolved_type)
     }
@@ -1125,7 +884,7 @@ pub struct ResolvedDomainBound {
 /// two can never disagree and consumers never convert on demand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedDeclType {
-    resolved: ResolvedTypeExpr,
+    resolved: ResolvedDeclType,
     declared: CheckedType,
 }
 
@@ -1137,16 +896,16 @@ impl CheckedDeclType {
     /// Returns a [`GraphcalError`] when the type contains unresolved generic
     /// parameters.
     pub(crate) fn new(
-        resolved: ResolvedTypeExpr,
+        resolved: ResolvedDeclType,
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, GraphcalError> {
-        let declared = super::ops::resolved_to_declared_type(&resolved, src)?;
+        let declared = resolved.to_checked_type(src)?;
         Ok(Self { resolved, declared })
     }
 
     /// The resolved TIR type, including declaration-level index axes.
     #[must_use]
-    pub const fn resolved(&self) -> &ResolvedTypeExpr {
+    pub const fn resolved(&self) -> &ResolvedDeclType {
         &self.resolved
     }
 
