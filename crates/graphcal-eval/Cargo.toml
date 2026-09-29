@@ -10,6 +10,10 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# Cross-crate tests may name declarations directly (`Value::*_with_owner`).
+test-identities = ["graphcal-compiler/test-identities"]
+
 [dependencies]
 base64.workspace = true
 graphcal-compiler = { workspace = true }

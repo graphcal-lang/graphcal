@@ -489,7 +489,7 @@ mod finite_axis_form_tests {
     fn declared_axis_without_a_semantic_definition_is_an_internal_error() {
         let source = NamedSource::new("test.gcl", Arc::new("values[key]".to_string()));
         let owner = DagId::from_virtual_relative_path(Path::new("test.gcl")).unwrap();
-        let resolved = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Missing"));
+        let resolved = ResolvedIndexName::for_test(owner, IndexName::expect_valid("Missing"));
         let index = IndexTypeRef::from_resolved(resolved);
 
         let error = finite_axis_form(&index, None, &source, Span::new(7, 3)).unwrap_err();

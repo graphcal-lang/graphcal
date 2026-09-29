@@ -645,7 +645,7 @@ fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
     let scoped_name = ScopedName::from(DeclName::expect_valid("p"));
     let bindings = HashMap::from([(
         scoped_name,
-        ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p")),
+        ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("p")),
     )]);
 
     let err = lower_expr(
@@ -817,7 +817,7 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
 
     // Bound: the binding's target is the reference, kind-checked as an
     // included instance's output.
-    let target = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p"));
+    let target = ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("p"));
     let bindings = HashMap::from([(name, target.clone())]);
     let lowered = lower_expr(&expr, bound(&bindings)).unwrap();
     let ExprKind::GraphRef(reference) = lowered.kind() else {
@@ -827,7 +827,7 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
 
     // A bound output that is not a graph value is rejected.
     let (name, expr) = include_output_ref("checked");
-    let assertion = ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("checked"));
+    let assertion = ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("checked"));
     let bindings = HashMap::from([(name, assertion)]);
     let err = lower_expr(&expr, bound(&bindings)).unwrap_err();
     assert!(matches!(

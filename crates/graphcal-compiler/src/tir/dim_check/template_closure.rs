@@ -165,7 +165,7 @@ fn check_rigid_value_bodies(
         .map(|entry| {
             (
                 DeclarationKind::ConstNode,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 &entry.type_ann,
                 entry.expr.span,
@@ -175,7 +175,7 @@ fn check_rigid_value_bodies(
             entry.definition.formula().map(|expression| {
                 (
                     DeclarationKind::Node,
-                    &entry.name,
+                    entry.name(),
                     entry.identity(),
                     &entry.type_ann,
                     expression.span,
@@ -209,10 +209,10 @@ fn check_rigid_assertion_bodies(
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
-        let assertion = ctx.hir_assert_body(&entry.name, &owner, entry.span)?;
+        let assertion = ctx.hir_assert_body(entry.name(), &owner, entry.span)?;
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
-            name: entry.name.atom().clone(),
+            name: entry.name().atom().clone(),
         };
         rigid_dimension_error(
             ctx,
@@ -235,7 +235,7 @@ fn check_rigid_plot_bodies(
         };
         let body = TemplateBodyIdentity {
             kind: DeclarationKind::Plot,
-            name: entry.name.atom().clone(),
+            name: entry.name().atom().clone(),
         };
         for (_, expression) in &entry.body.encodings {
             rigid_dimension_error(
@@ -269,7 +269,7 @@ fn check_rigid_composition_bodies(
         .map(|entry| {
             (
                 DeclarationKind::Figure,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 entry.fields.as_slice(),
             )
@@ -277,7 +277,7 @@ fn check_rigid_composition_bodies(
         .chain(ctx.env.dag.layers().map(|entry| {
             (
                 DeclarationKind::Layer,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 entry.fields.as_slice(),
             )
@@ -450,7 +450,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
         .map(|entry| {
             (
                 DeclarationKind::ConstNode,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 &entry.expr,
             )
@@ -459,7 +459,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
             entry.definition.formula().map(|expression| {
                 (
                     DeclarationKind::Node,
-                    &entry.name,
+                    entry.name(),
                     entry.identity(),
                     expression,
                 )
@@ -487,7 +487,7 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
         };
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Assert,
-            name: entry.name.atom().clone(),
+            name: entry.name().atom().clone(),
         };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => check_expr(ctx, Some(&owner), &identity, expr)?,
@@ -512,7 +512,7 @@ fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalE
         };
         let identity = TemplateBodyIdentity {
             kind: DeclarationKind::Plot,
-            name: entry.name.atom().clone(),
+            name: entry.name().atom().clone(),
         };
         for expr in entry
             .body
@@ -536,7 +536,7 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
         .map(|entry| {
             (
                 DeclarationKind::Figure,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 entry.fields.as_slice(),
             )
@@ -544,7 +544,7 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
         .chain(ctx.env.dag.layers().map(|entry| {
             (
                 DeclarationKind::Layer,
-                &entry.name,
+                entry.name(),
                 entry.identity(),
                 entry.fields.as_slice(),
             )

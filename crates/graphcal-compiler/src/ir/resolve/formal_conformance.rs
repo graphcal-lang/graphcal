@@ -9,7 +9,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 use serde::Deserialize;
 
-use super::{CollectedFile, GraphcalError, resolve};
+use super::{CollectedWithEntries, GraphcalError, resolve};
 use crate::syntax::parser::Parser;
 
 const ORACLE_ENV: &str = "GRAPHCAL_REQUIRED_BINDABILITY_ORACLE";
@@ -144,7 +144,7 @@ fn load_oracle_cases() -> Result<Vec<OracleCase>, String> {
         .map_err(|error| format!("Lean oracle emitted invalid JSON: {error}"))
 }
 
-fn parse_and_resolve_case(source: &str) -> Result<CollectedFile, GraphcalError> {
+fn parse_and_resolve_case(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
     let raw_file = Parser::new(source)
         .parse_file()
         .unwrap_or_else(|error| panic!("oracle rendered invalid Graphcal `{source}`: {error}"));

@@ -22,10 +22,10 @@ use crate::registry::reserved_name::validate_reserved_name;
 use crate::registry::time_zone::TimeZoneRegistry;
 use crate::resolve::ModuleResolver;
 use crate::resolve::namespace::Namespace;
-use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use crate::resolved_name::ResolvedStructTypeName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{ConstructorName, GenericParamName};
+use crate::syntax::type_name::GenericParamName;
 
 use super::nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
@@ -41,14 +41,6 @@ use super::types::{
 pub struct NominalLowering<'a> {
     pub resolver: &'a ModuleResolver,
     pub cancellation: &'a crate::cancellation::CancellationToken,
-}
-
-/// The canonical identity of a constructor of `owning_type`.
-fn constructor_identity(
-    owning_type: &ResolvedStructTypeName,
-    name: ConstructorName,
-) -> ResolvedConstructorName {
-    ResolvedConstructorName::from_def(owning_type.owner().clone(), name)
 }
 
 /// Lower one `type` declaration to its canonical HIR definition.
@@ -90,7 +82,7 @@ pub fn lower_type_declaration(
                         })
                         .collect::<Result<Vec<_>, GraphcalError>>()?;
                     NominalConstructor::try_new(
-                        constructor_identity(&identity, member.name.value.clone()),
+                        identity.constructor(member.name.value.clone()),
                         fields,
                     )
                     .map_err(|error| member_error(error, declaration, payload, src))
@@ -523,7 +515,7 @@ pub fn specialize_nominal_type(
                 .iter()
                 .map(|member| {
                     NominalConstructor::try_new(
-                        constructor_identity(&identity, member.name()),
+                        identity.constructor(member.name()),
                         member
                             .fields()
                             .iter()
@@ -754,7 +746,7 @@ mod tests {
         let declaration = first_type(&file);
         lower_type_declaration(
             declaration,
-            ResolvedStructTypeName::from_def(owner, declaration.name.value.clone()),
+            ResolvedStructTypeName::for_test(owner, declaration.name.value.clone()),
             declaration.name.span,
             &src,
             NominalLowering {
@@ -829,7 +821,7 @@ mod tests {
         let declaration = type_named(&file, "Box");
         let template = lower_type_declaration(
             declaration,
-            ResolvedStructTypeName::from_def(template_id.clone(), declaration.name.value.clone()),
+            ResolvedStructTypeName::for_test(template_id.clone(), declaration.name.value.clone()),
             declaration.name.span,
             &src,
             NominalLowering {
@@ -847,26 +839,26 @@ mod tests {
         let importer_id = DagId::root_in_package("test", "main");
         let (template, src) = template_box(&template_id);
 
-        let identity = ResolvedStructTypeName::from_def(
+        let identity = ResolvedStructTypeName::for_test(
             importer_id.clone(),
             StructTypeName::expect_valid("Box"),
         );
-        let slot = ResolvedStructTypeName::from_def(
+        let slot = ResolvedStructTypeName::for_test(
             template_id.clone(),
             StructTypeName::expect_valid("Slot"),
         );
-        let concrete = ResolvedStructTypeName::from_def(
+        let concrete = ResolvedStructTypeName::for_test(
             importer_id.clone(),
             StructTypeName::expect_valid("Concrete"),
         );
-        let port = ResolvedDimName::from_def(
+        let port = ResolvedDimName::for_test(
             template_id.clone(),
             crate::syntax::dimension::DimName::expect_valid("Q"),
         );
-        let length = crate::hir::lower::PreludeTypeScope::graphcal()
+        let length = crate::registry::prelude::prelude_type_scope()
             .resolve_dimension_path(&crate::syntax::names::NamePath::expect_local("Length"))
             .unwrap();
-        let axis = ResolvedIndexName::from_def(
+        let axis = ResolvedIndexName::for_test(
             template_id,
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
         );

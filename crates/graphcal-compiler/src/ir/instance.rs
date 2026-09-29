@@ -10,18 +10,10 @@ use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 
 use super::static_substitution::{StaticSpecializationId, StaticSubstitution};
 
-/// The declaration `name` of the template that `instance` instantiates.
-#[must_use]
-pub fn template_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDeclName {
-    ResolvedDeclName::from_def(instance.template().clone(), name)
-}
+pub mod identity;
+pub(crate) mod mint;
 
-/// The concrete copy that `instance` materializes of its template's
-/// declaration `name`.
-#[must_use]
-pub fn instance_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDeclName {
-    ResolvedDeclName::from_def(instance.owner().clone(), name)
-}
+pub use self::identity::{instance_declaration, template_declaration};
 
 /// One edge in the explicit module-template/instance graph.
 ///
@@ -182,7 +174,7 @@ mod tests {
     }
 
     fn dimension(owner: &DagId, name: &str) -> ResolvedDimName {
-        ResolvedDimName::from_def(
+        ResolvedDimName::for_test(
             owner.clone(),
             crate::syntax::dimension::DimName::expect_valid(name),
         )
@@ -222,7 +214,7 @@ mod tests {
             None
         );
         assert_eq!(
-            record.value_port(&ResolvedDeclName::from_def(other, port.clone())),
+            record.value_port(&ResolvedDeclName::for_test(other, port.clone())),
             None
         );
         assert_eq!(

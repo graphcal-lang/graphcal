@@ -66,9 +66,9 @@ fn constructor_target_coverage_is_exact_even_with_repeated_references() {
     use crate::syntax::type_name::StructTypeName;
 
     let constructor = |name: &str| {
-        ResolvedConstructorName::from_def(owner(), ConstructorName::expect_valid(name))
+        ResolvedConstructorName::for_test(owner(), ConstructorName::expect_valid(name))
     };
-    let identity = ResolvedStructTypeName::from_def(owner(), StructTypeName::expect_valid("Token"));
+    let identity = ResolvedStructTypeName::for_test(owner(), StructTypeName::expect_valid("Token"));
     let target = |name: &str| ConstructorMatch {
         definition: identity.clone(),
         runtime_type: identity.clone(),

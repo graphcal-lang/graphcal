@@ -15,6 +15,7 @@ use crate::ir::entry::{
     AssertEntry, BodyPhase, ConstEntry, Decl, FigureEntry, LayerEntry, NodeEntry, ParamEntry,
     PlotEntry,
 };
+use crate::ir::instance::identity::rebased_declaration;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 
@@ -168,7 +169,8 @@ impl<P: BodyPhase> DeclTable<P> {
             owner,
             decls.into_iter().map(|decl| {
                 let mut decl = transform(decl);
-                decl.set_declaration_owner(owner.clone());
+                let identity = rebased_declaration(&decl.identity(), owner);
+                decl.set_identity(identity);
                 decl
             }),
         )

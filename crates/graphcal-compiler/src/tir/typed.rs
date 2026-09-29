@@ -42,8 +42,8 @@ impl DagTIR {
         self.projectable_outputs.extend(
             self.decls
                 .params()
-                .map(|entry| &entry.name)
-                .chain(self.decls.nodes().map(|entry| &entry.name))
+                .map(crate::ir::entry::ParamEntry::name)
+                .chain(self.decls.nodes().map(crate::ir::entry::NodeEntry::name))
                 .filter(|name| surface.can_select_output(name))
                 .cloned(),
         );
@@ -691,48 +691,41 @@ fn attach_checked_types(
             Ok::<_, GraphcalError>(match decl {
                 Decl::Const(entry) => Decl::Const(ConstEntry {
                     type_ann: check(identity, entry.type_ann)?,
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     expr: entry.expr,
                     span: entry.span,
                 }),
                 Decl::Param(entry) => Decl::Param(ParamEntry {
                     type_ann: check(identity, entry.type_ann)?,
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     default: entry.default,
                     span: entry.span,
                     override_reconciliations: entry.override_reconciliations,
                 }),
                 Decl::Node(entry) => Decl::Node(NodeEntry {
                     type_ann: check(identity, entry.type_ann)?,
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     definition: entry.definition,
                     span: entry.span,
                 }),
                 Decl::Assert(entry) => Decl::Assert(AssertEntry {
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     body: entry.body,
                     span: entry.span,
                 }),
                 Decl::Plot(entry) => Decl::Plot(PlotEntry {
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     mark_type: entry.mark_type,
                     body: entry.body,
                     visibility: entry.visibility,
                 }),
                 Decl::Figure(entry) => Decl::Figure(FigureEntry {
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     plot_names: entry.plot_names,
                     fields: entry.fields,
                 }),
                 Decl::Layer(entry) => Decl::Layer(LayerEntry {
-                    name: entry.name,
-                    declaration_owner: entry.declaration_owner,
+                    identity: entry.identity,
                     plot_names: entry.plot_names,
                     fields: entry.fields,
                 }),
@@ -1337,7 +1330,7 @@ fn check_sink_body_policies(
     let is_explicit_export = |name: &DeclName| external_surface.is_explicit_export(name);
     for entry in dag.asserts() {
         let check_literals =
-            entry.declaration_owner == *ctx.owner && is_explicit_export(&entry.name);
+            entry.identity.owner() == ctx.owner && is_explicit_export(entry.name());
         let checker = HirPolicyChecker { ctx, src };
         match &*entry.body {
             hir::AssertBody::Expr(expr) => {
@@ -1357,7 +1350,7 @@ fn check_sink_body_policies(
     }
     for entry in dag.plots() {
         let body = &entry.body;
-        let check_literals = is_explicit_export(&entry.name);
+        let check_literals = is_explicit_export(entry.name());
         let checker = HirPolicyChecker { ctx, src };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
@@ -1368,8 +1361,8 @@ fn check_sink_body_policies(
     }
     for (name, fields) in dag
         .figures()
-        .map(|entry| (&entry.name, &entry.fields))
-        .chain(dag.layers().map(|entry| (&entry.name, &entry.fields)))
+        .map(|entry| (entry.name(), &entry.fields))
+        .chain(dag.layers().map(|entry| (entry.name(), &entry.fields)))
     {
         let check_literals = is_explicit_export(name);
         let checker = HirPolicyChecker { ctx, src };

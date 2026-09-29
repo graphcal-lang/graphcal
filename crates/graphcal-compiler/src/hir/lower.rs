@@ -5,14 +5,9 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDimName, ResolvedName, ResolvedStructTypeName,
-    ResolvedUnitName,
-};
-use crate::syntax::dimension::{DimName, UnitName, UnitRef};
+use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
 
 use thiserror::Error;
 
@@ -24,7 +19,7 @@ use crate::resolve::category::SurfaceNameKind;
 use crate::resolve::error::ModuleResolveError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexVariantName;
-use crate::syntax::names::{NameAtom, NameDef, NamePath};
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
@@ -232,66 +227,6 @@ impl std::fmt::Display for GenericArgArity {
     }
 }
 
-/// Implicit prelude type-system symbols visible without an import.
-///
-/// The module resolver intentionally resolves source module aliases only. The
-/// Graphcal prelude is different: its dimensions and units are implicitly in
-/// scope in every module but still need a canonical owner once we cross into
-/// HIR. This small typed scope models that boundary without flat strings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreludeTypeScope {
-    owner: DagId,
-    dimensions: HashSet<DimName>,
-    units: HashSet<UnitName>,
-}
-
-impl PreludeTypeScope {
-    /// Create a prelude type scope from its canonical owner, dimensions, and units.
-    #[must_use]
-    fn new(
-        owner: DagId,
-        dimensions: impl IntoIterator<Item = DimName>,
-        units: impl IntoIterator<Item = UnitName>,
-    ) -> Self {
-        Self {
-            owner,
-            dimensions: dimensions.into_iter().collect(),
-            units: units.into_iter().collect(),
-        }
-    }
-
-    /// The built-in Graphcal prelude type scope, built once per process.
-    #[must_use]
-    pub fn graphcal() -> &'static Self {
-        static GRAPHCAL: LazyLock<PreludeTypeScope> = LazyLock::new(|| {
-            PreludeTypeScope::new(
-                crate::registry::prelude::prelude_dag_id(),
-                crate::registry::prelude::prelude_dimension_names().map(DimName::expect_valid),
-                crate::registry::prelude::prelude_unit_names().map(UnitName::expect_valid),
-            )
-        });
-        &GRAPHCAL
-    }
-
-    #[must_use]
-    pub fn resolve_dimension_path(&self, path: &NamePath) -> Option<ResolvedDimName> {
-        let atom = path.as_bare()?;
-        self.dimensions
-            .contains(&NameDef::classify(atom.clone()))
-            .then(|| ResolvedName::new(self.owner.clone(), atom.clone()))
-    }
-
-    pub(crate) fn resolve_unit_ref(&self, reference: &UnitRef) -> Option<ResolvedUnitName> {
-        if reference.is_qualified() || !self.units.contains(reference.leaf()) {
-            return None;
-        }
-        Some(ResolvedName::from_def(
-            self.owner.clone(),
-            reference.leaf().clone(),
-        ))
-    }
-}
-
 /// A generic parameter binding in a lexical generic scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParamBinding {
@@ -369,7 +304,7 @@ impl GenericScope {
 ///
 /// Source paths resolve as seen from one owner module, with its lexical
 /// generic parameters, through the module-aware resolver. The implicit
-/// Graphcal prelude ([`PreludeTypeScope::graphcal`]) is in scope everywhere,
+/// Graphcal prelude ([`crate::registry::prelude::prelude_type_scope`]) is in scope everywhere,
 /// so it is not a field.
 #[derive(Debug, Clone, Copy)]
 pub struct ModuleScope<'a> {
@@ -762,7 +697,7 @@ fn non_nat_sort_for_ambiguous_arg(
                 .resolve_dimension_path(ctx.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .is_ok()
-                || PreludeTypeScope::graphcal()
+                || crate::registry::prelude::prelude_type_scope()
                     .resolve_dimension_path(&path)
                     .is_some()
             {
@@ -1035,13 +970,15 @@ pub(crate) fn lower_dim_term(
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
     {
         Ok(resolved) => resolved,
-        Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
-            .resolve_dimension_path(&term.name.value)
-            .ok_or_else(|| HirLowerError::UnknownTypePath {
-                path: term.name.value.clone(),
-                slot: TypePathSlot::DimensionTerm,
-                span: term.name.span,
-            })?,
+        Err(ModuleResolveError::UnknownName { .. }) => {
+            crate::registry::prelude::prelude_type_scope()
+                .resolve_dimension_path(&term.name.value)
+                .ok_or_else(|| HirLowerError::UnknownTypePath {
+                    path: term.name.value.clone(),
+                    slot: TypePathSlot::DimensionTerm,
+                    span: term.name.span,
+                })?
+        }
         Err(source) => {
             return Err(HirLowerError::ModuleResolve {
                 source,
@@ -1348,7 +1285,7 @@ mod tests {
         let resolver = modules.build().unwrap();
 
         let type_decl = first_type_decl(&file);
-        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::for_test(
             owner_id.clone(),
             StructTypeName::expect_valid("Series"),
         ));
@@ -1445,7 +1382,7 @@ mod tests {
         modules.add(owner_id.clone(), &file.declarations);
         let resolver = modules.build().unwrap();
         let type_decl = first_type_decl(&file);
-        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+        let type_owner = GenericParamOwner::Type(ResolvedStructTypeName::for_test(
             owner_id.clone(),
             StructTypeName::expect_valid("Grid"),
         ));
@@ -1664,7 +1601,7 @@ mod tests {
 
     #[test]
     fn index_refs_render_their_leaf_spelling() {
-        let owner = GenericParamOwner::Type(ResolvedStructTypeName::from_def(
+        let owner = GenericParamOwner::Type(ResolvedStructTypeName::for_test(
             DagId::root_in_package("test", "main"),
             StructTypeName::expect_valid("T"),
         ));

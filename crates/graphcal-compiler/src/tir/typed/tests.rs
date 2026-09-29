@@ -141,7 +141,7 @@ fn value_declaration_records_carry_their_checked_types() {
 #[test]
 fn decl_type_rejects_identities_owned_by_unknown_dags() {
     let tir = parse_and_type_resolve("node n: Bool = true;").unwrap();
-    let foreign = crate::resolved_name::ResolvedDeclName::from_def(
+    let foreign = crate::resolved_name::ResolvedDeclName::for_test(
         crate::dag_id::DagId::root_in_package("elsewhere", "elsewhere"),
         crate::syntax::decl_name::DeclName::expect_valid("n"),
     );
@@ -427,7 +427,7 @@ fn dag_type_indexes_share_the_project_store_definition_handle() {
         "pub type Item { Item(value: Dimensionless) }\nparam item: Item = Item(value: 1.0);\n",
     )
     .unwrap();
-    let name = ResolvedStructTypeName::from_def(
+    let name = ResolvedStructTypeName::for_test(
         tir.root_dag_id().clone(),
         StructTypeName::expect_valid("Item"),
     );
@@ -451,7 +451,7 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
         parse_and_type_resolve("index Axis = { A, B };\nparam values: Dimensionless[Fin(3)];\n")
             .unwrap();
     let declared = crate::registry::checked_type::IndexTypeRef::<Concrete>::from_resolved(
-        ResolvedIndexName::from_def(
+        ResolvedIndexName::for_test(
             tir.root_dag_id().clone(),
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
         ),
@@ -482,11 +482,11 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let src = NamedSource::new("store.gcl", Arc::new(source.to_string()));
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
     let owner = ir.dag_id().clone();
-    let index_name = ResolvedIndexName::from_def(
+    let index_name = ResolvedIndexName::for_test(
         owner.clone(),
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     );
-    let type_name = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Item"));
+    let type_name = ResolvedStructTypeName::for_test(owner, StructTypeName::expect_valid("Item"));
     let mut store = ProjectTypeStore::default();
     store.insert_module(ir.definitions()).unwrap();
     let first_index = Arc::clone(store.get_index_handle(&index_name).unwrap());
@@ -533,7 +533,7 @@ fn unit_overlay_tir(path: &str) -> (TIR, ResolvedUnitName) {
     )
     .unwrap()
     .finish();
-    let unit = ResolvedUnitName::from_def(
+    let unit = ResolvedUnitName::for_test(
         tir.root_dag_id().clone(),
         UnitName::expect_valid("local_step"),
     );
@@ -605,7 +605,7 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
 #[test]
 fn publication_rejects_runtime_units_without_a_defining_body() {
     let (mut tir, unit) = unit_overlay_tir("root.gcl");
-    let missing = ResolvedUnitName::from_def(
+    let missing = ResolvedUnitName::for_test(
         tir.root_dag_id()
             .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("missing")),
         unit.to_unowned_def_name(),
@@ -628,7 +628,7 @@ fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
 fn project_type_store_rejects_competing_dimension_definitions() {
     let first = lower_store_hir("dim Custom = Length;");
     let competing = lower_store_hir("dim Custom = Time;");
-    let identity = crate::resolved_name::ResolvedDimName::from_def(
+    let identity = crate::resolved_name::ResolvedDimName::for_test(
         first.dag_id().clone(),
         crate::syntax::dimension::DimName::expect_valid("Custom"),
     );
@@ -647,7 +647,7 @@ fn project_type_store_rejects_competing_dimension_definitions() {
 fn project_type_store_rejects_competing_unit_definitions() {
     let first = lower_store_hir("const unit custom: Length = 2.0 m;");
     let competing = lower_store_hir("const unit custom: Length = 3.0 m;");
-    let identity = crate::resolved_name::ResolvedUnitName::from_def(
+    let identity = crate::resolved_name::ResolvedUnitName::for_test(
         first.dag_id().clone(),
         crate::syntax::dimension::UnitName::expect_valid("custom"),
     );
@@ -666,7 +666,7 @@ fn project_type_store_rejects_competing_unit_definitions() {
 fn project_type_store_rejects_competing_index_definitions() {
     let first = lower_store_hir("index Axis = { A };");
     let competing = lower_store_hir("index Axis = { B };");
-    let identity = ResolvedIndexName::from_def(
+    let identity = ResolvedIndexName::for_test(
         first.dag_id().clone(),
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     );
@@ -685,7 +685,7 @@ fn project_type_store_rejects_competing_index_definitions() {
 fn project_type_store_rejects_competing_nominal_definitions() {
     let first = lower_store_hir("type Item { Item(value: Dimensionless) }");
     let competing = lower_store_hir("type Item { Item(value: Bool) }");
-    let identity = crate::resolved_name::ResolvedStructTypeName::from_def(
+    let identity = crate::resolved_name::ResolvedStructTypeName::for_test(
         first.dag_id().clone(),
         StructTypeName::expect_valid("Item"),
     );
@@ -881,10 +881,10 @@ fn module_aware_type_resolve_records_semantic_deps() {
 
     let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
     let deps = &tir.root().semantic.dependencies;
-    let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
-    let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));
-    let p = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("p"));
-    let x = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("x"));
+    let c = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("C"));
+    let d = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("D"));
+    let p = ResolvedDeclName::for_test(dag_id.clone(), DeclName::expect_valid("p"));
+    let x = ResolvedDeclName::for_test(dag_id, DeclName::expect_valid("x"));
 
     assert!(deps.const_deps[&d].contains(&c));
     assert!(deps.const_deps[&c].is_empty());
@@ -1058,7 +1058,7 @@ use crate::registry::checked_type::{CheckedType, Concrete, IndexTypeRef, StructT
 fn generic_index_substitution_preserves_resolved_owner() {
     let src = make_src();
     let owner = crate::dag_id::DagId::root_in_package("test", "a");
-    let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Phase"));
+    let resolved_index = ResolvedIndexName::for_test(owner, IndexName::expect_valid("Phase"));
     let generic = type_param("I");
     let resolved_type = ResolvedDeclType::Indexed {
         element: concrete_quantity(Dimension::dimensionless()),
@@ -1122,7 +1122,7 @@ fn convert_quantity() {
 #[test]
 fn convert_struct() {
     let owner = crate::dag_id::DagId::root_in_package("test", "test");
-    let resolved = ResolvedStructTypeName::from_def(owner, StructTypeName::expect_valid("Foo"));
+    let resolved = ResolvedStructTypeName::for_test(owner, StructTypeName::expect_valid("Foo"));
     let dt = ResolvedValueType::Struct {
         name: resolved.clone(),
         generic_args: Vec::new(),
@@ -1139,7 +1139,7 @@ fn convert_struct() {
 #[test]
 fn convert_indexed() {
     let owner = crate::dag_id::DagId::root_in_package("test", "test");
-    let resolved_index = ResolvedIndexName::from_def(owner, IndexName::expect_valid("M"));
+    let resolved_index = ResolvedIndexName::for_test(owner, IndexName::expect_valid("M"));
     let dt = ResolvedDeclType::Indexed {
         element: concrete_quantity(Dimension::base(BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length,
@@ -1379,7 +1379,7 @@ fn resolved_index_display_renders_source_spelling() {
     let owner =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let concrete = ResolvedIndex::Concrete(
-        ResolvedIndexName::from_def(
+        ResolvedIndexName::for_test(
             owner,
             crate::syntax::index_name::IndexName::expect_valid("Phase"),
         ),
@@ -1529,7 +1529,7 @@ fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimension
     use crate::syntax::dimension::DimName;
 
     let owner = crate::dag_id::DagId::root_in_package("test", "lib");
-    let dim = |name: &str| ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name));
+    let dim = |name: &str| ResolvedDimName::for_test(owner.clone(), DimName::expect_valid(name));
     let opaque =
         |identity: &ResolvedDimName| Dimension::base(BaseDimId::UserDefined(identity.clone()));
     let prelude = |base| Dimension::base(BaseDimId::Prelude(base));

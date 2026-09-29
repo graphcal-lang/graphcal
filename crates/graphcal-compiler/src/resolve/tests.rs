@@ -1327,13 +1327,16 @@ fn qualified_constructor_resolves_to_canonical_owner() {
     modules.import(&main_id, import, &lib_id);
     let resolver = modules.build().unwrap();
 
-    let resolved_name = resolver
+    let symbol = resolver
         .resolve_constructor_path(&main_id, &path(&["mission", "Impulsive"]))
-        .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
+    let resolved_name = symbol.into_resolved();
 
     assert_eq!(resolved_name.owner(), &lib_id);
     assert_eq!(resolved_name.as_str(), "Impulsive");
+    let owner_type = symbol.owner_type_identity();
+    assert_eq!(owner_type.owner(), &lib_id);
+    assert_eq!(owner_type.as_str(), "BurnKind");
 }
 
 #[test]
@@ -1428,7 +1431,7 @@ fn duplicate_and_decl_kind_errors_render_the_established_messages() {
     let owner = DagId::root_in_package("test", "main");
     let span = Span::new(0, 1);
     let unexpected = |expected| ModuleResolveError::UnexpectedDeclKind {
-        name: ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("x")),
+        name: ResolvedDeclName::for_test(owner.clone(), DeclName::expect_valid("x")),
         expected,
         actual: DeclSymbolKind::Node,
     };

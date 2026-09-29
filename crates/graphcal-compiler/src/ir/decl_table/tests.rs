@@ -43,8 +43,7 @@ fn name(spelling: &str) -> DeclName {
 
 fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
     Decl::Node(NodeEntry {
-        name: name(spelling),
-        declaration_owner,
+        identity: ResolvedDeclName::for_test(declaration_owner, name(spelling)),
         type_ann: (),
         definition: (),
         span: Span::new(0, 0),
@@ -53,8 +52,7 @@ fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
 
 fn param(spelling: &str) -> Decl<Bare> {
     Decl::Param(ParamEntry {
-        name: name(spelling),
-        declaration_owner: owner(),
+        identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         type_ann: (),
         default: None,
         span: Span::new(0, 0),
@@ -64,8 +62,7 @@ fn param(spelling: &str) -> Decl<Bare> {
 
 fn assertion(spelling: &str) -> Decl<Bare> {
     Decl::Assert(AssertEntry {
-        name: name(spelling),
-        declaration_owner: owner(),
+        identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         body: (),
         span: Span::new(0, 0),
     })
@@ -73,8 +70,7 @@ fn assertion(spelling: &str) -> Decl<Bare> {
 
 fn plot(spelling: &str) -> Decl<Bare> {
     Decl::Plot(PlotEntry {
-        name: name(spelling),
-        declaration_owner: owner(),
+        identity: ResolvedDeclName::for_test(owner(), name(spelling)),
         mark_type: MarkType::Line,
         body: (),
         visibility: PlotVisibility::Standalone,
@@ -151,23 +147,20 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                 let position = visited.len();
                 Ok(match decl {
                     Decl::Param(entry) => Decl::Param(ParamEntry {
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         type_ann: (),
                         default: Some(position),
                         span: entry.span,
                         override_reconciliations: entry.override_reconciliations,
                     }),
                     Decl::Node(entry) => Decl::Node(NodeEntry {
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         type_ann: (),
                         definition: position,
                         span: entry.span,
                     }),
                     Decl::Assert(entry) => Decl::Assert(AssertEntry {
-                        name: entry.name,
-                        declaration_owner: entry.declaration_owner,
+                        identity: entry.identity,
                         body: position,
                         span: entry.span,
                     }),
@@ -248,7 +241,7 @@ fn rebase_revalidates_the_transformed_declarations() {
     let error = table
         .rebase(&owner(), |decl| match decl {
             Decl::Node(mut entry) => {
-                entry.name = name("b");
+                entry.identity = entry.identity.with_leaf(name("b"));
                 Decl::Node(entry)
             }
             other => other,

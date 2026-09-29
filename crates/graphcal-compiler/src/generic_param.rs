@@ -58,7 +58,7 @@ pub(crate) mod test_support {
     /// A generic parameter of a test-only `type T` owned by the root module.
     pub fn type_param(name: &str) -> GenericParamId {
         GenericParamId::new(
-            GenericParamOwner::Type(ResolvedName::from_def(
+            GenericParamOwner::Type(ResolvedName::for_test(
                 DagId::root_in_package("test", "main"),
                 StructTypeName::expect_valid("T"),
             )),
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn same_spelled_parameters_of_different_owners_are_distinct() {
         let other = GenericParamId::new(
-            GenericParamOwner::Type(ResolvedName::from_def(
+            GenericParamOwner::Type(ResolvedName::for_test(
                 DagId::root_in_package("test", "main"),
                 StructTypeName::expect_valid("U"),
             )),

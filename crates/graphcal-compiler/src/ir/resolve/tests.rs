@@ -13,7 +13,7 @@ fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
     crate::desugar::desugared_ast::File::from(raw_file)
 }
 
-fn parse_and_resolve(source: &str) -> Result<CollectedFile, GraphcalError> {
+fn parse_and_resolve(source: &str) -> Result<CollectedWithEntries, GraphcalError> {
     let file = parse_and_desugar(source);
     resolve(&file, &make_src(source))
 }
@@ -77,7 +77,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
     )
     .unwrap();
     let mixed = tir
-        .dimension(&crate::resolved_name::ResolvedDimName::from_def(
+        .dimension(&crate::resolved_name::ResolvedDimName::for_test(
             tir.root_dag_id().clone(),
             crate::syntax::dimension::DimName::expect_valid("Mixed"),
         ))
@@ -1099,7 +1099,7 @@ fn collected_plot_entries_carry_hidden_visibility() {
     let visibilities: Vec<_> = resolved
         .plots()
         .into_iter()
-        .map(|entry| (entry.name.to_string(), entry.visibility))
+        .map(|entry| (entry.name().to_string(), entry.visibility))
         .collect();
     assert_eq!(
         visibilities,
@@ -1141,6 +1141,6 @@ fn collected_value_entries_carry_their_signatures_and_scope() {
         panic!("expected one node");
     };
     assert_eq!(source_text(source, node.type_ann.syntax.span), "Length");
-    assert_eq!(node.declaration_owner, owner);
+    assert_eq!(node.identity().owner(), &owner);
     assert_eq!(node.definition.resolution_owner, owner);
 }

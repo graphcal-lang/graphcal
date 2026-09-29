@@ -144,7 +144,7 @@ pub(super) fn build_checked_entry_interface(
                 let entry = tir
                     .root()
                     .params()
-                    .find(|entry| &entry.name == name)
+                    .find(|entry| entry.name() == name)
                     .ok_or_else(|| {
                         missing_interface_fact(
                             format!("HIR entry parameter `{name}` is absent from checked TIR"),
@@ -164,7 +164,7 @@ pub(super) fn build_checked_entry_interface(
                 let entry = tir
                     .root()
                     .nodes()
-                    .find(|entry| &entry.name == name)
+                    .find(|entry| entry.name() == name)
                     .ok_or_else(|| {
                         missing_interface_fact(
                             format!("HIR entry node `{name}` is absent from checked TIR"),

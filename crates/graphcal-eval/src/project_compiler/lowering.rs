@@ -975,7 +975,6 @@ fn record_semantic_instance(
         request.instance_scope.clone(),
         template_id.clone(),
     );
-    let instance_owner = instance_id.owner().clone();
     let value_bindings = semantic_value_bindings(request, &instance_id);
     let substitution = instance_substitution(request, importer, module_resolver);
     let output_projections = semantic_output_projections(request, &instance_id);
@@ -988,11 +987,7 @@ fn record_semantic_instance(
         src,
     )?;
     let plot_projections = semantic_plot_projections(request, template, src)?;
-    unfrozen.add_semantic_dynamic_unit_bindings(
-        &request.runtime_unit_names,
-        &request.instance_scope,
-        &instance_owner,
-    );
+    unfrozen.add_semantic_dynamic_unit_bindings(&request.runtime_unit_names, &instance_id);
     unfrozen.record_semantic_instance(
         graphcal_compiler::ir::lower::SemanticInstanceInput {
             instance: InstanceRecord::new(
