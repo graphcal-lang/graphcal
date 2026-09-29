@@ -2,29 +2,29 @@
 
 use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 
-use crate::tir::dim_check::InferredType;
+use crate::registry::checked_type::CheckedType;
 
 use super::context::Infer;
 use super::override_deps::IndexNominalUse;
 use super::refs::infer_hir_quantity_literal;
 
 impl Infer<'_> {
-    pub(super) fn infer_hir_type(&self, expr: &Expr) -> Result<InferredType, GraphcalError> {
+    pub(super) fn infer_hir_type(&self, expr: &Expr) -> Result<CheckedType, GraphcalError> {
         self.control.checkpoint()?;
         // Recursion choke point: inference recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| self.infer_hir_type_inner(expr))
     }
 
-    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<InferredType, GraphcalError> {
+    fn infer_hir_type_inner(&self, expr: &Expr) -> Result<CheckedType, GraphcalError> {
         let inferred = match expr.kind() {
             ExprKind::Error(no_error) => no_error.absurd(),
-            ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
-            ExprKind::Integer(_) => InferredType::Int,
-            ExprKind::Bool(_) => InferredType::Bool,
+            ExprKind::Number(_) => CheckedType::Quantity(Dimension::dimensionless()),
+            ExprKind::Integer(_) => CheckedType::Int,
+            ExprKind::Bool(_) => CheckedType::Bool,
             ExprKind::StringLiteral(_)
             | ExprKind::OffsetDateTimeLiteral(_)
             | ExprKind::CivilDateTimeLiteral(_)
@@ -56,7 +56,7 @@ impl Infer<'_> {
                 )?;
                 // A qualified label is self-typed: `Maneuver#Departure` is a
                 // constant of type `Key<Maneuver>` — the axis is in the spelling.
-                InferredType::Key(IndexTypeRef::from_resolved(variant.variant.index().clone()))
+                CheckedType::Key(IndexTypeRef::from_resolved(variant.variant.index().clone()))
             }
             ExprKind::GraphRef(target) => self
                 .env

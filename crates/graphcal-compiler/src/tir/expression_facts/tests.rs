@@ -47,7 +47,7 @@ fn rows(root: &Expr, revision: &BodyRevision) -> HashMap<ExprId, Box<CheckedExpr
             CheckedExpressionRecord::new(
                 expr,
                 ExpressionFact::Value {
-                    checked_type: DeclaredType::Int,
+                    checked_type: CheckedType::Int,
                     shape: ExpressionShape::Scalar,
                     constructor: None,
                 },
@@ -227,8 +227,8 @@ fn publication_rejects_wrong_named_cardinality_and_unnecessary_symbolic_shape() 
         owner(),
         crate::syntax::index_name::IndexName::expect_valid("Axis"),
     );
-    let ty = DeclaredType::Indexed {
-        element: Box::new(DeclaredType::Int),
+    let ty = CheckedType::Indexed {
+        element: Box::new(CheckedType::Int),
         index: index.clone(),
     };
     for expected_size in 1..=8 {
@@ -318,7 +318,7 @@ fn static_membership_proof_cannot_be_deleted_misowned_or_invalid() {
     let id = root.id();
     let record = records.get_mut(id).unwrap();
     record.fact = ExpressionFact::Value {
-        checked_type: DeclaredType::Key(axis.clone()),
+        checked_type: CheckedType::Key(axis.clone()),
         shape: ExpressionShape::Scalar,
         constructor: None,
     };

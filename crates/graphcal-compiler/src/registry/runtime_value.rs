@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
 use crate::finite_value::{FiniteQuantity, NonFiniteQuantity};
-use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
+use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
 use crate::resolved_name::{ResolvedIndexVariant, ResolvedStructTypeName};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
@@ -97,7 +97,7 @@ pub enum RuntimeValue {
         /// Constructor member identity within `type_name` (not a display leaf).
         constructor: ConstructorName,
         /// Concrete generic identity needed by field constraints and equality.
-        generic_args: Vec<DeclaredGenericArg>,
+        generic_args: Vec<CheckedGenericArg>,
         fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection keyed by named labels or typed positions.
@@ -266,7 +266,7 @@ impl RuntimeValue {
 #[cfg(test)]
 mod tests {
     use crate::dag_id::DagId;
-    use crate::registry::declared_type::IndexTypeRef;
+    use crate::registry::checked_type::IndexTypeRef;
     use crate::registry::runtime_value::RuntimeValue;
     use crate::syntax::index_name::IndexName;
 

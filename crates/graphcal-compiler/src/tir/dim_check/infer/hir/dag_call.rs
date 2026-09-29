@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use crate::registry::error::GraphcalError;
 use crate::tir::typed::specialization::specialize_type;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::{format_inferred_type, resolved_type_matches_inferred};
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 
@@ -22,7 +22,7 @@ impl Infer<'_> {
         args: &[ParamBinding],
         static_bindings: &StaticSubstitution,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let display_path = target.value.to_string();
         let dag_tir =
             self.env
@@ -77,11 +77,15 @@ impl Infer<'_> {
                 self.env.tir.project_type_store(),
                 self.env.src,
             )?;
-            if !resolved_type_matches_inferred(&expected, &found) {
+            // A parameter type that still mentions a generic parameter has no
+            // checked type and therefore matches no argument.
+            if !crate::tir::typed::resolved_to_declared_type(&expected, self.env.src)
+                .is_ok_and(|expected| expected == found)
+            {
                 return Err(GraphcalError::DagArgTypeMismatch {
                     param_name: target_key.as_str().to_string(),
                     expected: expected.format(self.env.registry),
-                    found: format_inferred_type(&found, self.env.registry),
+                    found: format_checked_type(&found, self.env.registry),
                     src: self.env.src.clone(),
                     span: binding.value.span.into(),
                 });
@@ -132,6 +136,5 @@ impl Infer<'_> {
             self.env.src,
         )?;
         crate::tir::typed::resolved_to_declared_type(&output_decl, self.env.src)
-            .map(|declared| InferredType::from(&declared))
     }
 }

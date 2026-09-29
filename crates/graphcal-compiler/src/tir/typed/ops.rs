@@ -5,6 +5,10 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 #[cfg(test)]
+#[cfg(test)]
+use super::ResolvedDimTerm;
+use super::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
+#[cfg(test)]
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::Dimension;
 #[cfg(test)]
@@ -14,26 +18,20 @@ use crate::generic_param::GenericParamId;
 #[cfg(test)]
 use crate::nat::{Monomial, NatPolyForm};
 #[cfg(test)]
-use crate::registry::declared_type::IndexDisplayName;
-use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
+use crate::registry::checked_type::IndexDisplayName;
+use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 #[cfg(test)]
 use crate::registry::types::FormattingRegistry;
 #[cfg(test)]
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
-#[cfg(test)]
-use crate::tir::dim_check::InferredGenericArg;
-
-#[cfg(test)]
-use super::ResolvedDimTerm;
-use super::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
 
 // ---------------------------------------------------------------------------
-// Conversion to DeclaredType
+// Conversion to CheckedType
 // ---------------------------------------------------------------------------
 
-/// Convert a non-generic [`ResolvedTypeExpr`] to a `DeclaredType`.
+/// Convert a non-generic [`ResolvedTypeExpr`] to a `CheckedType`.
 ///
 /// This is used by downstream stages (`dim_check`, `eval`) that work with concrete
 /// types. Generic variants (`GenericDimParam`, `GenericDimExpr`, generic indexes)
@@ -46,22 +44,22 @@ use super::{ResolvedDimArg, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr}
 pub fn resolved_to_declared_type(
     resolved: &ResolvedTypeExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::{DeclaredType, StructTypeRef};
+) -> Result<crate::registry::checked_type::CheckedType, GraphcalError> {
+    use crate::registry::checked_type::{CheckedType, StructTypeRef};
 
     match resolved {
-        ResolvedTypeExpr::Dimensionless => Ok(DeclaredType::Quantity(Dimension::dimensionless())),
-        ResolvedTypeExpr::Bool => Ok(DeclaredType::Bool),
-        ResolvedTypeExpr::Int => Ok(DeclaredType::Int),
-        ResolvedTypeExpr::Datetime(scale) => Ok(DeclaredType::Datetime(*scale)),
-        ResolvedTypeExpr::Quantity(dim) => Ok(DeclaredType::Quantity(dim.clone())),
+        ResolvedTypeExpr::Dimensionless => Ok(CheckedType::Quantity(Dimension::dimensionless())),
+        ResolvedTypeExpr::Bool => Ok(CheckedType::Bool),
+        ResolvedTypeExpr::Int => Ok(CheckedType::Int),
+        ResolvedTypeExpr::Datetime(scale) => Ok(CheckedType::Datetime(*scale)),
+        ResolvedTypeExpr::Quantity(dim) => Ok(CheckedType::Quantity(dim.clone())),
         ResolvedTypeExpr::Complex { dimension, span } => {
             resolved_complex_to_declared(dimension, *span, src)
         }
         ResolvedTypeExpr::Key { index, .. } => {
-            resolved_index_to_declared_ref(index, src).map(DeclaredType::Key)
+            resolved_index_to_declared_ref(index, src).map(CheckedType::Key)
         }
-        ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
+        ResolvedTypeExpr::Struct(name, _) => Ok(CheckedType::Struct(
             StructTypeRef::from_resolved(name.clone()),
             vec![],
         )),
@@ -72,7 +70,7 @@ pub fn resolved_to_declared_type(
                 .iter()
                 .map(|arg| resolved_generic_arg_to_declared(arg, src))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(DeclaredType::Struct(
+            Ok(CheckedType::Struct(
                 StructTypeRef::from_resolved(name.clone()),
                 declared_args,
             ))
@@ -97,7 +95,7 @@ pub fn resolved_to_declared_type(
             for idx in indexes.iter().rev() {
                 match idx {
                     ResolvedIndex::Concrete(name, _) => {
-                        result = DeclaredType::Indexed {
+                        result = CheckedType::Indexed {
                             element: Box::new(result),
                             index: IndexTypeRef::from_resolved(name.clone()),
                         };
@@ -120,7 +118,7 @@ pub fn resolved_to_declared_type(
                                     src: src.clone(),
                                     span: (*span).into(),
                                 })?;
-                        result = DeclaredType::Indexed {
+                        result = CheckedType::Indexed {
                             element: Box::new(result),
                             index: IndexTypeRef::from_finite_index(finite_index),
                         };
@@ -145,11 +143,11 @@ fn resolved_complex_to_declared(
     dimension: &ResolvedDimArg,
     span: Span,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::DeclaredType;
+) -> Result<crate::registry::checked_type::CheckedType, GraphcalError> {
+    use crate::registry::checked_type::CheckedType;
     match dimension {
-        ResolvedDimArg::Dimensionless => Ok(DeclaredType::Complex(Dimension::dimensionless())),
-        ResolvedDimArg::Concrete(dimension) => Ok(DeclaredType::Complex(dimension.clone())),
+        ResolvedDimArg::Dimensionless => Ok(CheckedType::Complex(Dimension::dimensionless())),
+        ResolvedDimArg::Concrete(dimension) => Ok(CheckedType::Complex(dimension.clone())),
         ResolvedDimArg::GenericParam(name, _) => Err(GraphcalError::EvalError {
             message: format!("complex dimension parameter `{name}` is not bound"),
             src: src.clone(),
@@ -166,13 +164,13 @@ fn resolved_complex_to_declared(
 pub fn resolved_generic_arg_to_declared(
     resolved: &ResolvedGenericArg,
     src: &NamedSource<Arc<String>>,
-) -> Result<DeclaredGenericArg, GraphcalError> {
+) -> Result<CheckedGenericArg, GraphcalError> {
     match resolved {
         ResolvedGenericArg::Dim(ResolvedDimArg::Dimensionless) => {
-            Ok(DeclaredGenericArg::Dim(Dimension::dimensionless()))
+            Ok(CheckedGenericArg::Dim(Dimension::dimensionless()))
         }
         ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(dim)) => {
-            Ok(DeclaredGenericArg::Dim(dim.clone()))
+            Ok(CheckedGenericArg::Dim(dim.clone()))
         }
         ResolvedGenericArg::Dim(ResolvedDimArg::GenericParam(name, span)) => {
             Err(GraphcalError::EvalError {
@@ -189,11 +187,11 @@ pub fn resolved_generic_arg_to_declared(
             })
         }
         ResolvedGenericArg::Index(index) => {
-            resolved_index_to_declared_ref(index, src).map(DeclaredGenericArg::Index)
+            resolved_index_to_declared_ref(index, src).map(CheckedGenericArg::Index)
         }
-        ResolvedGenericArg::Nat(form, _) => Ok(DeclaredGenericArg::Nat(form.clone())),
+        ResolvedGenericArg::Nat(form, _) => Ok(CheckedGenericArg::Nat(form.clone())),
         ResolvedGenericArg::Type(type_expr) => {
-            resolved_to_declared_type(type_expr, src).map(DeclaredGenericArg::Type)
+            resolved_to_declared_type(type_expr, src).map(CheckedGenericArg::Type)
         }
     }
 }
@@ -221,7 +219,7 @@ fn resolved_index_to_declared_ref(
 #[cfg(test)]
 fn resolved_index_matches_inferred(
     expected: &ResolvedIndex,
-    actual: &crate::registry::declared_type::IndexTypeRef,
+    actual: &crate::registry::checked_type::IndexTypeRef,
 ) -> bool {
     match expected {
         ResolvedIndex::Concrete(name, _) => actual.declared_resolved() == Some(name),
@@ -530,7 +528,7 @@ where
 #[cfg(test)]
 pub(in crate::tir::typed) fn unify_resolved_type(
     resolved: &ResolvedTypeExpr,
-    actual: &crate::tir::dim_check::InferredType,
+    actual: &crate::registry::checked_type::CheckedType,
     dim_sub: &mut HashMap<GenericParamId, Dimension>,
     index_sub: &mut HashMap<GenericParamId, IndexTypeRef>,
     nat_sub: &mut HashMap<GenericParamId, u64>,
@@ -538,7 +536,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
-    use crate::tir::dim_check::InferredType;
+    use crate::registry::checked_type::CheckedType;
 
     match resolved {
         ResolvedTypeExpr::Indexed { base, indexes } => {
@@ -546,14 +544,14 @@ pub(in crate::tir::typed) fn unify_resolved_type(
             // Iterate forward: first index in the list is the outermost Indexed layer.
             let mut current = actual;
             for idx in indexes {
-                let InferredType::Indexed {
+                let CheckedType::Indexed {
                     element,
                     index: actual_idx,
                 } = current
                 else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed type".to_string(),
-                        found: crate::tir::dim_check::format_inferred_type(current, registry),
+                        found: crate::tir::dim_check::format_checked_type(current, registry),
                         help: "expected an indexed value".to_string(),
                         src: src.clone(),
                         span: span.into(),
@@ -612,10 +610,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Bool => {
-            if *actual != InferredType::Bool {
+            if *actual != CheckedType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "expected Bool argument".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -625,10 +623,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Int => {
-            if *actual != InferredType::Int {
+            if *actual != CheckedType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "expected Int argument".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -638,7 +636,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Datetime(expected_scale) => {
-            if *actual != InferredType::Datetime(*expected_scale) {
+            if *actual != CheckedType::Datetime(*expected_scale) {
                 let expected_str = if expected_scale.is_utc() {
                     "Datetime".to_string()
                 } else {
@@ -646,7 +644,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                 };
                 return Err(GraphcalError::DimensionMismatch {
                     expected: expected_str,
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "expected Datetime argument".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -684,10 +682,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Complex { dimension, .. } => {
-            let InferredType::Complex(actual_dim) = actual else {
+            let CheckedType::Complex(actual_dim) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format!("Complex<{}>", dimension.format(registry)),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "expected a complex quantity".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -695,7 +693,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
             };
             unify_resolved_type(
                 &resolved_dim_arg_as_type(dimension),
-                &InferredType::Quantity(actual_dim.clone()),
+                &CheckedType::Quantity(actual_dim.clone()),
                 dim_sub,
                 index_sub,
                 nat_sub,
@@ -706,10 +704,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Key { index, .. } => {
-            let InferredType::Key(actual_index) = actual else {
+            let CheckedType::Key(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format!("Key<{index}>"),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "expected an index-key value".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -757,10 +755,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
         } => {
-            let InferredType::Struct(actual_name, actual_args) = actual else {
+            let CheckedType::Struct(actual_name, actual_args) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
@@ -769,7 +767,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
             if actual_name.resolved() != name {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
@@ -782,7 +780,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
                         name.as_str(),
                         generic_args.len()
                     ),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: "generic struct argument count must match exactly".to_string(),
                     src: src.clone(),
                     span: span.into(),
@@ -806,10 +804,10 @@ pub(in crate::tir::typed) fn unify_resolved_type(
         ResolvedTypeExpr::Struct(name, _) => {
             // When both sides carry canonical struct identities, compare
             // owners as well.
-            let InferredType::Struct(actual_name, _) = actual else {
+            let CheckedType::Struct(actual_name, _) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
@@ -818,7 +816,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
             if actual_name.resolved() != name {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
-                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    found: crate::tir::dim_check::format_checked_type(actual, registry),
                     help: format!("expected struct type `{}`", name.as_str()),
                     src: src.clone(),
                     span: span.into(),
@@ -965,7 +963,7 @@ fn resolved_dim_arg_as_type(arg: &ResolvedDimArg) -> ResolvedTypeExpr {
 #[cfg(test)]
 fn unify_resolved_generic_arg(
     expected: &ResolvedGenericArg,
-    actual: &InferredGenericArg,
+    actual: &CheckedGenericArg,
     dim_sub: &mut HashMap<GenericParamId, Dimension>,
     index_sub: &mut HashMap<GenericParamId, IndexTypeRef>,
     nat_sub: &mut HashMap<GenericParamId, u64>,
@@ -974,19 +972,17 @@ fn unify_resolved_generic_arg(
     span: Span,
 ) -> Result<(), GraphcalError> {
     match (expected, actual) {
-        (ResolvedGenericArg::Dim(expected), InferredGenericArg::Dim(actual)) => {
-            unify_resolved_type(
-                &resolved_dim_arg_as_type(expected),
-                &crate::tir::dim_check::InferredType::Quantity(actual.clone()),
-                dim_sub,
-                index_sub,
-                nat_sub,
-                registry,
-                src,
-                span,
-            )
-        }
-        (ResolvedGenericArg::Index(expected), InferredGenericArg::Index(actual)) => {
+        (ResolvedGenericArg::Dim(expected), CheckedGenericArg::Dim(actual)) => unify_resolved_type(
+            &resolved_dim_arg_as_type(expected),
+            &crate::registry::checked_type::CheckedType::Quantity(actual.clone()),
+            dim_sub,
+            index_sub,
+            nat_sub,
+            registry,
+            src,
+            span,
+        ),
+        (ResolvedGenericArg::Index(expected), CheckedGenericArg::Index(actual)) => {
             if resolved_index_matches_inferred(expected, actual) {
                 Ok(())
             } else {
@@ -998,7 +994,7 @@ fn unify_resolved_generic_arg(
                 })
             }
         }
-        (ResolvedGenericArg::Nat(expected, _), InferredGenericArg::Nat(actual)) => {
+        (ResolvedGenericArg::Nat(expected, _), CheckedGenericArg::Nat(actual)) => {
             if actual.is_constant() {
                 return unify_nat_generic_arg(expected, actual, nat_sub, src, span);
             }
@@ -1021,7 +1017,7 @@ fn unify_resolved_generic_arg(
                 })
             }
         }
-        (ResolvedGenericArg::Type(expected), InferredGenericArg::Type(actual)) => {
+        (ResolvedGenericArg::Type(expected), CheckedGenericArg::Type(actual)) => {
             unify_resolved_type(
                 expected, actual, dim_sub, index_sub, nat_sub, registry, src, span,
             )
@@ -1043,27 +1039,27 @@ fn unify_resolved_generic_arg(
 /// in a [`super::Substitution`]. `span` locates the embedded nodes.
 #[must_use]
 pub fn declared_to_resolved_type(
-    declared: &crate::registry::declared_type::DeclaredType,
+    declared: &crate::registry::checked_type::CheckedType,
     span: Span,
 ) -> ResolvedTypeExpr {
-    use crate::registry::declared_type::DeclaredType;
+    use crate::registry::checked_type::CheckedType;
     match declared {
-        DeclaredType::Quantity(dim) => ResolvedTypeExpr::Quantity(dim.clone()),
-        DeclaredType::Complex(dim) => ResolvedTypeExpr::Complex {
+        CheckedType::Quantity(dim) => ResolvedTypeExpr::Quantity(dim.clone()),
+        CheckedType::Complex(dim) => ResolvedTypeExpr::Complex {
             dimension: dimension_to_resolved_arg(dim),
             span,
         },
-        DeclaredType::Bool => ResolvedTypeExpr::Bool,
-        DeclaredType::Int => ResolvedTypeExpr::Int,
-        DeclaredType::Datetime(scale) => ResolvedTypeExpr::Datetime(*scale),
-        DeclaredType::Key(index) => ResolvedTypeExpr::Key {
+        CheckedType::Bool => ResolvedTypeExpr::Bool,
+        CheckedType::Int => ResolvedTypeExpr::Int,
+        CheckedType::Datetime(scale) => ResolvedTypeExpr::Datetime(*scale),
+        CheckedType::Key(index) => ResolvedTypeExpr::Key {
             index: index_ref_to_resolved(index, span),
             span,
         },
-        DeclaredType::Struct(name, args) if args.is_empty() => {
+        CheckedType::Struct(name, args) if args.is_empty() => {
             ResolvedTypeExpr::Struct(name.resolved().clone(), span)
         }
-        DeclaredType::Struct(name, args) => ResolvedTypeExpr::GenericStruct {
+        CheckedType::Struct(name, args) => ResolvedTypeExpr::GenericStruct {
             name: name.resolved().clone(),
             generic_args: args
                 .iter()
@@ -1071,7 +1067,7 @@ pub fn declared_to_resolved_type(
                 .collect(),
             span,
         },
-        DeclaredType::Indexed { element, index } => ResolvedTypeExpr::Indexed {
+        CheckedType::Indexed { element, index } => ResolvedTypeExpr::Indexed {
             base: Box::new(declared_to_resolved_type(element, span)),
             indexes: vec![index_ref_to_resolved(index, span)],
         },
@@ -1080,17 +1076,14 @@ pub fn declared_to_resolved_type(
 
 /// Embed a concrete generic argument into the symbolic form.
 #[must_use]
-pub fn declared_to_resolved_generic_arg(
-    arg: &DeclaredGenericArg,
-    span: Span,
-) -> ResolvedGenericArg {
+pub fn declared_to_resolved_generic_arg(arg: &CheckedGenericArg, span: Span) -> ResolvedGenericArg {
     match arg {
-        DeclaredGenericArg::Dim(dim) => ResolvedGenericArg::Dim(dimension_to_resolved_arg(dim)),
-        DeclaredGenericArg::Index(index) => {
+        CheckedGenericArg::Dim(dim) => ResolvedGenericArg::Dim(dimension_to_resolved_arg(dim)),
+        CheckedGenericArg::Index(index) => {
             ResolvedGenericArg::Index(index_ref_to_resolved(index, span))
         }
-        DeclaredGenericArg::Nat(form) => ResolvedGenericArg::Nat(form.clone(), span),
-        DeclaredGenericArg::Type(ty) => {
+        CheckedGenericArg::Nat(form) => ResolvedGenericArg::Nat(form.clone(), span),
+        CheckedGenericArg::Type(ty) => {
             ResolvedGenericArg::Type(declared_to_resolved_type(ty, span))
         }
     }

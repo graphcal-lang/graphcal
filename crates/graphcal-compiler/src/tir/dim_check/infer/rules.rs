@@ -3,7 +3,7 @@
 //!
 //! Both engines walk different expression representations but must apply
 //! identical typing rules. Keeping the rules here as pure functions over
-//! [`InferredType`] operands means a rule change lands once — the engines
+//! [`CheckedType`] operands means a rule change lands once — the engines
 //! had already drifted (HIR accepted `-` on Bool) when each carried its own
 //! copy.
 
@@ -19,12 +19,12 @@ use crate::registry::types::FormattingRegistry;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
-use super::super::InferredType;
-use super::super::helpers::{expect_quantity, format_inferred_type};
+use super::super::helpers::{expect_quantity, format_checked_type};
+use crate::registry::checked_type::CheckedType;
 
 /// A typed operand with the span diagnostics should point at.
 pub(super) struct Operand {
-    pub ty: InferredType,
+    pub ty: CheckedType,
     pub span: Span,
 }
 
@@ -36,10 +36,10 @@ fn comparison_operand_type<'a>(
     operand: &'a Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'a InferredType, GraphcalError> {
+) -> Result<&'a CheckedType, GraphcalError> {
     match &operand.ty {
-        InferredType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
-            found: format_inferred_type(&operand.ty, registry),
+        CheckedType::Indexed { .. } => Err(GraphcalError::IndexedComparisonOperand {
+            found: format_checked_type(&operand.ty, registry),
             src: src.clone(),
             span: operand.span.into(),
         }),
@@ -56,16 +56,16 @@ fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
 /// `k : Key<Fin(N)>` plus a static Nat constant `c` yields `Key<Fin(N + c)>`.
 fn fin_key_additive_rule(
     op: BinOp,
-    key_index: &crate::registry::declared_type::IndexTypeRef,
+    key_index: &crate::registry::checked_type::IndexTypeRef,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let reject = |help: &str| {
         Err(GraphcalError::DimensionMismatch {
             expected: "a static Nat constant".to_string(),
-            found: format_inferred_type(&rhs.ty, registry),
+            found: format_checked_type(&rhs.ty, registry),
             help: help.to_string(),
             src: src.clone(),
             span: rhs.span.into(),
@@ -83,7 +83,7 @@ fn fin_key_additive_rule(
              or use to_int() and fin_key()",
         );
     }
-    if rhs.ty != InferredType::Int {
+    if rhs.ty != CheckedType::Int {
         return reject("`k + c` takes an integer constant addend");
     }
     let Some(addend) = rhs_const_int else {
@@ -102,8 +102,8 @@ fn fin_key_additive_rule(
             src: src.clone(),
             span: rhs.span.into(),
         })?;
-    crate::registry::declared_type::IndexTypeRef::from_finite_index_form(shifted)
-        .map(InferredType::Key)
+    crate::registry::checked_type::IndexTypeRef::from_finite_index_form(shifted)
+        .map(CheckedType::Key)
         .map_err(|err| GraphcalError::EvalError {
             message: err.describe_finite_index(),
             src: src.clone(),
@@ -129,48 +129,48 @@ pub(super) fn binop_rule(
     rhs_const_int: Option<i64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let lhs_type = &lhs.ty;
     let rhs_type = &rhs.ty;
     match op {
         // Logical operators: require Bool operands, return Bool
         BinOp::And | BinOp::Or => {
-            if *lhs_type != InferredType::Bool {
+            if *lhs_type != CheckedType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: format_inferred_type(lhs_type, registry),
+                    found: format_checked_type(lhs_type, registry),
                     help: "boolean operators require Bool operands".to_string(),
                     src: src.clone(),
                     span: lhs.span.into(),
                 });
             }
-            if *rhs_type != InferredType::Bool {
+            if *rhs_type != CheckedType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: format_inferred_type(rhs_type, registry),
+                    found: format_checked_type(rhs_type, registry),
                     help: "boolean operators require Bool operands".to_string(),
                     src: src.clone(),
                     span: rhs.span.into(),
                 });
             }
-            Ok(InferredType::Bool)
+            Ok(CheckedType::Bool)
         }
         // Equality operands must be unindexed and have the same value type.
         BinOp::Eq | BinOp::Ne => {
             let lhs_type = comparison_operand_type(lhs, registry, src)?;
             let rhs_type = comparison_operand_type(rhs, registry, src)?;
             if lhs_type == rhs_type {
-                return Ok(InferredType::Bool);
+                return Ok(CheckedType::Bool);
             }
             if let (Some(lhs_dim), Some(rhs_dim)) =
                 (lhs_type.quantity_dimension(), rhs_type.quantity_dimension())
                 && lhs_dim == rhs_dim
             {
-                return Ok(InferredType::Bool);
+                return Ok(CheckedType::Bool);
             }
             Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(lhs_type, registry),
-                found: format_inferred_type(rhs_type, registry),
+                expected: format_checked_type(lhs_type, registry),
+                found: format_checked_type(rhs_type, registry),
                 help: "equality operands must have the same type".to_string(),
                 src: src.clone(),
                 span: rhs.span.into(),
@@ -181,20 +181,20 @@ pub(super) fn binop_rule(
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             let lhs_type = comparison_operand_type(lhs, registry, src)?;
             let rhs_type = comparison_operand_type(rhs, registry, src)?;
-            if matches!(lhs_type, InferredType::Complex(_))
-                || matches!(rhs_type, InferredType::Complex(_))
+            if matches!(lhs_type, CheckedType::Complex(_))
+                || matches!(rhs_type, CheckedType::Complex(_))
             {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "an ordered real quantity, integer, or datetime".to_string(),
-                    found: if matches!(lhs_type, InferredType::Complex(_)) {
-                        format_inferred_type(lhs_type, registry)
+                    found: if matches!(lhs_type, CheckedType::Complex(_)) {
+                        format_checked_type(lhs_type, registry)
                     } else {
-                        format_inferred_type(rhs_type, registry)
+                        format_checked_type(rhs_type, registry)
                     },
                     help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
                         .to_string(),
                     src: src.clone(),
-                    span: if matches!(lhs_type, InferredType::Complex(_)) {
+                    span: if matches!(lhs_type, CheckedType::Complex(_)) {
                         lhs.span
                     } else {
                         rhs.span
@@ -202,33 +202,32 @@ pub(super) fn binop_rule(
                     .into(),
                 });
             }
-            if matches!(lhs_type, InferredType::Int) || matches!(rhs_type, InferredType::Int) {
-                if !matches!(lhs_type, InferredType::Int) || !matches!(rhs_type, InferredType::Int)
-                {
+            if matches!(lhs_type, CheckedType::Int) || matches!(rhs_type, CheckedType::Int) {
+                if !matches!(lhs_type, CheckedType::Int) || !matches!(rhs_type, CheckedType::Int) {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_type, registry),
-                        found: format_inferred_type(rhs_type, registry),
+                        expected: format_checked_type(lhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
                         help: "comparison operands must have the same type".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(InferredType::Bool);
+                return Ok(CheckedType::Bool);
             }
             // Datetime comparisons: same time scale required
-            if let InferredType::Datetime(ls) = lhs_type
-                && let InferredType::Datetime(rs) = rhs_type
+            if let CheckedType::Datetime(ls) = lhs_type
+                && let CheckedType::Datetime(rs) = rhs_type
             {
                 if ls != rs {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_type, registry),
-                        found: format_inferred_type(rhs_type, registry),
+                        expected: format_checked_type(lhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
                         help: "cannot compare datetimes with different time scales".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(InferredType::Bool);
+                return Ok(CheckedType::Bool);
             }
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
             let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
@@ -241,7 +240,7 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            Ok(InferredType::Bool)
+            Ok(CheckedType::Bool)
         }
         // Arithmetic operators: require matching numeric operands (Int or Quantity)
         BinOp::Add | BinOp::Sub => {
@@ -250,13 +249,13 @@ pub(super) fn binop_rule(
             // — exactly and infallibly. Everything else on keys is rejected:
             // subtraction is fallible at 0 and Nat itself has none; runtime
             // offsets escape any static bound.
-            if let InferredType::Key(key_index) = lhs_type {
+            if let CheckedType::Key(key_index) = lhs_type {
                 return fin_key_additive_rule(op, key_index, rhs, rhs_const_int, registry, src);
             }
-            if matches!(rhs_type, InferredType::Key(_)) {
+            if matches!(rhs_type, CheckedType::Key(_)) {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(lhs_type, registry),
-                    found: format_inferred_type(rhs_type, registry),
+                    expected: format_checked_type(lhs_type, registry),
+                    found: format_checked_type(rhs_type, registry),
                     help: "Fin-key arithmetic is written key-first: `k + c` with a \
                            static Nat constant"
                         .to_string(),
@@ -264,27 +263,27 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
-                return Ok(InferredType::Int);
+            if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
+                return Ok(CheckedType::Int);
             }
             match (lhs_type, rhs_type) {
-                (InferredType::Complex(lhs_dim), InferredType::Complex(rhs_dim)) => {
+                (CheckedType::Complex(lhs_dim), CheckedType::Complex(rhs_dim)) => {
                     if lhs_dim != rhs_dim {
                         return Err(GraphcalError::DimensionMismatch {
-                            expected: format_inferred_type(lhs_type, registry),
-                            found: format_inferred_type(rhs_type, registry),
+                            expected: format_checked_type(lhs_type, registry),
+                            found: format_checked_type(rhs_type, registry),
                             help: "complex operands of addition and subtraction must have the same dimension"
                                 .to_string(),
                             src: src.clone(),
                             span: rhs.span.into(),
                         });
                     }
-                    return Ok(InferredType::Complex(lhs_dim.clone()));
+                    return Ok(CheckedType::Complex(lhs_dim.clone()));
                 }
-                (InferredType::Complex(_), _) | (_, InferredType::Complex(_)) => {
+                (CheckedType::Complex(_), _) | (_, CheckedType::Complex(_)) => {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: format_inferred_type(lhs_type, registry),
-                        found: format_inferred_type(rhs_type, registry),
+                        expected: format_checked_type(lhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
                         help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
                             .to_string(),
                         src: src.clone(),
@@ -294,27 +293,27 @@ pub(super) fn binop_rule(
                 _ => {}
             }
             // Point-vs-vector rules for Datetime
-            if let InferredType::Datetime(ls) = lhs_type {
+            if let CheckedType::Datetime(ls) = lhs_type {
                 let time_dim = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
-                if let InferredType::Datetime(rs) = rhs_type {
+                if let CheckedType::Datetime(rs) = rhs_type {
                     // Datetime - Datetime -> Quantity(Time)
                     if op == BinOp::Sub {
                         if ls != rs {
                             return Err(GraphcalError::DimensionMismatch {
-                                expected: format_inferred_type(lhs_type, registry),
-                                found: format_inferred_type(rhs_type, registry),
+                                expected: format_checked_type(lhs_type, registry),
+                                found: format_checked_type(rhs_type, registry),
                                 help: "cannot subtract datetimes with different time scales"
                                     .to_string(),
                                 src: src.clone(),
                                 span: rhs.span.into(),
                             });
                         }
-                        return Ok(InferredType::Quantity(time_dim));
+                        return Ok(CheckedType::Quantity(time_dim));
                     }
                     // Datetime + Datetime -> error
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Quantity(Time)".to_string(),
-                        found: format_inferred_type(rhs_type, registry),
+                        found: format_checked_type(rhs_type, registry),
                         help: "cannot add two datetimes; did you mean to subtract?".to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
@@ -332,9 +331,9 @@ pub(super) fn binop_rule(
                         span: rhs.span.into(),
                     });
                 }
-                return Ok(InferredType::Datetime(*ls));
+                return Ok(CheckedType::Datetime(*ls));
             }
-            if let InferredType::Datetime(rs) = rhs_type {
+            if let CheckedType::Datetime(rs) = rhs_type {
                 // Quantity(Time) + Datetime -> Datetime (only for Add)
                 if op == BinOp::Add {
                     let time_dim = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
@@ -348,12 +347,12 @@ pub(super) fn binop_rule(
                             span: lhs.span.into(),
                         });
                     }
-                    return Ok(InferredType::Datetime(*rs));
+                    return Ok(CheckedType::Datetime(*rs));
                 }
                 // Quantity - Datetime -> error
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: format_inferred_type(lhs_type, registry),
-                    found: format_inferred_type(rhs_type, registry),
+                    expected: format_checked_type(lhs_type, registry),
+                    found: format_checked_type(rhs_type, registry),
                     help: "cannot subtract a Datetime from a quantity".to_string(),
                     src: src.clone(),
                     span: rhs.span.into(),
@@ -371,18 +370,18 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            Ok(InferredType::Quantity(lhs_dim))
+            Ok(CheckedType::Quantity(lhs_dim))
         }
         BinOp::Mul => {
-            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
-                return Ok(InferredType::Int);
+            if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
+                return Ok(CheckedType::Int);
             }
             let (lhs_dim, lhs_complex) = match lhs_type {
-                InferredType::Complex(dimension) => (dimension.clone(), true),
+                CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
             };
             let (rhs_dim, rhs_complex) = match rhs_type {
-                InferredType::Complex(dimension) => (dimension.clone(), true),
+                CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
             let dim =
@@ -393,21 +392,21 @@ pub(super) fn binop_rule(
                         span: expr_span.into(),
                     })?;
             if lhs_complex || rhs_complex {
-                Ok(InferredType::Complex(dim))
+                Ok(CheckedType::Complex(dim))
             } else {
-                Ok(InferredType::Quantity(dim))
+                Ok(CheckedType::Quantity(dim))
             }
         }
         BinOp::Div => {
-            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
-                return Ok(InferredType::Int);
+            if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
+                return Ok(CheckedType::Int);
             }
             let (lhs_dim, lhs_complex) = match lhs_type {
-                InferredType::Complex(dimension) => (dimension.clone(), true),
+                CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
             };
             let (rhs_dim, rhs_complex) = match rhs_type {
-                InferredType::Complex(dimension) => (dimension.clone(), true),
+                CheckedType::Complex(dimension) => (dimension.clone(), true),
                 _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
             };
             let dim =
@@ -418,21 +417,21 @@ pub(super) fn binop_rule(
                         span: expr_span.into(),
                     })?;
             if lhs_complex || rhs_complex {
-                Ok(InferredType::Complex(dim))
+                Ok(CheckedType::Complex(dim))
             } else {
-                Ok(InferredType::Quantity(dim))
+                Ok(CheckedType::Quantity(dim))
             }
         }
         BinOp::Mod => {
-            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
-                return Ok(InferredType::Int);
+            if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
+                return Ok(CheckedType::Int);
             }
             Err(GraphcalError::DimensionMismatch {
                 expected: "Int".to_string(),
                 found: format!(
                     "{} % {}",
-                    format_inferred_type(lhs_type, registry),
-                    format_inferred_type(rhs_type, registry)
+                    format_checked_type(lhs_type, registry),
+                    format_checked_type(rhs_type, registry)
                 ),
                 help: "modulo operator requires Int operands".to_string(),
                 src: src.clone(),
@@ -443,7 +442,7 @@ pub(super) fn binop_rule(
             // Int powers remain integer-only. Exact integer syntax is
             // preferred; right-associated constant Int chains retain their
             // existing checked constant folding.
-            if matches!(lhs_type, InferredType::Int) {
+            if matches!(lhs_type, CheckedType::Int) {
                 let int_exp = match exponent {
                     PowerExponent::Exact(exact) if exact.is_integer() => Some(exact.num()),
                     PowerExponent::Runtime => rhs_const_int,
@@ -451,7 +450,7 @@ pub(super) fn binop_rule(
                 };
                 if let Some(value) = int_exp {
                     if value >= 0 {
-                        return Ok(InferredType::Int);
+                        return Ok(CheckedType::Int);
                     }
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "non-negative Int exponent".to_string(),
@@ -464,7 +463,7 @@ pub(super) fn binop_rule(
                 }
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "non-negative exact Int exponent".to_string(),
-                    found: format_inferred_type(rhs_type, registry),
+                    found: format_checked_type(rhs_type, registry),
                     help: "integer power requires an exact integer exponent such as `2`"
                         .to_string(),
                     src: src.clone(),
@@ -491,7 +490,7 @@ pub(super) fn binop_rule(
             match exponent {
                 PowerExponent::Exact(exact) => {
                     if lhs_dim.is_dimensionless() {
-                        return Ok(InferredType::Quantity(Dimension::dimensionless()));
+                        return Ok(CheckedType::Quantity(Dimension::dimensionless()));
                     }
                     let rational = Rational::try_from(exact).map_err(|_| {
                         GraphcalError::DimensionOverflow {
@@ -506,11 +505,11 @@ pub(super) fn binop_rule(
                                 src: src.clone(),
                                 span: expr_span.into(),
                             })?;
-                    Ok(InferredType::Quantity(dim))
+                    Ok(CheckedType::Quantity(dim))
                 }
                 PowerExponent::FloatSyntax { exact } => {
                     if lhs_dim.is_dimensionless() {
-                        return Ok(InferredType::Quantity(Dimension::dimensionless()));
+                        return Ok(CheckedType::Quantity(Dimension::dimensionless()));
                     }
                     let replacement = exact_float_replacement(exact);
                     let help = replacement.as_ref().map_or_else(
@@ -529,7 +528,7 @@ pub(super) fn binop_rule(
                 }
                 PowerExponent::Runtime => {
                     if lhs_dim.is_dimensionless() {
-                        Ok(InferredType::Quantity(Dimension::dimensionless()))
+                        Ok(CheckedType::Quantity(Dimension::dimensionless()))
                     } else {
                         Err(GraphcalError::RuntimeExponentForDimensionedBase {
                             src: src.clone(),
@@ -548,27 +547,27 @@ pub(super) fn unary_rule(
     operand: &Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     match op {
         UnaryOp::Not => {
-            if operand.ty != InferredType::Bool {
+            if operand.ty != CheckedType::Bool {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Bool".to_string(),
-                    found: format_inferred_type(&operand.ty, registry),
+                    found: format_checked_type(&operand.ty, registry),
                     help: "logical NOT requires a Bool operand".to_string(),
                     src: src.clone(),
                     span: operand.span.into(),
                 });
             }
-            Ok(InferredType::Bool)
+            Ok(CheckedType::Bool)
         }
         UnaryOp::Neg => match &operand.ty {
-            InferredType::Quantity(_) | InferredType::Complex(_) | InferredType::Int => {
+            CheckedType::Quantity(_) | CheckedType::Complex(_) | CheckedType::Int => {
                 Ok(operand.ty.clone())
             }
             other => Err(GraphcalError::DimensionMismatch {
                 expected: "Int or Quantity".to_string(),
-                found: format_inferred_type(other, registry),
+                found: format_checked_type(other, registry),
                 help: "negation requires a numeric quantity or Int operand".to_string(),
                 src: src.clone(),
                 span: operand.span.into(),
@@ -584,11 +583,11 @@ pub(super) fn if_rule(
     else_branch: &Operand,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    if cond.ty != InferredType::Bool {
+) -> Result<CheckedType, GraphcalError> {
+    if cond.ty != CheckedType::Bool {
         return Err(GraphcalError::DimensionMismatch {
             expected: "Bool".to_string(),
-            found: format_inferred_type(&cond.ty, registry),
+            found: format_checked_type(&cond.ty, registry),
             help: "if/else condition must be Bool".to_string(),
             src: src.clone(),
             span: cond.span.into(),
@@ -596,8 +595,8 @@ pub(super) fn if_rule(
     }
     if then_branch.ty != else_branch.ty {
         return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&then_branch.ty, registry),
-            found: format_inferred_type(&else_branch.ty, registry),
+            expected: format_checked_type(&then_branch.ty, registry),
+            found: format_checked_type(&else_branch.ty, registry),
             help: "both branches of if/else must have the same dimension".to_string(),
             src: src.clone(),
             span: else_branch.span.into(),
@@ -645,12 +644,12 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
 /// least one arm must exist. `arm_body_span` maps an arm index to the span
 /// of its body for diagnostics (the two engines carry different arm types).
 pub(in crate::tir::dim_check) fn match_arms_rule(
-    arm_types: &[InferredType],
+    arm_types: &[CheckedType],
     arm_body_span: impl Fn(usize) -> Span,
     expr_span: Span,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     let Some(first) = arm_types.first() else {
         return Err(GraphcalError::EvalError {
             message: "match expression has no arms".to_string(),
@@ -661,8 +660,8 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
         if arm_type != first {
             return Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(first, registry),
-                found: format_inferred_type(arm_type, registry),
+                expected: format_checked_type(first, registry),
+                found: format_checked_type(arm_type, registry),
                 help: "all match arms must return the same type".to_string(),
                 src: src.clone(),
                 span: arm_body_span(i).into(),

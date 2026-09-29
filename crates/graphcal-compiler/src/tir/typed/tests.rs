@@ -86,13 +86,13 @@ fn value_declaration_records_carry_their_checked_types() {
         crate::dimension::PreludeBaseDimension::Length,
     ));
     for (name, resolved, declared) in [
-        ("k", ResolvedTypeExpr::Int, DeclaredType::Int),
+        ("k", ResolvedTypeExpr::Int, CheckedType::Int),
         (
             "p",
             ResolvedTypeExpr::Quantity(length.clone()),
-            DeclaredType::Quantity(length),
+            CheckedType::Quantity(length),
         ),
-        ("n", ResolvedTypeExpr::Bool, DeclaredType::Bool),
+        ("n", ResolvedTypeExpr::Bool, CheckedType::Bool),
     ] {
         let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
         let identity = tir.root().bound_decl_identity(&written).unwrap();
@@ -135,7 +135,7 @@ fn checked_decl_type_requires_a_concrete_type() {
     let generic = ResolvedTypeExpr::GenericTypeParam(type_param("T"), Span::new(0, 0));
     assert!(CheckedDeclType::new(generic, &src).is_err());
     let checked = CheckedDeclType::new(ResolvedTypeExpr::Int, &src).unwrap();
-    assert_eq!(checked.declared(), &DeclaredType::Int);
+    assert_eq!(checked.declared(), &CheckedType::Int);
 }
 
 #[test]
@@ -415,11 +415,11 @@ fn tir_index_lookup_uses_the_project_store_for_declared_and_finite_indexes() {
         parse_and_type_resolve("index Axis = { A, B };\nparam values: Dimensionless[Fin(3)];\n")
             .unwrap();
     let declared =
-        crate::registry::declared_type::IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
+        crate::registry::checked_type::IndexTypeRef::from_resolved(ResolvedIndexName::from_def(
             tir.root_dag_id().clone(),
             crate::syntax::index_name::IndexName::expect_valid("Axis"),
         ));
-    let finite = crate::registry::declared_type::IndexTypeRef::from_finite_index(
+    let finite = crate::registry::checked_type::IndexTypeRef::from_finite_index(
         crate::registry::types::FiniteIndex::try_from_u64(3).unwrap(),
     );
 
@@ -1013,12 +1013,12 @@ fn type_resolve_default_type_params() {
 
 // --- resolved_to_declared_type() tests ---
 
-use crate::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 
 #[test]
 fn generic_index_substitution_preserves_resolved_owner() {
-    use crate::registry::declared_type::IndexTypeRef;
-    use crate::tir::dim_check::InferredType;
+    use crate::registry::checked_type::CheckedType;
+    use crate::registry::checked_type::IndexTypeRef;
 
     let src = make_src();
     let registry = make_registry();
@@ -1032,8 +1032,8 @@ fn generic_index_substitution_preserves_resolved_owner() {
             Span::new(0, 0),
         )],
     };
-    let actual = InferredType::Indexed {
-        element: Box::new(InferredType::Quantity(Dimension::dimensionless())),
+    let actual = CheckedType::Indexed {
+        element: Box::new(CheckedType::Quantity(Dimension::dimensionless())),
         index: IndexTypeRef::from_resolved(resolved_index.clone()),
     };
     let mut dim_sub = HashMap::new();
@@ -1068,7 +1068,7 @@ fn generic_index_substitution_preserves_resolved_owner() {
     }
     let substituted =
         resolved_to_declared_type(&substitution.apply(&resolved_type).unwrap(), &src).unwrap();
-    let DeclaredType::Indexed { index, .. } = substituted else {
+    let CheckedType::Indexed { index, .. } = substituted else {
         panic!("expected indexed type after substitution");
     };
     assert_eq!(index.declared_resolved(), Some(&resolved_index));
@@ -1077,19 +1077,19 @@ fn generic_index_substitution_preserves_resolved_owner() {
 #[test]
 fn convert_dimensionless() {
     let dt = resolved_to_declared_type(&ResolvedTypeExpr::Dimensionless, &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Quantity(Dimension::dimensionless()));
+    assert_eq!(dt, CheckedType::Quantity(Dimension::dimensionless()));
 }
 
 #[test]
 fn convert_bool() {
     let dt = resolved_to_declared_type(&ResolvedTypeExpr::Bool, &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Bool);
+    assert_eq!(dt, CheckedType::Bool);
 }
 
 #[test]
 fn convert_int() {
     let dt = resolved_to_declared_type(&ResolvedTypeExpr::Int, &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Int);
+    assert_eq!(dt, CheckedType::Int);
 }
 
 #[test]
@@ -1099,7 +1099,7 @@ fn convert_quantity() {
     ));
     let dt =
         resolved_to_declared_type(&ResolvedTypeExpr::Quantity(dim.clone()), &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Quantity(dim));
+    assert_eq!(dt, CheckedType::Quantity(dim));
 }
 
 #[test]
@@ -1113,7 +1113,7 @@ fn convert_struct() {
     .unwrap();
     assert_eq!(
         dt,
-        DeclaredType::Struct(StructTypeRef::from_resolved(resolved), vec![])
+        CheckedType::Struct(StructTypeRef::from_resolved(resolved), vec![])
     );
 }
 
@@ -1136,8 +1136,8 @@ fn convert_indexed() {
     .unwrap();
     assert_eq!(
         dt,
-        DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Quantity(Dimension::base(BaseDimId::Prelude(
+        CheckedType::Indexed {
+            element: Box::new(CheckedType::Quantity(Dimension::base(BaseDimId::Prelude(
                 crate::dimension::PreludeBaseDimension::Length,
             )))),
             index: IndexTypeRef::from_resolved(resolved_index),
@@ -1213,14 +1213,14 @@ fn resolve_datetime_unknown_scale_error() {
 fn convert_datetime_utc() {
     let dt = resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::UTC), &make_src())
         .unwrap();
-    assert_eq!(dt, DeclaredType::Datetime(TimeScale::UTC));
+    assert_eq!(dt, CheckedType::Datetime(TimeScale::UTC));
 }
 
 #[test]
 fn convert_datetime_tt() {
     let dt =
         resolved_to_declared_type(&ResolvedTypeExpr::Datetime(TimeScale::TT), &make_src()).unwrap();
-    assert_eq!(dt, DeclaredType::Datetime(TimeScale::TT));
+    assert_eq!(dt, CheckedType::Datetime(TimeScale::TT));
 }
 
 // -----------------------------------------------------------------------
@@ -1298,7 +1298,7 @@ fn nat_leq_zero_leq_anything() {
 
 #[test]
 fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
-    let reference = crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
+    let reference = crate::registry::checked_type::IndexTypeRef::from_finite_index_form(
         NatPolyForm::from_constant(3),
     )?;
     assert_eq!(
@@ -1314,7 +1314,7 @@ fn finite_index_concrete_form_to_index_type_ref() -> Result<(), Box<dyn std::err
 #[test]
 fn finite_index_symbolic_form_to_display_only_index_type_ref()
 -> Result<(), Box<dyn std::error::Error>> {
-    let reference = crate::registry::declared_type::IndexTypeRef::from_finite_index_form(
+    let reference = crate::registry::checked_type::IndexTypeRef::from_finite_index_form(
         NatPolyForm::from_var(type_param("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap(),
@@ -1483,7 +1483,7 @@ fn nat_unify_substituted_term_overflow_errors() {
         &form,
         4,
         &mut nat_sub,
-        &crate::registry::declared_type::IndexDisplayName::Finite(NatPolyForm::from_constant(4)),
+        &crate::registry::checked_type::IndexDisplayName::Finite(NatPolyForm::from_constant(4)),
         &src,
         Span::new(0, 0),
     );

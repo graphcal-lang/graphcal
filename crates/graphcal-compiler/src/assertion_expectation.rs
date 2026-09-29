@@ -4,7 +4,7 @@
 //! resolved identities. Collection and attribute parsing are separate clients.
 
 use crate::dag_id::DagId;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::resolved_name::ResolvedIndexVariant;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::non_empty::NonEmpty;

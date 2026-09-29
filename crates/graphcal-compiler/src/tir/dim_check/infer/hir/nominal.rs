@@ -5,13 +5,13 @@ use crate::hir::nominal::{NominalConstructor, NominalField, NominalTypeDef};
 use crate::hir::types::GenericArg;
 use crate::resolved_name::ResolvedConstructorName;
 
-use crate::registry::declared_type::StructTypeRef;
+use crate::registry::checked_type::StructTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::type_name::FieldName;
 
-use crate::tir::dim_check::InferredType;
+use crate::registry::checked_type::CheckedType;
 use crate::tir::dim_check::helpers::{
-    format_distinct_inferred_types, format_inferred_type, struct_type_def_for_inferred,
+    format_checked_type, format_distinct_types, struct_type_def_for_inferred,
 };
 
 use super::context::Infer;
@@ -31,11 +31,11 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         field: &crate::syntax::span::Spanned<FieldName>,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let inner_type = self.infer_hir_type(inner)?;
-        let InferredType::Struct(type_name, type_args) = &inner_type else {
+        let CheckedType::Struct(type_name, type_args) = &inner_type else {
             return Err(GraphcalError::NotAStruct {
-                name: format_inferred_type(&inner_type, self.env.registry),
+                name: format_checked_type(&inner_type, self.env.registry),
                 src: self.env.src.clone(),
                 span: inner.span.into(),
             });
@@ -97,7 +97,7 @@ impl Infer<'_> {
         callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
             target.owning_type(),
@@ -194,7 +194,7 @@ impl Infer<'_> {
             )?;
             if value_type != expected {
                 let (expected, found) =
-                    format_distinct_inferred_types(&expected, &value_type, self.env.registry);
+                    format_distinct_types(&expected, &value_type, self.env.registry);
                 return Err(GraphcalError::FieldDimensionMismatch {
                     type_name: owning_type_name,
                     field_name: field_init.name.value.clone(),
@@ -206,7 +206,7 @@ impl Infer<'_> {
             }
         }
 
-        Ok(InferredType::Struct(
+        Ok(CheckedType::Struct(
             owning_type_identity,
             resolved_type_args,
         ))

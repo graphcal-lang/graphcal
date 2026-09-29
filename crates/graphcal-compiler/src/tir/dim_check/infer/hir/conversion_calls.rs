@@ -5,8 +5,8 @@ use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::registry::error::GraphcalError;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 
 use super::context::Infer;
 
@@ -15,31 +15,31 @@ impl Infer<'_> {
         &self,
         kind: ConversionFn,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
             ConversionFn::ToFloat => {
-                if arg_type != InferredType::Int {
+                if arg_type != CheckedType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "to_float() requires an Int argument".to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
                     });
                 }
-                Ok(InferredType::Quantity(Dimension::dimensionless()))
+                Ok(CheckedType::Quantity(Dimension::dimensionless()))
             }
             ConversionFn::ToInt => {
                 // A `Fin`-axis key exposes its position: the position is the
                 // key's semantic content. Named and coordinate keys stay opaque.
-                if let InferredType::Key(index) = &arg_type {
+                if let CheckedType::Key(index) = &arg_type {
                     if index.finite_index_form().is_some() {
-                        return Ok(InferredType::Int);
+                        return Ok(CheckedType::Int);
                     }
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Key<Fin(N)>".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "to_int() extracts positions from Fin-axis keys only; \
                            named and coordinate keys have no ordinal"
                             .to_string(),
@@ -58,13 +58,13 @@ impl Infer<'_> {
                         span: args[0].span.into(),
                     });
                 }
-                Ok(InferredType::Int)
+                Ok(CheckedType::Int)
             }
             ConversionFn::Coord => {
-                let InferredType::Key(index) = &arg_type else {
+                let CheckedType::Key(index) = &arg_type else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Key<C> for a coordinate axis C".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "coord() extracts the coordinate quantity of a \
                            coordinate-axis key"
                             .to_string(),
@@ -75,7 +75,7 @@ impl Infer<'_> {
                 if index.finite_index_form().is_some() {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Key<C> for a coordinate axis C".to_string(),
-                        found: format_inferred_type(&arg_type, self.env.registry),
+                        found: format_checked_type(&arg_type, self.env.registry),
                         help: "coord() applies to coordinate-axis keys only; named \
                            keys are opaque and Fin keys expose to_int()"
                             .to_string(),
@@ -94,7 +94,7 @@ impl Infer<'_> {
                     || {
                         Err(GraphcalError::DimensionMismatch {
                             expected: "Key<C> for a coordinate axis C".to_string(),
-                            found: format_inferred_type(&arg_type, self.env.registry),
+                            found: format_checked_type(&arg_type, self.env.registry),
                             help: "coord() applies to coordinate-axis keys only; named \
                                keys are opaque and Fin keys expose to_int()"
                                 .to_string(),
@@ -102,7 +102,7 @@ impl Infer<'_> {
                             span: args[0].span.into(),
                         })
                     },
-                    |dimension| Ok(InferredType::Quantity(dimension.clone())),
+                    |dimension| Ok(CheckedType::Quantity(dimension.clone())),
                 )
             }
         }
@@ -113,18 +113,18 @@ impl Infer<'_> {
         name: BuiltinFn,
         scale: crate::registry::time_scale::TimeScale,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
-        if !matches!(arg_type, InferredType::Datetime(_)) {
+        if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&arg_type, self.env.registry),
+                found: format_checked_type(&arg_type, self.env.registry),
                 help: format!("{}() requires a Datetime argument", name.as_str()),
                 src: self.env.src.clone(),
                 span: args[0].span.into(),
             });
         }
-        Ok(InferredType::Datetime(scale))
+        Ok(CheckedType::Datetime(scale))
     }
 
     pub(super) fn infer_hir_datetime_constructor(
@@ -133,7 +133,7 @@ impl Infer<'_> {
         epoch_scale: Option<crate::registry::time_scale::TimeScale>,
         span: crate::syntax::span::Span,
         args: &[Expr],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         match kind {
             DatetimeConstructorFn::Datetime => {
                 let first_is_valid = match args.len() {
@@ -145,7 +145,7 @@ impl Infer<'_> {
                     let found = self.infer_arg(&args[0])?;
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "datetime literal".to_string(),
-                        found: format_inferred_type(&found, self.env.registry),
+                        found: format_checked_type(&found, self.env.registry),
                         help: "datetime() requires a contextual datetime string literal"
                             .to_string(),
                         src: self.env.src.clone(),
@@ -156,7 +156,7 @@ impl Infer<'_> {
                     let found = self.infer_arg(&args[1])?;
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "timezone literal".to_string(),
-                        found: format_inferred_type(&found, self.env.registry),
+                        found: format_checked_type(&found, self.env.registry),
                         help: "datetime() second argument must be an IANA timezone literal"
                             .to_string(),
                         src: self.env.src.clone(),
@@ -181,7 +181,7 @@ impl Infer<'_> {
                         span: span.into(),
                     });
                 }
-                Ok(InferredType::Datetime(
+                Ok(CheckedType::Datetime(
                     crate::registry::time_scale::TimeScale::UTC,
                 ))
             }
@@ -190,20 +190,20 @@ impl Infer<'_> {
                     let found = self.infer_arg(&args[0])?;
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "scale-free datetime literal".to_string(),
-                        found: format_inferred_type(&found, self.env.registry),
+                        found: format_checked_type(&found, self.env.registry),
                         help: "epoch<S>() requires one civil datetime string literal".to_string(),
                         src: self.env.src.clone(),
                         span: args[0].span.into(),
                     });
                 }
-                epoch_scale.map(InferredType::Datetime).ok_or_else(|| {
-                    GraphcalError::InternalError {
+                epoch_scale
+                    .map(CheckedType::Datetime)
+                    .ok_or_else(|| GraphcalError::InternalError {
                         message: "epoch call reached type inference without a static time scale"
                             .to_string(),
                         src: self.env.src.clone(),
                         span: span.into(),
-                    }
-                })
+                    })
             }
         }
     }
@@ -212,13 +212,13 @@ impl Infer<'_> {
         &self,
         name: BuiltinFn,
         args: &[Expr],
-        result: InferredType,
-    ) -> Result<InferredType, GraphcalError> {
+        result: CheckedType,
+    ) -> Result<CheckedType, GraphcalError> {
         let arg_type = self.infer_arg(&args[0])?;
-        if !matches!(arg_type, InferredType::Datetime(_)) {
+        if !matches!(arg_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&arg_type, self.env.registry),
+                found: format_checked_type(&arg_type, self.env.registry),
                 help: format!("{}() requires a Datetime argument", name.as_str()),
                 src: self.env.src.clone(),
                 span: args[0].span.into(),

@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::registry::declared_type::{IndexDisplayName, IndexTypeRef};
+use crate::registry::checked_type::{IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 use crate::tir::typed::NatPolyForm;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::format_inferred_type;
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 use super::nat_forms::finite_index_error;
@@ -170,7 +170,7 @@ impl Infer<'_> {
         &self,
         expr: &Expr,
         entries: &[MapEntry],
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         for entry in entries {
             for key in &entry.keys {
                 if let MapEntryKey::IndexVariant(variant) = key {
@@ -351,7 +351,7 @@ impl Infer<'_> {
         }
 
         let first_type = self.infer_hir_type(&first_entry.value)?;
-        if let InferredType::Indexed { index, .. } = &first_type {
+        if let CheckedType::Indexed { index, .. } = &first_type {
             let inner_is_label =
                 crate::tir::dim_check::infer::index_def_for_inferred(index, self.env.tir)
                     .is_some_and(|def| !def.is_coordinate());
@@ -367,8 +367,8 @@ impl Infer<'_> {
             let entry_type = self.infer_hir_type(&entry.value)?;
             if entry_type != first_type {
                 return Err(GraphcalError::DimensionMismatchInAnnotation {
-                    declared: format_inferred_type(&first_type, self.env.registry),
-                    inferred: format_inferred_type(&entry_type, self.env.registry),
+                    declared: format_checked_type(&first_type, self.env.registry),
+                    inferred: format_checked_type(&entry_type, self.env.registry),
                     src: self.env.src.clone(),
                     span: entry.value.span.into(),
                 });
@@ -376,7 +376,7 @@ impl Infer<'_> {
         }
         let mut result = first_type;
         for axis in axes.iter().rev() {
-            result = InferredType::Indexed {
+            result = CheckedType::Indexed {
                 element: Box::new(result),
                 index: axis.index.clone(),
             };

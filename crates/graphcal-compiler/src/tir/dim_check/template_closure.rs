@@ -1,8 +1,9 @@
 //! Option A template-body closure validation.
 
-use super::{DimCheckContext, InferredType, check_decl_expr_type, check_hir_assert_body, infer};
+use super::{DimCheckContext, check_decl_expr_type, check_hir_assert_body, infer};
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
+use crate::registry::checked_type::CheckedType;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::DeclarationKind;
 use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
@@ -37,7 +38,7 @@ fn infer_operand(
     ctx: &DimCheckContext<'_>,
     owner: Option<&ResolvedDeclName>,
     expr: &hir::Expr,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     ctx.infer_hir(expr, owner)
 }
 

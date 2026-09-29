@@ -1084,28 +1084,28 @@ fn validate_public_generic_defaults(
 }
 
 fn collect_struct_type_defs_from_declared_type(
-    declared: &crate::registry::declared_type::DeclaredType,
+    declared: &crate::registry::checked_type::CheckedType,
     ctx: ModuleTypeContext<'_>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match declared {
-        crate::registry::declared_type::DeclaredType::Struct(name, generic_args) => {
+        crate::registry::checked_type::CheckedType::Struct(name, generic_args) => {
             record_resolved_struct_type_def(name.resolved(), ctx, defs)?;
             for arg in generic_args {
-                if let crate::registry::declared_type::DeclaredGenericArg::Type(type_expr) = arg {
+                if let crate::registry::checked_type::CheckedGenericArg::Type(type_expr) = arg {
                     collect_struct_type_defs_from_declared_type(type_expr, ctx, defs)?;
                 }
             }
         }
-        crate::registry::declared_type::DeclaredType::Indexed { element, .. } => {
+        crate::registry::checked_type::CheckedType::Indexed { element, .. } => {
             collect_struct_type_defs_from_declared_type(element, ctx, defs)?;
         }
-        crate::registry::declared_type::DeclaredType::Quantity(_)
-        | crate::registry::declared_type::DeclaredType::Complex(_)
-        | crate::registry::declared_type::DeclaredType::Bool
-        | crate::registry::declared_type::DeclaredType::Int
-        | crate::registry::declared_type::DeclaredType::Datetime(_)
-        | crate::registry::declared_type::DeclaredType::Key(_) => {}
+        crate::registry::checked_type::CheckedType::Quantity(_)
+        | crate::registry::checked_type::CheckedType::Complex(_)
+        | crate::registry::checked_type::CheckedType::Bool
+        | crate::registry::checked_type::CheckedType::Int
+        | crate::registry::checked_type::CheckedType::Datetime(_)
+        | crate::registry::checked_type::CheckedType::Key(_) => {}
     }
     Ok(())
 }

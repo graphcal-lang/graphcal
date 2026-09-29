@@ -1,11 +1,11 @@
 //! Inference of `scan` and `unfold` recurrences.
 
 use crate::hir::expr::{Expr, LocalDef};
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::format_inferred_type;
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::format_checked_type;
 
 use super::context::Infer;
 
@@ -17,10 +17,10 @@ impl Infer<'_> {
         acc: &LocalDef,
         val: &LocalDef,
         body: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let source_type = self.infer_hir_type(source)?;
         let source_rank = source_type.indexed_rank();
-        let InferredType::Indexed { element, index } = source_type else {
+        let CheckedType::Indexed { element, index } = source_type else {
             return Err(GraphcalError::EvalError {
                 message: "scan source must be an indexed value".to_string(),
                 src: self.env.src.clone(),
@@ -41,14 +41,14 @@ impl Infer<'_> {
         let body_type = self.with_locals(&scan_locals).infer_hir_type(body)?;
         if body_type != accumulator_type {
             return Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(&accumulator_type, self.env.registry),
-                found: format_inferred_type(&body_type, self.env.registry),
+                expected: format_checked_type(&accumulator_type, self.env.registry),
+                found: format_checked_type(&body_type, self.env.registry),
                 help: "scan body must return the same type as the accumulator".to_string(),
                 src: self.env.src.clone(),
                 span: body.span.into(),
             });
         }
-        Ok(InferredType::Indexed {
+        Ok(CheckedType::Indexed {
             element: Box::new(accumulator_type),
             index,
         })
@@ -62,7 +62,7 @@ impl Infer<'_> {
         prev_index: &LocalDef,
         current_index: &LocalDef,
         body: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let init_type = self.infer_hir_type(init)?;
         let index = IndexTypeRef::from_resolved(axis.value.clone());
         let idx_def = self
@@ -83,7 +83,7 @@ impl Infer<'_> {
         }
         // The recurrence coordinate binders are keys of the axis; the coordinate
         // quantity is extracted with coord().
-        let coordinate_type = InferredType::Key(index.clone());
+        let coordinate_type = CheckedType::Key(index.clone());
         let unfold_locals = self.locals.child(vec![
             (prev_state.id, init_type.clone()),
             (prev_index.id, coordinate_type.clone()),
@@ -92,14 +92,14 @@ impl Infer<'_> {
         let body_type = self.with_locals(&unfold_locals).infer_hir_type(body)?;
         if body_type != init_type {
             return Err(GraphcalError::DimensionMismatch {
-                expected: format_inferred_type(&init_type, self.env.registry),
-                found: format_inferred_type(&body_type, self.env.registry),
+                expected: format_checked_type(&init_type, self.env.registry),
+                found: format_checked_type(&body_type, self.env.registry),
                 help: "unfold body must return the same type as the previous state".to_string(),
                 src: self.env.src.clone(),
                 span: body.span.into(),
             });
         }
-        Ok(InferredType::Indexed {
+        Ok(CheckedType::Indexed {
             element: Box::new(init_type),
             index,
         })

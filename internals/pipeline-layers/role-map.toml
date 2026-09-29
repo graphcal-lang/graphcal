@@ -727,12 +727,12 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "declared_type"]
+path = ["registry", "checked_type"]
 role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["registry", "declared_type", "tests"]
+path = ["registry", "checked_type", "tests"]
 role = "contracts"
 
 [[module]]

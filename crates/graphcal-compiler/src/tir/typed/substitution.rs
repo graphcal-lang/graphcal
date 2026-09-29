@@ -22,7 +22,7 @@ use crate::dimension::{Dimension, Rational};
 use crate::generic_param::GenericParamId;
 use crate::hir::nominal::NominalGenericParam;
 use crate::nat::{NatOverflowError, NatPolyForm};
-use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType, IndexTypeRef};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 
@@ -217,39 +217,39 @@ impl Substitution {
     /// finite index.
     pub fn apply_declared(
         &self,
-        declared: &DeclaredType,
+        declared: &CheckedType,
         span: Span,
-    ) -> Result<DeclaredType, SubstitutionError> {
+    ) -> Result<CheckedType, SubstitutionError> {
         Ok(match declared {
-            DeclaredType::Key(index) => DeclaredType::Key(self.apply_index_ref(index, span)?),
-            DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
+            CheckedType::Key(index) => CheckedType::Key(self.apply_index_ref(index, span)?),
+            CheckedType::Indexed { element, index } => CheckedType::Indexed {
                 element: Box::new(self.apply_declared(element, span)?),
                 index: self.apply_index_ref(index, span)?,
             },
-            DeclaredType::Struct(identity, args) => DeclaredType::Struct(
+            CheckedType::Struct(identity, args) => CheckedType::Struct(
                 identity.clone(),
                 args.iter()
                     .map(|arg| {
                         Ok(match arg {
-                            DeclaredGenericArg::Nat(form) => {
-                                DeclaredGenericArg::Nat(self.close_nat(form, span)?)
+                            CheckedGenericArg::Nat(form) => {
+                                CheckedGenericArg::Nat(self.close_nat(form, span)?)
                             }
-                            DeclaredGenericArg::Type(ty) => {
-                                DeclaredGenericArg::Type(self.apply_declared(ty, span)?)
+                            CheckedGenericArg::Type(ty) => {
+                                CheckedGenericArg::Type(self.apply_declared(ty, span)?)
                             }
-                            DeclaredGenericArg::Index(index) => {
-                                DeclaredGenericArg::Index(self.apply_index_ref(index, span)?)
+                            CheckedGenericArg::Index(index) => {
+                                CheckedGenericArg::Index(self.apply_index_ref(index, span)?)
                             }
-                            DeclaredGenericArg::Dim(_) => arg.clone(),
+                            CheckedGenericArg::Dim(_) => arg.clone(),
                         })
                     })
                     .collect::<Result<_, SubstitutionError>>()?,
             ),
-            DeclaredType::Quantity(_)
-            | DeclaredType::Complex(_)
-            | DeclaredType::Bool
-            | DeclaredType::Int
-            | DeclaredType::Datetime(_) => declared.clone(),
+            CheckedType::Quantity(_)
+            | CheckedType::Complex(_)
+            | CheckedType::Bool
+            | CheckedType::Int
+            | CheckedType::Datetime(_) => declared.clone(),
         })
     }
 

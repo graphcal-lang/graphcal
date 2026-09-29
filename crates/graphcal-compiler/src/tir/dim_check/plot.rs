@@ -15,7 +15,7 @@ use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes}
 use crate::registry::error::GraphcalError;
 
 use super::{
-    DimCheckContext, InferredType, check_ineffective_conversions, helpers::format_inferred_type,
+    CheckedType, DimCheckContext, check_ineffective_conversions, helpers::format_checked_type,
 };
 
 pub(super) type CheckedPlotChannelShapes = HashMap<
@@ -219,7 +219,7 @@ fn check_plot_encodings(
             let inferred = infer_expression_type(ctx, owner, expr)?;
             plot_channel_shape(&inferred).ok_or_else(|| GraphcalError::PlotEncodingTypeMismatch {
                 channel: *channel,
-                found: format_inferred_type(&inferred, ctx.env.registry),
+                found: format_checked_type(&inferred, ctx.env.registry),
                 src: ctx.env.src.clone(),
                 span: expr.span.into(),
             })
@@ -245,27 +245,27 @@ fn check_plot_encodings(
         .collect())
 }
 
-fn plot_channel_shape(inferred: &InferredType) -> Option<PlotChannelShape> {
+fn plot_channel_shape(inferred: &CheckedType) -> Option<PlotChannelShape> {
     let mut axes = Vec::new();
     let leaf = plot_leaf_kind(inferred, &mut axes)?;
     Some(PlotChannelShape::new(axes, leaf))
 }
 
 fn plot_leaf_kind(
-    inferred: &InferredType,
-    axes: &mut Vec<crate::registry::declared_type::IndexTypeRef>,
+    inferred: &CheckedType,
+    axes: &mut Vec<crate::registry::checked_type::IndexTypeRef>,
 ) -> Option<PlotLeafKind> {
     match inferred {
-        InferredType::Indexed { element, index } => {
+        CheckedType::Indexed { element, index } => {
             axes.push(index.clone());
             crate::stack::with_stack_growth(|| plot_leaf_kind(element, axes))
         }
-        InferredType::Quantity(dimension) => Some(PlotLeafKind::Quantity(dimension.clone())),
-        InferredType::Bool => Some(PlotLeafKind::Bool),
-        InferredType::Int => Some(PlotLeafKind::Int),
-        InferredType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
-        InferredType::Key(index) => Some(PlotLeafKind::Key(index.clone())),
-        InferredType::Complex(_) | InferredType::Struct(_, _) => None,
+        CheckedType::Quantity(dimension) => Some(PlotLeafKind::Quantity(dimension.clone())),
+        CheckedType::Bool => Some(PlotLeafKind::Bool),
+        CheckedType::Int => Some(PlotLeafKind::Int),
+        CheckedType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
+        CheckedType::Key(index) => Some(PlotLeafKind::Key(index.clone())),
+        CheckedType::Complex(_) | CheckedType::Struct(_, _) => None,
     }
 }
 
@@ -351,15 +351,15 @@ pub(super) fn check_property_value(
                 return Err(mismatch("a string literal".to_string()));
             }
             match infer_expression_type(ctx, owner, &field.value)? {
-                InferredType::Int => Ok(()),
-                InferredType::Quantity(d) if d.is_dimensionless() => Ok(()),
-                InferredType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
+                CheckedType::Int => Ok(()),
+                CheckedType::Quantity(d) if d.is_dimensionless() => Ok(()),
+                CheckedType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
                     property,
                     dimension: ctx.env.registry.dimensions.format_dimension(&d),
                     src: ctx.env.src.clone(),
                     span: field.value.span.into(),
                 }),
-                other => Err(mismatch(format_inferred_type(&other, ctx.env.registry))),
+                other => Err(mismatch(format_checked_type(&other, ctx.env.registry))),
             }
         }
         PlotPropertyType::Bool => {
@@ -367,8 +367,8 @@ pub(super) fn check_property_value(
                 return Err(mismatch("a string literal".to_string()));
             }
             match infer_expression_type(ctx, owner, &field.value)? {
-                InferredType::Bool => Ok(()),
-                other => Err(mismatch(format_inferred_type(&other, ctx.env.registry))),
+                CheckedType::Bool => Ok(()),
+                other => Err(mismatch(format_checked_type(&other, ctx.env.registry))),
             }
         }
     }
@@ -378,6 +378,6 @@ fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
     expr: &crate::hir::Expr,
-) -> Result<InferredType, GraphcalError> {
+) -> Result<CheckedType, GraphcalError> {
     ctx.infer_hir(expr, Some(owner))
 }

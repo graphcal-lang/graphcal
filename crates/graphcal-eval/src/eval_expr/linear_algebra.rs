@@ -6,7 +6,7 @@
 
 use graphcal_compiler::builtin::LinearAlgebraFn;
 use graphcal_compiler::finite_value::FiniteQuantity;
-use graphcal_compiler::registry::declared_type::IndexTypeRef;
+use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;

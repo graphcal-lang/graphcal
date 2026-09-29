@@ -8,8 +8,8 @@ use miette::NamedSource;
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::UnaryOp;
 
-use crate::tir::dim_check::InferredType;
-use crate::tir::dim_check::helpers::{expect_quantity, format_inferred_type};
+use crate::registry::checked_type::CheckedType;
+use crate::tir::dim_check::helpers::{expect_quantity, format_checked_type};
 use crate::tir::dim_check::infer::rules::{self, Operand};
 
 use super::context::Infer;
@@ -20,7 +20,7 @@ impl Infer<'_> {
         condition: &Expr,
         then_branch: &Expr,
         else_branch: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let infer = |expr: &Expr| self.infer_hir_type(expr);
         let cond_type = infer(condition)?;
         let then_type = infer(then_branch)?;
@@ -47,7 +47,7 @@ impl Infer<'_> {
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
         operand: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         let operand_type = self.infer_hir_type(operand)?;
         rules::unary_rule(
             op,
@@ -94,7 +94,7 @@ impl Infer<'_> {
         op: crate::desugar::desugared_ast::BinOp,
         lhs: &Expr,
         rhs: &Expr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         use crate::desugar::desugared_ast::BinOp;
         let lhs_type = self.infer_hir_type(lhs)?;
         let rhs_type = self.infer_hir_type(rhs)?;
@@ -152,14 +152,14 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         target: &ResolvedUnitExpr,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
         // `->` distributes element-wise over indexed values (#648 U1): the quantity
         // element dimension must match the target. Multi-axis values unwrap
         // through each nested Indexed layer.
         let mut element = &inner_type;
-        while let InferredType::Indexed {
+        while let CheckedType::Indexed {
             element: nested, ..
         } = element
         {
@@ -188,13 +188,13 @@ impl Infer<'_> {
         &self,
         inner: &Expr,
         timezone: &crate::registry::time_zone::IanaTimeZoneId,
-    ) -> Result<InferredType, GraphcalError> {
+    ) -> Result<CheckedType, GraphcalError> {
         reject_nested_conversion(inner, self.env.src)?;
         let inner_type = self.infer_hir_type(inner)?;
-        if !matches!(&inner_type, InferredType::Datetime(_)) {
+        if !matches!(&inner_type, CheckedType::Datetime(_)) {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "Datetime".to_string(),
-                found: format_inferred_type(&inner_type, self.env.registry),
+                found: format_checked_type(&inner_type, self.env.registry),
                 help: format!(
                     "timezone display `-> \"{timezone}\"` requires a Datetime expression"
                 ),

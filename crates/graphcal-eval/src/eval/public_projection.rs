@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
+use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{FiniteIndex, IndexDef};
@@ -20,12 +20,12 @@ use super::types::{DisplayUnit, Value};
 #[derive(Debug, Clone, Copy)]
 pub(super) struct EvaluatedValue<'a> {
     runtime: &'a RuntimeValue,
-    declared_type: &'a DeclaredType,
+    declared_type: &'a CheckedType,
 }
 
 impl<'a> EvaluatedValue<'a> {
     #[must_use]
-    pub const fn new(runtime: &'a RuntimeValue, declared_type: &'a DeclaredType) -> Self {
+    pub const fn new(runtime: &'a RuntimeValue, declared_type: &'a CheckedType) -> Self {
         Self {
             runtime,
             declared_type,
@@ -44,7 +44,7 @@ impl<'a> EvaluatedValue<'a> {
 
 fn projection_error(
     runtime: &RuntimeValue,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
     message: impl Into<String>,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -100,7 +100,7 @@ fn projection_index_for_ref<'a>(
 fn require_matching_index<'a>(
     runtime: &RuntimeValue,
     runtime_index: &IndexTypeRef,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
     declared_index: &IndexTypeRef,
     tir: &'a graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -133,26 +133,26 @@ fn require_matching_index<'a>(
 )]
 fn project_runtime_value(
     runtime: &RuntimeValue,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Value, GraphcalError> {
     match (runtime, declared_type) {
-        (RuntimeValue::Quantity(si_value), DeclaredType::Quantity(dimension)) => {
+        (RuntimeValue::Quantity(si_value), CheckedType::Quantity(dimension)) => {
             Ok(Value::Quantity {
                 si_value: si_value.get(),
                 dimension: dimension.clone(),
                 display_unit: None,
             })
         }
-        (RuntimeValue::Complex(si_value), DeclaredType::Complex(dimension)) => Ok(Value::Complex {
+        (RuntimeValue::Complex(si_value), CheckedType::Complex(dimension)) => Ok(Value::Complex {
             si_value: *si_value,
             dimension: dimension.clone(),
             display_unit: None,
         }),
-        (RuntimeValue::Bool(value), DeclaredType::Bool) => Ok(Value::Bool(*value)),
-        (RuntimeValue::Int(value), DeclaredType::Int) => Ok(Value::Int(*value)),
-        (RuntimeValue::Int(position), DeclaredType::Key(index)) => {
+        (RuntimeValue::Bool(value), CheckedType::Bool) => Ok(Value::Bool(*value)),
+        (RuntimeValue::Int(value), CheckedType::Int) => Ok(Value::Int(*value)),
+        (RuntimeValue::Int(position), CheckedType::Key(index)) => {
             let finite = index.finite_index().ok_or_else(|| {
                 projection_error(
                     runtime,
@@ -188,7 +188,7 @@ fn project_runtime_value(
                 index_name,
                 variant,
             },
-            DeclaredType::Key(declared_index),
+            CheckedType::Key(declared_index),
         ) => {
             let definition = require_matching_index(
                 runtime,
@@ -220,7 +220,7 @@ fn project_runtime_value(
                 generic_args: runtime_args,
                 fields,
             },
-            DeclaredType::Struct(declared_identity, declared_args),
+            CheckedType::Struct(declared_identity, declared_args),
         ) => {
             if type_name != declared_identity.resolved() || runtime_args != declared_args {
                 return Err(projection_error(
@@ -303,7 +303,7 @@ fn project_runtime_value(
                 index_name,
                 entries,
             },
-            DeclaredType::Indexed {
+            CheckedType::Indexed {
                 element,
                 index: declared_index,
             },
@@ -354,10 +354,10 @@ fn project_runtime_value(
                 position,
                 value,
             },
-            DeclaredType::Quantity(_) | DeclaredType::Key(_),
+            CheckedType::Quantity(_) | CheckedType::Key(_),
         ) => {
             let projection_index = match declared_type {
-                DeclaredType::Key(declared_index) => require_matching_index(
+                CheckedType::Key(declared_index) => require_matching_index(
                     runtime,
                     index_name,
                     declared_type,
@@ -365,7 +365,7 @@ fn project_runtime_value(
                     tir,
                     src,
                 )?,
-                DeclaredType::Quantity(_) => {
+                CheckedType::Quantity(_) => {
                     projection_index_for_ref(index_name, tir).ok_or_else(|| {
                         projection_error(
                             runtime,
@@ -426,10 +426,10 @@ fn project_runtime_value(
                 .as_ref()
                 .map(|label| DisplayUnit::new(label.clone(), data.display().scale));
             let dimension = match declared_type {
-                DeclaredType::Quantity(dimension) if dimension == data.dimension() => {
+                CheckedType::Quantity(dimension) if dimension == data.dimension() => {
                     dimension.clone()
                 }
-                DeclaredType::Quantity(_) => {
+                CheckedType::Quantity(_) => {
                     return Err(projection_error(
                         runtime,
                         declared_type,
@@ -438,7 +438,7 @@ fn project_runtime_value(
                         src,
                     ));
                 }
-                DeclaredType::Key(_) => data.dimension().clone(),
+                CheckedType::Key(_) => data.dimension().clone(),
                 _ => {
                     return Err(projection_error(
                         runtime,
@@ -455,14 +455,12 @@ fn project_runtime_value(
                 display_unit,
             })
         }
-        (RuntimeValue::Datetime(epoch), DeclaredType::Datetime(time_scale)) => {
-            Ok(Value::Datetime {
-                epoch: *epoch,
-                time_scale: *time_scale,
-                display_tz: None,
-                time_zones: tir.registry().time_zones.clone(),
-            })
-        }
+        (RuntimeValue::Datetime(epoch), CheckedType::Datetime(time_scale)) => Ok(Value::Datetime {
+            epoch: *epoch,
+            time_scale: *time_scale,
+            display_tz: None,
+            time_zones: tir.registry().time_zones.clone(),
+        }),
         _ => Err(projection_error(
             runtime,
             declared_type,
@@ -526,7 +524,7 @@ mod tests {
         let tir = crate::eval::compile_to_tir("", "projection.gcl").unwrap();
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
         let runtime = RuntimeValue::quantity(1.0).unwrap();
-        let error = EvaluatedValue::new(&runtime, &DeclaredType::Bool)
+        let error = EvaluatedValue::new(&runtime, &CheckedType::Bool)
             .project(&tir, &src)
             .unwrap_err();
 
@@ -539,7 +537,7 @@ mod tests {
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
         let runtime = RuntimeValue::quantity(1.0).unwrap();
         let declared =
-            DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
+            CheckedType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
         let projected = EvaluatedValue::new(&runtime, &declared)
             .project(&tir, &src)
             .unwrap();
@@ -568,7 +566,7 @@ mod tests {
             ))
             .unwrap();
         let declared = tir.decl_type(sample).unwrap().declared();
-        let DeclaredType::Struct(identity, generic_args) = declared else {
+        let CheckedType::Struct(identity, generic_args) = declared else {
             panic!("sample must have a concrete nominal type");
         };
         let runtime = RuntimeValue::Struct {
@@ -606,7 +604,7 @@ mod tests {
         );
         let runtime = RuntimeValue::coordinate_label(index, 0, 0.0).unwrap();
         let declared =
-            DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
+            CheckedType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
 
         assert!(matches!(
             EvaluatedValue::new(&runtime, &declared).project(&tir, &src),
@@ -620,8 +618,8 @@ mod tests {
         let src = NamedSource::new("projection.gcl", Arc::new(String::new()));
         let index = IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(2).unwrap());
         let element =
-            DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
-        let declared = DeclaredType::Indexed {
+            CheckedType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
+        let declared = CheckedType::Indexed {
             element: Box::new(element),
             index: index.clone(),
         };
@@ -648,7 +646,7 @@ mod tests {
         ));
 
         let key_runtime = RuntimeValue::Int(1);
-        let key_declared = DeclaredType::Key(index);
+        let key_declared = CheckedType::Key(index);
         assert!(matches!(
             EvaluatedValue::new(&key_runtime, &key_declared)
                 .project(&tir, &src)

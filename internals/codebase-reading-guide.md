@@ -727,7 +727,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
 | `graph_ir/`             | Dependency-graph export model and DOT rendering               |
 
-`eval/public_projection.rs` consumes an atomic runtime-value/`DeclaredType`
+`eval/public_projection.rs` consumes an atomic runtime-value/`CheckedType`
 pair. It recursively resolves nominal constructors and fields; missing or
 mismatched metadata is an internal error, never a fallback to untyped fields
 that could lose display units.
@@ -1265,7 +1265,7 @@ use canonical `IndexTypeRef` identities. Named selection ignores display aliases
 but rejects equal leaf spellings from different owners. Finite positions bind to
 their tuple's assertion axis during checking, not through a fabricated name.
 
-`TypeNameRef<Ns>` in `registry/declared_type.rs` is the shared identity carrier
+`TypeNameRef<Ns>` in `registry/checked_type.rs` is the shared identity carrier
 for declared type-level runtime/public values. It stores both a display leaf and
 a canonical `ResolvedName<Ns>`.
 
@@ -1491,8 +1491,8 @@ just lint
 | HIR                              | `hir/`                                 | The single resolution stage: consume syntax paths once              |
 | `DagId`                          | `dag_id.rs`                            | Keep filesystem paths at loader boundaries                          |
 | `ModulePathKey`                  | `loader.rs`                            | Keep module paths structured instead of separator-joined            |
-| `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve declared index/struct owners through runtime/public values |
-| Finite-index identity carriers   | `nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic `Fin` axes typed, not fake resolved names    |
+| `TypeNameRef` identity carriers  | `registry/checked_type.rs`             | Preserve declared index/struct owners through runtime/public values |
+| Finite-index identity carriers   | `nat.rs`, `registry/checked_type.rs`  | Keep concrete/symbolic `Fin` axes typed, not fake resolved names    |
 | Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
 | Package identifier newtypes      | `graphcal-package`                     | Keep package/alias/instance/Git identities typed                    |
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
@@ -1678,7 +1678,7 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 128. `crates/graphcal-compiler/src/ir/static_substitution.rs`
 129. `crates/graphcal-compiler/src/generic_param.rs`
 130. `crates/graphcal-compiler/src/nat.rs`
-131. `crates/graphcal-compiler/src/registry/declared_type.rs`
+131. `crates/graphcal-compiler/src/registry/checked_type.rs`
 132. `crates/graphcal-compiler/src/assertion_expectation.rs`
 133. `crates/graphcal-compiler/src/registry/runtime_value.rs`
 134. `crates/graphcal-compiler/src/ir/imported_binding.rs`
@@ -1735,24 +1735,24 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 185. `crates/graphcal-compiler/src/ir/include.rs`
 186. `crates/graphcal-compiler/src/ir/lower.rs`
 187. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/nat_forms.rs`
-188. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
-189. `crates/graphcal-compiler/src/tir/typed/substitution.rs`
-190. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
-191. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
-192. `crates/graphcal-compiler/src/tir/typed/collect.rs`
-193. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
-194. `crates/graphcal-compiler/src/tir/typed/model.rs`
-195. `crates/graphcal-compiler/src/tir/typed/ops.rs`
-196. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/context.rs`
-197. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/facts.rs`
-198. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-199. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
-200. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/generics.rs`
-201. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
-202. `crates/graphcal-compiler/src/tir/typed.rs`
-203. `crates/graphcal-compiler/src/tir/dim_check/concrete_obligations.rs`
-204. `crates/graphcal-compiler/src/tir/dim_check/expression_facts.rs`
-205. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+188. `crates/graphcal-compiler/src/tir/typed/substitution.rs`
+189. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
+190. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
+191. `crates/graphcal-compiler/src/tir/typed/collect.rs`
+192. `crates/graphcal-compiler/src/tir/typed/model.rs`
+193. `crates/graphcal-compiler/src/tir/typed/ops.rs`
+194. `crates/graphcal-compiler/src/tir/typed.rs`
+195. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
+196. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
+197. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+198. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/facts.rs`
+199. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+200. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/context.rs`
+201. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+202. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/generics.rs`
+203. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
+204. `crates/graphcal-compiler/src/tir/dim_check/concrete_obligations.rs`
+205. `crates/graphcal-compiler/src/tir/dim_check/expression_facts.rs`
 206. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
 207. `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
 208. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`

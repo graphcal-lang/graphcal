@@ -1,4 +1,4 @@
-//! Declared type of a const/param/node.
+//! Checked type of a declaration or expression, and the type-level references it carries.
 
 use crate::dag_id::DagId;
 use crate::dimension::Dimension;
@@ -414,6 +414,30 @@ mod tests {
     }
 
     #[test]
+    fn checked_type_projections_and_rank() {
+        let length = Dimension::base(crate::dimension::BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length,
+        ));
+        let axis = IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(2).unwrap());
+        let quantity = CheckedType::Quantity(length.clone());
+        let complex = CheckedType::Complex(length.clone());
+        let matrix = CheckedType::Indexed {
+            element: Box::new(CheckedType::Indexed {
+                element: Box::new(quantity.clone()),
+                index: axis.clone(),
+            }),
+            index: axis,
+        };
+        assert_eq!(quantity.quantity_dimension(), Some(&length));
+        assert_eq!(quantity.complex_dimension(), None);
+        assert_eq!(complex.complex_dimension(), Some(&length));
+        assert_eq!(complex.quantity_dimension(), None);
+        assert_eq!(quantity.indexed_rank(), 0);
+        assert_eq!(matrix.indexed_rank(), 2);
+        assert_eq!(matrix.quantity_dimension(), None);
+    }
+
+    #[test]
     fn type_name_ref_equality_uses_canonical_identity_not_display_leaf() {
         let owner = DagId::root_in_package("test", "main");
         let resolved = ResolvedName::from_def(owner, StructTypeName::expect_valid("Result"));
@@ -430,11 +454,11 @@ mod tests {
 
 /// A concrete generic argument classified by its declared sort.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DeclaredGenericArg {
+pub enum CheckedGenericArg {
     Dim(Dimension),
     Index(IndexTypeRef),
     Nat(NatPolyForm),
-    Type(DeclaredType),
+    Type(CheckedType),
 }
 
 #[derive(Clone, Copy)]
@@ -466,7 +490,7 @@ impl DiagnosticNameQualification {
     }
 }
 
-impl DeclaredGenericArg {
+impl CheckedGenericArg {
     fn format(
         &self,
         dims: &DimensionFormattingRegistry,
@@ -481,11 +505,14 @@ impl DeclaredGenericArg {
     }
 }
 
-/// A concrete declared type: primitive, struct, or indexed value type.
-/// Index arguments are never types; generic struct metadata carries them as
-/// [`DeclaredGenericArg::Index`].
+/// A checked type: the semantic type of a declaration or an expression.
+///
+/// Declarations and inferred expressions share this one representation, so a
+/// declaration matches its body exactly when the two types are equal. Index
+/// arguments are never types; generic struct metadata carries them as
+/// [`CheckedGenericArg::Index`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DeclaredType {
+pub enum CheckedType {
     Quantity(Dimension),
     /// A complex quantity whose real and imaginary components share one dimension.
     Complex(Dimension),
@@ -496,14 +523,41 @@ pub enum DeclaredType {
     /// An index-key value type `Key<I>`: element keys of axis `I`.
     Key(IndexTypeRef),
     /// A struct type, optionally with concrete sorted generic arguments.
-    Struct(StructTypeRef, Vec<DeclaredGenericArg>),
+    Struct(StructTypeRef, Vec<CheckedGenericArg>),
     Indexed {
         element: Box<Self>,
         index: IndexTypeRef,
     },
 }
 
-impl DeclaredType {
+impl CheckedType {
+    /// The shared component dimension of a complex type.
+    #[must_use]
+    pub(crate) const fn complex_dimension(&self) -> Option<&Dimension> {
+        match self {
+            Self::Complex(dimension) => Some(dimension),
+            _ => None,
+        }
+    }
+
+    /// The dimension of a scalar quantity type.
+    #[must_use]
+    pub(crate) const fn quantity_dimension(&self) -> Option<&Dimension> {
+        match self {
+            Self::Quantity(dimension) => Some(dimension),
+            _ => None,
+        }
+    }
+
+    /// Number of index axes carried by this type.
+    #[must_use]
+    pub(crate) fn indexed_rank(&self) -> usize {
+        match self {
+            Self::Indexed { element, .. } => element.indexed_rank().saturating_add(1),
+            _ => 0,
+        }
+    }
+
     /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
     #[must_use]
     pub fn format(&self, dims: &DimensionFormattingRegistry) -> String {

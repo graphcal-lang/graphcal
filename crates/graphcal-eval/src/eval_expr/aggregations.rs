@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn count_defensively_rejects_nested_indexed_entries() {
-        use graphcal_compiler::registry::declared_type::IndexTypeRef;
+        use graphcal_compiler::registry::checked_type::IndexTypeRef;
         use graphcal_compiler::registry::index::FiniteIndex;
 
         let inner = RuntimeValue::Indexed {

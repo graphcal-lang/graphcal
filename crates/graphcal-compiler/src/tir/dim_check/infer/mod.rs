@@ -11,7 +11,7 @@ pub(super) mod hir;
 mod linear_algebra;
 mod rules;
 
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::checked_type::IndexTypeRef;
 /// Look up an inferred index through the project-wide semantic authority.
 fn index_def_for_inferred<'a>(
     index: &IndexTypeRef,

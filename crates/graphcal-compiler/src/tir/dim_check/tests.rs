@@ -1,6 +1,6 @@
 use super::*;
 use crate::dimension::BaseDimId;
-use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
@@ -22,7 +22,7 @@ fn test_index_ref(name: &str) -> IndexTypeRef {
     )
 }
 
-fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalError> {
+fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
@@ -75,7 +75,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
 
 /// The checked declared type of every root value declaration and imported
 /// value, keyed by its written name.
-fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, DeclaredType> {
+fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, CheckedType> {
     let root = tir.root();
     root.consts()
         .map(|entry| (&entry.name, &entry.type_ann))
@@ -183,11 +183,11 @@ fn model_port_application(
     crate::tir::typed::TIR,
     NamedSource<Arc<String>>,
     StructTypeRef,
-    Vec<DeclaredGenericArg>,
+    Vec<CheckedGenericArg>,
 ) {
     let (tir, src) = module_aware_tir(source);
     let declared_types = root_declared_types(&tir);
-    let DeclaredType::Struct(identity, generic_args) = &declared_types
+    let CheckedType::Struct(identity, generic_args) = &declared_types
         [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("port"))]
     else {
         panic!("expected `port` to be a concrete model struct");
@@ -426,7 +426,7 @@ fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("g0"))],
-        DeclaredType::Quantity(Dimension::dimensionless())
+        CheckedType::Quantity(Dimension::dimensionless())
     );
 }
 
@@ -435,7 +435,7 @@ fn check_dimensionless_arithmetic() {
     let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("y"))],
-        DeclaredType::Quantity(Dimension::dimensionless())
+        CheckedType::Quantity(Dimension::dimensionless())
     );
 }
 
@@ -447,7 +447,7 @@ fn check_length_quantity_literal() {
     ));
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("alt"))],
-        DeclaredType::Quantity(length)
+        CheckedType::Quantity(length)
     );
 }
 
@@ -463,7 +463,7 @@ fn check_velocity_from_division() {
     .unwrap();
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("speed"))],
-        DeclaredType::Quantity(velocity)
+        CheckedType::Quantity(velocity)
     );
 }
 
@@ -580,7 +580,7 @@ fn check_conversion_same_dimension() {
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
             "speed_kmh"
         ))],
-        DeclaredType::Quantity(velocity)
+        CheckedType::Quantity(velocity)
     );
 }
 
@@ -668,8 +668,8 @@ Maneuver#Insertion: 1.8 km / s,
     .unwrap();
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("dv"))],
-        DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Quantity(velocity)),
+        CheckedType::Indexed {
+            element: Box::new(CheckedType::Quantity(velocity)),
             index: test_index_ref("Maneuver"),
         }
     );
@@ -1569,7 +1569,7 @@ node y: Length = match @x { Pair(a: left, a: right) => left + right };";
 
 // --- Block let-binding type annotation mismatch ---
 
-// --- types_match wildcard: mismatched kinds ---
+// --- type equality: mismatched kinds ---
 
 #[test]
 fn check_types_match_struct_vs_quantity() {
@@ -2695,7 +2695,7 @@ pub type Phantom<N: Nat> { Phantom }
 param port: Phantom<1>;
 ";
     let (tir, src, identity, _) = model_port_application(source);
-    let wrong_sort = [DeclaredGenericArg::Type(DeclaredType::Int)];
+    let wrong_sort = [CheckedGenericArg::Type(CheckedType::Int)];
 
     let error = ConcreteModelType::try_new(&tir, &identity, &wrong_sort, &src).unwrap_err();
     assert!(matches!(
@@ -2733,7 +2733,7 @@ param port: Defaults;
     assert_eq!(constructors[0].fields().len(), 1);
     assert_eq!(
         constructors[0].fields()[0].declared_type(),
-        &DeclaredType::Int
+        &CheckedType::Int
     );
 }
 
@@ -2750,8 +2750,8 @@ param port: Outer<Int>;
 
     assert!(matches!(
         constructors[0].fields()[0].declared_type(),
-        DeclaredType::Struct(_, nested_args)
-            if matches!(nested_args.as_slice(), [DeclaredGenericArg::Type(DeclaredType::Int)])
+        CheckedType::Struct(_, nested_args)
+            if matches!(nested_args.as_slice(), [CheckedGenericArg::Type(CheckedType::Int)])
     ));
 }
 
@@ -2909,7 +2909,7 @@ fn inline_dag_call_basic_returns_output_type() {
     ));
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("doubled"))],
-        DeclaredType::Quantity(length)
+        CheckedType::Quantity(length)
     );
 }
 
@@ -2928,13 +2928,13 @@ node bound_factor: Dimensionless = @config(factor: 3.0)::factor;
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
             "default_factor"
         ))],
-        DeclaredType::Quantity(Dimension::dimensionless())
+        CheckedType::Quantity(Dimension::dimensionless())
     );
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
             "bound_factor"
         ))],
-        DeclaredType::Quantity(Dimension::dimensionless())
+        CheckedType::Quantity(Dimension::dimensionless())
     );
 }
 
@@ -3047,8 +3047,8 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(
             "distances"
         ))],
-        DeclaredType::Indexed {
-            element: Box::new(DeclaredType::Quantity(length)),
+        CheckedType::Indexed {
+            element: Box::new(CheckedType::Quantity(length)),
             index: test_index_ref("Region"),
         }
     );
@@ -3096,7 +3096,7 @@ node out: Length = @doubler(v: @dist)::result[Region#A];
     ));
     assert_eq!(
         types[&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("out"))],
-        DeclaredType::Quantity(length)
+        CheckedType::Quantity(length)
     );
 }
 

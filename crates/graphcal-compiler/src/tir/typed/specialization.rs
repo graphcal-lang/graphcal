@@ -17,7 +17,7 @@ use crate::ir::static_substitution::{
 };
 use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::checked_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName, ResolvedUnitName,
@@ -258,54 +258,54 @@ fn specialize_struct_ref(
 }
 
 pub fn specialize_expression_type(
-    ty: &crate::registry::declared_type::DeclaredType,
+    ty: &crate::registry::checked_type::CheckedType,
     substitution: &StaticSubstitution,
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    use crate::registry::declared_type::{DeclaredGenericArg, DeclaredType};
-    let recurse = |ty: &DeclaredType| specialize_expression_type(ty, substitution, tir, src);
+) -> Result<crate::registry::checked_type::CheckedType, GraphcalError> {
+    use crate::registry::checked_type::{CheckedGenericArg, CheckedType};
+    let recurse = |ty: &CheckedType| specialize_expression_type(ty, substitution, tir, src);
     Ok(match ty {
-        DeclaredType::Quantity(dimension) => DeclaredType::Quantity(specialize_dimension(
+        CheckedType::Quantity(dimension) => CheckedType::Quantity(specialize_dimension(
             dimension,
             substitution,
             tir.project_type_store(),
             src,
         )?),
-        DeclaredType::Complex(dimension) => DeclaredType::Complex(specialize_dimension(
+        CheckedType::Complex(dimension) => CheckedType::Complex(specialize_dimension(
             dimension,
             substitution,
             tir.project_type_store(),
             src,
         )?),
-        DeclaredType::Key(index) => DeclaredType::Key(specialize_index_ref(index, substitution)),
-        DeclaredType::Indexed { element, index } => DeclaredType::Indexed {
+        CheckedType::Key(index) => CheckedType::Key(specialize_index_ref(index, substitution)),
+        CheckedType::Indexed { element, index } => CheckedType::Indexed {
             element: Box::new(recurse(element)?),
             index: specialize_index_ref(index, substitution),
         },
-        DeclaredType::Struct(name, args) => DeclaredType::Struct(
+        CheckedType::Struct(name, args) => CheckedType::Struct(
             specialize_struct_ref(name, substitution),
             args.iter()
                 .map(|arg| {
                     Ok(match arg {
-                        DeclaredGenericArg::Dim(dimension) => {
-                            DeclaredGenericArg::Dim(specialize_dimension(
+                        CheckedGenericArg::Dim(dimension) => {
+                            CheckedGenericArg::Dim(specialize_dimension(
                                 dimension,
                                 substitution,
                                 tir.project_type_store(),
                                 src,
                             )?)
                         }
-                        DeclaredGenericArg::Index(index) => {
-                            DeclaredGenericArg::Index(specialize_index_ref(index, substitution))
+                        CheckedGenericArg::Index(index) => {
+                            CheckedGenericArg::Index(specialize_index_ref(index, substitution))
                         }
-                        DeclaredGenericArg::Type(ty) => DeclaredGenericArg::Type(recurse(ty)?),
-                        DeclaredGenericArg::Nat(_) => arg.clone(),
+                        CheckedGenericArg::Type(ty) => CheckedGenericArg::Type(recurse(ty)?),
+                        CheckedGenericArg::Nat(_) => arg.clone(),
                     })
                 })
                 .collect::<Result<_, GraphcalError>>()?,
         ),
-        DeclaredType::Bool | DeclaredType::Int | DeclaredType::Datetime(_) => ty.clone(),
+        CheckedType::Bool | CheckedType::Int | CheckedType::Datetime(_) => ty.clone(),
     })
 }
 

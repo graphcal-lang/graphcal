@@ -5,12 +5,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 use thiserror::Error;
 
-use super::InferredGenericArg;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::{NominalConstructor, NominalTypeDef, NominalTypeKind};
-use crate::registry::declared_type::{
-    DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
-};
+use crate::registry::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
@@ -89,7 +86,7 @@ struct ModelTypeDefinition<'tir> {
 pub struct ValidatedModelType<'tir> {
     tir: &'tir crate::tir::typed::TIR,
     identity: StructTypeRef,
-    generic_args: Vec<DeclaredGenericArg>,
+    generic_args: Vec<CheckedGenericArg>,
     definition: ModelTypeDefinition<'tir>,
 }
 
@@ -107,7 +104,7 @@ impl<'tir> ValidatedModelType<'tir> {
     pub fn try_new(
         tir: &'tir crate::tir::typed::TIR,
         identity: &StructTypeRef,
-        generic_args: &[DeclaredGenericArg],
+        generic_args: &[CheckedGenericArg],
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, ConcreteModelTypeError> {
         let definition = validate_model_type_definition(tir, identity, generic_args)?;
@@ -126,7 +123,7 @@ impl<'tir> ValidatedModelType<'tir> {
     }
 
     #[must_use]
-    pub fn generic_args(&self) -> &[DeclaredGenericArg] {
+    pub fn generic_args(&self) -> &[CheckedGenericArg] {
         &self.generic_args
     }
 
@@ -139,11 +136,6 @@ impl<'tir> ValidatedModelType<'tir> {
         &self,
         _src: &NamedSource<Arc<String>>,
     ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
-        let inferred_args = self
-            .generic_args
-            .iter()
-            .map(InferredGenericArg::from)
-            .collect::<Vec<_>>();
         let metadata_dag = self
             .tir
             .dag_with_type_metadata(self.identity.resolved())
@@ -163,14 +155,14 @@ impl<'tir> ValidatedModelType<'tir> {
                                 field.name(),
                             ),
                             self.definition.type_def,
-                            &inferred_args,
+                            &self.generic_args,
                             metadata_dag,
                             self.definition.type_def.source(),
                             field.type_annotation().span,
                         )
                         .map(|inferred| ConcreteModelField {
                             name: field.name().clone(),
-                            declared_type: DeclaredType::from(&inferred),
+                            declared_type: inferred,
                         })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -203,7 +195,7 @@ impl<'tir> ConcreteModelType<'tir> {
     pub fn try_new(
         tir: &'tir crate::tir::typed::TIR,
         identity: &StructTypeRef,
-        generic_args: &[DeclaredGenericArg],
+        generic_args: &[CheckedGenericArg],
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, ConcreteModelTypeError> {
         let validated = ValidatedModelType::try_new(tir, identity, generic_args, src)?;
@@ -217,7 +209,7 @@ impl<'tir> ConcreteModelType<'tir> {
     }
 
     #[must_use]
-    pub fn generic_args(&self) -> &[DeclaredGenericArg] {
+    pub fn generic_args(&self) -> &[CheckedGenericArg] {
         self.validated.generic_args()
     }
 
@@ -237,11 +229,11 @@ impl<'tir> ConcreteModelType<'tir> {
 fn validate_application_obligations(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
-    generic_args: &[DeclaredGenericArg],
+    generic_args: &[CheckedGenericArg],
     definition: &ModelTypeDefinition<'_>,
     _src: &NamedSource<Arc<String>>,
 ) -> Result<(), ConcreteModelTypeError> {
-    let application = DeclaredType::Struct(identity.clone(), generic_args.to_vec());
+    let application = CheckedType::Struct(identity.clone(), generic_args.to_vec());
     let metadata_dag = tir
         .dag_with_type_metadata(identity.resolved())
         .unwrap_or_else(|| tir.root());
@@ -259,7 +251,7 @@ fn validate_application_obligations(
 fn validate_model_type_definition<'tir>(
     tir: &'tir crate::tir::typed::TIR,
     identity: &StructTypeRef,
-    generic_args: &[DeclaredGenericArg],
+    generic_args: &[CheckedGenericArg],
 ) -> Result<ModelTypeDefinition<'tir>, ConcreteModelTypeError> {
     let type_def = validate_nominal_signature(tir, identity, generic_args)?;
     let NominalTypeKind::Union { members } = type_def.kind() else {
@@ -276,7 +268,7 @@ fn validate_model_type_definition<'tir>(
 fn validate_nominal_signature<'tir>(
     tir: &'tir crate::tir::typed::TIR,
     identity: &StructTypeRef,
-    generic_args: &[DeclaredGenericArg],
+    generic_args: &[CheckedGenericArg],
 ) -> Result<&'tir NominalTypeDef, ConcreteModelTypeError> {
     let type_def = tir.struct_type_def(identity.resolved()).ok_or_else(|| {
         ConcreteModelTypeError::UnknownType {
@@ -305,12 +297,12 @@ fn validate_nominal_signature<'tir>(
     Ok(type_def)
 }
 
-const fn generic_argument_sort(argument: &DeclaredGenericArg) -> GenericConstraint {
+const fn generic_argument_sort(argument: &CheckedGenericArg) -> GenericConstraint {
     match argument {
-        DeclaredGenericArg::Dim(_) => GenericConstraint::Dim,
-        DeclaredGenericArg::Index(_) => GenericConstraint::Index,
-        DeclaredGenericArg::Nat(_) => GenericConstraint::Nat,
-        DeclaredGenericArg::Type(_) => GenericConstraint::Type,
+        CheckedGenericArg::Dim(_) => GenericConstraint::Dim,
+        CheckedGenericArg::Index(_) => GenericConstraint::Index,
+        CheckedGenericArg::Nat(_) => GenericConstraint::Nat,
+        CheckedGenericArg::Type(_) => GenericConstraint::Type,
     }
 }
 
@@ -318,17 +310,17 @@ fn validate_generic_argument_shape(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
-    argument: &DeclaredGenericArg,
+    argument: &CheckedGenericArg,
 ) -> Result<(), ConcreteModelTypeError> {
     match argument {
-        DeclaredGenericArg::Dim(_) => Ok(()),
-        DeclaredGenericArg::Index(index) => validate_index_reference(tir, index),
-        DeclaredGenericArg::Nat(form) if form.constant_value().is_some() => Ok(()),
-        DeclaredGenericArg::Nat(_) => Err(ConcreteModelTypeError::NonConcreteGenericArgument {
+        CheckedGenericArg::Dim(_) => Ok(()),
+        CheckedGenericArg::Index(index) => validate_index_reference(tir, index),
+        CheckedGenericArg::Nat(form) if form.constant_value().is_some() => Ok(()),
+        CheckedGenericArg::Nat(_) => Err(ConcreteModelTypeError::NonConcreteGenericArgument {
             identity: identity.clone(),
             parameter: parameter.clone(),
         }),
-        DeclaredGenericArg::Type(declared_type) => {
+        CheckedGenericArg::Type(declared_type) => {
             validate_type_argument_shape(tir, identity, parameter, declared_type)
         }
     }
@@ -338,29 +330,29 @@ fn validate_type_argument_shape(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
 ) -> Result<(), ConcreteModelTypeError> {
     match declared_type {
-        DeclaredType::Struct(nested_identity, nested_args) => {
+        CheckedType::Struct(nested_identity, nested_args) => {
             validate_nominal_signature(tir, nested_identity, nested_args).map(|_| ())
         }
-        DeclaredType::Key(index) => validate_index_reference(tir, index),
-        DeclaredType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
+        CheckedType::Key(index) => validate_index_reference(tir, index),
+        CheckedType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
             identity: identity.clone(),
             parameter: parameter.clone(),
         }),
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_) => Ok(()),
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_) => Ok(()),
     }
 }
 
 fn validate_bound_generic_arguments(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
-    generic_args: &[DeclaredGenericArg],
+    generic_args: &[CheckedGenericArg],
 ) -> Result<(), ConcreteModelTypeError> {
     let type_def = validate_nominal_signature(tir, identity, generic_args)?;
     type_def
@@ -376,12 +368,12 @@ fn validate_bound_generic_argument(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
-    argument: &DeclaredGenericArg,
+    argument: &CheckedGenericArg,
 ) -> Result<(), ConcreteModelTypeError> {
     match argument {
-        DeclaredGenericArg::Dim(_) | DeclaredGenericArg::Nat(_) => Ok(()),
-        DeclaredGenericArg::Index(index) => validate_bound_index(tir, index),
-        DeclaredGenericArg::Type(declared_type) => {
+        CheckedGenericArg::Dim(_) | CheckedGenericArg::Nat(_) => Ok(()),
+        CheckedGenericArg::Index(index) => validate_bound_index(tir, index),
+        CheckedGenericArg::Type(declared_type) => {
             validate_bound_type_argument(tir, identity, parameter, declared_type)
         }
     }
@@ -391,10 +383,10 @@ fn validate_bound_type_argument(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
-    declared_type: &DeclaredType,
+    declared_type: &CheckedType,
 ) -> Result<(), ConcreteModelTypeError> {
     match declared_type {
-        DeclaredType::Struct(nested_identity, nested_args) => {
+        CheckedType::Struct(nested_identity, nested_args) => {
             let type_def = validate_nominal_signature(tir, nested_identity, nested_args)?;
             if matches!(type_def.kind(), NominalTypeKind::Required) {
                 return Err(ConcreteModelTypeError::RequiredType {
@@ -403,16 +395,16 @@ fn validate_bound_type_argument(
             }
             validate_bound_generic_arguments(tir, nested_identity, nested_args)
         }
-        DeclaredType::Key(index) => validate_bound_index(tir, index),
-        DeclaredType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
+        CheckedType::Key(index) => validate_bound_index(tir, index),
+        CheckedType::Indexed { .. } => Err(ConcreteModelTypeError::IndexedTypeArgument {
             identity: identity.clone(),
             parameter: parameter.clone(),
         }),
-        DeclaredType::Quantity(_)
-        | DeclaredType::Complex(_)
-        | DeclaredType::Bool
-        | DeclaredType::Int
-        | DeclaredType::Datetime(_) => Ok(()),
+        CheckedType::Quantity(_)
+        | CheckedType::Complex(_)
+        | CheckedType::Bool
+        | CheckedType::Int
+        | CheckedType::Datetime(_) => Ok(()),
     }
 }
 
@@ -461,7 +453,7 @@ fn index_definition<'tir>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConcreteModelField {
     name: FieldName,
-    declared_type: DeclaredType,
+    declared_type: CheckedType,
 }
 
 impl ConcreteModelField {
@@ -471,7 +463,7 @@ impl ConcreteModelField {
     }
 
     #[must_use]
-    pub const fn declared_type(&self) -> &DeclaredType {
+    pub const fn declared_type(&self) -> &CheckedType {
         &self.declared_type
     }
 }

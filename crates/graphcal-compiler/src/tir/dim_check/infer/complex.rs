@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::builtin::ComplexFn;
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 
-use super::super::InferredType;
+use crate::registry::checked_type::CheckedType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum ComplexTypeError {
@@ -30,8 +30,8 @@ pub(super) enum ComplexTypeError {
 /// types; this rule does not re-check the count.
 pub(super) fn infer(
     function: ComplexFn,
-    arguments: &[InferredType],
-) -> Result<InferredType, ComplexTypeError> {
+    arguments: &[CheckedType],
+) -> Result<CheckedType, ComplexTypeError> {
     match function {
         ComplexFn::Rectangular => {
             let re = quantity_dimension(arguments, 0)?;
@@ -39,7 +39,7 @@ pub(super) fn infer(
             if re != im {
                 return Err(ComplexTypeError::DimensionMismatch { left: 0, right: 1 });
             }
-            Ok(InferredType::Complex(re.clone()))
+            Ok(CheckedType::Complex(re.clone()))
         }
         ComplexFn::Polar => {
             let magnitude = quantity_dimension(arguments, 0)?;
@@ -48,40 +48,40 @@ pub(super) fn infer(
             if *phase != angle {
                 return Err(ComplexTypeError::ExpectedAngle { argument: 1 });
             }
-            Ok(InferredType::Complex(magnitude.clone()))
+            Ok(CheckedType::Complex(magnitude.clone()))
         }
         ComplexFn::ToComplex => quantity_dimension(arguments, 0)
             .cloned()
-            .map(InferredType::Complex),
+            .map(CheckedType::Complex),
         ComplexFn::Real | ComplexFn::Imaginary => complex_dimension(arguments, 0)
             .cloned()
-            .map(InferredType::Quantity),
+            .map(CheckedType::Quantity),
         ComplexFn::Absolute => match &arguments[0] {
-            InferredType::Complex(dimension) | InferredType::Quantity(dimension) => {
-                Ok(InferredType::Quantity(dimension.clone()))
+            CheckedType::Complex(dimension) | CheckedType::Quantity(dimension) => {
+                Ok(CheckedType::Quantity(dimension.clone()))
             }
             _ => Err(ComplexTypeError::ExpectedQuantityOrComplex { argument: 0 }),
         },
         ComplexFn::Phase => complex_dimension(arguments, 0).map(|_| {
-            InferredType::Quantity(Dimension::base(BaseDimId::Prelude(
+            CheckedType::Quantity(Dimension::base(BaseDimId::Prelude(
                 PreludeBaseDimension::Angle,
             )))
         }),
         ComplexFn::Conjugate => complex_dimension(arguments, 0)
             .cloned()
-            .map(InferredType::Complex),
+            .map(CheckedType::Complex),
         ComplexFn::Exponential => match &arguments[0] {
-            InferredType::Complex(dimension) => {
+            CheckedType::Complex(dimension) => {
                 if !dimension.is_dimensionless() {
                     return Err(ComplexTypeError::ExpectedDimensionless { argument: 0 });
                 }
-                Ok(InferredType::Complex(Dimension::dimensionless()))
+                Ok(CheckedType::Complex(Dimension::dimensionless()))
             }
-            InferredType::Quantity(dimension) => {
+            CheckedType::Quantity(dimension) => {
                 if !dimension.is_dimensionless() {
                     return Err(ComplexTypeError::ExpectedDimensionless { argument: 0 });
                 }
-                Ok(InferredType::Quantity(Dimension::dimensionless()))
+                Ok(CheckedType::Quantity(Dimension::dimensionless()))
             }
             _ => Err(ComplexTypeError::ExpectedQuantityOrComplex { argument: 0 }),
         },
@@ -89,7 +89,7 @@ pub(super) fn infer(
 }
 
 fn quantity_dimension(
-    arguments: &[InferredType],
+    arguments: &[CheckedType],
     argument: usize,
 ) -> Result<&Dimension, ComplexTypeError> {
     arguments[argument]
@@ -98,7 +98,7 @@ fn quantity_dimension(
 }
 
 fn complex_dimension(
-    arguments: &[InferredType],
+    arguments: &[CheckedType],
     argument: usize,
 ) -> Result<&Dimension, ComplexTypeError> {
     arguments[argument]
@@ -120,18 +120,18 @@ mod tests {
             infer(
                 ComplexFn::Rectangular,
                 &[
-                    InferredType::Quantity(length()),
-                    InferredType::Quantity(length()),
+                    CheckedType::Quantity(length()),
+                    CheckedType::Quantity(length()),
                 ],
             ),
-            Ok(InferredType::Complex(length()))
+            Ok(CheckedType::Complex(length()))
         );
         assert!(matches!(
             infer(
                 ComplexFn::Rectangular,
                 &[
-                    InferredType::Quantity(length()),
-                    InferredType::Quantity(Dimension::dimensionless()),
+                    CheckedType::Quantity(length()),
+                    CheckedType::Quantity(Dimension::dimensionless()),
                 ],
             ),
             Err(ComplexTypeError::DimensionMismatch { .. })
@@ -141,15 +141,15 @@ mod tests {
     #[test]
     fn exponential_requires_dimensionless_input() {
         assert!(matches!(
-            infer(ComplexFn::Exponential, &[InferredType::Complex(length())]),
+            infer(ComplexFn::Exponential, &[CheckedType::Complex(length())]),
             Err(ComplexTypeError::ExpectedDimensionless { .. })
         ));
         assert_eq!(
             infer(
                 ComplexFn::Exponential,
-                &[InferredType::Complex(Dimension::dimensionless())],
+                &[CheckedType::Complex(Dimension::dimensionless())],
             ),
-            Ok(InferredType::Complex(Dimension::dimensionless()))
+            Ok(CheckedType::Complex(Dimension::dimensionless()))
         );
     }
 }
