@@ -37,7 +37,6 @@ mod imports;
 mod lowering;
 mod model;
 mod pipeline;
-mod recursion;
 mod registry_merge;
 mod session;
 mod template;

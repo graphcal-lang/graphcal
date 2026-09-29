@@ -2006,11 +2006,6 @@ role = "checking"
 
 [[module]]
 package = "eval"
-path = ["project_compiler", "recursion"]
-role = "checking"
-
-[[module]]
-package = "eval"
 path = ["project_compiler", "registry_merge"]
 role = "checking"
 

@@ -5,6 +5,8 @@
 //! entry module. Storing the root as its own field makes "the root exists and
 //! comes last" structural instead of a lookup that each phase re-validates.
 
+use graphcal_compiler::dependency_graph::TopoOrder;
+
 /// Modules in dependency order followed by the entry (root) module.
 ///
 /// Invariants:
@@ -13,11 +15,14 @@
 /// - Every element of `deps` appears after all of its own dependencies, and
 ///   the root appears after every dependency (topological order).
 ///
-/// The first invariant is structural. The second is established by the only
-/// constructor, `DependencyOrdered::new`, which is crate-private: the loader
-/// builds the sequence from its post-order traversal, and every later phase
-/// derives its sequence with [`DependencyOrdered::map`] or
-/// [`DependencyOrdered::try_map`], which preserve positions.
+/// The first invariant is structural. The second is established by the
+/// constructors: `DependencyOrdered::from_topo_order` takes a
+/// [`TopoOrder`] (which only a [`DependencyGraph`] produces) and checks that
+/// the root comes last, `DependencyOrdered::root_only` has no dependencies,
+/// and every later phase derives its sequence with [`DependencyOrdered::map`]
+/// or [`DependencyOrdered::try_map`], which preserve positions.
+///
+/// [`DependencyGraph`]: graphcal_compiler::dependency_graph::DependencyGraph
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyOrdered<T> {
     deps: Vec<T>,
@@ -25,12 +30,34 @@ pub struct DependencyOrdered<T> {
 }
 
 impl<T> DependencyOrdered<T> {
-    /// Pair dependency-first `deps` with the `root` that depends on them.
+    /// A lone `root` without dependencies.
+    pub(crate) const fn root_only(root: T) -> Self {
+        Self {
+            deps: Vec::new(),
+            root,
+        }
+    }
+
+    /// The value of every key of `order`, dependencies first, ending with the
+    /// value of `root`.
     ///
-    /// The caller must supply `deps` in topological order (post-order of the
-    /// dependency traversal).
-    pub(crate) const fn new(deps: Vec<T>, root: T) -> Self {
-        Self { deps, root }
+    /// Returns `None` when `root` is not the last key of `order` (some key
+    /// does not lead to it) or `value` has no value for some key.
+    pub(crate) fn from_topo_order<K: PartialEq>(
+        order: TopoOrder<K>,
+        root: &K,
+        mut value: impl FnMut(K) -> Option<T>,
+    ) -> Option<Self> {
+        let mut keys = order.into_vec();
+        let last = keys.pop().filter(|last| last == root)?;
+        let deps = keys
+            .into_iter()
+            .map(&mut value)
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            deps,
+            root: value(last)?,
+        })
     }
 
     /// The entry module.
@@ -131,11 +158,27 @@ impl<'a, T> IntoIterator for &'a DependencyOrdered<T> {
 
 #[cfg(test)]
 mod tests {
+    use graphcal_compiler::dependency_graph::DependencyGraph;
+
     use super::DependencyOrdered;
+
+    /// `root` depending on each of `deps`, which are independent.
+    fn ordered<T: Clone + Eq + std::hash::Hash + std::fmt::Debug>(
+        deps: &[T],
+        root: &T,
+    ) -> DependencyOrdered<T> {
+        let mut graph = DependencyGraph::new();
+        graph.add_node(root.clone());
+        for dep in deps {
+            graph.add_dependency(root.clone(), dep.clone());
+        }
+        let order = graph.into_depth_first_order().unwrap();
+        DependencyOrdered::from_topo_order(order, root, Some).unwrap()
+    }
 
     #[test]
     fn root_is_last_in_iteration_and_positions() {
-        let ordered = DependencyOrdered::new(vec!["a", "b"], "root");
+        let ordered = ordered(&["a", "b"], &"root");
         assert_eq!(
             ordered.iter().copied().collect::<Vec<_>>(),
             ["a", "b", "root"]
@@ -150,15 +193,51 @@ mod tests {
 
     #[test]
     fn root_only_sequence_has_one_element() {
-        let ordered = DependencyOrdered::new(Vec::new(), 7);
+        let ordered = DependencyOrdered::root_only(7);
         assert_eq!(ordered.len(), 1);
         assert!(!ordered.is_empty());
         assert_eq!(ordered.iter().copied().collect::<Vec<_>>(), [7]);
     }
 
     #[test]
+    fn from_topo_order_maps_keys_to_values() {
+        let mut graph = DependencyGraph::new();
+        graph.add_dependency("main", "lib");
+        graph.add_dependency("lib", "core");
+        let order = graph.into_depth_first_order().unwrap();
+        let ordered =
+            DependencyOrdered::from_topo_order(order, &"main", |key| Some(key.len())).unwrap();
+        assert_eq!(ordered.into_parts(), (vec![4, 3], 4));
+    }
+
+    #[test]
+    fn from_topo_order_requires_the_root_last_and_every_value() {
+        let mut graph = DependencyGraph::new();
+        graph.add_dependency("main", "lib");
+        graph.add_node("unrelated");
+        let order = graph.into_depth_first_order().unwrap();
+        assert_eq!(
+            DependencyOrdered::from_topo_order(order.clone(), &"main", Some),
+            None
+        );
+        assert_eq!(
+            DependencyOrdered::from_topo_order(order, &"unrelated", |key| {
+                (key != "lib").then_some(key)
+            }),
+            None
+        );
+        let empty = DependencyGraph::<&str>::new()
+            .into_depth_first_order()
+            .unwrap();
+        assert_eq!(
+            DependencyOrdered::from_topo_order(empty, &"main", Some),
+            None
+        );
+    }
+
+    #[test]
     fn try_map_visits_dependencies_before_root_and_preserves_positions() {
-        let ordered = DependencyOrdered::new(vec![1, 2], 3);
+        let ordered = ordered(&[1, 2], &3);
         let mut visited = Vec::new();
         let mapped = ordered
             .try_map(|value| {
@@ -172,7 +251,7 @@ mod tests {
 
     #[test]
     fn try_map_stops_at_first_error() {
-        let ordered = DependencyOrdered::new(vec![1, 2], 3);
+        let ordered = ordered(&[1, 2], &3);
         let mut visited = Vec::new();
         let result = ordered.try_map(|value| {
             visited.push(value);
@@ -184,7 +263,7 @@ mod tests {
 
     #[test]
     fn map_and_as_ref_preserve_positions() {
-        let ordered = DependencyOrdered::new(vec![String::from("a")], String::from("r"));
+        let ordered = ordered(&[String::from("a")], &String::from("r"));
         let lengths = ordered.as_ref().map(String::len);
         assert_eq!(lengths.into_parts(), (vec![1], 1));
     }

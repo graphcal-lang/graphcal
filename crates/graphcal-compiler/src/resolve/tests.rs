@@ -1740,13 +1740,10 @@ fn recursive_include_expansion_is_rejected_with_its_template_cycle() {
     modules.edge(&first, &module_path(&["second"]), &second);
     modules.edge(&second, &module_path(&["first"]), &first);
 
-    assert_eq!(
-        modules.build(),
-        Err(ModuleResolveError::RecursiveIncludeExpansion {
-            module: first.clone(),
-            cycle: vec![first.clone(), second, first],
-        })
-    );
+    let Err(ModuleResolveError::RecursiveIncludeExpansion { cycle }) = modules.build() else {
+        panic!("recursive includes must be rejected");
+    };
+    assert_eq!(cycle.into_path(), [first, second]);
 }
 
 #[test]

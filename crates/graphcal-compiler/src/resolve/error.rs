@@ -6,6 +6,7 @@
 use thiserror::Error;
 
 use crate::dag_id::DagId;
+use crate::dependency_graph::Cycle;
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::function_name::FnName;
 use crate::syntax::import_category::ImportItemCategoryMismatch;
@@ -83,12 +84,11 @@ pub enum ModuleResolveError {
     AmbiguousModulePath { first: DagId, second: DagId },
     /// The template include graph has a cycle, so its concrete instances
     /// would never end.
-    #[error("recursive include expansion involving module `{module}`")]
+    #[error("recursive include expansion involving module `{}`", .cycle.entry())]
     RecursiveIncludeExpansion {
-        /// First template repeated along the include chain.
-        module: DagId,
-        /// The template cycle, including the repeated endpoint.
-        cycle: Vec<DagId>,
+        /// Templates including each other in a circle, starting at the first
+        /// one the expansion re-entered.
+        cycle: Cycle<DagId>,
     },
     /// No symbol table exists for a canonical module identity.
     #[error("unknown module `{owner}`")]

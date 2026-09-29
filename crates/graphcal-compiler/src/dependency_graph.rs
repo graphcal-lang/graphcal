@@ -1,9 +1,11 @@
 //! Generic dependency graphs with deterministic topological ordering.
 //!
 //! A [`DependencyGraph<K>`] records "`dependent` depends on `dependency`"
-//! edges between keys. [`DependencyGraph::into_topo_order`] either proves the
-//! graph acyclic by returning a [`TopoOrder<K>`] (every key after all of its
-//! dependencies) or returns a [`Cycle<K>`] naming one dependency cycle.
+//! edges between keys. [`DependencyGraph::into_topo_order`] and
+//! [`DependencyGraph::into_depth_first_order`] either prove the graph acyclic
+//! by returning a [`TopoOrder<K>`] (every key after all of its dependencies)
+//! or return a [`Cycle<K>`] naming one dependency cycle. They differ only in
+//! how they order independent keys.
 //!
 //! Both results are pure functions of the insertion order of nodes and edges:
 //! no hash iteration order leaks into them. Callers that need an order that is
@@ -91,11 +93,11 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
     ///
     /// # Errors
     ///
-    /// Returns the [`Cycle`] found by a depth-first search that visits roots in
-    /// node insertion order and dependencies in edge insertion order.
+    /// Returns the [`Cycle`] found by the depth-first search of
+    /// [`Self::into_depth_first_order`].
     pub fn into_topo_order(self) -> Result<TopoOrder<K>, Cycle<K>> {
-        if let Some(cycle) = self.find_cycle() {
-            return Err(self.cycle_from_indices(cycle));
+        if let Err(cycle) = self.depth_first() {
+            return Err(self.cycle_from_indices(&cycle));
         }
         let rank = self.kahn_ranks();
         let mut ranked = rank.into_iter().zip(self.keys).collect::<Vec<_>>();
@@ -103,6 +105,33 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
         Ok(TopoOrder {
             order: ranked.into_iter().map(|(_, key)| key).collect(),
         })
+    }
+
+    /// Order every node after all of its dependencies, in depth-first
+    /// post-order.
+    ///
+    /// The search starts from each not yet visited node in node insertion
+    /// order and follows dependencies in edge insertion order; a node is
+    /// emitted once all of its dependencies are. When the first node inserted
+    /// reaches every other node, it is emitted last.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`Cycle`] this search closes: the path from the node
+    /// it re-entered to the node whose dependency re-entered it.
+    pub fn into_depth_first_order(self) -> Result<TopoOrder<K>, Cycle<K>> {
+        match self.depth_first() {
+            Ok(post_order) => {
+                let mut keys = self.keys.into_iter().map(Some).collect::<Vec<_>>();
+                Ok(TopoOrder {
+                    order: post_order
+                        .into_iter()
+                        .filter_map(|node| keys[node].take())
+                        .collect(),
+                })
+            }
+            Err(cycle) => Err(self.cycle_from_indices(&cycle)),
+        }
     }
 
     fn position_of(&mut self, key: K) -> usize {
@@ -117,11 +146,12 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
         position
     }
 
-    /// Node indices of one cycle, starting at the node the search re-entered,
-    /// or `None` when the graph is acyclic. Iterative, so deep graphs cannot
-    /// overflow the call stack.
-    fn find_cycle(&self) -> Option<Vec<usize>> {
+    /// Node indices in depth-first post-order, or the first cycle found as
+    /// the node the search re-entered and the rest of the cycle path.
+    /// Iterative, so deep graphs cannot overflow the call stack.
+    fn depth_first(&self) -> Result<Vec<usize>, (usize, Vec<usize>)> {
         let mut state = vec![Visit::Unvisited; self.keys.len()];
+        let mut post_order = Vec::with_capacity(self.keys.len());
         // Each frame is a node on the current path and its next edge to try.
         let mut path: Vec<(usize, usize)> = Vec::new();
         for root in 0..self.keys.len() {
@@ -134,6 +164,7 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
                 let (node, cursor) = *frame;
                 let Some(&dependency) = self.dependencies[node].get(cursor) else {
                     state[node] = Visit::Done;
+                    post_order.push(node);
                     path.pop();
                     continue;
                 };
@@ -144,13 +175,14 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
                         path.push((dependency, 0));
                     }
                     Visit::OnPath(position) => {
-                        return Some(path[position..].iter().map(|(node, _)| *node).collect());
+                        let rest = path[position..].iter().skip(1).map(|(node, _)| *node);
+                        return Err((dependency, rest.collect()));
                     }
                     Visit::Done => {}
                 }
             }
         }
-        None
+        Ok(post_order)
     }
 
     /// Emission rank of every node under FIFO Kahn. Only called on acyclic
@@ -176,21 +208,10 @@ impl<K: Clone + Eq + Hash> DependencyGraph<K> {
         rank
     }
 
-    /// Rotate the cycle to start at its earliest-inserted node so the report
-    /// does not depend on where the search entered the cycle.
-    fn cycle_from_indices(&self, mut cycle: Vec<usize>) -> Cycle<K> {
-        let start = cycle
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, node)| **node)
-            .map_or(0, |(position, _)| position);
-        cycle.rotate_left(start);
+    fn cycle_from_indices(&self, (entry, rest): &(usize, Vec<usize>)) -> Cycle<K> {
         Cycle {
-            entry: self.keys[cycle[0]].clone(),
-            rest: cycle[1..]
-                .iter()
-                .map(|&node| self.keys[node].clone())
-                .collect(),
+            entry: self.keys[*entry].clone(),
+            rest: rest.iter().map(|&node| self.keys[node].clone()).collect(),
         }
     }
 }
@@ -264,9 +285,11 @@ impl<'a, K> IntoIterator for &'a TopoOrder<K> {
 
 /// One dependency cycle of a [`DependencyGraph`].
 ///
-/// The path starts at the cycle's earliest-inserted node ([`Cycle::entry`]).
-/// Each node depends on the next one, and the last node depends on the entry.
-/// A self-loop is a cycle whose path is just the entry.
+/// The path starts at [`Cycle::entry`], the node at which the depth-first
+/// search (roots in node insertion order, dependencies in edge insertion
+/// order) re-entered its current path. Each node depends on the next one, and
+/// the last node depends on the entry. A self-loop is a cycle whose path is
+/// just the entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cycle<K> {
     entry: K,
@@ -274,7 +297,7 @@ pub struct Cycle<K> {
 }
 
 impl<K> Cycle<K> {
-    /// The cycle's earliest-inserted node, where its path starts.
+    /// The node the search re-entered, where the cycle path starts.
     #[must_use]
     pub const fn entry(&self) -> &K {
         &self.entry
@@ -302,6 +325,15 @@ impl<K> Cycle<K> {
     #[must_use]
     pub fn into_path(self) -> Vec<K> {
         std::iter::once(self.entry).chain(self.rest).collect()
+    }
+
+    /// Transform every node, keeping the path order.
+    #[must_use]
+    pub fn map<U>(self, mut f: impl FnMut(K) -> U) -> Cycle<U> {
+        Cycle {
+            entry: f(self.entry),
+            rest: self.rest.into_iter().map(f).collect(),
+        }
     }
 }
 
@@ -413,12 +445,13 @@ mod tests {
     }
 
     #[test]
-    fn cycle_path_follows_dependencies_from_the_earliest_node() {
+    fn cycle_path_starts_where_the_search_re_entered_it() {
         let graph = graph(&["a", "b", "c"], &[("c", "a"), ("a", "b"), ("b", "c")]);
         assert_eq!(cycle(graph), ["a", "b", "c"]);
 
+        // `b` was inserted before `c`, but the search entered the cycle at `c`.
         let graph = graph_with_entry_late();
-        assert_eq!(cycle(graph), ["b", "c", "d"]);
+        assert_eq!(cycle(graph), ["c", "d", "b"]);
     }
 
     fn graph_with_entry_late() -> DependencyGraph<&'static str> {
@@ -437,9 +470,45 @@ mod tests {
             &[("d", "c"), ("c", "b"), ("b", "c"), ("a", "d")],
         );
         let cycle = graph.into_topo_order().expect_err("cyclic");
-        assert_eq!(cycle.entry(), &"b");
+        assert_eq!(cycle.entry(), &"c");
         assert_eq!(cycle.len(), 2);
-        assert_eq!(cycle.into_path(), ["b", "c"]);
+        assert_eq!(cycle.into_path(), ["c", "b"]);
+    }
+
+    #[test]
+    fn depth_first_order_emits_each_node_after_its_dependencies_in_post_order() {
+        // FIFO Kahn would emit the independent `leaf` before `mid`.
+        let graph = graph(
+            &["root", "mid", "base", "leaf"],
+            &[("root", "mid"), ("mid", "base"), ("root", "leaf")],
+        );
+        assert_eq!(order(graph.clone()), ["base", "leaf", "mid", "root"]);
+        let order = graph.into_depth_first_order().expect("acyclic");
+        assert_eq!(order.into_vec(), ["base", "mid", "leaf", "root"]);
+    }
+
+    #[test]
+    fn depth_first_order_visits_later_roots_in_insertion_order() {
+        let graph = graph(&["a", "b", "c"], &[("c", "a")]);
+        let order = graph.into_depth_first_order().expect("acyclic");
+        assert_eq!(order.into_vec(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn depth_first_order_reports_the_same_cycle() {
+        let graph = graph_with_entry_late();
+        let cycle = graph.into_depth_first_order().expect_err("cyclic");
+        assert_eq!(cycle.into_path(), ["c", "d", "b"]);
+    }
+
+    #[test]
+    fn cycle_map_keeps_the_path_order() {
+        let cycle = graph_with_entry_late()
+            .into_topo_order()
+            .expect_err("cyclic")
+            .map(str::len);
+        assert_eq!(cycle.entry(), &1);
+        assert_eq!(cycle.len(), 3);
     }
 
     #[test]
@@ -514,11 +583,30 @@ mod tests {
                     let path = cycle.clone().into_path();
                     prop_assert_eq!(path.len(), cycle.len());
                     prop_assert_eq!(path.iter().collect::<HashSet<_>>().len(), path.len());
-                    prop_assert_eq!(Some(&path[0]), path.iter().min());
                     for (position, node) in path.iter().enumerate() {
                         let next = path[(position + 1) % path.len()];
                         prop_assert!(edge_set.contains(&(*node, next)));
                     }
+                }
+            }
+            // Both orders agree on acyclicity and on the reported cycle.
+            match (graph.clone().into_topo_order(), graph.clone().into_depth_first_order()) {
+                (Ok(kahn), Ok(depth_first)) => {
+                    prop_assert_eq!(depth_first.len(), node_count);
+                    let rank = depth_first
+                        .iter()
+                        .enumerate()
+                        .map(|(rank, node)| (*node, rank))
+                        .collect::<HashMap<_, _>>();
+                    prop_assert_eq!(rank.len(), node_count);
+                    for (dependent, dependency) in &edges {
+                        prop_assert!(rank[dependency] < rank[dependent]);
+                    }
+                    prop_assert_eq!(kahn.len(), depth_first.len());
+                }
+                (Err(kahn), Err(depth_first)) => prop_assert_eq!(kahn, depth_first),
+                (kahn, depth_first) => {
+                    prop_assert!(false, "orders disagree: {kahn:?} vs {depth_first:?}");
                 }
             }
             // Determinism: the same insertions give the same result.

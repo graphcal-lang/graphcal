@@ -8,7 +8,6 @@ use miette::NamedSource;
 
 use crate::eval::types::CompileError;
 use crate::loader::LoadedProject;
-use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 
 use super::{CompiledFile, lowering, pipeline};
 
@@ -55,7 +54,6 @@ impl<'project, Host> ProjectCompiler<'project, Host> {
     /// performed.
     pub fn lower(self) -> Result<super::HirProject<'project>, CompileError> {
         self.cancellation.checkpoint()?;
-        pipeline::validate_project_dag_recursion(self.project)?;
         let root_source = self.project.root_file().named_source();
         let module_resolver =
             self.project
@@ -63,21 +61,7 @@ impl<'project, Host> ProjectCompiler<'project, Host> {
                 .map_err(|error| match error {
                     graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion {
                         cycle,
-                        ..
-                    } => CompileError::Eval(
-                        graphcal_compiler::registry::error::GraphcalError::internal_error(
-                            format!(
-                                "recursive DAG instantiation: {}",
-                                cycle
-                                    .iter()
-                                    .map(std::string::ToString::to_string)
-                                    .collect::<Vec<_>>()
-                                    .join(" -> ")
-                            ),
-                            root_source,
-                            DiagnosticAnchor::WholeFile,
-                        ),
-                    ),
+                    } => pipeline::recursive_dag_instantiation(self.project, &cycle),
                     error => lowering::module_resolve_compile_error(error, root_source),
                 })?;
         pipeline::lower_project_perfile(self.project, module_resolver, &self.cancellation)

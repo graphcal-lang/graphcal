@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use crate::dag_id::{DagId, DagPackageId};
+use crate::dependency_graph::DependencyGraph;
 use crate::desugar::desugared_ast as ast;
 use crate::syntax::ast::ModulePath;
 
@@ -229,12 +230,14 @@ impl<'a> SymbolTables<'a> {
             entries.insert(owner, module.entry);
         }
         let own_edges = order
-            .into_iter()
+            .iter()
+            .cloned()
             .filter_map(|owner| {
                 let edges = module_edges(&owner, declarations.get(&owner)?, targets);
                 Some((owner, edges))
             })
             .collect::<Vec<_>>();
+        reject_recursive_includes(&order, &own_edges)?;
         let mut resolver = ModuleResolver { modules: entries };
         let mut instances = Vec::new();
         {
@@ -327,6 +330,31 @@ fn module_edges<'a>(
         .collect()
 }
 
+/// Reject a cycle of includes among the source modules, whose expansion
+/// would never end.
+///
+/// The search visits source modules in `order` and each module's includes in
+/// declaration order, so it reports the cycle that expanding the modules in
+/// that order would enter first.
+fn reject_recursive_includes(
+    order: &[DagId],
+    own_edges: &[(DagId, Vec<Edge<'_>>)],
+) -> Result<(), ModuleResolveError> {
+    let mut includes = DependencyGraph::new();
+    for owner in order {
+        includes.add_node(owner.clone());
+    }
+    for (owner, edges) in own_edges {
+        for (_, template) in edges.iter().filter_map(Edge::instantiation) {
+            includes.add_dependency(owner.clone(), template.clone());
+        }
+    }
+    includes
+        .into_depth_first_order()
+        .map(drop)
+        .map_err(|cycle| ModuleResolveError::RecursiveIncludeExpansion { cycle })
+}
+
 /// One template being instantiated while expanding includes.
 struct Expansion {
     /// The module the template's includes allocate instances in.
@@ -339,7 +367,9 @@ struct Expansion {
 /// Add the instance modules of every include reachable from the source module
 /// `root`, recording each with its template.
 ///
-/// The walk is iterative, so deep include chains cannot overflow the stack.
+/// The include graph is acyclic ([`reject_recursive_includes`]), so the
+/// expansion is finite. The walk is iterative, so deep include chains cannot
+/// overflow the stack.
 fn expand_instances(
     root: &DagId,
     edges: &HashMap<&DagId, &[Edge<'_>]>,
@@ -364,20 +394,6 @@ fn expand_instances(
         };
         expansion.next += 1;
         let instance = expansion.base.instance_child(include.instance_scope());
-        if let Some(start) = open
-            .iter()
-            .position(|expansion| &expansion.template == template)
-        {
-            let cycle = open[start..]
-                .iter()
-                .map(|expansion| expansion.template.clone())
-                .chain(std::iter::once(template.clone()))
-                .collect();
-            return Err(ModuleResolveError::RecursiveIncludeExpansion {
-                module: template.clone(),
-                cycle,
-            });
-        }
         let template_declarations =
             declarations
                 .get(template)

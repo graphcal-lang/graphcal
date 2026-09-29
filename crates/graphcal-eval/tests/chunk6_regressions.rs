@@ -81,6 +81,38 @@ node total: Dimensionless = @left + @right;
 }
 
 #[test]
+fn recursive_include_through_a_file_root_is_reported_at_that_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/mission");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"mission\"\n",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    let source = r"
+param x: Dimensionless = 1.0;
+include inner()::{ y };
+dag inner {
+    include mission.main()::{ x as y };
+}
+";
+    std::fs::write(&root, source).unwrap();
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect_err("a file root including itself through its DAG must be rejected");
+    let CompileError::Eval(GraphcalError::EvalError { message, span, .. }) = &error else {
+        panic!("expected an E001 recursion diagnostic, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        "recursive DAG instantiation: src.mission.main -> inner -> src.mission.main"
+    );
+    assert_eq!((span.offset(), span.len()), (0, source.len()));
+}
+
+#[test]
 fn module_resolver_rejects_recursive_include_expansion() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("main.gcl");

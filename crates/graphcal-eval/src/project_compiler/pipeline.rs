@@ -6,31 +6,58 @@
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use graphcal_compiler::desugar::desugared_ast::DeclKind;
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::dependency_graph::Cycle;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 
-/// Validate inline-DAG recursion before constructing project-wide scopes.
+/// E001 for templates that include each other in a circle, reported at the
+/// declaration of the template the include expansion re-entered.
 ///
-/// This preserves source-level diagnostic ordering: a recursive instance graph
-/// is rejected before resolver inheritance attempts to inspect that invalid
-/// synthetic scope.
-pub(in crate::project_compiler) fn validate_project_dag_recursion(
+/// Each template is named by its path inside its file (`outer.inner`), or by
+/// its module identity when it is a file root.
+pub(in crate::project_compiler) fn recursive_dag_instantiation(
     project: &crate::loader::LoadedProject,
-) -> Result<(), CompileError> {
-    project.files().iter().try_for_each(|loaded_file| {
-        let definitions = loaded_file
-            .ast()
-            .declarations
-            .iter()
-            .filter_map(|declaration| {
-                let DeclKind::Dag(dag) = &declaration.kind else {
-                    return None;
-                };
-                Some((dag.name.value.clone(), dag))
-            })
-            .collect();
-        recursion::check_dag_recursion(&definitions, loaded_file.named_source())
+    cycle: &Cycle<DagId>,
+) -> CompileError {
+    let names = cycle
+        .path()
+        .chain(std::iter::once(cycle.entry()))
+        .map(template_name)
+        .collect::<Vec<_>>();
+    let (src, span) = match project.module(cycle.entry()) {
+        Some(crate::loader::LoadedModule::InlineDag { file, dag }) => {
+            (file.named_source(), dag.declaration(file).span)
+        }
+        Some(crate::loader::LoadedModule::FileRoot(file)) => (
+            file.named_source(),
+            Span::new(0, file.named_source().inner().len()),
+        ),
+        None => {
+            let src = project.root_file().named_source();
+            (src, Span::new(0, src.inner().len()))
+        }
+    };
+    CompileError::Eval(GraphcalError::EvalError {
+        message: format!("recursive DAG instantiation: {}", names.join(" -> ")),
+        src: src.clone(),
+        span: span.into(),
     })
+}
+
+/// A template's inline-DAG path inside its file, or the file root's identity.
+fn template_name(template: &DagId) -> String {
+    let file_depth = template.file_root().segments().len();
+    let inline_path = template
+        .segments()
+        .iter()
+        .skip(file_depth)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if inline_path.is_empty() {
+        template.to_string()
+    } else {
+        inline_path.join(".")
+    }
 }
 
 /// Lower one physical file after every dependency HIR interface is available.
