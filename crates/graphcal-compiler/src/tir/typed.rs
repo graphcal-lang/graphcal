@@ -434,10 +434,11 @@ fn type_resolve_impl(
         declared_types: _,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
+    let decls = HirDeclarations::split(ir.decls);
     let mut root_dag = type_resolve_dag(
-        ir.consts,
-        ir.params,
-        ir.nodes,
+        decls.consts,
+        decls.params,
+        decls.nodes,
         src,
         module_ctx.owner,
         module_ctx,
@@ -446,18 +447,21 @@ fn type_resolve_impl(
         cancellation,
     )?
     .with_body(
-        ir.asserts,
-        ir.plots,
-        ir.figures,
-        ir.layers,
-        ir.included_plots,
-        ir.source_order,
-        ir.static_ports,
-        ir.assumes_map,
-        ir.expected_fail,
-        ir.dynamic_unit_scales,
+        HirBody {
+            asserts: decls.asserts,
+            plots: decls.plots,
+            figures: decls.figures,
+            layers: decls.layers,
+            source_order: decls.source_order,
+            spelling: decls.spelling,
+            included_plots: ir.included_plots,
+            static_ports: ir.static_ports,
+            assumes_map: ir.assumes_map,
+            expected_fail: ir.expected_fail,
+            dynamic_unit_scales: ir.dynamic_unit_scales,
+            semantic_instances: ir.semantic_instances,
+        },
         imported_bindings,
-        ir.semantic_instances,
         module_ctx,
         src,
     )?;
@@ -588,10 +592,11 @@ fn type_resolve_single_impl(
         declared_types: _,
     } = signed;
     let imported_bindings_for_hir = imported_bindings.clone();
+    let decls = HirDeclarations::split(ir.decls);
     let mut dag = type_resolve_dag(
-        ir.consts,
-        ir.params,
-        ir.nodes,
+        decls.consts,
+        decls.params,
+        decls.nodes,
         src,
         module_ctx.owner,
         module_ctx,
@@ -600,18 +605,21 @@ fn type_resolve_single_impl(
         cancellation,
     )?
     .with_body(
-        ir.asserts,
-        ir.plots,
-        ir.figures,
-        ir.layers,
-        ir.included_plots,
-        ir.source_order,
-        ir.static_ports,
-        ir.assumes_map,
-        ir.expected_fail,
-        ir.dynamic_unit_scales,
+        HirBody {
+            asserts: decls.asserts,
+            plots: decls.plots,
+            figures: decls.figures,
+            layers: decls.layers,
+            source_order: decls.source_order,
+            spelling: decls.spelling,
+            included_plots: ir.included_plots,
+            static_ports: ir.static_ports,
+            assumes_map: ir.assumes_map,
+            expected_fail: ir.expected_fail,
+            dynamic_unit_scales: ir.dynamic_unit_scales,
+            semantic_instances: ir.semantic_instances,
+        },
         imported_bindings,
-        ir.semantic_instances,
         module_ctx,
         src,
     )?;
@@ -648,16 +656,12 @@ fn resolve_declared_type_exprs(
         })
         .collect::<HashMap<_, _>>();
     let mut resolved = HashMap::new();
-    for (name, type_ann) in hir
-        .consts
-        .iter()
+    let decls = hir.decls();
+    for (name, type_ann) in decls
+        .consts()
         .map(|entry| (&entry.name, &entry.type_ann))
-        .chain(
-            hir.params
-                .iter()
-                .map(|entry| (&entry.name, &entry.type_ann)),
-        )
-        .chain(hir.nodes.iter().map(|entry| (&entry.name, &entry.type_ann)))
+        .chain(decls.params().map(|entry| (&entry.name, &entry.type_ann)))
+        .chain(decls.nodes().map(|entry| (&entry.name, &entry.type_ann)))
     {
         cancellation.checkpoint()?;
         let ty = resolve_hir_decl_type(&type_ann.decl_type, src, module_ctx)?;
@@ -1730,58 +1734,69 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_hir_decl_bindings,
-    collect_resolved_constructor_refs_from_expr, collect_resolved_dag_dependencies,
-    resolve_expected_fail_keys,
+    augment_runtime_deps_for_dynamic_units, collect_resolved_constructor_refs_from_expr,
+    collect_resolved_dag_dependencies,
 };
 
-fn install_non_value_decl_bindings<'a>(
-    bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
-    dag_id: &crate::dag_id::DagId,
-    asserts: &'a [crate::ir::lower::AssertEntry],
-    dag_owned_names: impl Iterator<Item = &'a ScopedName>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let assertions = asserts.iter().map(|entry| {
-        (
-            &entry.name,
-            ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.leaf().clone()),
-        )
-    });
-    let dag_owned = dag_owned_names.map(|name| {
-        (
-            name,
-            ResolvedDeclName::from_def(dag_id.clone(), name.leaf().clone()),
-        )
-    });
-    for (name, identity) in assertions.chain(dag_owned) {
-        if bindings.insert(name.clone(), identity).is_some() {
-            return Err(GraphcalError::internal_error(
-                format!("duplicate canonical declaration binding `{name}`"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ));
-        }
-    }
-    Ok(())
+/// HIR declarations split into the per-kind records a [`DagTIR`] stores.
+struct HirDeclarations {
+    consts: Vec<crate::ir::lower::ConstEntry>,
+    params: Vec<crate::ir::lower::ParamEntry>,
+    nodes: Vec<crate::ir::lower::NodeEntry>,
+    asserts: Vec<crate::ir::lower::AssertEntry>,
+    plots: Vec<crate::ir::lower::PlotEntry>,
+    figures: Vec<crate::ir::lower::FigureEntry>,
+    layers: Vec<crate::ir::lower::LayerEntry>,
+    source_order: Vec<(ScopedName, DeclCategory)>,
+    spelling: HashMap<ScopedName, ResolvedDeclName>,
 }
 
-fn validate_source_order_bindings(
-    bindings: &HashMap<ScopedName, ResolvedDeclName>,
-    source_order: &[(ScopedName, DeclCategory)],
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    source_order.iter().try_for_each(|(name, category)| {
-        if bindings.contains_key(name) {
-            Ok(())
-        } else {
-            Err(GraphcalError::internal_error(
-                format!("source-order {category} declaration `{name}` has no canonical binding"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ))
+impl HirDeclarations {
+    fn split(table: crate::ir::decl_table::DeclTable<crate::ir::lower::Lowered>) -> Self {
+        let (decls, spelling) = table.into_parts();
+        let mut split = Self {
+            consts: Vec::new(),
+            params: Vec::new(),
+            nodes: Vec::new(),
+            asserts: Vec::new(),
+            plots: Vec::new(),
+            figures: Vec::new(),
+            layers: Vec::new(),
+            source_order: Vec::new(),
+            spelling,
+        };
+        for decl in decls {
+            split
+                .source_order
+                .push((decl.name().clone(), decl.category()));
+            match decl {
+                crate::ir::entry::Decl::Const(entry) => split.consts.push(entry),
+                crate::ir::entry::Decl::Param(entry) => split.params.push(entry),
+                crate::ir::entry::Decl::Node(entry) => split.nodes.push(entry),
+                crate::ir::entry::Decl::Assert(entry) => split.asserts.push(entry),
+                crate::ir::entry::Decl::Plot(entry) => split.plots.push(entry),
+                crate::ir::entry::Decl::Figure(entry) => split.figures.push(entry),
+                crate::ir::entry::Decl::Layer(entry) => split.layers.push(entry),
+            }
         }
-    })
+        split
+    }
+}
+
+/// The HIR DAG fields beyond the resolved value declarations.
+struct HirBody {
+    asserts: Vec<crate::ir::lower::AssertEntry>,
+    plots: Vec<crate::ir::lower::PlotEntry>,
+    figures: Vec<crate::ir::lower::FigureEntry>,
+    layers: Vec<crate::ir::lower::LayerEntry>,
+    source_order: Vec<(ScopedName, DeclCategory)>,
+    spelling: HashMap<ScopedName, ResolvedDeclName>,
+    included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
+    static_ports: Vec<crate::hir::StaticPort>,
+    assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
+    expected_fail: HashMap<ResolvedDeclName, crate::ir::lower::ResolvedExpectedFailMetadata>,
+    dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
+    semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
 }
 
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
@@ -1797,43 +1812,35 @@ struct DagTIRSeed {
 }
 
 impl DagTIRSeed {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "single conversion that absorbs every HIR DAG field beyond the resolved decls"
-    )]
     fn with_body(
         self,
-        asserts: Vec<crate::ir::lower::AssertEntry>,
-        plots: Vec<crate::ir::lower::PlotEntry>,
-        figures: Vec<crate::ir::lower::FigureEntry>,
-        layers: Vec<crate::ir::lower::LayerEntry>,
-        included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
-        source_order: Vec<(ScopedName, DeclCategory)>,
-        static_ports: Vec<crate::hir::StaticPort>,
-        assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-        expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
-        dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
+        body: HirBody,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-        semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
-        let mut decl_bindings =
-            collect_hir_decl_bindings(&self.consts, &self.params, &self.nodes, &imported_bindings);
-        let dag_owned_sinks = plots
-            .iter()
-            .map(|entry| &entry.name)
-            .chain(figures.iter().map(|entry| &entry.name))
-            .chain(layers.iter().map(|entry| &entry.name));
-        install_non_value_decl_bindings(
-            &mut decl_bindings,
-            &self.dag_id,
-            &asserts,
-            dag_owned_sinks,
-            src,
-        )?;
-        validate_source_order_bindings(&decl_bindings, &source_order, src)?;
-        let expected_fail = resolve_expected_fail_keys(expected_fail, module_ctx, src)?;
+        let HirBody {
+            asserts,
+            plots,
+            figures,
+            layers,
+            source_order,
+            spelling,
+            included_plots,
+            static_ports,
+            assumes_map,
+            expected_fail,
+            dynamic_unit_scales,
+            semantic_instances,
+        } = body;
+        // The HIR declaration table already binds every local spelling to its
+        // canonical identity; imported values add their lexical targets.
+        let mut decl_bindings = spelling;
+        decl_bindings.extend(
+            imported_bindings
+                .iter()
+                .map(|(name, binding)| (name.clone(), binding.target().clone())),
+        );
 
         let mut semantic = self.semantic;
         semantic.decl_bindings = decl_bindings;

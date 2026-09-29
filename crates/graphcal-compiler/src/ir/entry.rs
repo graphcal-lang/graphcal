@@ -17,9 +17,11 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dag_id::DagId;
+use crate::declaration_category::{DeclCategory, ValueDeclCategory};
 use crate::desugar::desugared_ast::{AssertBody, Encoding, Expr, PlotField, TypeExpr};
 use crate::dimension::Dimension;
 use crate::plot_visibility::PlotVisibility;
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::ast::MarkType;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::module_name::ScopedName;
@@ -140,6 +142,8 @@ pub struct AssertEntry<P: BodyPhase> {
 #[derive(Debug, Clone)]
 pub struct PlotEntry<P: BodyPhase> {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: DagId,
     /// Mark shape rendered for this plot.
     pub mark_type: MarkType,
     pub body: P::PlotBody,
@@ -152,6 +156,8 @@ pub struct PlotEntry<P: BodyPhase> {
 #[derive(Debug, Clone)]
 pub struct FigureEntry<P: BodyPhase> {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: DagId,
     /// Plots composed by this figure, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
     pub fields: P::CompositionFields,
@@ -161,6 +167,8 @@ pub struct FigureEntry<P: BodyPhase> {
 #[derive(Debug, Clone)]
 pub struct LayerEntry<P: BodyPhase> {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: DagId,
     /// Plots composed by this layer, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
     pub fields: P::CompositionFields,
@@ -184,4 +192,96 @@ pub struct DynamicUnitScaleEntry<P: BodyPhase> {
     /// Source of the owning DAG, whose bytes `expr` and `span` index. The
     /// evaluator needs it when it evaluates a unit scale owned by another DAG.
     pub src: NamedSource<Arc<String>>,
+}
+
+/// Canonical identity of a declaration entry owned by `owner`.
+///
+/// Every entry is authored under a local, unqualified spelling; qualified
+/// names reach a DAG only as lexical bindings to other owners' declarations.
+fn entry_identity(owner: &DagId, name: &ScopedName) -> ResolvedDeclName {
+    ResolvedDeclName::from_def(owner.clone(), name.leaf().clone())
+}
+
+macro_rules! impl_entry_identity {
+    ($($entry:ident),* $(,)?) => {$(
+        impl<P: BodyPhase> $entry<P> {
+            /// Canonical identity of this declaration.
+            #[must_use]
+            pub fn identity(&self) -> ResolvedDeclName {
+                entry_identity(&self.declaration_owner, &self.name)
+            }
+        }
+    )*};
+}
+
+impl_entry_identity!(
+    ConstEntry,
+    ParamEntry,
+    NodeEntry,
+    AssertEntry,
+    PlotEntry,
+    FigureEntry,
+    LayerEntry,
+);
+
+/// One value, assertion, or visualization declaration.
+#[derive(Debug, Clone)]
+pub enum Decl<P: BodyPhase> {
+    Const(ConstEntry<P>),
+    Param(ParamEntry<P>),
+    Node(NodeEntry<P>),
+    Assert(AssertEntry<P>),
+    Plot(PlotEntry<P>),
+    Figure(FigureEntry<P>),
+    Layer(LayerEntry<P>),
+}
+
+impl<P: BodyPhase> Decl<P> {
+    /// Source-facing spelling of the declaration.
+    #[must_use]
+    pub const fn name(&self) -> &ScopedName {
+        match self {
+            Self::Const(entry) => &entry.name,
+            Self::Param(entry) => &entry.name,
+            Self::Node(entry) => &entry.name,
+            Self::Assert(entry) => &entry.name,
+            Self::Plot(entry) => &entry.name,
+            Self::Figure(entry) => &entry.name,
+            Self::Layer(entry) => &entry.name,
+        }
+    }
+
+    /// Canonical owner of the declaration.
+    #[must_use]
+    pub const fn declaration_owner(&self) -> &DagId {
+        match self {
+            Self::Const(entry) => &entry.declaration_owner,
+            Self::Param(entry) => &entry.declaration_owner,
+            Self::Node(entry) => &entry.declaration_owner,
+            Self::Assert(entry) => &entry.declaration_owner,
+            Self::Plot(entry) => &entry.declaration_owner,
+            Self::Figure(entry) => &entry.declaration_owner,
+            Self::Layer(entry) => &entry.declaration_owner,
+        }
+    }
+
+    /// Canonical identity of the declaration.
+    #[must_use]
+    pub fn identity(&self) -> ResolvedDeclName {
+        entry_identity(self.declaration_owner(), self.name())
+    }
+
+    /// Evaluation source-order category of the declaration.
+    #[must_use]
+    pub const fn category(&self) -> DeclCategory {
+        match self {
+            Self::Const(_) => DeclCategory::Value(ValueDeclCategory::Const),
+            Self::Param(_) => DeclCategory::Value(ValueDeclCategory::Param),
+            Self::Node(_) => DeclCategory::Value(ValueDeclCategory::Node),
+            Self::Assert(_) => DeclCategory::Assert,
+            Self::Plot(_) => DeclCategory::Plot,
+            Self::Figure(_) => DeclCategory::Figure,
+            Self::Layer(_) => DeclCategory::Layer,
+        }
+    }
 }
