@@ -32,7 +32,7 @@ use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{
     ConcreteIndexKind, FormattingRegistry, IndexKind, RequiredIndexKind, UnitScale,
 };
-use graphcal_compiler::tir::typed::{ResolvedDeclType, ResolvedDomainBound, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, ResolvedDeclType, ResolvedDomainBound};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
@@ -2530,7 +2530,7 @@ fn format_type_with_constraints(
     clippy::too_many_lines,
     reason = "linear match over all symbol categories"
 )]
-pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
+pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId) {
     let registry = tir.registry();
 
     if let Some(dag) = tir.dag_registry().get(dag_id) {

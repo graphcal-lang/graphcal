@@ -257,7 +257,7 @@ struct ProjectOutputAssembly {
 /// A checked, value-independent Graphcal project ready for repeated evaluation.
 pub struct PreparedProject {
     plan_id: u64,
-    tir: graphcal_compiler::tir::typed::TIR,
+    tir: graphcal_compiler::tir::typed::CheckedTir,
     plan: crate::execution_plan::ExecPlan,
     source: NamedSource<Arc<String>>,
     host_fns: crate::host_fns::HostFunctionRegistry,

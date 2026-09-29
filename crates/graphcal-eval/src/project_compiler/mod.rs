@@ -43,7 +43,7 @@ mod template;
 pub(crate) use entry_interface::CheckedEntryInterface;
 #[cfg(test)]
 pub(crate) fn check_execution_facts_with_cancellation(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<crate::execution_facts::CheckedExecutionFacts, GraphcalError> {
@@ -57,7 +57,7 @@ pub(crate) fn check_execution_facts_with_cancellation(
 
 #[cfg(test)]
 pub(crate) fn resolve_struct_field_constraints(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     const_values: &crate::execution_facts::RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<

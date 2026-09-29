@@ -8,7 +8,7 @@ use miette::NamedSource;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{DagTIR, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, DagTIR};
 
 use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::declaration_locations::DeclarationLocations;
@@ -26,7 +26,10 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 /// Returns a [`GraphcalError`] when static execution-fact checking or plan
 /// selection fails.
 #[cfg(test)]
-pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, GraphcalError> {
+pub fn compile(
+    tir: &CheckedTir,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ExecPlan, GraphcalError> {
     compile_with_cancellation(
         tir,
         src,
@@ -41,7 +44,7 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 /// Returns a [`GraphcalError`] for an invalid plan or cancellation.
 #[cfg(test)]
 pub fn compile_with_cancellation(
-    tir: &TIR,
+    tir: &CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
@@ -52,7 +55,7 @@ pub fn compile_with_cancellation(
 
 /// Build a runtime schedule from facts retained by the checked project.
 pub fn compile_checked_with_cancellation(
-    tir: &TIR,
+    tir: &CheckedTir,
     facts: &CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -90,7 +93,7 @@ pub fn compile_checked_with_cancellation(
 }
 
 fn prepare_callable_plan(
-    tir: &TIR,
+    tir: &CheckedTir,
     facts: &CheckedExecutionFacts,
     body: &DagTIR,
     declaration_locations: &DeclarationLocations,
@@ -198,7 +201,7 @@ fn merge_assumes_maps<'a>(
 }
 
 fn prepare_imports(
-    tir: &TIR,
+    tir: &CheckedTir,
     facts: &CheckedExecutionFacts,
     dags: &[&DagTIR],
     locations: &DeclarationLocations,
@@ -233,7 +236,7 @@ fn prepare_imports(
 }
 
 fn prepare_declaration_locations(
-    tir: &TIR,
+    tir: &CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DeclarationLocations, GraphcalError> {
     DeclarationLocations::try_new(tir.dag_registry().values().flat_map(|dag| {
@@ -267,7 +270,7 @@ fn validate_schedule_locations(
 }
 
 fn checked_scope<'a>(
-    tir: &'a TIR,
+    tir: &'a CheckedTir,
     facts: &'a CheckedExecutionFacts,
     owner: &graphcal_compiler::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
@@ -279,7 +282,7 @@ fn checked_scope<'a>(
 
 /// Validate coverage once at preparation, including DAGs reached only by calls.
 fn validate_execution_facts(
-    tir: &TIR,
+    tir: &CheckedTir,
     all_facts: &CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -328,29 +331,35 @@ mod tests {
     use graphcal_compiler::resolved_name::ResolvedDeclName;
     use graphcal_compiler::syntax::decl_name::DeclName;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
+    use graphcal_compiler::tir::typed::ProjectTypeStore;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
     fn compile_source(source: &str) -> Result<ExecPlan, GraphcalError> {
-        let (mut tir, src) = resolved_tir_from_source(source);
-        graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut tir, &src)?;
+        let (tir, src) = checked_tir_from_source(source)?;
         compile(&tir, &src)
     }
 
     fn tir_from_source(
         source: &str,
-    ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
-        let (mut tir, src) = resolved_tir_from_source(source);
-        graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut tir, &src).unwrap();
-        (tir, src)
+    ) -> (
+        graphcal_compiler::tir::typed::CheckedTir,
+        NamedSource<Arc<String>>,
+    ) {
+        checked_tir_from_source(source).unwrap()
     }
 
-    fn resolved_tir_from_source(
+    fn checked_tir_from_source(
         source: &str,
-    ) -> (graphcal_compiler::tir::typed::TIR, NamedSource<Arc<String>>) {
+    ) -> Result<
+        (
+            graphcal_compiler::tir::typed::CheckedTir,
+            NamedSource<Arc<String>>,
+        ),
+        GraphcalError,
+    > {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
@@ -362,8 +371,32 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_module(ir.definitions()).unwrap();
-        let tir = type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types)).unwrap();
-        (tir, src)
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let signed =
+            graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+                ir,
+                &src,
+                &resolver,
+                &project_types,
+                &cancellation,
+            )
+            .unwrap();
+        graphcal_compiler::tir::typed::TirDraft::resolve_root(
+            signed,
+            std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
+            &src,
+            &resolver,
+            Arc::new(project_types),
+            &cancellation,
+        )
+        .unwrap()
+        .instantiate(
+            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
+            &src,
+        )
+        .unwrap()
+        .check(&src, &cancellation)
+        .map(|tir| (tir, src.clone()))
     }
 
     #[test]

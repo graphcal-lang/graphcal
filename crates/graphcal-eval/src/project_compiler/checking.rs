@@ -73,7 +73,7 @@ fn resolve_imported_bindings(
 }
 
 fn checked_imported_values(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     facts: &crate::execution_facts::CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, (RuntimeValue, CheckedType)>, CompileError> {
@@ -147,10 +147,9 @@ fn resolve_file_signatures(
     })
 }
 
-fn reconcile_checked_dependency_overrides(
-    tir: &mut graphcal_compiler::tir::typed::TIR,
+fn checked_dependency_overrides(
     module_artifacts: &ModuleArtifactStore,
-) {
+) -> graphcal_compiler::tir::typed::CheckedOverrideDependencies {
     let dependencies = module_artifacts
         .values()
         .flat_map(|artifact| artifact.override_dependencies.iter())
@@ -160,11 +159,7 @@ fn reconcile_checked_dependency_overrides(
         .values()
         .flat_map(|artifact| artifact.local_owners.iter().cloned())
         .collect();
-    graphcal_compiler::tir::dim_check::reconcile_external_override_dependencies(
-        tir,
-        &dependencies,
-        &checked_owners,
-    );
+    graphcal_compiler::tir::typed::CheckedOverrideDependencies::new(dependencies, checked_owners)
 }
 
 /// Check one physical file's root and inline-DAG HIR modules.
@@ -207,7 +202,7 @@ pub(super) fn check_hir_file(
         module_resolver,
         file_src,
     )?;
-    let mut tir = graphcal_compiler::tir::typed::type_resolve_signed_builder_with_imported_bindings_and_cancellation(
+    let mut tir = graphcal_compiler::tir::typed::TirDraft::resolve_root(
         signed_root,
         root_bindings,
         file_src,
@@ -224,9 +219,6 @@ pub(super) fn check_hir_file(
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
-        // A nested DAG's `import plugin` signatures join the file's extern
-        // map, exactly like the root body's, so calls inside it resolve.
-        tir.merge_declared_extern_functions(signed.hir(), file_src)?;
         let imported_bindings = resolve_imported_bindings(
             signed.hir(),
             &local_interfaces,
@@ -234,21 +226,13 @@ pub(super) fn check_hir_file(
             module_resolver,
             file_src,
         )?;
-        let checked = graphcal_compiler::tir::typed::type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        tir.add_inline_dag(
             signed,
             imported_bindings,
             file_src,
             module_resolver,
-            project_types.as_ref(),
             cancellation,
         )?;
-        tir.insert_dag(checked).map_err(|error| {
-            CompileError::Eval(GraphcalError::internal_error(
-                error.to_string(),
-                file_src,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })?;
     }
 
     lowering::install_shared_module_artifacts(&mut tir, module_artifacts, file_src)?;
@@ -280,27 +264,21 @@ pub(super) fn check_hir_file(
     })
 }
 
-/// Complete mutable local bodies before any execution facts are published.
+/// Complete local bodies before any execution facts are published.
 fn finish_module_assembly(
-    builder: graphcal_compiler::tir::typed::TirBuilder,
+    draft: graphcal_compiler::tir::typed::TirDraft,
     module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    let mut tir = builder.finish();
-    graphcal_compiler::tir::typed::instantiate_semantic_edges(&mut tir, src)?;
-    reconcile_checked_dependency_overrides(&mut tir, module_artifacts);
-    graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
-        &mut tir,
-        src,
-        cancellation,
-    )?;
-    Ok(tir)
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
+    Ok(draft
+        .instantiate(&checked_dependency_overrides(module_artifacts), src)?
+        .check(src, cancellation)?)
 }
 
 #[cfg(test)]
 fn observe_shared_artifacts(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     module_artifacts: &ModuleArtifactStore,
 ) {

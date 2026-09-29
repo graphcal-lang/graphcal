@@ -12,7 +12,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::model::TIR;
+use graphcal_compiler::tir::typed::model::CheckedTir;
 use miette::NamedSource;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -151,7 +151,7 @@ impl<'a> ExecutionFrame<'a> {
 
     pub fn run(
         &mut self,
-        tir: &TIR,
+        tir: &CheckedTir,
         source: &NamedSource<Arc<String>>,
         cancellation: &CancellationToken,
         mut evaluate: impl FnMut(

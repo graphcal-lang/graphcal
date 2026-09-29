@@ -595,6 +595,7 @@ impl DagRegistry {
         &self.root
     }
 
+    #[cfg(test)]
     const fn root_mut(&mut self) -> &mut DagTIR {
         &mut self.root
     }
@@ -1083,23 +1084,25 @@ pub struct CompetingExternFunctionDefinition {
     pub name: crate::syntax::function_name::FnName,
 }
 
-/// Mutable assembly state for a project TIR.
+/// A project TIR under assembly: the first state of the TIR typestate.
 ///
-/// Type resolution creates this builder with a mandatory root DAG. Project
-/// lowering may then add file-defined child DAGs, imported DAG modules, and the
-/// completed canonical project type store. [`Self::finish`] consumes the
-/// mutable shell and exposes an immutable [`TIR`].
-#[derive(Debug)]
-pub struct TirBuilder {
+/// Type resolution creates a draft with a mandatory root DAG
+/// ([`Self::resolve_root`]). Project checking then adds same-file inline DAGs
+/// ([`Self::add_inline_dag`]), imported module stores, and imported extern
+/// signatures. [`Self::instantiate`] consumes the draft into an
+/// [`InstantiatedTir`], whose only transition is
+/// [`InstantiatedTir::check`] into a [`CheckedTir`].
+#[derive(Debug, Clone)]
+pub struct TirDraft {
     registry: FormattingRegistry,
-    project_types: Arc<ProjectTypeStore>,
+    pub(in crate::tir::typed) project_types: Arc<ProjectTypeStore>,
     dags: DagRegistry,
     runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     extern_functions:
         HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
 
-impl TirBuilder {
+impl TirDraft {
     pub(in crate::tir::typed) fn new(
         registry: FormattingRegistry,
         project_types: Arc<ProjectTypeStore>,
@@ -1125,7 +1128,8 @@ impl TirBuilder {
     }
 
     /// Mutably borrow the file-root DAG during assembly.
-    pub const fn root_mut(&mut self) -> &mut DagTIR {
+    #[cfg(test)]
+    pub(crate) const fn root_mut(&mut self) -> &mut DagTIR {
         self.dags.root_mut()
     }
 
@@ -1147,7 +1151,7 @@ impl TirBuilder {
     ///
     /// Returns [`DagRegistryError::DuplicateDag`] rather than replacing an
     /// existing root, child, or dependency DAG.
-    pub fn insert_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
+    pub(crate) fn insert_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
         self.dags.insert(dag)
     }
 
@@ -1216,7 +1220,7 @@ impl TirBuilder {
     ///
     /// Returns [`GraphcalError::InvalidExternSignature`] when a declaration
     /// conflicts with an already-merged signature of the same plugin function.
-    pub fn merge_declared_extern_functions(
+    pub(crate) fn merge_declared_extern_functions(
         &mut self,
         hir: &crate::ir::lower::HirDag,
         src: &NamedSource<Arc<String>>,
@@ -1233,10 +1237,9 @@ impl TirBuilder {
         })
     }
 
-    /// Finalize project assembly into an immutable, structurally valid TIR.
-    #[must_use]
-    pub fn finish(self) -> TIR {
-        TIR {
+    /// End assembly: the registry of local and imported bodies is complete.
+    pub(crate) fn finish(self) -> UncheckedTir {
+        UncheckedTir {
             registry: self.registry,
             project_types: self.project_types,
             dags: self.dags,
@@ -1247,14 +1250,15 @@ impl TirBuilder {
     }
 }
 
-/// Immutable Typed Intermediate Representation of one Graphcal file and every
-/// canonical DAG module reachable from it.
+/// Typed Intermediate Representation of one Graphcal file and every canonical
+/// DAG module reachable from it.
 ///
+/// This is the representation shared by the TIR states; only
+/// [`InstantiatedTir::check`] hands it out, as a [`CheckedTir`].
 /// Root presence and DAG key/body identity are enforced by the private checked
-/// [`DagRegistry`]. Safe clients can inspect but cannot remove, replace, or
-/// re-key finalized DAG bodies.
+/// [`DagRegistry`].
 #[derive(Debug, Clone)]
-pub struct TIR {
+pub(crate) struct UncheckedTir {
     pub(crate) registry: FormattingRegistry,
     pub(in crate::tir::typed) project_types: Arc<ProjectTypeStore>,
     pub(crate) dags: DagRegistry,
@@ -1265,7 +1269,7 @@ pub struct TIR {
     pub(crate) const_schedule: Option<crate::tir::schedule::ConstSchedule>,
 }
 
-impl TIR {
+impl UncheckedTir {
     pub(super) fn insert_materialized_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
         self.dags.insert(dag)
     }
@@ -1274,11 +1278,6 @@ impl TIR {
     #[must_use]
     pub const fn root(&self) -> &DagTIR {
         self.dags.root()
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn root_mut(&mut self) -> &mut DagTIR {
-        self.dags.root_mut()
     }
 
     /// Canonical identity of the root DAG.
@@ -1462,6 +1461,160 @@ impl TIR {
     }
 }
 
+/// A project TIR whose semantic include edges are materialized as concrete
+/// instance DAGs: the second state of the TIR typestate.
+///
+/// Created only by [`TirDraft::instantiate`]; consumed only by
+/// [`Self::check`].
+#[derive(Debug)]
+pub struct InstantiatedTir {
+    pub(crate) tir: UncheckedTir,
+}
+
+/// The checked project TIR: the final state of the TIR typestate and the only
+/// one evaluation and the language server see.
+///
+/// Created only by [`InstantiatedTir::check`]. It is immutable: safe clients
+/// can inspect but cannot remove, replace, or re-key its DAG bodies.
+#[derive(Debug, Clone)]
+pub struct CheckedTir {
+    tir: UncheckedTir,
+}
+
+impl CheckedTir {
+    pub(crate) const fn new(tir: UncheckedTir) -> Self {
+        Self { tir }
+    }
+
+    /// Borrow the representation for compiler-internal checking services.
+    pub(crate) const fn tir(&self) -> &UncheckedTir {
+        &self.tir
+    }
+
+    /// Borrow the root DAG. Root presence is guaranteed by [`DagRegistry`].
+    #[must_use]
+    pub const fn root(&self) -> &DagTIR {
+        self.tir.root()
+    }
+
+    /// Canonical identity of the root DAG.
+    #[must_use]
+    pub const fn root_dag_id(&self) -> &crate::dag_id::DagId {
+        self.tir.root_dag_id()
+    }
+
+    /// Evaluation order of the local DAGs' constants.
+    #[must_use]
+    pub const fn const_schedule(&self) -> Option<&crate::tir::schedule::ConstSchedule> {
+        self.tir.const_schedule()
+    }
+
+    /// Borrow the root file's immutable post-resolution formatting services.
+    #[must_use]
+    pub const fn registry(&self) -> &FormattingRegistry {
+        self.tir.registry()
+    }
+
+    /// Borrow the authoritative owner-qualified project type store.
+    #[must_use]
+    pub fn project_type_store(&self) -> &ProjectTypeStore {
+        self.tir.project_type_store()
+    }
+
+    /// Borrow every local and imported DAG through the read-only checked registry.
+    #[must_use]
+    pub const fn dag_registry(&self) -> &DagRegistry {
+        self.tir.dag_registry()
+    }
+
+    /// Consume this TIR's local bodies into an immutable store. Imported
+    /// bodies and runtime units remain owned by their publishing module.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DagStoreFreezeError`] if a runtime unit has no defining body.
+    pub fn freeze_local_dag_store(self) -> Result<DagStore, DagStoreFreezeError> {
+        self.tir.freeze_local_dag_store()
+    }
+
+    /// Iterate over every DAG owned by this file, including the root and all
+    /// nested descendants.
+    pub fn local_dags(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
+        self.tir.local_dags()
+    }
+
+    /// Find the checked DAG that owns a declaration record.
+    #[must_use]
+    pub fn dag_containing_declaration(&self, declaration: &ResolvedDeclName) -> Option<&DagTIR> {
+        self.tir.dag_containing_declaration(declaration)
+    }
+
+    /// The checked type of any value declaration in the project.
+    #[must_use]
+    pub fn decl_type(&self, declaration: &ResolvedDeclName) -> Option<&CheckedDeclType> {
+        self.tir.decl_type(declaration)
+    }
+
+    /// Borrow resolved extern function signatures.
+    #[must_use]
+    pub const fn extern_functions(
+        &self,
+    ) -> &HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
+        self.tir.extern_functions()
+    }
+
+    /// Look up a dimension by its canonical defining-module identity.
+    #[must_use]
+    pub fn dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
+        self.tir.dimension(name)
+    }
+
+    /// Look up a unit by its canonical defining-module identity.
+    #[must_use]
+    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
+        self.tir.unit_info(name)
+    }
+
+    /// Look up a declared index by its canonical defining-module identity.
+    #[must_use]
+    pub fn declared_index_def(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
+        self.tir.declared_index_def(name)
+    }
+
+    /// Resolve a declared axis or derive a structural axis from its cardinality.
+    #[must_use]
+    pub fn index_def<V: crate::registry::checked_type::Concreteness>(
+        &self,
+        index: &IndexTypeRef<V>,
+    ) -> Option<std::borrow::Cow<'_, IndexDef>> {
+        self.tir.index_def(index)
+    }
+
+    /// Look up a nominal type by its canonical defining-module identity.
+    #[must_use]
+    pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&NominalTypeDef> {
+        self.tir.struct_type_def(name)
+    }
+
+    /// Iterate every canonical nominal definition in the project type store.
+    pub fn nominal_type_defs(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedStructTypeName, &NominalTypeDef)> {
+        self.tir.nominal_type_defs()
+    }
+
+    /// Iterate canonical index definitions owned by the root module.
+    pub fn root_declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
+        self.tir.root_declared_indexes()
+    }
+
+    /// Returns true if this file declares any required param or required index.
+    #[must_use]
+    pub fn is_library(&self) -> bool {
+        self.tir.is_library()
+    }
+}
+
 pub(crate) use crate::ir::lower::ResolvedExpectedFailMetadata;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1475,7 +1628,7 @@ enum ExpressionRootScope {
 ///
 /// Stored in the checked [`DagRegistry`]: type resolution installs the file
 /// root, and project assembly adds inline and dependency DAGs through
-/// [`TirBuilder::insert_dag`].
+/// [`TirDraft::add_inline_dag`].
 #[derive(Debug, Clone)]
 pub struct DagTIR {
     pub(crate) dag_id: crate::dag_id::DagId,

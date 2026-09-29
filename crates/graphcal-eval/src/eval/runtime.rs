@@ -175,7 +175,7 @@ impl RuntimeEvaluation {
 pub(super) fn run_eval_loop_with_bindings(
     plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -229,7 +229,7 @@ pub(super) fn run_eval_loop_with_bindings(
 
 /// The checked declared type of a runtime declaration.
 fn checked_declared_type<'a>(
-    tir: &'a graphcal_compiler::tir::typed::TIR,
+    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
     declaration: &ResolvedDeclName,
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'a CheckedType, GraphcalError> {
@@ -255,7 +255,7 @@ fn checked_declared_type<'a>(
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
 pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     src: &NamedSource<Arc<String>>,
@@ -743,7 +743,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
 /// Checked DAG materialized by one semantic-instance record.
 fn semantic_instance_dag<'tir>(
-    tir: &'tir graphcal_compiler::tir::typed::TIR,
+    tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
     record: &graphcal_compiler::ir::instance::HirInstanceRecord,
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'tir graphcal_compiler::tir::typed::DagTIR, GraphcalError> {
@@ -769,7 +769,7 @@ fn semantic_instance_dag<'tir>(
 /// dependency failure (with its root cause) instead of evaluating over a
 /// value map where the failed name is simply absent (#814).
 pub(super) fn evaluate_assertions(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     plan: &crate::execution_plan::ExecPlan,
     src: &NamedSource<Arc<String>>,
     ctx: &EvalContext<'_>,
@@ -851,7 +851,7 @@ pub(super) fn evaluate_assertions(
 /// Declarations private to a semantic instance have no root source name and
 /// are absent.
 pub(super) fn root_source_names(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<(ResolvedDeclName, ScopedName)>, GraphcalError> {
     let mut names = tir

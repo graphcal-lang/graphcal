@@ -20,7 +20,7 @@ fn scoped_name(name: &str) -> ScopedName {
 
 /// The checked type of the root declaration written as `name`.
 fn root_decl_type<'a>(
-    tir: &'a graphcal_compiler::tir::typed::TIR,
+    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
     name: &str,
 ) -> &'a graphcal_compiler::tir::typed::CheckedDeclType {
     let identity = tir
@@ -573,21 +573,80 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     );
 }
 
+/// Resolve a single-file root body into a draft that has not been checked.
+fn root_draft(
+    source: &str,
+    path: &str,
+) -> (
+    graphcal_compiler::tir::typed::TirDraft,
+    miette::NamedSource<std::sync::Arc<String>>,
+) {
+    let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
+        .parse_file()
+        .unwrap();
+    let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
+    let src = miette::NamedSource::new(path, std::sync::Arc::new(source.to_string()));
+    let ir = graphcal_compiler::ir::lower::lower(&file, &src).unwrap();
+    let resolver = graphcal_compiler::resolve::ModuleResolver::without_edges([(
+        ir.dag_id().clone(),
+        file.declarations.as_slice(),
+    )])
+    .unwrap();
+    let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
+    project_types.insert_graphcal_prelude().unwrap();
+    project_types.insert_module(ir.definitions()).unwrap();
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+    let signed =
+        graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
+            ir,
+            &src,
+            &resolver,
+            &project_types,
+            &cancellation,
+        )
+        .unwrap();
+    let draft = graphcal_compiler::tir::typed::TirDraft::resolve_root(
+        signed,
+        std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
+        &src,
+        &resolver,
+        std::sync::Arc::new(project_types),
+        &cancellation,
+    )
+    .unwrap();
+    (draft, src)
+}
+
+fn check_draft(
+    draft: graphcal_compiler::tir::typed::TirDraft,
+    src: &miette::NamedSource<std::sync::Arc<String>>,
+) -> graphcal_compiler::tir::typed::CheckedTir {
+    draft
+        .instantiate(
+            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
+            src,
+        )
+        .unwrap()
+        .check(
+            src,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .unwrap()
+}
+
 #[test]
 fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shared() {
     let source = "node x: Dimensionless = 1.0;";
-    let tir = compile_to_tir(source, "revisions.gcl").unwrap();
-    let src = miette::NamedSource::new("revisions.gcl", std::sync::Arc::new(source.to_string()));
+    let (draft, src) = root_draft(source, "revisions.gcl");
+    let tir = check_draft(draft.clone(), &src);
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
     let facts =
         crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
             .unwrap();
-    let mut revised = tir.clone();
     assert!(
-        crate::execution_scope::CheckedExecutionScope::new(&revised, &facts, revised.root_dag_id())
-            .is_ok()
+        crate::execution_scope::CheckedExecutionScope::new(&tir, &facts, tir.root_dag_id()).is_ok()
     );
-    graphcal_compiler::tir::dim_check::check_dimensions_tir(&mut revised, &src).unwrap();
+    let revised = check_draft(draft, &src);
     assert_eq!(revised.root_dag_id(), tir.root_dag_id());
     assert_eq!(
         revised
@@ -692,7 +751,7 @@ fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
 }
 
 fn callable_plan_fixture() -> (
-    graphcal_compiler::tir::typed::TIR,
+    graphcal_compiler::tir::typed::CheckedTir,
     miette::NamedSource<std::sync::Arc<String>>,
 ) {
     let source = "const node BASE: Dimensionless = 3.0; dag helper { const node LOCAL: Dimensionless = 20.0; pub node out: Dimensionless = @LOCAL; } node value: Dimensionless = @helper()::out + @BASE;";

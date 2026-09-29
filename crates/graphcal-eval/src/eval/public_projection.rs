@@ -35,7 +35,7 @@ impl<'a> EvaluatedValue<'a> {
     /// Project this checked pair into the public value model.
     pub fn project(
         self,
-        tir: &graphcal_compiler::tir::typed::TIR,
+        tir: &graphcal_compiler::tir::typed::CheckedTir,
         src: &NamedSource<Arc<String>>,
     ) -> Result<Value, GraphcalError> {
         project_runtime_value(self.runtime, self.declared_type, tir, src)
@@ -46,7 +46,7 @@ fn projection_error(
     runtime: &RuntimeValue,
     declared_type: &CheckedType,
     message: impl Into<String>,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
     GraphcalError::internal_error(
@@ -87,7 +87,7 @@ impl<'a> ProjectionIndex<'a> {
 
 fn projection_index_for_ref<'a>(
     index: &IndexTypeRef,
-    tir: &'a graphcal_compiler::tir::typed::TIR,
+    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
 ) -> Option<ProjectionIndex<'a>> {
     match index.finite_index() {
         Some(finite) => Some(ProjectionIndex::Finite(finite)),
@@ -102,7 +102,7 @@ fn require_matching_index<'a>(
     runtime_index: &IndexTypeRef,
     declared_type: &CheckedType,
     declared_index: &IndexTypeRef,
-    tir: &'a graphcal_compiler::tir::typed::TIR,
+    tir: &'a graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ProjectionIndex<'a>, GraphcalError> {
     if !runtime_index.matches_ref(declared_index) {
@@ -134,7 +134,7 @@ fn require_matching_index<'a>(
 fn project_runtime_value(
     runtime: &RuntimeValue,
     declared_type: &CheckedType,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Value, GraphcalError> {
     match (runtime, declared_type) {

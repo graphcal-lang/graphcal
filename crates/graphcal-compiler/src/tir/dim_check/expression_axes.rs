@@ -10,10 +10,10 @@ use crate::registry::index::IndexCardinality;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::ExpressionFactsError;
 use crate::tir::materialized_shape::MaterializedShapeError;
-use crate::tir::typed::model::TIR;
+use crate::tir::typed::model::UncheckedTir;
 
 pub(super) fn checked_index_cardinality(
-    tir: &TIR,
+    tir: &UncheckedTir,
     index: &IndexTypeRef<Symbolic>,
 ) -> Result<Option<IndexCardinality>, ExpressionFactsError> {
     if index
@@ -43,7 +43,7 @@ impl From<MaterializedShapeError> for MaterializationError {
 /// allocation policy. Axes still awaiting a binding are checked once bound.
 pub(super) fn check_materializable(
     ty: &CheckedType<Symbolic>,
-    tir: &TIR,
+    tir: &UncheckedTir,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {

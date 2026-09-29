@@ -358,7 +358,7 @@ fn verify_host_functions(
         graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::PluginFileEntry,
     >,
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,

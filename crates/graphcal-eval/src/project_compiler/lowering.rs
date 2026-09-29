@@ -737,7 +737,7 @@ fn process_dag_body_include_declarations<'a>(
 /// remain in defining-body execution facts; no importer mutates a dependency's
 /// bindings or injects values into its immutable body.
 pub(super) fn install_shared_module_artifacts(
-    tir: &mut graphcal_compiler::tir::typed::TirBuilder,
+    tir: &mut graphcal_compiler::tir::typed::TirDraft,
     module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {

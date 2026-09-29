@@ -4,7 +4,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::tir::typed::{DagTIR, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, DagTIR};
 use thiserror::Error;
 
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts};
@@ -46,7 +46,7 @@ pub struct CheckedExecutionScope<'a> {
 /// Checking uses this lookup before executable plans exist. Runtime frames use
 /// retained import references instead and must never repeat this body search.
 pub fn checked_imported_constant<'a>(
-    tir: &'a TIR,
+    tir: &'a CheckedTir,
     facts: &'a CheckedExecutionFacts,
     binding: &ImportedBinding,
 ) -> Result<Option<&'a RuntimeValue>, ExecutionScopeError> {
@@ -74,7 +74,7 @@ pub fn checked_imported_constant<'a>(
 
 impl<'a> CheckedExecutionScope<'a> {
     pub(crate) fn new(
-        tir: &'a TIR,
+        tir: &'a CheckedTir,
         facts: &'a CheckedExecutionFacts,
         owner: &DagId,
     ) -> Result<Self, ExecutionScopeError> {

@@ -11,7 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use graphcal_compiler::tir::typed::{
-    DagTIR, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey, TIR,
+    CheckedTir, DagTIR, ResolvedDeclType, ResolvedValueType, StructFieldConstraintKey,
 };
 
 use crate::domain_constraint::{
@@ -31,7 +31,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 ///
 /// Const constraints are also checked against their already-evaluated values.
 pub(super) fn resolve_domain_constraints_for_dag(
-    tir: &TIR,
+    tir: &CheckedTir,
     dag: &DagTIR,
     const_values: &RuntimeValueMap,
     all_const_values: &RuntimeValueMap,
@@ -300,7 +300,7 @@ struct ConcreteNominalApplication {
 
 fn collect_concrete_nominal_applications(
     declared: &CheckedType,
-    tir: &TIR,
+    tir: &CheckedTir,
     src: &NamedSource<Arc<String>>,
     applications: &mut HashSet<ConcreteNominalApplication>,
 ) -> Result<(), GraphcalError> {
@@ -395,7 +395,7 @@ fn generic_nat_bindings(
 /// evaluation, `min ≤ max`, and storage.
 #[cfg(test)]
 pub(super) fn resolve_struct_field_constraints(
-    tir: &TIR,
+    tir: &CheckedTir,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
@@ -415,7 +415,7 @@ pub(super) struct DagConstScope<'a> {
 }
 
 struct FieldConstraintResolutionContext<'a> {
-    tir: &'a TIR,
+    tir: &'a CheckedTir,
     const_scopes: &'a HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'a>>,
     all_const_values: &'a RuntimeValueMap,
     fallback_src: &'a NamedSource<Arc<String>>,
@@ -537,7 +537,7 @@ fn resolve_application_field_constraints(
 }
 
 fn collect_field_constraint_applications(
-    tir: &TIR,
+    tir: &CheckedTir,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<ConcreteNominalApplication>, GraphcalError> {
     let mut applications = HashSet::new();
@@ -583,7 +583,7 @@ fn collect_field_constraint_applications(
 }
 
 pub(super) fn resolve_struct_field_constraints_for_dags(
-    tir: &TIR,
+    tir: &CheckedTir,
     const_scopes: &HashMap<graphcal_compiler::dag_id::DagId, DagConstScope<'_>>,
     all_const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
@@ -607,7 +607,7 @@ pub(super) fn resolve_struct_field_constraints_for_dags(
 
 #[cfg(test)]
 pub(super) fn resolve_struct_field_constraints_with_cancellation(
-    tir: &TIR,
+    tir: &CheckedTir,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,

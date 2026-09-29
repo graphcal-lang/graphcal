@@ -1,7 +1,7 @@
 use super::*;
 use crate::dimension::BaseDimId;
 use crate::registry::checked_type::{CheckedGenericArg, IndexTypeRef, StructTypeRef};
-use crate::resolved_name::ResolvedDeclName;
+use crate::resolved_name::{ResolvedDeclName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::parser::Parser;
@@ -46,12 +46,11 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
                 span: Span::new(0, 0).into(),
             })?;
     }
-    let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
+    let mut builder = crate::tir::typed::type_resolve_draft(
         lowered.root,
         &src,
         &resolver,
         Arc::new(project_types.clone()),
-        &crate::cancellation::CancellationToken::unbounded(),
     )?;
     for dag_body_ir in lowered.inline_dags {
         let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
@@ -68,15 +67,26 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, GraphcalError
                 span: Span::new(0, 0).into(),
             })?;
     }
-    let mut tir = builder.finish();
-    check_dimensions_tir(&mut tir, &src)?;
-    Ok(root_declared_types(&tir))
+    let tir = check_draft(builder, &src)?;
+    Ok(root_declared_types(tir.root()))
+}
+
+/// Instantiate and check a draft without external override summaries.
+fn check_draft(
+    draft: crate::tir::typed::TirDraft,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::typed::CheckedTir, GraphcalError> {
+    draft
+        .instantiate(
+            &crate::tir::typed::CheckedOverrideDependencies::default(),
+            src,
+        )?
+        .check(src, &crate::cancellation::CancellationToken::unbounded())
 }
 
 /// The checked declared type of every root value declaration and imported
 /// value, keyed by its written name.
-fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, CheckedType> {
-    let root = tir.root();
+fn root_declared_types(root: &crate::tir::typed::DagTIR) -> HashMap<ScopedName, CheckedType> {
     root.consts()
         .map(|entry| (entry.name(), &entry.type_ann))
         .chain(root.params().map(|entry| (entry.name(), &entry.type_ann)))
@@ -97,13 +107,13 @@ fn root_declared_types(tir: &crate::tir::typed::TIR) -> HashMap<ScopedName, Chec
 
 /// Edit the root DAG's declaration records in place.
 fn edit_root_decls(
-    tir: &mut crate::tir::typed::TIR,
+    tir: &mut crate::tir::typed::TirDraft,
     edit: impl FnMut(&mut crate::tir::typed::TypedDecl),
 ) {
     tir.root_mut().decls.update(edit);
 }
 
-fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<String>>) {
+fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, NamedSource<Arc<String>>) {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
@@ -115,9 +125,8 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
-    let tir =
-        crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, Arc::new(project_types))
-            .unwrap();
+    let tir = crate::tir::typed::type_resolve_draft(ir, &src, &resolver, Arc::new(project_types))
+        .unwrap();
     (tir, src)
 }
 
@@ -141,8 +150,8 @@ fn one_checking_pass_records_every_expression_once() {
             "-(".repeat(depth),
             ")".repeat(depth)
         );
-        let (mut tir, src) = module_aware_tir(&source);
-        check_dimensions_tir(&mut tir, &src).unwrap();
+        let (tir, src) = module_aware_tir(&source);
+        let tir = check_draft(tir, &src).unwrap();
         assert_eq!(
             tir.root().expression_facts().unwrap().records().count(),
             depth + 1
@@ -152,9 +161,9 @@ fn one_checking_pass_records_every_expression_once() {
 
 #[test]
 fn consuming_rules_record_contextual_literals() {
-    let (mut tir, src) =
+    let (tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let tir = check_draft(tir, &src).unwrap();
     assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
     let node = tir.root().nodes().next().unwrap();
     let independent = check_external_value_expr_type(
@@ -166,7 +175,7 @@ fn consuming_rules_record_contextual_literals() {
     .unwrap();
     assert_eq!(count_contextual(&independent), 1);
 
-    let (mut tir, src) = module_aware_tir(
+    let (tir, src) = module_aware_tir(
         "node zoned: Datetime<UTC> = datetime(\"2026-01-01T09:00:00\", \"Asia/Tokyo\");\n\
          node civil: Datetime<TAI> = epoch<TAI>(\"2026-01-01T00:00:00\");\n\
          index S = { A, B };\n\
@@ -177,7 +186,7 @@ fn consuming_rules_record_contextual_literals() {
              title: \"Values\",\n\
          };",
     );
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let tir = check_draft(tir, &src).unwrap();
     // Two zoned-datetime arguments, one civil literal, the string encoding,
     // and the string property.
     assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 5);
@@ -197,11 +206,12 @@ fn body_observations_reject_a_second_record_of_one_expression() {
         .formula()
         .unwrap();
     let ty = CheckedType::Quantity(Dimension::dimensionless());
+    let unchecked = tir.clone().finish();
     observations
-        .record(expr, &ty, tir.root(), &tir, &src)
+        .record(expr, &ty, tir.root(), &unchecked, &src)
         .unwrap();
     assert!(matches!(
-        observations.record(expr, &ty, tir.root(), &tir, &src),
+        observations.record(expr, &ty, tir.root(), &unchecked, &src),
         Err(GraphcalError::InternalError { .. })
     ));
 }
@@ -229,8 +239,8 @@ fn template_closure_reports_the_first_observed_type_definition_use() {
                   param r: Record;\n\
                   pub node plain: Dimensionless = 1.0;\n\
                   pub node read: Dimensionless = @r.x + @r.x;";
-    let (mut tir, src) = module_aware_tir(source);
-    let error = check_dimensions_tir(&mut tir, &src).unwrap_err();
+    let (tir, src) = module_aware_tir(source);
+    let error = check_draft(tir, &src).unwrap_err();
     let GraphcalError::TemplateBodyDependsOnStaticDefault {
         body_name, span, ..
     } = error
@@ -244,13 +254,13 @@ fn template_closure_reports_the_first_observed_type_definition_use() {
 fn model_port_application(
     source: &str,
 ) -> (
-    crate::tir::typed::TIR,
+    crate::tir::typed::TirDraft,
     NamedSource<Arc<String>>,
     StructTypeRef,
     Vec<CheckedGenericArg>,
 ) {
     let (tir, src) = module_aware_tir(source);
-    let declared_types = root_declared_types(&tir);
+    let declared_types = root_declared_types(tir.root());
     let CheckedType::Struct(identity, generic_args) = &declared_types
         [&ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("port"))]
     else {
@@ -284,8 +294,8 @@ param wrapped: Wrapper<Record, Axis> =
 param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
     Wrapper<Fixed, FixedAxis>(value: @fixed, values: @fixed_values);
 ";
-    let (mut tir, src) = module_aware_tir(source);
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let (tir, src) = module_aware_tir(source);
+    let tir = check_draft(tir, &src).unwrap();
 
     let summary = collect_override_dependency_summary(&tir, &src).unwrap();
     let owner = test_dag_id();
@@ -329,6 +339,7 @@ pub(bind) type Record { Record(x: Dimensionless) }
 param record: Record = Record(x: 1.0);
 ";
     let (tir, src) = module_aware_tir(source);
+    let tir = check_draft(tir, &src).unwrap();
     let cancellation = crate::cancellation::CancellationSource::new();
     cancellation.cancel();
 
@@ -362,17 +373,18 @@ fn cycle_detection_uses_semantic_dependencies() {
 
     tir.root_mut().semantic.dependencies = resolved;
 
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    check_draft(tir, &src).unwrap();
 }
 
 #[test]
 fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let source =
         "node result: Dimensionless = sum(for p: Fin(2) { 1.0 }) + sum(for q: Fin(3) { 1.0 });";
-    let (mut tir, src) = module_aware_tir(source);
+    let (mut draft, src) = module_aware_tir(source);
     let mut ids = Vec::new();
     crate::hir::visit_expr(
-        tir.root()
+        draft
+            .root()
             .nodes()
             .next()
             .unwrap()
@@ -386,7 +398,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
         },
     );
     assert_eq!(ids.len(), 2);
-    edit_root_decls(&mut tir, |decl| {
+    edit_root_decls(&mut draft, |decl| {
         if let crate::ir::entry::Decl::Node(entry) = decl {
             entry
                 .definition
@@ -395,8 +407,8 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
                 .map_spans_for_test(|_| Span::new(0, 1));
         }
     });
-    check_dimensions_tir(&mut tir, &src).unwrap();
-    let totals = |tir: &crate::tir::typed::TIR| {
+    let tir = check_draft(draft.clone(), &src).unwrap();
+    let totals = |tir: &crate::tir::typed::CheckedTir| {
         ids.iter()
             .map(
                 |id| match &tir.root().expression_facts().unwrap().get(id).unwrap().fact {
@@ -418,7 +430,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
             .collect::<Vec<_>>()
     };
     assert_eq!(totals(&tir), vec![2, 3]);
-    edit_root_decls(&mut tir, |decl| {
+    edit_root_decls(&mut draft, |decl| {
         if let crate::ir::entry::Decl::Node(entry) = decl {
             entry
                 .definition
@@ -427,10 +439,10 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
                 .map_spans_for_test(|_| Span::new(2, 3));
         }
     });
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let tir = check_draft(draft, &src).unwrap();
     assert_eq!(totals(&tir), vec![2, 3]);
-    let (mut rebuilt, rebuilt_src) = module_aware_tir(source);
-    check_dimensions_tir(&mut rebuilt, &rebuilt_src).unwrap();
+    let (rebuilt, rebuilt_src) = module_aware_tir(source);
+    let rebuilt = check_draft(rebuilt, &rebuilt_src).unwrap();
     assert!(
         ids.iter()
             .all(|id| rebuilt.root().expression_facts().unwrap().get(id).is_err())
@@ -452,7 +464,7 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_dimensions_tir(&mut tir, &src).is_err());
+    assert!(check_draft(tir, &src).is_err());
 }
 
 #[test]
@@ -473,7 +485,7 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_dimensions_tir(&mut tir, &src).is_err());
+    assert!(check_draft(tir, &src).is_err());
 }
 
 #[test]
@@ -490,7 +502,7 @@ fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
         }
     });
 
-    assert!(check_dimensions_tir(&mut tir, &src).is_err());
+    assert!(check_draft(tir, &src).is_err());
 }
 
 #[test]
@@ -2715,9 +2727,9 @@ pub type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
 param port: Box<Time>;
 ";
     let (_, _, _, invalid_args) = model_port_application(source);
-    let (mut tir, src, identity, valid_args) =
+    let (tir, src, identity, valid_args) =
         model_port_application(&source.replace("Box<Time>", "Box<Length>"));
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let tir = check_draft(tir, &src).unwrap();
     ConcreteModelType::try_new(&tir, &identity, &valid_args, &src).unwrap();
     let error = ConcreteModelType::try_new(&tir, &identity, &invalid_args, &src).unwrap_err();
     assert!(
@@ -2736,6 +2748,7 @@ pub type Phantom<N: Nat> { Phantom }
 param port: Phantom<1>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
+    let tir = check_draft(tir, &src).unwrap();
     assert_eq!(generic_args.len(), 1);
 
     let too_few = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
@@ -2767,6 +2780,7 @@ pub type Phantom<N: Nat> { Phantom }
 param port: Phantom<1>;
 ";
     let (tir, src, identity, _) = model_port_application(source);
+    let tir = check_draft(tir, &src).unwrap();
     let wrong_sort = [CheckedGenericArg::Type(CheckedType::Int)];
 
     let error = ConcreteModelType::try_new(&tir, &identity, &wrong_sort, &src).unwrap_err();
@@ -2787,6 +2801,7 @@ pub type Defaults<N: Nat = 2, T: Type = Int> { Defaults(value: T) }
 param port: Defaults;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
+    let tir = check_draft(tir, &src).unwrap();
     assert_eq!(generic_args.len(), 2);
 
     let omitted_defaults = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
@@ -2817,6 +2832,7 @@ pub type Outer<T: Type> { Outer(value: Inner<T>) }
 param port: Outer<Int>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
+    let tir = check_draft(tir, &src).unwrap();
     let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
     let constructors = model_type.constructors(&src).unwrap();
 
@@ -2835,6 +2851,7 @@ pub type Vector<I: Index> { Vector(values: Dimensionless[I]) }
 param port: Vector<Axis>;
 ";
     let (tir, src, identity, generic_args) = model_port_application(source);
+    let tir = check_draft(tir, &src).unwrap();
 
     let validated = ValidatedModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
     assert_eq!(validated.constructors(&src).unwrap().len(), 1);
@@ -3747,10 +3764,8 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
                   param p: Dimensionless = 1.0;\n\
                   node m: Dimensionless = @p + 1.0;\n\
                   node q: Dimensionless = 2.0;";
-    let (mut tir, src) = module_aware_tir(source);
-    assert!(tir.const_schedule().is_none());
-    assert!(tir.root().runtime_schedule().is_none());
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let (draft, src) = module_aware_tir(source);
+    let tir = check_draft(draft.clone(), &src).unwrap();
 
     let constants = tir.const_schedule().unwrap();
     assert_eq!(constants.dags(), [test_dag_id()]);
@@ -3790,11 +3805,9 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     assert_eq!(runtime.dependencies_of(&root_decl("c")), None);
 
     // A new checking revision rebuilds the same schedules.
-    let retained = runtime.clone();
-    let constants = constants.clone();
-    check_dimensions_tir(&mut tir, &src).unwrap();
-    assert_eq!(tir.root().runtime_schedule(), Some(&retained));
-    assert_eq!(tir.const_schedule(), Some(&constants));
+    let retained = check_draft(draft, &src).unwrap();
+    assert_eq!(retained.root().runtime_schedule(), Some(runtime));
+    assert_eq!(retained.const_schedule(), Some(constants));
 }
 
 #[test]
@@ -3820,14 +3833,12 @@ fn declaration_cycles_are_reported_deterministically_at_the_closing_declaration(
         ),
     ] {
         for _ in 0..4 {
-            let (mut tir, src) = module_aware_tir(source);
-            let error = check_dimensions_tir(&mut tir, &src).unwrap_err();
+            let (tir, src) = module_aware_tir(source);
+            let error = check_draft(tir, &src).unwrap_err();
             assert!(
                 matches!(&error, GraphcalError::CyclicDependency { name, .. } if name == expected),
                 "{source}: {error:?}"
             );
-            assert!(tir.const_schedule().is_none());
-            assert!(tir.root().runtime_schedule().is_none());
         }
     }
 }
@@ -3847,7 +3858,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
         .semantic
         .override_reconciliations
         .insert(owner, vec![reconciliation]);
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let tir = check_draft(tir, &src).unwrap();
     assert_eq!(tir.root().expression_facts().unwrap().records().count(), 5);
 }
 
@@ -3866,8 +3877,8 @@ fn inference_emits_typed_trees_carrying_node_facts() {
                   node picked_entry: Dimensionless = @v[1];\n\
                   node when: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");\n\
                   plot p = { mark: point, encode: { x: @v, y: @v, color: \"red\" } };";
-    let (mut tir, src) = module_aware_tir(source);
-    check_dimensions_tir(&mut tir, &src).unwrap();
+    let (tir, src) = module_aware_tir(source);
+    let tir = check_draft(tir, &src).unwrap();
     let dag = tir.root();
     let bodies = dag.typed_bodies().unwrap();
     crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts().unwrap()).unwrap();

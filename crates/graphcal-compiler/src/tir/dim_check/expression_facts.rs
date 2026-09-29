@@ -12,7 +12,7 @@ use crate::registry::error::GraphcalError;
 use crate::tir::expression_facts::{
     CheckedExpressionFacts, CheckingEnvironment, ExpressionFact, ValueFact,
 };
-use crate::tir::typed::model::TIR;
+use crate::tir::typed::model::UncheckedTir;
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
 use super::expression_axes::{check_materializable, checked_index_cardinality};
@@ -25,7 +25,18 @@ use super::{DimCheckContext, check_decl_expr_type, infer};
     reason = "canonical binding services retain this exact map type"
 )]
 pub fn specialize_bound_expression_facts(
-    tir: &TIR,
+    tir: &crate::tir::typed::CheckedTir,
+    dag: &crate::tir::typed::model::DagTIR,
+    root: &crate::hir::expr::Expr,
+    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<CheckedExpressionFacts, GraphcalError> {
+    specialize_bound_facts(tir.tir(), dag, root, bindings, src)
+}
+
+/// [`specialize_bound_expression_facts`] while the project is being checked.
+pub(super) fn specialize_bound_facts(
+    tir: &UncheckedTir,
     dag: &crate::tir::typed::model::DagTIR,
     root: &crate::hir::expr::Expr,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
@@ -237,7 +248,7 @@ impl FactSubstitution<'_> {
     fn value_type(
         &self,
         ty: &CheckedType<Symbolic>,
-        tir: &TIR,
+        tir: &UncheckedTir,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
@@ -271,7 +282,7 @@ impl FactSubstitution<'_> {
 fn specialize_record(
     record: &crate::tir::expression_facts::CheckedExpressionRecord,
     dag: &crate::tir::typed::model::DagTIR,
-    tir: &TIR,
+    tir: &UncheckedTir,
     substitution: &FactSubstitution<'_>,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
@@ -353,7 +364,7 @@ fn specialize_record(
 /// that rebinds a defaulted dimension port (taken in the view where that port
 /// is rigid, like the instance's facts).
 pub(super) fn install_instance_expression_facts(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
 ) -> Result<HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>, GraphcalError> {
@@ -457,7 +468,7 @@ pub(super) fn install_instance_expression_facts(
 }
 
 fn publish_instance_facts(
-    tir: &mut TIR,
+    tir: &mut UncheckedTir,
     owner: &crate::dag_id::DagId,
     records: HashMap<
         crate::expression_id::ExprId,

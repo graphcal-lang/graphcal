@@ -7,7 +7,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
+use graphcal_compiler::tir::typed::{CheckedTir, StructFieldConstraintKey};
 
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts, RuntimeValueMap};
@@ -24,7 +24,7 @@ use domain_resolve::{
 /// Check every DAG not already present in `inherited`, preserving dependency
 /// facts and their defining sources while compiling an importing file.
 pub(super) fn check_execution_facts_with_inherited(
-    tir: &TIR,
+    tir: &CheckedTir,
     inherited: &CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -34,7 +34,7 @@ pub(super) fn check_execution_facts_with_inherited(
 
 #[cfg(test)]
 pub(super) fn resolve_struct_field_constraints(
-    tir: &TIR,
+    tir: &CheckedTir,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
@@ -131,7 +131,7 @@ fn constant_presentations(
 }
 
 fn check_dag_execution_facts(
-    tir: &TIR,
+    tir: &CheckedTir,
     inherited: &CheckedExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
