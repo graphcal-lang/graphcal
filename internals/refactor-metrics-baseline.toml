@@ -1,9 +1,9 @@
-internal_error_calls = 278
-resolved_name_from_def_outside_resolver = 40
+internal_error_calls = 274
+resolved_name_from_def_outside_resolver = 39
 expect_valid_format = 0
-too_many_arguments_expects = 32
+too_many_arguments_expects = 29
 build_declared_types_calls = 10
 module_resolve_str_key_lookups = 0
-pipeline_layers_exceptions = 69
+pipeline_layers_exceptions = 68
 reading_order_sccs = 14
 graphcal_error_variants = 158

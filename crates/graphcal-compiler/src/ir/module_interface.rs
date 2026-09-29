@@ -189,6 +189,9 @@ pub struct ModuleInterface {
     value_outputs: Vec<ValueOutput>,
     /// Explicitly exported runtime (non-`const`) units.
     runtime_units: HashSet<UnitName>,
+    /// Externally addressable names introduced by the module's own
+    /// declarations; re-exports are excluded.
+    declared_surface: ExternalDeclSurface,
     external_surface: ExternalDeclSurface,
 }
 
@@ -235,6 +238,7 @@ impl ModuleInterface {
             );
         }
         if let Some(declared) = kind.declared_name() {
+            self.declared_surface.record_declared(declared);
             self.external_surface.record_declared(declared);
         }
         if let Some(interface) = static_interface(kind)
@@ -460,6 +464,13 @@ impl ModuleInterface {
         &self.runtime_units
     }
 
+    /// Externally addressable declarations of the module itself: explicit
+    /// exports and `param` input ports, without re-exports.
+    #[must_use]
+    pub const fn declared_surface(&self) -> &ExternalDeclSurface {
+        &self.declared_surface
+    }
+
     /// Externally addressable declarations: explicit exports (including
     /// `pub` re-exports) and `param` input ports.
     #[must_use]
@@ -654,6 +665,27 @@ mod tests {
         assert!(surface.is_explicit_export(&DeclName::expect_valid("kernel")));
         assert!(surface.is_explicit_export(&DeclName::expect_valid("shared")));
         assert!(!interface.has_item(&atom("kernel"), ImportItemNamespace::Term));
+    }
+
+    #[test]
+    fn declared_surface_excludes_reexports() {
+        let interface = interface(
+            "import pkg.core::{ pub dim Speed };\n\
+             pub import pkg.shared;\n\
+             param input: Dimensionless = 1.0;\n\
+             pub dim Length2 = Length^2;\n\
+             dim Hidden = Length;\n",
+        );
+        let declared = interface.declared_surface();
+        let external = interface.external_surface();
+
+        assert!(declared.is_input_port(&DeclName::expect_valid("input")));
+        assert!(declared.is_static_explicit_export(&atom("Length2")));
+        assert!(!declared.is_static_explicit_export(&atom("Hidden")));
+        assert!(!declared.is_static_explicit_export(&atom("Speed")));
+        assert!(!declared.is_explicit_export(&DeclName::expect_valid("shared")));
+        assert!(external.is_static_explicit_export(&atom("Speed")));
+        assert!(external.is_explicit_export(&DeclName::expect_valid("shared")));
     }
 
     #[test]

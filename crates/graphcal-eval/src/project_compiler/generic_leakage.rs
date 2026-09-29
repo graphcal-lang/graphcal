@@ -9,30 +9,16 @@ use super::*;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{
     StaticReference, StaticScope, declaration_static_references,
 };
 use graphcal_compiler::ir::static_interface::{StaticRole, static_interface};
-use graphcal_compiler::registry::types::IndexBindingTarget;
+use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use graphcal_compiler::resolved_name::ResolvedStaticName;
 use graphcal_compiler::syntax::ast::IntroducedKind;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
 use graphcal_compiler::syntax::names::NameAtom;
-
-/// Collect the set of type-system names declared locally in a file
-/// (dims, units, indexes, types). Used to distinguish a private-local
-/// symbol (V = private at the importer) from a builtin or cross-file
-/// symbol for the V006 check.
-pub(super) fn collect_local_type_names(
-    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-) -> HashMap<NameAtom, ImportItemNamespace> {
-    declarations
-        .iter()
-        .filter_map(|declaration| declaration.kind.declared_name())
-        .filter(|introduced| introduced.namespace() != ImportItemNamespace::Term)
-        .map(|introduced| (introduced.atom().clone(), introduced.namespace()))
-        .collect()
-}
 
 fn collect_required_binding_names(
     declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
@@ -55,16 +41,8 @@ enum ReferenceSubstitution {
     External,
     Unbound,
     StructuralIndex,
-    ImporterLocal(NameAtom),
-}
-
-fn index_substitution(target: &IndexBindingTarget) -> ReferenceSubstitution {
-    match target {
-        IndexBindingTarget::Declared(name) => {
-            ReferenceSubstitution::ImporterLocal(name.atom().clone())
-        }
-        IndexBindingTarget::Finite(_) => ReferenceSubstitution::StructuralIndex,
-    }
+    /// The canonical importer-side definition the include binds.
+    Importer(ResolvedStaticName),
 }
 
 /// The importer-side substitution for one resolved dependency reference.
@@ -75,27 +53,43 @@ fn index_substitution(target: &IndexBindingTarget) -> ReferenceSubstitution {
 fn reference_substitution(
     reference: &StaticReference,
     dependency: &DagId,
-    index_bindings: &IndexBindings,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
+    substitution: &StaticSubstitution,
 ) -> ReferenceSubstitution {
     if reference.target().owner() != dependency {
         return ReferenceSubstitution::External;
     }
     match reference.target() {
-        ResolvedStaticName::Index(name) => index_bindings
-            .get(&name.to_unowned_def_name())
-            .map_or(ReferenceSubstitution::Unbound, index_substitution),
-        ResolvedStaticName::Type(name) => type_bindings
-            .get(&name.to_unowned_def_name())
+        ResolvedStaticName::Index(name) => {
+            substitution
+                .indexes
+                .get(name)
+                .map_or(ReferenceSubstitution::Unbound, |target| match target {
+                    InstanceIndexBindingTarget::Declared(target) => {
+                        ReferenceSubstitution::Importer(ResolvedStaticName::Index(target.clone()))
+                    }
+                    InstanceIndexBindingTarget::Finite(_) => ReferenceSubstitution::StructuralIndex,
+                })
+        }
+        ResolvedStaticName::Type(name) => substitution
+            .types
+            .get(name)
             .map_or(ReferenceSubstitution::Unbound, |target| {
-                ReferenceSubstitution::ImporterLocal(target.atom().clone())
+                ReferenceSubstitution::Importer(ResolvedStaticName::Type(target.clone()))
             }),
-        ResolvedStaticName::Dimension(name) => dim_bindings
-            .get(&name.to_unowned_def_name())
+        ResolvedStaticName::Dimension(name) => substitution
+            .dimensions
+            .get(name)
             .map_or(ReferenceSubstitution::Unbound, |target| {
-                ReferenceSubstitution::ImporterLocal(target.atom().clone())
+                ReferenceSubstitution::Importer(ResolvedStaticName::Dimension(target.clone()))
             }),
+    }
+}
+
+const fn static_namespace(name: &ResolvedStaticName) -> ImportItemNamespace {
+    match name {
+        ResolvedStaticName::Dimension(_) => ImportItemNamespace::Dimension,
+        ResolvedStaticName::Type(_) => ImportItemNamespace::Type,
+        ResolvedStaticName::Index(_) => ImportItemNamespace::Index,
     }
 }
 
@@ -134,23 +128,21 @@ const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<&'static st
 /// symbol in their effective signature.
 ///
 /// For every dependency declaration that the importer explicitly re-exports
-/// via `{ pub name }`, walk its signature, apply the include's substitution
-/// map, and check each referenced type/dim/index name. If a name resolves to a
-/// declaration that exists locally in the importer but is not explicitly
-/// exported, the re-export leaks a private symbol.
+/// via `{ pub name }`, walk its signature, apply the include's canonical
+/// substitution, and check each referenced type/dim/index. If it is bound to
+/// a declaration of the importer itself that the importer does not explicitly
+/// export, the re-export leaks a private symbol.
 #[expect(
     clippy::too_many_arguments,
-    reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
+    reason = "the check needs the dep AST, the canonical substitution, and the importer's identity and interface"
 )]
 pub(super) fn check_generics_leakage(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     dep_scope: StaticScope<'_>,
     pub_reexport_items: &HashSet<NameAtom>,
-    index_bindings: &IndexBindings,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    importer_external_surface: &ExternalDeclSurface,
-    importer_local_type_names: &HashMap<NameAtom, ImportItemNamespace>,
+    substitution: &StaticSubstitution,
+    importer: &DagId,
+    importer_interface: &ModuleInterface,
     importer_src: &NamedSource<Arc<String>>,
     include_span: Span,
 ) -> Result<(), CompileError> {
@@ -179,14 +171,11 @@ pub(super) fn check_generics_leakage(
         // required ports, however, must have a substitution by this phase.
         for reference in refs {
             let reference_name = reference.target().atom();
-            let substitution = reference_substitution(
+            let substituted = match reference_substitution(
                 &reference,
                 dep_scope.owner(),
-                index_bindings,
-                type_bindings,
-                dim_bindings,
-            );
-            let substituted = match substitution {
+                substitution,
+            ) {
                 ReferenceSubstitution::External | ReferenceSubstitution::StructuralIndex => {
                     continue;
                 }
@@ -203,17 +192,24 @@ pub(super) fn check_generics_leakage(
                     }
                     continue;
                 }
-                ReferenceSubstitution::ImporterLocal(name) => name,
+                ReferenceSubstitution::Importer(name) => name,
             };
 
-            if let Some(namespace) = importer_local_type_names.get(&substituted)
-                && !importer_external_surface.is_static_explicit_export(&substituted)
+            let namespace = static_namespace(&substituted);
+            if substituted.owner() == importer
+                && importer_interface
+                    .declared_kinds(substituted.atom(), namespace)
+                    .next()
+                    .is_some()
+                && !importer_interface
+                    .external_surface()
+                    .is_static_explicit_export(substituted.atom())
             {
                 return Err(CompileError::Eval(GraphcalError::GenericsLeakage {
                     reexport_kind: decl_kind_str.to_string(),
                     reexport_name: decl_name.to_string(),
-                    leaked_kind: namespace_diagnostic_name(*namespace).to_string(),
-                    leaked_name: substituted.to_string(),
+                    leaked_kind: namespace_diagnostic_name(namespace).to_string(),
+                    leaked_name: substituted.atom().to_string(),
                     src: importer_src.clone(),
                     span: include_span.into(),
                 }));
@@ -244,6 +240,10 @@ mod tests {
         DagId::from_virtual_relative_path(std::path::Path::new("dep.gcl")).unwrap()
     }
 
+    fn importer() -> DagId {
+        DagId::from_virtual_relative_path(std::path::Path::new("main.gcl")).unwrap()
+    }
+
     fn resolver(
         declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     ) -> graphcal_compiler::resolve::ModuleResolver {
@@ -262,8 +262,8 @@ mod tests {
             "type Inner { Inner(value: Int), } node output: Inner = Inner(value: 1);",
         );
         let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
-        let importer_names =
-            HashMap::from([(NameAtom::parse("Inner").unwrap(), ImportItemNamespace::Type)]);
+        let importer_interface =
+            ModuleInterface::new(&parse_declarations("type Inner { Inner(value: Int), }"));
 
         let resolver = resolver(&declarations);
         let owner = dependency();
@@ -271,11 +271,9 @@ mod tests {
             &declarations,
             StaticScope::new(&owner, &resolver),
             &reexports,
-            &IndexBindings::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &ExternalDeclSurface::default(),
-            &importer_names,
+            &StaticSubstitution::default(),
+            &importer(),
+            &importer_interface,
             &source(),
             Span::new(0, 0),
         )
@@ -294,11 +292,9 @@ mod tests {
             &declarations,
             StaticScope::new(&owner, &resolver),
             &reexports,
-            &IndexBindings::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &ExternalDeclSurface::default(),
-            &HashMap::new(),
+            &StaticSubstitution::default(),
+            &importer(),
+            &ModuleInterface::default(),
             &source(),
             Span::new(0, 0),
         )

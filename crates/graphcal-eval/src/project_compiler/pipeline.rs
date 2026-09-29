@@ -64,18 +64,9 @@ fn template_name(template: &DagId) -> String {
 fn lower_single_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<
-    (
-        HirFile,
-        Vec<(graphcal_compiler::dag_id::DagId, LoweringModuleInterface)>,
-    ),
-    CompileError,
-> {
+) -> Result<HirFile, CompileError> {
     cancellation.checkpoint()?;
-    let file_dag_id = loaded_file.dag_id();
-
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
         imported_bindings: HashMap::new(),
@@ -87,24 +78,12 @@ fn lower_single_file_to_hir(
     imports::process_file_body_declarations(
         semantic.project,
         loaded_file,
-        module_artifacts,
         semantic.module_resolver,
         &mut ctx,
         cancellation,
     )?;
 
-    let (hir, root_interface) =
-        lowering::lower_file_to_hir(semantic, loaded_file, ctx, module_artifacts, cancellation)?;
-    let mut interfaces = vec![(file_dag_id.clone(), root_interface)];
-    // Each lowered inline DAG publishes its own frozen surface, not that of
-    // whichever module first elaborated its template.
-    for frozen in &hir.inline_dags {
-        interfaces.push((
-            frozen.dag_id().clone(),
-            LoweringModuleInterface::new(frozen),
-        ));
-    }
-    Ok((hir, interfaces))
+    lowering::lower_file_to_hir(semantic, loaded_file, ctx, cancellation)
 }
 
 fn validate_dag_constant_values(
@@ -200,7 +179,6 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirProject<'project>, CompileError> {
     cancellation.checkpoint()?;
-    let mut module_interfaces = HashMap::new();
     let mut module_templates = ModuleTemplateStore::default();
 
     let files = {
@@ -237,20 +215,27 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         // before its dependents are lowered.
         project.files().ordered().as_ref().try_map(|loaded_file| {
             cancellation.checkpoint()?;
-            let (hir, lowering_interfaces) = lower_single_file_to_hir(
-                &mut semantic,
-                loaded_file,
-                &module_interfaces,
-                cancellation,
-            )?;
-            module_interfaces.extend(lowering_interfaces);
-            Ok::<_, CompileError>(hir)
+            lower_single_file_to_hir(&mut semantic, loaded_file, cancellation)
         })?
     };
 
-    let exported_runtime_units = module_interfaces
+    let exported_runtime_units = project
+        .files()
         .iter()
-        .map(|(owner, interface)| (owner.clone(), interface.exported_runtime_units().clone()))
+        .flat_map(|loaded_file| {
+            std::iter::once(loaded_file.module()).chain(
+                loaded_file
+                    .inline_dags()
+                    .iter()
+                    .map(|inline| inline.module(loaded_file)),
+            )
+        })
+        .map(|module| {
+            (
+                module.dag_id().clone(),
+                module.interface().runtime_units().clone(),
+            )
+        })
         .collect();
 
     Ok(HirProject {

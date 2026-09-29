@@ -12,14 +12,13 @@ use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::types;
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{ConstructorName, StructTypeName};
+use crate::syntax::type_name::ConstructorName;
 use crate::syntax::visitor::ExprVisitor;
 
 use super::{
@@ -38,10 +37,7 @@ use super::{
 /// its semantic instance edge.
 #[derive(Debug, Clone, Default)]
 pub struct IncludeOverrideReconciliations(
-    HashMap<
-        ResolvedDeclName,
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
-    >,
+    HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,
 );
 
 /// Complete importer-side data needed to record one semantic include edge.
@@ -746,7 +742,7 @@ impl UnfrozenIR {
         >,
     ) -> Option<crate::hir::nominal_lower::NominalSubstitution> {
         use crate::hir::nominal_lower::{NominalIndexTarget, NominalSubstitution};
-        use crate::ir::instance::InstanceIndexBindingTarget;
+        use crate::ir::static_substitution::InstanceIndexBindingTarget;
 
         let template = projection.template().owner();
         let record = self.semantic_instances.iter().find(|record| {
@@ -849,18 +845,12 @@ impl UnfrozenIR {
     /// inferred HIR. Explicit index labels and constructors need a narrow
     /// registry-backed preflight because substitution can make HIR lowering
     /// reject them before TIR exists.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the include boundary supplies bindings, canonical owners, the resolver, and source provenance"
-    )]
     pub fn include_override_reconciliations(
         &self,
         bindings: &HashMap<DeclName, Expr>,
-        index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
-        type_bindings: &HashMap<StructTypeName, StructTypeName>,
+        substitution: &crate::ir::static_substitution::StaticSubstitution,
         resolver: &crate::resolve::ModuleResolver,
         dependency_owner: &crate::dag_id::DagId,
-        importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
         include_span: Span,
     ) -> Result<IncludeOverrideReconciliations, GraphcalError> {
@@ -869,11 +859,10 @@ impl UnfrozenIR {
             .map(|param| {
                 let mut reconciliations = param.override_reconciliations.clone();
                 if let Some(default) = &param.default
-                    && (!index_bindings.is_empty() || !type_bindings.is_empty())
+                    && (!substitution.indexes.is_empty() || !substitution.types.is_empty())
                 {
                     NominalOverridePreflight {
-                        index_bindings,
-                        type_bindings,
+                        substitution,
                         resolver,
                         dependency_owner,
                         orphan_decl: param.name.leaf(),
@@ -882,12 +871,10 @@ impl UnfrozenIR {
                     }
                     .visit_expr(&default.syntax)?;
                     reconciliations.push(
-                        crate::ir::override_reconciliation::PendingOverrideReconciliation::new(
+                        crate::ir::override_reconciliation::OverrideReconciliation::new(
                             param.name.leaf().clone(),
                             dependency_owner,
-                            importer_owner,
-                            index_bindings,
-                            type_bindings,
+                            substitution,
                             importer_src.clone(),
                             include_span,
                         ),
@@ -918,8 +905,7 @@ impl UnfrozenIR {
 /// fail before TIR ownership is available. Field and generic-argument
 /// dependencies remain deferred to canonical inference.
 struct NominalOverridePreflight<'a> {
-    index_bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
-    type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
+    substitution: &'a crate::ir::static_substitution::StaticSubstitution,
     resolver: &'a crate::resolve::ModuleResolver,
     dependency_owner: &'a crate::dag_id::DagId,
     orphan_decl: &'a DeclName,
@@ -929,7 +915,13 @@ struct NominalOverridePreflight<'a> {
 
 impl NominalOverridePreflight<'_> {
     fn check_label(&self, index: &IndexName, detail: String) -> Result<(), GraphcalError> {
-        if !self.index_bindings.contains_key(index) {
+        let Ok(symbol) = self.resolver.resolve_index_path(
+            self.dependency_owner,
+            &crate::syntax::names::NamePath::local(index.atom().clone()),
+        ) else {
+            return Ok(());
+        };
+        if !self.substitution.indexes.contains_key(symbol.resolved()) {
             return Ok(());
         }
         Err(GraphcalError::IncludeMustReconcileOverride {
@@ -954,7 +946,11 @@ impl NominalOverridePreflight<'_> {
             return Ok(());
         };
         let owning_type = symbol.kind().owner_type();
-        if !self.type_bindings.contains_key(owning_type) {
+        let owning_identity = crate::resolved_name::ResolvedStructTypeName::from_def(
+            symbol.resolved().owner().clone(),
+            owning_type.clone(),
+        );
+        if !self.substitution.types.contains_key(&owning_identity) {
             return Ok(());
         }
         Err(GraphcalError::IncludeMustReconcileOverride {

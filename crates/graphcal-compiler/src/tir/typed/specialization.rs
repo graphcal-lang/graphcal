@@ -11,8 +11,9 @@ use super::{
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{BaseDimId, Dimension};
-use crate::ir::instance::{
-    HirInstanceRecord, InstanceIndexBindingTarget, StaticSpecializationId, StaticSubstitution,
+use crate::ir::instance::HirInstanceRecord;
+use crate::ir::static_substitution::{
+    InstanceIndexBindingTarget, StaticSpecializationId, StaticSubstitution,
 };
 use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
@@ -441,89 +442,18 @@ fn extend_binding_constructor_refs(
     result
 }
 
-fn resolve_instance_override_target(
-    target: &crate::ir::override_reconciliation::PendingOverrideTarget,
-    pending: &crate::ir::override_reconciliation::PendingOverrideReconciliation,
-    substitution: &StaticSubstitution,
-) -> Result<super::ResolvedOverrideTarget, GraphcalError> {
-    use crate::ir::override_reconciliation::PendingOverrideTarget;
-
-    let source_owner = pending.source_owner();
-    let src = pending.src();
-    let include_span = pending.include_span();
-
-    match target {
-        PendingOverrideTarget::Index { overridden, .. } => {
-            let source = ResolvedIndexName::from_def(source_owner.clone(), overridden.clone());
-            let replacement = substitution.indexes.get(&source).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "semantic override reconciliation for index `{source}` has no canonical Static substitution"
-                    ),
-                    src,
-                    DiagnosticAnchor::Source(include_span),
-                )
-            })?;
-            Ok(super::ResolvedOverrideTarget::Index {
-                overridden: overridden.clone(),
-                source,
-                replacement: match replacement {
-                    InstanceIndexBindingTarget::Declared(name) => {
-                        IndexTypeRef::from_resolved(name.clone())
-                    }
-                    InstanceIndexBindingTarget::Finite(index) => {
-                        IndexTypeRef::from_finite_index(*index)
-                    }
-                },
-            })
-        }
-        PendingOverrideTarget::Type { overridden, .. } => {
-            let source = ResolvedStructTypeName::from_def(source_owner.clone(), overridden.clone());
-            let replacement = substitution.types.get(&source).cloned().ok_or_else(|| {
-                GraphcalError::internal_error(
-                    format!(
-                        "semantic override reconciliation for type `{source}` has no canonical Static substitution"
-                    ),
-                    src,
-                    DiagnosticAnchor::Source(include_span),
-                )
-            })?;
-            Ok(super::ResolvedOverrideTarget::Type {
-                overridden: overridden.clone(),
-                source,
-                replacement,
-            })
-        }
-    }
-}
-
-fn install_override_reconciliations(
-    instance: &mut DagTIR,
-    edge: &HirInstanceRecord,
-) -> Result<(), GraphcalError> {
+fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
     let owner = edge.instance.id().owner();
     instance.semantic.override_reconciliations = edge
         .override_reconciliations
         .iter()
-        .map(|(template_port, pending)| {
-            let instance_port =
-                ResolvedDeclName::from_def(owner.clone(), template_port.to_unowned_def_name());
-            let reconciliations = pending
-                .iter()
-                .map(|pending| {
-                    super::resolve_override_reconciliation(pending, |target| {
-                        resolve_instance_override_target(
-                            target,
-                            pending,
-                            edge.instance.substitution(),
-                        )
-                    })
-                })
-                .collect::<Result<_, GraphcalError>>()?;
-            Ok((instance_port, reconciliations))
+        .map(|(template_port, reconciliations)| {
+            (
+                ResolvedDeclName::from_def(owner.clone(), template_port.to_unowned_def_name()),
+                reconciliations.clone(),
+            )
         })
-        .collect::<Result<_, GraphcalError>>()?;
-    Ok(())
+        .collect();
 }
 
 fn specialize_expected_fail(
@@ -816,7 +746,7 @@ fn specialize_instance_semantics(
         .iter()
         .map(|(target, bounds)| (local_instance_decl(target, owner), bounds.clone()))
         .collect();
-    install_override_reconciliations(instance, edge)?;
+    install_override_reconciliations(instance, edge);
     instance.declaration_index = super::DagDeclarationIndex::default();
     instance.index_declaration_records().map_err(|error| {
         GraphcalError::internal_error(

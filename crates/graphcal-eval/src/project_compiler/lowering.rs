@@ -5,14 +5,13 @@ use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
-    InstanceAssertionProjection, InstanceIndexBindingTarget, InstancePlotProjection,
-    InstanceRecord, InstanceValueProjection, StaticSubstitution, template_declaration,
+    InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
+    template_declaration,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
-use graphcal_compiler::resolved_name::{
-    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
-};
+use graphcal_compiler::ir::static_substitution::StaticSubstitution;
+use graphcal_compiler::resolved_name::{ResolvedDeclName, ResolvedDimName, ResolvedIndexName};
 
 #[allow(
     clippy::wildcard_imports,
@@ -24,7 +23,7 @@ use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, Exp
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::visitor::ExprVisitor;
 
-use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
+use super::generic_leakage::check_generics_leakage;
 
 /// Project-wide semantic services shared by every module lowering pass.
 pub(super) struct ProjectSemanticContext<'project, 'session> {
@@ -166,29 +165,24 @@ fn is_imported_dynamic_unit_during_lowering(
     >,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    project: &crate::loader::LoadedProject,
 ) -> bool {
     imported_module_target(alias, module_map).is_some_and(|target| {
-        module_interfaces
-            .get(&target)
-            .is_some_and(|interface| interface.is_exported_runtime_unit(name))
+        project
+            .module(&target)
+            .is_some_and(|module| module.interface().runtime_units().contains(name))
     })
 }
 
 fn remap_imported_dynamic_unit_error(
     error: GraphcalError,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    project: &crate::loader::LoadedProject,
 ) -> GraphcalError {
     match error {
         GraphcalError::UnknownUnit { name, src, span }
             if name.owner().is_some_and(|alias| {
-                is_imported_dynamic_unit_during_lowering(
-                    alias,
-                    name.leaf(),
-                    module_map,
-                    module_interfaces,
-                )
+                is_imported_dynamic_unit_during_lowering(alias, name.leaf(), module_map, project)
             }) =>
         {
             GraphcalError::ImportRuntimeUnit {
@@ -267,9 +261,8 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
     ctx: ImportContext<'_>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
+) -> Result<HirFile, CompileError> {
     cancellation.checkpoint()?;
     let file_dag_id = loaded_file.dag_id();
     let file_src = loaded_file.named_source();
@@ -286,7 +279,10 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     let include_debug_names = include_debug_name_map(&ctx);
     let mut unfrozen =
         graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
-            file_ast,
+            graphcal_compiler::ir::lower::ModuleBody {
+                ast: file_ast,
+                interface: loaded_file.interface(),
+            },
             file_src,
             &ctx.imported_names,
             ctx.imported_bindings,
@@ -294,9 +290,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
             semantic.definitions,
             cancellation,
         )
-        .map_err(|error| {
-            remap_imported_dynamic_unit_error(error, &ctx.module_map, module_artifacts)
-        })?;
+        .map_err(|error| remap_imported_dynamic_unit_error(error, &ctx.module_map, project))?;
 
     let output_surface: HashSet<ScopedName> = unfrozen
         .value_names()
@@ -318,7 +312,6 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         semantic,
         file_dag_id,
         &ctx.include_instances,
-        module_artifacts,
         file_src,
         importer,
         &mut unfrozen,
@@ -328,22 +321,17 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     cancellation.checkpoint()?;
     let root =
         store_and_freeze_module_template(semantic, file_dag_id, unfrozen, file_src, cancellation)?;
-    let inline_dags =
-        lower_inline_dag_modules(semantic, loaded_file, module_artifacts, cancellation)?;
+    let inline_dags = lower_inline_dag_modules(semantic, loaded_file, cancellation)?;
 
-    let lowering_interface = LoweringModuleInterface::new(&root);
-    Ok((
-        HirFile {
-            source: file_src.clone(),
-            root,
-            inline_dags,
-            imported_source_order: ctx.imported_source_order,
-            output_surface,
-            include_debug_names,
-            module_map: ctx.module_map,
-        },
-        lowering_interface,
-    ))
+    Ok(HirFile {
+        source: file_src.clone(),
+        root,
+        inline_dags,
+        imported_source_order: ctx.imported_source_order,
+        output_surface,
+        include_debug_names,
+        module_map: ctx.module_map,
+    })
 }
 
 /// N001 for a resolver duplicate, rendered with its spelled name.
@@ -439,7 +427,6 @@ pub(super) fn module_resolve_compile_error(
 fn lower_inline_dag_modules(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::LoadedFile,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let file_src = loaded_file.named_source();
@@ -455,7 +442,6 @@ fn lower_inline_dag_modules(
                 loaded_dag,
                 dag_body,
                 file_src,
-                module_artifacts,
                 cancellation,
             )
         })
@@ -468,7 +454,6 @@ fn compile_loaded_dag_module_ir(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     cancellation.checkpoint()?;
@@ -505,7 +490,6 @@ fn compile_loaded_dag_module_ir(
         loaded_dag,
         dag_body,
         file_src,
-        module_artifacts,
         module_resolver,
         &mut ctx,
     )?;
@@ -538,7 +522,10 @@ fn compile_loaded_dag_module_ir(
     )?;
     let mut unfrozen =
         graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
-            &dag_ast,
+            graphcal_compiler::ir::lower::ModuleBody {
+                ast: &dag_ast,
+                interface: loaded_dag.interface(),
+            },
             &ctx.imported_names,
             ctx.imported_bindings,
             file_src,
@@ -551,7 +538,6 @@ fn compile_loaded_dag_module_ir(
         semantic,
         loaded_dag.dag_id(),
         &ctx.include_instances,
-        module_artifacts,
         file_src,
         loaded_dag.module(parent_loaded),
         &mut unfrozen,
@@ -654,7 +640,6 @@ fn process_dag_body_import_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
@@ -680,7 +665,6 @@ fn process_dag_body_import_declarations<'a>(
                 StaticScope::new(loaded_dag.dag_id(), module_resolver),
             ),
             file_src,
-            module_artifacts,
             module_resolver,
             ctx,
         )?;
@@ -714,7 +698,7 @@ fn process_dag_body_include_declarations<'a>(
                 decl,
                 loaded_dag.interface(),
                 file_src,
-                module_resolver,
+                StaticScope::new(loaded_dag.dag_id(), module_resolver),
                 ctx,
             )?;
             continue;
@@ -732,7 +716,7 @@ fn process_dag_body_include_declarations<'a>(
             decl,
             loaded_dag.interface(),
             file_src,
-            module_resolver,
+            StaticScope::new(loaded_dag.dag_id(), module_resolver),
             ctx,
         )?;
     }
@@ -855,113 +839,14 @@ fn semantic_value_bindings(
         .collect()
 }
 
-fn template_index_port(
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    source: &graphcal_compiler::syntax::index_name::IndexName,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedIndexName, CompileError> {
-    template
-        .static_ports()
-        .iter()
-        .find_map(|port| match &port.identity {
-            graphcal_compiler::hir::StaticPortIdentity::Index(identity)
-                if identity.atom() == source.atom() =>
-            {
-                Some(identity.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("template index port `{source}` has no canonical identity"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })
-}
-
-fn semantic_index_bindings(
+/// The instance's canonical Static substitution: the include's own bindings
+/// plus every selected type the include projects onto an importer type.
+fn instance_substitution(
     request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ResolvedIndexName, InstanceIndexBindingTarget>, CompileError> {
-    request
-        .index_bindings
-        .iter()
-        .map(|(source, target)| {
-            let target = match target {
-                graphcal_compiler::registry::index::IndexBindingTarget::Declared(target) => {
-                    InstanceIndexBindingTarget::Declared(
-                        module_resolver
-                            .resolve_index_path(
-                                importer,
-                                &graphcal_compiler::syntax::names::NamePath::local(
-                                    target.atom().clone(),
-                                ),
-                            )
-                            .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                            .map_err(|error| module_resolve_compile_error(error, src))?,
-                    )
-                }
-                graphcal_compiler::registry::index::IndexBindingTarget::Finite(target) => {
-                    InstanceIndexBindingTarget::Finite(*target)
-                }
-            };
-            Ok((template_index_port(template, source, src)?, target))
-        })
-        .collect()
-}
-
-fn template_type_port(
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    source: &graphcal_compiler::syntax::type_name::StructTypeName,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedStructTypeName, CompileError> {
-    template
-        .static_ports()
-        .iter()
-        .find_map(|port| match &port.identity {
-            graphcal_compiler::hir::StaticPortIdentity::Type(identity)
-                if identity.atom() == source.atom() =>
-            {
-                Some(identity.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("template type port `{source}` has no canonical identity"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })
-}
-
-fn semantic_type_bindings(
-    request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ResolvedStructTypeName, ResolvedStructTypeName>, CompileError> {
-    let mut types = request
-        .type_bindings
-        .iter()
-        .map(|(source, target)| {
-            Ok((
-                template_type_port(template, source, src)?,
-                module_resolver
-                    .resolve_struct_type_path(
-                        importer,
-                        &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
-                    )
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                    .map_err(|error| module_resolve_compile_error(error, src))?,
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, CompileError>>()?;
+) -> StaticSubstitution {
+    let mut substitution = request.static_bindings.substitution.clone();
     if let Some(aliases) = &request.selective_names {
         for alias in aliases {
             let source_path =
@@ -976,83 +861,11 @@ fn semantic_type_bindings(
                     .resolve_struct_type_path(importer, &target_path)
                     .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
             ) {
-                types.insert(source, target);
+                substitution.types.insert(source, target);
             }
         }
     }
-    Ok(types)
-}
-
-fn template_dimension_port(
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    source: &graphcal_compiler::syntax::dimension::DimName,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDimName, CompileError> {
-    template
-        .static_ports()
-        .iter()
-        .find_map(|port| match &port.identity {
-            graphcal_compiler::hir::StaticPortIdentity::Dimension(identity)
-                if identity.atom() == source.atom() =>
-            {
-                Some(identity.clone())
-            }
-            _ => None,
-        })
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::internal_error(
-                format!("template dimension port `{source}` has no canonical identity"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            ))
-        })
-}
-
-fn semantic_dimension_bindings(
-    request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ResolvedDimName, ResolvedDimName>, CompileError> {
-    let prelude = graphcal_compiler::hir::PreludeTypeScope::graphcal();
-    request
-        .dim_bindings
-        .iter()
-        .map(|(source, target)| {
-            let path = graphcal_compiler::syntax::names::NamePath::local(target.atom().clone());
-            let target = match module_resolver
-                .resolve_dimension_path(importer, &path)
-                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            {
-                Ok(resolved) => resolved,
-                Err(error) => prelude
-                    .resolve_dimension_path(&path)
-                    .ok_or_else(|| module_resolve_compile_error(error, src))?,
-            };
-            Ok((template_dimension_port(template, source, src)?, target))
-        })
-        .collect()
-}
-
-fn semantic_substitution(
-    request: &IncludeInstanceRequest,
-    template: &graphcal_compiler::ir::lower::UnfrozenIR,
-    importer: &graphcal_compiler::dag_id::DagId,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
-    src: &NamedSource<Arc<String>>,
-) -> Result<StaticSubstitution, CompileError> {
-    Ok(StaticSubstitution {
-        indexes: semantic_index_bindings(request, template, importer, module_resolver, src)?
-            .into_iter()
-            .collect(),
-        types: semantic_type_bindings(request, template, importer, module_resolver, src)?
-            .into_iter()
-            .collect(),
-        dimensions: semantic_dimension_bindings(request, template, importer, module_resolver, src)?
-            .into_iter()
-            .collect(),
-    })
+    substitution
 }
 
 fn semantic_output_projections(
@@ -1163,7 +976,7 @@ fn record_semantic_instance(
     );
     let instance_owner = instance_id.owner().clone();
     let value_bindings = semantic_value_bindings(request, &instance_id);
-    let substitution = semantic_substitution(request, template, importer, module_resolver, src)?;
+    let substitution = instance_substitution(request, importer, module_resolver);
     let output_projections = semantic_output_projections(request, &instance_id);
     let assertion_projections = semantic_assertion_projections(
         request,
@@ -1216,10 +1029,6 @@ fn record_semantic_instance(
 /// 5. Record a typed semantic instance edge without copying dependency bodies.
 /// 6. Materialize only selective projection aliases in the importer.
 #[expect(
-    clippy::too_many_arguments,
-    reason = "pipeline function threads project, importer, module artifacts, and HIR builders"
-)]
-#[expect(
     clippy::too_many_lines,
     reason = "single cohesive include pipeline: source resolution, validation, HIR merge"
 )]
@@ -1227,7 +1036,6 @@ fn elaborate_include_instances(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     importer_src: &NamedSource<Arc<String>>,
     importer: crate::loader::LoadedModule<'_>,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
@@ -1235,8 +1043,6 @@ fn elaborate_include_instances(
 ) -> Result<(), CompileError> {
     let project = semantic.project;
     let module_resolver = semantic.module_resolver;
-    let importer_external_surface = importer.interface().external_surface();
-    let importer_local_type_names = collect_local_type_names(importer.declarations());
     for instance in include_instances {
         cancellation.checkpoint()?;
         // ---- 1. Resolve and assemble source body -----------------------------
@@ -1263,7 +1069,6 @@ fn elaborate_include_instances(
                 imports::process_file_body_declarations(
                     project,
                     dep_loaded,
-                    module_artifacts,
                     module_resolver,
                     &mut body_ctx,
                     cancellation,
@@ -1277,7 +1082,10 @@ fn elaborate_include_instances(
                     dep_src,
                 )?;
                 let mut dep_unfrozen = graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
-                                dep_body,
+                                graphcal_compiler::ir::lower::ModuleBody {
+                                    ast: dep_body,
+                                    interface: dep_loaded.interface(),
+                                },
                                 dep_src,
                                 &body_ctx.imported_names,
                                 body_ctx.imported_bindings,
@@ -1289,7 +1097,6 @@ fn elaborate_include_instances(
                     semantic,
                     dep_dag_id,
                     &body_ctx.include_instances,
-                    module_artifacts,
                     dep_src,
                     dep_loaded.module(),
                     &mut dep_unfrozen,
@@ -1338,7 +1145,6 @@ fn elaborate_include_instances(
                     loaded_inline,
                     inline_body,
                     importer_src,
-                    module_artifacts,
                     module_resolver,
                     &mut body_ctx,
                 )?;
@@ -1369,7 +1175,10 @@ fn elaborate_include_instances(
                     importer_src,
                 )?;
                 let mut dag_unfrozen = graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
-                                &stripped_body,
+                                graphcal_compiler::ir::lower::ModuleBody {
+                                    ast: &stripped_body,
+                                    interface: loaded_inline.interface(),
+                                },
                                 &body_ctx.imported_names,
                                 imported_bindings,
                                 importer_src,
@@ -1381,7 +1190,6 @@ fn elaborate_include_instances(
                     semantic,
                     dag_id,
                     &body_ctx.include_instances,
-                    module_artifacts,
                     importer_src,
                     loaded_inline.module(parent_loaded),
                     &mut dag_unfrozen,
@@ -1408,19 +1216,15 @@ fn elaborate_include_instances(
                 importer_src,
                 include_span: instance.include_span,
             },
-            &instance.index_bindings,
-            &instance.index_binding_spans,
-            &instance.dim_bindings,
+            &instance.static_bindings,
         )?;
 
         // ---- 4. Validation checks -----------------------------------------
         let override_reconciliations = dep_unfrozen.include_override_reconciliations(
             &instance.bindings,
-            &instance.index_bindings,
-            &instance.type_bindings,
+            &instance.static_bindings.substitution,
             module_resolver,
             &dep_resolution_owner,
-            importer_dag_id,
             importer_src,
             instance.include_span,
         )?;
@@ -1428,11 +1232,9 @@ fn elaborate_include_instances(
             body_decls_for_aliases,
             StaticScope::new(&dep_resolution_owner, module_resolver),
             &instance.pub_reexport_items,
-            &instance.index_bindings,
-            &instance.type_bindings,
-            &instance.dim_bindings,
-            importer_external_surface,
-            &importer_local_type_names,
+            &instance.static_bindings.substitution,
+            importer_dag_id,
+            importer.interface(),
             importer_src,
             instance.include_span,
         )?;
@@ -1488,14 +1290,6 @@ fn elaborate_include_instances(
     Ok(())
 }
 
-fn index_binding_span(
-    dep_index: &IndexName,
-    spans: &HashMap<IndexName, Span>,
-    include_span: Span,
-) -> Span {
-    spans.get(dep_index).copied().unwrap_or(include_span)
-}
-
 /// The two modules one include's index bindings connect, with the
 /// diagnostic provenance of the include.
 struct IndexBindingSites<'a> {
@@ -1506,82 +1300,46 @@ struct IndexBindingSites<'a> {
     include_span: Span,
 }
 
-/// The importer-side definition one index port binding names, resolved in
-/// the importer's own scope.
-fn index_binding_candidate(
-    definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
-    sites: &IndexBindingSites<'_>,
-    dep_index: &IndexName,
-    target: &IndexBindingTarget,
-    span: Span,
-) -> Result<graphcal_compiler::registry::types::IndexDef, CompileError> {
-    match target {
-        IndexBindingTarget::Declared(importer_index) => {
-            let identity = definitions
-                .resolver()
-                .resolve_index_path(
-                    sites.importer,
-                    &graphcal_compiler::syntax::names::NamePath::local(
-                        importer_index.atom().clone(),
-                    ),
-                )
-                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-                .map_err(|_| {
-                    CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                        dep_index: dep_index.to_string(),
-                        value: target.to_string(),
-                        src: sites.importer_src.clone(),
-                        span: span.into(),
-                    })
-                })?;
-            Ok(definitions.index(&identity)?)
-        }
-        IndexBindingTarget::Finite(finite) => Ok(
-            graphcal_compiler::registry::types::IndexDef::finite(*finite),
-        ),
-    }
-}
-
 fn validate_index_binding_contracts(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     sites: &IndexBindingSites<'_>,
-    bindings: &IndexBindings,
-    spans: &HashMap<IndexName, Span>,
-    dim_bindings: &HashMap<DimName, DimName>,
+    bindings: &IncludeStaticBindings,
 ) -> Result<(), CompileError> {
+    use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
     use graphcal_compiler::registry::types::IndexBindingContractError;
 
-    let candidates = bindings
-        .iter()
-        .map(|(dep_index, target)| {
-            let span = index_binding_span(dep_index, spans, sites.include_span);
-            index_binding_candidate(definitions, sites, dep_index, target, span)
-                .map(|candidate| (dep_index, candidate))
-        })
-        .collect::<Result<HashMap<_, _>, CompileError>>()?;
-
-    for (dep_index, target) in bindings {
-        let span = index_binding_span(dep_index, spans, sites.include_span);
-        let contract =
-            effective_index_binding_contract(definitions, sites, dep_index, dim_bindings, span)?;
-        let candidate = candidates.get(dep_index).ok_or_else(|| {
+    for (port, target) in &bindings.substitution.indexes {
+        let site = bindings.index_sites.get(port).ok_or_else(|| {
             CompileError::Eval(GraphcalError::InternalError {
-                message: format!("captured index binding candidate for `{dep_index}` was lost"),
+                message: format!("bound index port `{port}` has no binding site"),
                 src: sites.importer_src.clone(),
-                span: span.into(),
+                span: sites.include_span.into(),
             })
         })?;
-
-        match contract.validate(candidate) {
+        let candidate = match target {
+            InstanceIndexBindingTarget::Declared(identity) => definitions.index(identity)?,
+            InstanceIndexBindingTarget::Finite(finite) => {
+                graphcal_compiler::registry::types::IndexDef::finite(*finite)
+            }
+        };
+        let contract = effective_index_binding_contract(
+            definitions,
+            sites,
+            port,
+            &bindings.substitution.dimensions,
+            site.span,
+        )?;
+        let dep_index = port.to_unowned_def_name();
+        match contract.validate(&candidate) {
             Ok(()) => {}
             Err(IndexBindingContractError::KindMismatch { expected, found }) => {
                 return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                     dep_index: dep_index.to_string(),
                     dep_kind: expected.to_string(),
-                    bound_index: target.to_string(),
+                    bound_index: site.authored.to_string(),
                     bound_kind: found.to_string(),
                     src: sites.importer_src.clone(),
-                    span: span.into(),
+                    span: site.span.into(),
                 }));
             }
             Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
@@ -1589,10 +1347,10 @@ fn validate_index_binding_contracts(
                     GraphcalError::IndexBindingDimensionMismatch {
                         dep_index: dep_index.to_string(),
                         expected_dim: definitions.format_dimension(sites.importer, &expected),
-                        bound_index: target.to_string(),
+                        bound_index: site.authored.to_string(),
                         found_dim: definitions.format_dimension(sites.importer, &found),
                         src: sites.importer_src.clone(),
-                        span: span.into(),
+                        span: site.span.into(),
                     },
                 ));
             }
@@ -1601,42 +1359,32 @@ fn validate_index_binding_contracts(
     Ok(())
 }
 
-/// Each dimension port an include binds, with the importer-side dimension it
-/// is bound to (`None` when the target names no visible dimension).
+/// Each dimension port an include binds, with the dimension of its
+/// importer-side target (`None` when the target has no definition of its
+/// own, such as an instance-owned projection).
 fn bound_dimension_ports(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
-    sites: &IndexBindingSites<'_>,
-    dim_bindings: &HashMap<DimName, DimName>,
-) -> Result<
-    HashMap<
-        graphcal_compiler::resolved_name::ResolvedDimName,
-        Option<graphcal_compiler::dimension::Dimension>,
-    >,
-    GraphcalError,
-> {
-    use graphcal_compiler::syntax::dimension::DimRef;
-
-    let mut overrides = HashMap::new();
-    for (port, target) in dim_bindings {
-        let Some(port) =
-            definitions.resolve_dimension(sites.template, &DimRef::local(port.clone()))
-        else {
-            continue;
-        };
-        let target = definitions
-            .resolve_dimension(sites.importer, &DimRef::local(target.clone()))
-            .map(|target| definitions.dimension(&target))
-            .transpose()?;
-        overrides.insert(port, target);
-    }
-    Ok(overrides)
+    dimensions: &std::collections::BTreeMap<ResolvedDimName, ResolvedDimName>,
+) -> Result<HashMap<ResolvedDimName, Option<graphcal_compiler::dimension::Dimension>>, GraphcalError>
+{
+    dimensions
+        .iter()
+        .map(|(port, target)| {
+            let dimension = if definitions.defines_dimension(target) {
+                Some(definitions.dimension(target)?)
+            } else {
+                None
+            };
+            Ok((port.clone(), dimension))
+        })
+        .collect()
 }
 
 fn effective_index_binding_contract(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     sites: &IndexBindingSites<'_>,
-    dep_index: &IndexName,
-    dim_bindings: &HashMap<DimName, DimName>,
+    identity: &ResolvedIndexName,
+    dimensions: &std::collections::BTreeMap<ResolvedDimName, ResolvedDimName>,
     binding_span: Span,
 ) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
@@ -1645,22 +1393,8 @@ fn effective_index_binding_contract(
         ConcreteIndexKind, IndexBindingContract, IndexKind, RequiredIndexKind,
     };
 
-    let missing_port = || {
-        CompileError::Eval(GraphcalError::InternalError {
-            message: format!("bound dependency index `{dep_index}` has no canonical definition"),
-            src: sites.importer_src.clone(),
-            span: binding_span.into(),
-        })
-    };
-    let identity = definitions
-        .resolver()
-        .resolve_index_path(
-            sites.template,
-            &graphcal_compiler::syntax::names::NamePath::local(dep_index.atom().clone()),
-        )
-        .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-        .map_err(|_| missing_port())?;
-    let definition = definitions.index(&identity)?;
+    let dep_index = identity.to_unowned_def_name();
+    let definition = definitions.index(identity)?;
 
     match &definition.kind {
         IndexKind::Concrete(ConcreteIndexKind::Named { .. }) => Ok(IndexBindingContract::Named),
@@ -1680,7 +1414,7 @@ fn effective_index_binding_contract(
                     };
                     match &index.kind {
                         IndexDeclKind::RequiredCoordinate { dimension }
-                            if index.name.value == *dep_index =>
+                            if index.name.value == dep_index =>
                         {
                             Some(dimension)
                         }
@@ -1703,7 +1437,7 @@ fn effective_index_binding_contract(
             // The expression is the dependency's source: a reference to a
             // bound dimension port evaluates to the importer's binding target,
             // every other reference in the dependency's own scope.
-            let overrides = bound_dimension_ports(definitions, sites, dim_bindings)?;
+            let overrides = bound_dimension_ports(definitions, dimensions)?;
             let dimension = definitions
                 .evaluate_dim_expr_with_overrides(sites.template, dimension_expr, &overrides)
                 .map_err(|failure| {

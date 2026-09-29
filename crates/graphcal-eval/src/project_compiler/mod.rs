@@ -15,7 +15,6 @@ use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -74,8 +73,8 @@ pub use hir_project::HirProject;
 use lowering::ProjectSemanticContext;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IndexBindings,
-    LoweringModuleInterface, ModuleArtifact, ModuleArtifactStore, ProjectModuleBinding,
+    HirFile, ImportAlias, ImportContext, IncludeInstanceRequest, IncludeStaticBindings,
+    IndexBindingSite, ModuleArtifact, ModuleArtifactStore, ProjectModuleBinding,
     UnitProjectionAlias,
 };
 pub(crate) use session::CheckedProjectRuntimeParts;

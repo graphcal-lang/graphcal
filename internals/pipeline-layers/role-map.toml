@@ -573,12 +573,12 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "override_reconciliation"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["ir", "override_reconciliation", "tests"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -629,6 +629,11 @@ role = "checking"
 package = "compiler"
 path = ["ir", "resolve", "tests"]
 role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "static_substitution"]
+role = "contracts"
 
 [[module]]
 package = "compiler"

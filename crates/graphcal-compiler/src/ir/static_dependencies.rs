@@ -39,6 +39,12 @@ impl<'a> StaticScope<'a> {
     pub const fn owner(&self) -> &'a DagId {
         self.owner
     }
+
+    /// The resolver references of the module resolve through.
+    #[must_use]
+    pub const fn resolver(&self) -> &'a ModuleResolver {
+        self.resolver
+    }
 }
 
 /// A module's declarations paired with the scope their references resolve in.

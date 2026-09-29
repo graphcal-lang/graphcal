@@ -114,7 +114,7 @@ pub struct ParamEntry<P: BodyPhase> {
     /// Include overrides whose nominal dependencies must be checked after
     /// canonical type inference.
     pub(crate) override_reconciliations:
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
+        Vec<crate::ir::override_reconciliation::OverrideReconciliation>,
 }
 
 /// A `node` declaration.

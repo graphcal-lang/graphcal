@@ -101,7 +101,6 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_file: &crate::loader::LoadedFile,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -120,7 +119,6 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
                 StaticScope::new(file_dag_id, module_resolver),
             ),
             file_src,
-            module_artifacts,
             module_resolver,
             ctx,
         )?;
@@ -138,7 +136,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             loaded_file.interface(),
             file_src,
-            module_resolver,
+            StaticScope::new(file_dag_id, module_resolver),
             ctx,
         )?;
     }
@@ -166,7 +164,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             loaded_file.interface(),
             file_src,
-            module_resolver,
+            StaticScope::new(file_dag_id, module_resolver),
             ctx,
         )?;
     }
@@ -205,7 +203,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             loaded_file.interface(),
             file_src,
-            module_resolver,
+            StaticScope::new(file_dag_id, module_resolver),
             ctx,
         )?;
     }
@@ -302,13 +300,13 @@ fn validate_qualified_static_import_references(
 }
 
 fn reject_runtime_unit_import(
-    dep: &LoweringModuleInterface,
+    dep: &ModuleInterface,
     name: &NameAtom,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
     let unit_name = graphcal_compiler::syntax::dimension::UnitName::classify(name.clone());
-    if dep.is_exported_runtime_unit(&unit_name) {
+    if dep.runtime_units().contains(&unit_name) {
         return Err(CompileError::Eval(GraphcalError::ImportRuntimeUnit {
             name: name.to_string(),
             src: src.clone(),
@@ -483,16 +481,118 @@ fn file_exports_plot(
     visit(project, file_dag_id, name, &mut HashSet::new())
 }
 
-/// Classified param bindings: each entry routes to one of the four binding
-/// maps based on what the dependency declares the binding name as. Index
-/// values retain a typed declared-or-structural target; `types` / `dims` use
-/// [`DepToImporter`] keying from the dep-side name to the importer-side name.
+/// Classified param bindings as authored: each entry routes to one of the
+/// four binding maps based on what the dependency declares the binding name
+/// as, keyed by the dependency-side name. Index values retain a typed
+/// declared-or-structural target. The Static maps serve interface-level
+/// validation only; [`resolve_include_static_bindings`] turns them into the
+/// canonical bindings an include instance carries.
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    indexes: IndexBindings,
+    indexes: HashMap<IndexName, IndexBindingTarget>,
     index_spans: HashMap<IndexName, Span>,
-    types: DepToImporter<StructTypeName>,
-    dims: DepToImporter<DimName>,
+    types: HashMap<StructTypeName, StructTypeName>,
+    dims: HashMap<DimName, DimName>,
+}
+
+/// One include's authored Static bindings, keyed by dependency-side name.
+struct AuthoredStaticBindings {
+    indexes: HashMap<IndexName, IndexBindingTarget>,
+    index_spans: HashMap<IndexName, Span>,
+    types: HashMap<StructTypeName, StructTypeName>,
+    dims: HashMap<DimName, DimName>,
+}
+
+/// Resolve one include's authored Static bindings canonically: each port in
+/// the template's scope, each target in the importer's (`scope`).
+///
+/// A dimension target may also name a prelude dimension.
+fn resolve_include_static_bindings(
+    authored: AuthoredStaticBindings,
+    template: &graphcal_compiler::dag_id::DagId,
+    scope: StaticScope<'_>,
+    src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<IncludeStaticBindings, CompileError> {
+    use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
+    use graphcal_compiler::resolve::symbols::SymbolRef;
+    use graphcal_compiler::syntax::names::NamePath;
+
+    let AuthoredStaticBindings {
+        indexes,
+        index_spans,
+        types,
+        dims,
+    } = authored;
+    let resolver = scope.resolver();
+    let missing_port = |kind: &str, port: &dyn std::fmt::Display| {
+        CompileError::Eval(GraphcalError::internal_error(
+            format!("template {kind} port `{port}` has no canonical identity"),
+            src,
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+        ))
+    };
+    let mut bindings = IncludeStaticBindings::default();
+    for (port, authored) in indexes {
+        let span = index_spans.get(&port).copied().unwrap_or(include_span);
+        let identity = resolver
+            .resolve_index_path(template, &NamePath::local(port.atom().clone()))
+            .map(SymbolRef::into_resolved)
+            .map_err(|_| missing_port("index", &port))?;
+        let target = match &authored {
+            IndexBindingTarget::Declared(target) => InstanceIndexBindingTarget::Declared(
+                resolver
+                    .resolve_index_path(scope.owner(), &NamePath::local(target.atom().clone()))
+                    .map(SymbolRef::into_resolved)
+                    .map_err(|_| {
+                        CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                            dep_index: port.to_string(),
+                            value: authored.to_string(),
+                            src: src.clone(),
+                            span: span.into(),
+                        })
+                    })?,
+            ),
+            IndexBindingTarget::Finite(finite) => InstanceIndexBindingTarget::Finite(*finite),
+        };
+        bindings
+            .substitution
+            .indexes
+            .insert(identity.clone(), target);
+        bindings
+            .index_sites
+            .insert(identity, IndexBindingSite { authored, span });
+    }
+    for (port, target) in types {
+        let identity = resolver
+            .resolve_struct_type_path(template, &NamePath::local(port.atom().clone()))
+            .map(SymbolRef::into_resolved)
+            .map_err(|_| missing_port("type", &port))?;
+        let target = resolver
+            .resolve_struct_type_path(scope.owner(), &NamePath::local(target.atom().clone()))
+            .map(SymbolRef::into_resolved)
+            .map_err(|error| lowering::module_resolve_compile_error(error, src))?;
+        bindings.substitution.types.insert(identity, target);
+    }
+    let prelude = graphcal_compiler::hir::lower::PreludeTypeScope::graphcal();
+    for (port, target) in dims {
+        let identity = resolver
+            .resolve_dimension_path(template, &NamePath::local(port.atom().clone()))
+            .map(SymbolRef::into_resolved)
+            .map_err(|_| missing_port("dimension", &port))?;
+        let path = NamePath::local(target.atom().clone());
+        let target = match resolver
+            .resolve_dimension_path(scope.owner(), &path)
+            .map(SymbolRef::into_resolved)
+        {
+            Ok(identity) => identity,
+            Err(error) => prelude
+                .resolve_dimension_path(&path)
+                .ok_or_else(|| lowering::module_resolve_compile_error(error, src))?,
+        };
+        bindings.substitution.dimensions.insert(identity, target);
+    }
+    Ok(bindings)
 }
 
 /// Route each binding through the namespace/category selected by its authored
@@ -613,9 +713,9 @@ fn static_binding_composition_valid(input: StaticInterface, target: StaticInterf
 fn validate_concrete_static_binding_targets(
     importer: &ModuleInterface,
     dep: &ModuleInterface,
-    type_bindings: &DepToImporter<StructTypeName>,
-    dim_bindings: &DepToImporter<DimName>,
-    index_bindings: &IndexBindings,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
+    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
     file_src: &NamedSource<Arc<String>>,
     include_span: Span,
 ) -> Result<(), CompileError> {
@@ -681,9 +781,9 @@ fn record_unit_projection(
 
 fn validate_required_static_bindings(
     dep: &ModuleInterface,
-    type_bindings: &DepToImporter<StructTypeName>,
-    dim_bindings: &DepToImporter<DimName>,
-    index_bindings: &IndexBindings,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
+    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
     file_src: &NamedSource<Arc<String>>,
     include_span: Span,
 ) -> Result<(), CompileError> {
@@ -793,9 +893,10 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    importer_scope: StaticScope<'_>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
+    let module_resolver = importer_scope.resolver();
     let dependency = project.module(target.target()).ok_or_else(|| {
         CompileError::Eval(GraphcalError::InternalError {
             message: format!("included module `{}` is not loaded", target.target()),
@@ -987,6 +1088,18 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, &dep_path_display, file_src, decl.span)?;
+    let static_bindings = resolve_include_static_bindings(
+        AuthoredStaticBindings {
+            indexes: index_bindings,
+            index_spans: index_binding_spans,
+            types: type_bindings,
+            dims: dim_bindings,
+        },
+        import_dag_id,
+        importer_scope,
+        file_src,
+        decl.span,
+    )?;
 
     let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
@@ -1002,10 +1115,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         instance_scope,
         debug_scope: derive_module_name_from_import_path(&include_decl.path),
         bindings,
-        index_bindings,
-        index_binding_spans,
-        type_bindings,
-        dim_bindings,
+        static_bindings,
         selective_names,
         unit_projection_aliases,
         runtime_unit_names: dep.runtime_units().clone(),
@@ -1038,10 +1148,12 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer: &ModuleInterface,
     file_src: &NamedSource<Arc<String>>,
-    module_resolver: &graphcal_compiler::resolve::ModuleResolver,
+    importer_scope: StaticScope<'_>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
+
+    let module_resolver = importer_scope.resolver();
 
     let dep = target.module.interface();
     let dag_name = target.dag_name;
@@ -1206,6 +1318,18 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
         include_decl.path.span(),
     )?;
     validate_required_param_bindings(dep, &bindings, dag_name, file_src, decl.span)?;
+    let static_bindings = resolve_include_static_bindings(
+        AuthoredStaticBindings {
+            indexes: index_bindings,
+            index_spans: index_binding_spans,
+            types: type_bindings,
+            dims: dim_bindings,
+        },
+        dag_id,
+        importer_scope,
+        file_src,
+        decl.span,
+    )?;
 
     let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
@@ -1221,10 +1345,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
         instance_scope,
         debug_scope: ModuleAliasName::expect_valid(dag_name),
         bindings,
-        index_bindings,
-        index_binding_spans,
-        type_bindings,
-        dim_bindings,
+        static_bindings,
         selective_names,
         unit_projection_aliases,
         runtime_unit_names: dep.runtime_units().clone(),
@@ -1244,7 +1365,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include<'a>(
 /// types, indexes, and DAG blueprints). Runtime items and assertion outcomes
 /// require an explicit instance and are rejected with migration guidance.
 #[expect(
-    clippy::too_many_arguments,
     clippy::too_many_lines,
     reason = "visibility and capability checks consume the complete import context in one boundary pass"
 )]
@@ -1254,19 +1374,11 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
     import: &graphcal_compiler::desugar::desugared_ast::ImportDecl,
     importer: ModuleDeclarations<'_>,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let import_path = import.path();
     let module_target = resolved_module.target();
-    let dep = module_artifacts.get(module_target).ok_or_else(|| {
-        CompileError::Eval(GraphcalError::EvalError {
-            message: format!("module `{module_target}` is not available for imports"),
-            src: file_src.clone(),
-            span: import_path.span().into(),
-        })
-    })?;
     let dep_module = project.module(module_target).ok_or_else(|| {
         CompileError::Eval(GraphcalError::InternalError {
             message: format!("inline module `{module_target}` has no owning declaration"),
@@ -1347,7 +1459,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     )?;
                     if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
-                            dep,
+                            dep_interface,
                             orig_name.atom(),
                             file_src,
                             import_item.name.span,

@@ -503,7 +503,7 @@ fn check_type_override_dependency(
 
     for reconciliation in reconciliations {
         for target in &reconciliation.targets {
-            let crate::tir::typed::ResolvedOverrideTarget::Type {
+            let crate::tir::typed::OverrideTarget::Type {
                 overridden,
                 source,
                 replacement,
@@ -571,7 +571,7 @@ fn check_index_override_dependency(
 
     for reconciliation in reconciliations {
         for target in &reconciliation.targets {
-            let crate::tir::typed::ResolvedOverrideTarget::Index {
+            let crate::tir::typed::OverrideTarget::Index {
                 overridden,
                 source,
                 replacement,

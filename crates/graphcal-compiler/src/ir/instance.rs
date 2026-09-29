@@ -1,15 +1,14 @@
 //! Typed relationships between reusable DAG templates and concrete instances.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::{DagId, InstanceId};
-use crate::registry::index::FiniteIndex;
-use crate::resolved_name::{
-    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
-};
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
+
+use super::static_substitution::{StaticSpecializationId, StaticSubstitution};
 
 /// The declaration `name` of the template that `instance` instantiates.
 #[must_use]
@@ -22,44 +21,6 @@ pub fn template_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDe
 #[must_use]
 pub fn instance_declaration(instance: &InstanceId, name: DeclName) -> ResolvedDeclName {
     ResolvedDeclName::from_def(instance.owner().clone(), name)
-}
-
-/// Canonical importer-side target of one instance index binding.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum InstanceIndexBindingTarget {
-    /// A declared index owned by the importing DAG.
-    Declared(ResolvedIndexName),
-    /// A structural finite index supplied directly at the instance boundary.
-    Finite(FiniteIndex),
-}
-
-/// Canonical applicative substitution for one reusable DAG template.
-///
-/// Ordered maps make equality and hashing independent of include-site spelling
-/// and binding order. Runtime value bindings are deliberately absent: they do
-/// not change static specialization identity.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StaticSubstitution {
-    pub indexes: BTreeMap<ResolvedIndexName, InstanceIndexBindingTarget>,
-    pub types: BTreeMap<ResolvedStructTypeName, ResolvedStructTypeName>,
-    pub dimensions: BTreeMap<ResolvedDimName, ResolvedDimName>,
-}
-
-/// Applicative identity shared by instances with equal Static bindings.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StaticSpecializationId {
-    pub template: DagId,
-    pub substitution: StaticSubstitution,
-}
-
-impl StaticSpecializationId {
-    #[must_use]
-    pub const fn new(template: DagId, substitution: StaticSubstitution) -> Self {
-        Self {
-            template,
-            substitution,
-        }
-    }
 }
 
 /// One edge in the explicit module-template/instance graph.
@@ -187,16 +148,16 @@ pub struct HirInstanceRecord {
     /// Ancestor template owners rebased by enclosing semantic instances.
     pub owner_rebases: HashMap<DagId, DagId>,
     /// V005 obligations retained only for unrebound parameter defaults.
-    pub(crate) override_reconciliations: HashMap<
-        ResolvedDeclName,
-        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
-    >,
+    pub(crate) override_reconciliations:
+        HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resolved_name::ResolvedDimName;
     use crate::syntax::module_name::ScopeSegment;
+    use std::collections::BTreeMap;
 
     #[test]
     fn template_and_instance_declarations_share_the_leaf() {

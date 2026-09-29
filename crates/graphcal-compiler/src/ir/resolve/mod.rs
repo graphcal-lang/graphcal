@@ -336,6 +336,7 @@ const fn source_order_category(kind: IntroducedKind) -> Option<DeclCategory> {
 /// evaluated names in the names map for further processing.
 fn collect_local_declarations(
     file: &File,
+    declared_surface: &ExternalDeclSurface,
     src: &NamedSource<Arc<String>>,
     names: &mut HashMap<ScopedName, Span>,
 ) -> Result<CollectedDeclarations, GraphcalError> {
@@ -345,17 +346,9 @@ fn collect_local_declarations(
     check_static_namespace_collisions(file, src)?;
     check_value_namespace_collisions(file, src, names)?;
 
-    // Classify the externally addressable surface without treating `param`
-    // input ports as ordinary exports. Explicit `pub`/`pub(bind)` declarations
-    // are exports; the `param` kind itself declares a named input port.
-    let mut external_surface = ExternalDeclSurface::default();
-    for introduced in file
-        .declarations
-        .iter()
-        .filter_map(|decl| decl.kind.declared_name())
-    {
-        external_surface.record_declared(introduced);
-    }
+    // The module interface classifies the externally addressable surface
+    // without treating `param` input ports as ordinary exports.
+    let external_surface = declared_surface.clone();
 
     validate_required_bindability(file, src)?;
 
@@ -829,8 +822,10 @@ fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::Na
 /// production imported-binding path.
 #[cfg(test)]
 fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile, GraphcalError> {
+    let interface = crate::ir::module_interface::ModuleInterface::new(&file.declarations);
     resolve_with_imported_values(
         file,
+        interface.declared_surface(),
         src,
         &ImportedValueNames::default(),
         &DagId::root_in_package("test", "main"),
@@ -850,6 +845,7 @@ fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile,
 /// arity mismatches are found.
 pub(crate) fn resolve_with_imported_values(
     file: &File,
+    declared_surface: &ExternalDeclSurface,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
     dag_id: &DagId,
@@ -878,7 +874,7 @@ pub(crate) fn resolve_with_imported_values(
     }
 
     // Collect local declarations
-    let local = collect_local_declarations(file, src, &mut names)?;
+    let local = collect_local_declarations(file, declared_surface, src, &mut names)?;
 
     // Build assert names (imported + local) for attribute validation
     let mut all_assert_names: HashSet<DeclName> = HashSet::new();

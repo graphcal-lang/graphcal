@@ -894,10 +894,10 @@ pub fn reconcile_external_override_dependencies<S>(
                     let dependencies = summary.get(&reconciliation.source_decl);
                     reconciliation.targets.retain(|target| {
                         let source = match target {
-                            crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
+                            crate::tir::typed::OverrideTarget::Index { source, .. } => {
                                 NominalOverrideIdentity::Index(source.clone())
                             }
-                            crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
+                            crate::tir::typed::OverrideTarget::Type { source, .. } => {
                                 NominalOverrideIdentity::Type(source.clone())
                             }
                         };
