@@ -461,7 +461,7 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     )
     .unwrap();
     assert!(std::ptr::eq(context.tir, plan.tir()));
-    assert!(std::ptr::eq(context.current_dag, plan.tir().root()));
+    assert!(std::ptr::eq(context.dag(), plan.tir().root()));
     assert!(std::ptr::eq(
         context.struct_field_constraints().unwrap(),
         plan.program().facts().struct_field_constraints()
@@ -802,6 +802,130 @@ fn shared_frames_cancel_before_interpretation() {
 }
 
 #[test]
+fn frame_arguments_are_domain_checked_and_keep_presentation_only_when_bound() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    use crate::presentation_evidence::PresentationInstance;
+    use crate::runtime_presentation::EvaluatedRuntimeValue;
+    use graphcal_compiler::registry::runtime_value::RuntimeValue;
+    let source = "param p: Dimensionless(min: 0.0) = 1.0; node n: Dimensionless = @p;";
+    let tir = compile_to_tir(source, "frame.gcl").unwrap();
+    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    let key = tir
+        .root()
+        .params()
+        .next()
+        .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
+        .unwrap();
+    let labelled = |value: f64| {
+        EvaluatedRuntimeValue::new(
+            RuntimeValue::quantity(value).unwrap(),
+            PresentationInstance::Unit {
+                label: "percent".to_owned(),
+                scale: graphcal_compiler::registry::unit::PositiveFiniteScale::new(0.01).unwrap(),
+            },
+        )
+    };
+    let span = graphcal_compiler::syntax::span::Span::new(0, 0);
+
+    let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Contain).unwrap();
+    frame
+        .bind_argument(&key, labelled(2.0), &src, span)
+        .unwrap();
+    assert!(frame.values().contains_key(&key));
+    assert!(frame.presentations().contains_key(&key));
+    assert!(frame.errors().is_empty());
+
+    let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Contain).unwrap();
+    frame
+        .bind_argument(&key, labelled(-1.0), &src, span)
+        .unwrap();
+    assert!(!frame.values().contains_key(&key));
+    assert!(!frame.presentations().contains_key(&key));
+    assert!(matches!(
+        frame.errors().get(&key),
+        Some(NodeUnavailable::EvalFailed { .. })
+    ));
+    let outcome = frame.finish();
+    assert!(outcome.values.is_empty() && outcome.presentations.is_empty());
+    assert_eq!(outcome.errors.len(), 1);
+
+    let mut frame =
+        ExecutionFrame::new(&plan, tir.root_dag_id(), FailurePolicy::Propagate).unwrap();
+    assert!(
+        frame
+            .bind_argument(&key, labelled(-1.0), &src, span)
+            .is_err()
+    );
+}
+
+#[test]
+fn frame_runtime_imports_seed_only_unbound_prepared_imports() {
+    use crate::execution_frame::{ExecutionFrame, FailurePolicy};
+    use crate::presentation_evidence::PresentationInstance;
+    use crate::runtime_presentation::EvaluatedRuntimeValue;
+    use graphcal_compiler::registry::runtime_value::RuntimeValue;
+    let source = "dag scaled { param factor: Dimensionless; pub node result: Dimensionless = @factor * 2.0; } node out: Dimensionless = @scaled(factor: 4.0)::result;";
+    let tir = compile_to_tir(source, "frame.gcl").unwrap();
+    let src = miette::NamedSource::new("frame.gcl", std::sync::Arc::new(source.to_string()));
+    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
+    // Runtime imports are prepared from checked import bindings; seed one
+    // directly so the frame's contract is exercised on its own.
+    let (owner, callable) = plan
+        .callables
+        .iter_mut()
+        .next()
+        .expect("the inline DAG is callable");
+    let owner = owner.clone();
+    let import = tir
+        .dag_registry()
+        .get(&owner)
+        .unwrap()
+        .params()
+        .next()
+        .map(graphcal_compiler::tir::typed::TypedParamEntry::identity)
+        .unwrap();
+    callable.imports.runtime = vec![import.clone()];
+    let plan = plan;
+    let owner = &owner;
+    let expected_imports = vec![import.clone()];
+    let value = |value: f64| {
+        EvaluatedRuntimeValue::new(
+            RuntimeValue::quantity(value).unwrap(),
+            PresentationInstance::None,
+        )
+    };
+
+    let mut frame = ExecutionFrame::new(&plan, owner, FailurePolicy::Propagate).unwrap();
+    let mut asked = Vec::new();
+    frame.seed_runtime_imports(|key| {
+        asked.push(key.clone());
+        Some(value(5.0))
+    });
+    assert_eq!(asked, expected_imports);
+    assert!(frame.values().contains_key(&import));
+    assert!(!frame.presentations().contains_key(&import));
+
+    // An import already bound keeps its value.
+    let span = graphcal_compiler::syntax::span::Span::new(0, 0);
+    let mut frame = ExecutionFrame::new(&plan, owner, FailurePolicy::Propagate).unwrap();
+    frame
+        .bind_argument(&import, value(7.0), &src, span)
+        .unwrap();
+    frame.seed_runtime_imports(|key| {
+        assert_ne!(key, &import, "a bound import is never looked up");
+        Some(value(5.0))
+    });
+    assert_eq!(
+        frame
+            .values()
+            .get(&import)
+            .and_then(|value| value.expect_quantity("import").ok()),
+        Some(7.0)
+    );
+}
+
+#[test]
 fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     let source = "pub const node OUTER: Dimensionless = 2.0; dag helper { import pools::{OUTER}; const node LOCAL: Dimensionless = 3.0; pub node value: Dimensionless = @OUTER + @LOCAL; } include helper() as one; include helper() as two; node output: Dimensionless = @one::value + @two::value + @helper()::value;";
     let tir = compile_to_tir(source, "pools.gcl").unwrap();
@@ -904,10 +1028,15 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
                 assert!(outcome.is_err());
             } else {
                 outcome.unwrap();
-                assert!(frame.values.keys().any(|key| key.as_str() == "independent"));
                 assert!(
                     frame
-                        .errors
+                        .values()
+                        .keys()
+                        .any(|key| key.as_str() == "independent")
+                );
+                assert!(
+                    frame
+                        .errors()
                         .iter()
                         .any(|(key, error)| key.as_str() == "dependent"
                             && matches!(error, NodeUnavailable::DependencyFailed { .. }))

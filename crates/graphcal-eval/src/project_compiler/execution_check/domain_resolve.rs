@@ -240,7 +240,7 @@ fn evaluate_domain_bounds<T: PartialOrd>(
         .iter()
         .map(|bound| {
             let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
-                ctx.evaluation.tir, ctx.evaluation.current_dag, &bound.value, ctx.bindings, &bound.src,
+                ctx.evaluation.tir, ctx.evaluation.dag(), &bound.value, ctx.bindings, &bound.src,
             )?;
             let runtime_value = eval_texpr(&tree, values, &empty_locals, ctx.evaluation)?;
             let value = convert(&runtime_value, bound)?;

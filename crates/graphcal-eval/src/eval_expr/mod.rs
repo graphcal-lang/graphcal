@@ -33,7 +33,7 @@ fn imported_binding_value<'a>(
     caller_values: &'a RuntimeValueMap,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a RuntimeValue> {
-    if target.owner() == ctx.current_dag.dag_id() {
+    if target.owner() == ctx.dag().dag_id() {
         caller_values.get(target)
     } else if target.owner() == ctx.tir.root_dag_id() {
         ctx.root_values.and_then(|values| values.get(target))

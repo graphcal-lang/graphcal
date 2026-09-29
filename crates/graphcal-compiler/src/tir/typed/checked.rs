@@ -105,6 +105,30 @@ impl CheckedDag {
         self.presentation.plot_channels.get(plot)
     }
 
+    /// The declaration `handle` denotes when this DAG runs the body holding
+    /// it.
+    ///
+    /// The frame is this DAG's own and never leaves it, so a handle is
+    /// resolved by the DAG selected to run it, not by a frame its caller
+    /// picks.
+    #[must_use]
+    pub fn resolve(&self, handle: &crate::hir::expr::LocalDecl) -> ResolvedDeclName {
+        self.body.frame().resolve(handle)
+    }
+
+    /// The unit whose scale `unit` has when this DAG runs the body holding it.
+    #[must_use]
+    pub fn resolve_unit(&self, unit: &crate::hir::expr::ResolvedUnitRef) -> ResolvedUnitName {
+        self.body.frame().resolve_unit(unit)
+    }
+
+    /// The nominal type `source` stands for when this DAG runs a body naming
+    /// it, after the instance's Static type substitution.
+    #[must_use]
+    pub fn runtime_struct_type(&self, source: &ResolvedStructTypeName) -> ResolvedStructTypeName {
+        self.body.frame().struct_type(source)
+    }
+
     /// Release the body, dropping its facts, to re-resolve it in a derived
     /// checking view.
     pub(crate) fn into_body(self) -> DagTIR {

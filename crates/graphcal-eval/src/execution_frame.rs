@@ -9,7 +9,7 @@ use crate::presentation_evidence::PresentationInstanceMap;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use miette::NamedSource;
@@ -28,10 +28,25 @@ pub enum FramePreparationError {
     Callable(#[from] crate::execution_plan::CallablePlanError),
 }
 
+/// The values of one callable's declarations while its plan runs.
+///
+/// The fields are private so the frame keeps its invariants by construction:
+/// every bound value passed its domain check, a presentation is kept only for
+/// a bound value, and a declaration holds a value or an unavailability, never
+/// both. Callers supply arguments and runtime imports through the operations
+/// below, read the frame while it runs, and take the outcome with
+/// [`ExecutionFrame::finish`].
 pub struct ExecutionFrame<'a> {
     plan: &'a ExecPlan,
     callable: &'a CallablePlan,
     policy: FailurePolicy,
+    values: RuntimeValueMap,
+    presentations: PresentationInstanceMap,
+    errors: HashMap<ResolvedDeclName, NodeUnavailable>,
+}
+
+/// What a finished frame computed.
+pub struct FrameOutcome {
     pub values: RuntimeValueMap,
     pub presentations: PresentationInstanceMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
@@ -98,6 +113,34 @@ impl<'a> ExecutionFrame<'a> {
         })
     }
 
+    /// Values bound so far.
+    #[must_use]
+    pub const fn values(&self) -> &RuntimeValueMap {
+        &self.values
+    }
+
+    /// Presentations of the values bound so far.
+    #[must_use]
+    pub const fn presentations(&self) -> &PresentationInstanceMap {
+        &self.presentations
+    }
+
+    /// Declarations found unavailable so far.
+    #[must_use]
+    pub const fn errors(&self) -> &HashMap<ResolvedDeclName, NodeUnavailable> {
+        &self.errors
+    }
+
+    /// The frame's outcome, once the caller is done running it.
+    #[must_use]
+    pub fn finish(self) -> FrameOutcome {
+        FrameOutcome {
+            values: self.values,
+            presentations: self.presentations,
+            errors: self.errors,
+        }
+    }
+
     pub fn unfinished_origins(
         &self,
     ) -> impl Iterator<Item = &graphcal_compiler::resolved_name::ResolvedDeclName> {
@@ -121,13 +164,16 @@ impl<'a> ExecutionFrame<'a> {
         }
     }
 
-    pub fn bind(
+    /// Bind `key` to `value` after its domain check, recording a violation
+    /// under the frame's failure policy.
+    fn bind(
         &mut self,
         key: &ResolvedDeclName,
-        value: RuntimeValue,
+        value: EvaluatedRuntimeValue,
         source: &NamedSource<Arc<String>>,
         span: Span,
     ) -> Result<(), GraphcalError> {
+        let (value, presentation) = value.into_parts();
         if let Some(constraint) = self.callable.domain_constraints.get(key)
             && let Err(violation) = check_domain_constraint(&value, constraint)
         {
@@ -142,7 +188,46 @@ impl<'a> ExecutionFrame<'a> {
             );
         }
         self.values.insert(key.clone(), value);
+        if !presentation.is_none() {
+            self.presentations.insert(key.clone(), presentation);
+        }
         Ok(())
+    }
+
+    /// Bind a value the caller supplies for `key` (a runtime parameter
+    /// binding or a call argument) before the frame runs.
+    ///
+    /// The value is domain-checked like every value the frame computes.
+    pub fn bind_argument(
+        &mut self,
+        key: &ResolvedDeclName,
+        value: EvaluatedRuntimeValue,
+        source: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> Result<(), GraphcalError> {
+        self.bind(key, value, source, span)
+    }
+
+    /// Seed each prepared runtime import of this callable that is not bound
+    /// yet with the value `lookup` finds for it in the caller's frames.
+    ///
+    /// Supplied values and retained checked constants always win.
+    pub fn seed_runtime_imports(
+        &mut self,
+        mut lookup: impl FnMut(&ResolvedDeclName) -> Option<EvaluatedRuntimeValue>,
+    ) {
+        for key in &self.callable.imports.runtime {
+            if self.values.contains_key(key) {
+                continue;
+            }
+            if let Some(imported) = lookup(key) {
+                let (value, presentation) = imported.into_parts();
+                self.values.insert(key.clone(), value);
+                if !presentation.is_none() {
+                    self.presentations.insert(key.clone(), presentation);
+                }
+            }
+        }
     }
 
     pub fn run(
@@ -205,13 +290,7 @@ impl<'a> ExecutionFrame<'a> {
                 self,
             );
             match result {
-                Ok(evaluated) => {
-                    let (value, presentation) = evaluated.into_parts();
-                    self.bind(key, value, scope.source(), expression.span)?;
-                    if self.values.contains_key(key) && !presentation.is_none() {
-                        self.presentations.insert(key.clone(), presentation);
-                    }
-                }
+                Ok(evaluated) => self.bind(key, evaluated, scope.source(), expression.span)?,
                 Err(error) => self.failure(key, error)?,
             }
         }
