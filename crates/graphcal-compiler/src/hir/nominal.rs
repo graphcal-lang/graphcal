@@ -10,6 +10,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 use thiserror::Error;
 
+use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use crate::syntax::ast::GenericConstraint;
 use crate::syntax::span::Span;
@@ -162,6 +163,11 @@ pub struct NominalTypeDef {
     kind: NominalTypeKind,
     source: NamedSource<Arc<String>>,
     span: Span,
+    /// For a definition an include projects from its template, the include's
+    /// canonical substitution. Signature names are already substituted; the
+    /// dimensions a named template dimension is defined over are substituted
+    /// when its field types are resolved.
+    instance_substitution: Option<StaticSubstitution>,
 }
 
 impl NominalTypeDef {
@@ -178,6 +184,7 @@ impl NominalTypeDef {
             kind: NominalTypeKind::Required,
             source,
             span,
+            instance_substitution: None,
         }
     }
 
@@ -208,7 +215,22 @@ impl NominalTypeDef {
             kind: NominalTypeKind::Union { members },
             source,
             span,
+            instance_substitution: None,
         })
+    }
+
+    /// Mark this definition as projected from a template through an
+    /// include's canonical `substitution`.
+    #[must_use]
+    pub(crate) fn with_instance_substitution(mut self, substitution: StaticSubstitution) -> Self {
+        self.instance_substitution = Some(substitution);
+        self
+    }
+
+    /// The include substitution this definition was projected through, if any.
+    #[must_use]
+    pub const fn instance_substitution(&self) -> Option<&StaticSubstitution> {
+        self.instance_substitution.as_ref()
     }
 
     /// Canonical type identity, including its defining DAG.

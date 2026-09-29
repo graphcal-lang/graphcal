@@ -687,6 +687,28 @@ fn clone_checked_instance(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagTIR, GraphcalError> {
+    // An instance rebinding a defaulted dimension port is built from the
+    // template's view where that port is rigid, then specialized like a
+    // required port.
+    let ports = tir
+        .project_type_store()
+        .bound_defaulted_dimension_ports(&edge.instance.specialization().substitution);
+    let rigid_tir;
+    let template = if ports.is_empty() {
+        template
+    } else {
+        rigid_tir = super::rigid_dimension_view(tir, template.dag_id(), &ports, src)?;
+        rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!(
+                    "rigid template `{}` is unavailable for semantic instance",
+                    template.dag_id()
+                ),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?
+    };
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge);
     for (_, dag) in tir.dags.iter() {
@@ -709,6 +731,7 @@ fn clone_checked_instance(
 
 fn specialize_instance_presentation_facts(
     tir: &TIR,
+    port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<(crate::dag_id::DagId, DagPresentationFacts)>, GraphcalError> {
     tir.dags
@@ -729,10 +752,9 @@ fn specialize_instance_presentation_facts(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            let plot_channels = template
-                .semantic
-                .presentation
-                .plot_channels
+            let plot_channels = port_generic_plot_channels
+                .get(owner)
+                .unwrap_or(&template.semantic.presentation.plot_channels)
                 .iter()
                 .map(|(plot, channels)| {
                     channels
@@ -854,15 +876,25 @@ pub fn install_semantic_plot_projection_facts(
     })
 }
 
+/// Checked channel shapes of a DAG's plots.
+pub type PlotChannels =
+    HashMap<ResolvedDeclName, HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>>;
+
 /// Bootstrap semantic instances with specialized checked presentation facts.
 ///
-/// The dimension checker subsequently recomputes concrete provenance from each
+/// An instance specializes its template's plot shapes, or, when it rebinds a
+/// defaulted dimension port, the template's shapes in the view where that
+/// port is rigid (`port_generic_plot_channels`, keyed by instance). The
+/// dimension checker subsequently recomputes concrete provenance from each
 /// instance body while retaining these already-checked plot shapes.
 pub fn install_semantic_presentation_facts(
     tir: &mut TIR,
+    port_generic_plot_channels: &HashMap<crate::dag_id::DagId, PlotChannels>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for (owner, facts) in specialize_instance_presentation_facts(tir, src)? {
+    for (owner, facts) in
+        specialize_instance_presentation_facts(tir, port_generic_plot_channels, src)?
+    {
         let instance = tir.dags.get_mut(&owner).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("semantic presentation instance `{owner}` is unavailable"),

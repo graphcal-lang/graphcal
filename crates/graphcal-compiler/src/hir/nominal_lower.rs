@@ -512,12 +512,12 @@ pub fn specialize_nominal_type(
         })
         .collect::<Result<_, NatOverflowError>>()?;
     match template.kind() {
-        NominalTypeKind::Required => Ok(NominalTypeDef::required(
-            identity,
-            generic_params,
-            source,
-            span,
-        )),
+        NominalTypeKind::Required => {
+            Ok(
+                NominalTypeDef::required(identity, generic_params, source, span)
+                    .with_instance_substitution(substitution.clone()),
+            )
+        }
         NominalTypeKind::Union { members } => {
             let members = members
                 .iter()
@@ -543,6 +543,7 @@ pub fn specialize_nominal_type(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             NominalTypeDef::try_union(identity, generic_params, members, source, span)
+                .map(|definition| definition.with_instance_substitution(substitution.clone()))
         }
     }
 }
@@ -887,6 +888,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(specialized.identity(), &identity);
+        assert_eq!(specialized.instance_substitution(), Some(&substitution));
+        assert_eq!(template.instance_substitution(), None);
         let [param, nat_param] = specialized.generic_params() else {
             panic!("Box keeps two generic parameters");
         };

@@ -1370,6 +1370,184 @@ fn derived_dimension_projection_from_file_module_follows_the_include_binding() {
     }
 }
 
+/// A template whose bindable dimension port has a default, with a derived
+/// dimension over it.
+const DEFAULTED_BINDABLE_DIM_LIBRARY: &str = "pub(bind) dim Q = Length;\n\
+                                              pub dim QR = Q / Time;\n\
+                                              param q: Q;\n\
+                                              pub node doubled: Q = @q * 2.0;\n\
+                                              pub node rate: QR = @q / 2.0 s;\n";
+
+#[test]
+fn defaulted_bindable_dimension_follows_the_include_binding_in_inline_dags() {
+    let library = format!("dag blib {{\n{DEFAULTED_BINDABLE_DIM_LIBRARY}}}\n");
+    for (include, output, value) in [
+        // Rebinding the defaulted port retypes every use and derived dimension.
+        (
+            "include blib(dim Q: Mass, q: 4.0 kg)::{doubled, rate};",
+            "node x: Mass = @doubled;\nnode y: Mass / Time = @rate;",
+            (8.0, 2.0),
+        ),
+        // Without a binding the default applies.
+        (
+            "include blib(q: 4.0 m)::{doubled, rate};",
+            "node x: Length = @doubled;\nnode y: Length / Time = @rate;",
+            (8.0, 2.0),
+        ),
+    ] {
+        let source = format!("{library}{include}\n{output}");
+        let result = compile_and_eval(&source)
+            .unwrap_or_else(|error| panic!("`{include}` was rejected: {error:?}"));
+        assert_quantity_value(&result, "x", value.0);
+        assert_quantity_value(&result, "y", value.1);
+    }
+    // The rebound port rejects a value of the default dimension.
+    assert!(
+        compile_and_eval(&format!(
+            "{library}include blib(dim Q: Mass, q: 4.0 m)::{{doubled}};\nnode x: Mass = @doubled;"
+        ))
+        .is_err()
+    );
+    // A projected derived dimension follows the rebinding too.
+    let prefix = format!("{library}include blib(dim Q: Mass, q: 4.0 kg)::{{dim QR}};\n");
+    let result = compile_and_eval(&format!("{prefix}node x: QR = 1.0 kg/s;"))
+        .expect("the projected QR is Mass / Time");
+    assert_quantity_value(&result, "x", 1.0);
+    expect_annotation_mismatch(&format!("{prefix}node x: QR = 1.0 m/s;"));
+}
+
+#[test]
+fn defaulted_bindable_dimension_follows_the_include_binding_in_file_modules() {
+    for (main, expected) in [
+        (
+            "include pipeline.lib(dim Q: Mass, q: 4.0 kg)::{doubled, rate};\n\
+             node x: Mass = @doubled;\n\
+             node y: Mass / Time = @rate;\n",
+            Some((8.0, 2.0)),
+        ),
+        (
+            "include pipeline.lib(q: 4.0 m)::{doubled, rate};\n\
+             node x: Length = @doubled;\n\
+             node y: Length / Time = @rate;\n",
+            Some((8.0, 2.0)),
+        ),
+        (
+            "include pipeline.lib(dim Q: Mass, q: 4.0 kg)::{doubled};\n\
+             node x: Length = @doubled;\n",
+            None,
+        ),
+    ] {
+        let (_directory, root) = write_pipeline_project(
+            &[
+                ("lib.gcl", DEFAULTED_BINDABLE_DIM_LIBRARY),
+                ("main.gcl", main),
+            ],
+            "main.gcl",
+        );
+        let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
+        match (result, expected) {
+            (Ok(result), Some((x, y))) => {
+                assert_quantity_value(&result, "x", x);
+                assert_quantity_value(&result, "y", y);
+            }
+            (
+                Err(CompileError::Eval(GraphcalError::DimensionMismatchInAnnotation { .. })),
+                None,
+            ) => {}
+            (other, _) => panic!("unexpected result for\n{main}\n{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn defaulted_bindable_dimension_rebinding_passes_through_nested_includes() {
+    let source = "dag inner {\n\
+                      pub(bind) dim P = Length;\n\
+                      param p: P;\n\
+                      pub node twice: P = @p * 2.0;\n\
+                  }\n\
+                  dag wrap {\n\
+                      pub(bind) dim Q = Length;\n\
+                      param q: Q;\n\
+                      include inner(dim P: Q, p: @q)::{twice};\n\
+                      pub node out: Q = @twice;\n\
+                  }\n\
+                  include wrap(dim Q: Mass, q: 3.0 kg)::{out};\n\
+                  node r: Mass = @out;";
+    let result = compile_and_eval(source).expect("the rebinding reaches the nested include");
+    assert_quantity_value(&result, "r", 6.0);
+}
+
+#[test]
+fn rebound_defaulted_dimension_port_types_projected_plot_channels() {
+    let source = "dag lib {\n\
+                      pub(bind) dim Q = Length;\n\
+                      pub index I = { A, B };\n\
+                      param q: Q;\n\
+                      pub node xs: Q[I] = for i: I { @q };\n\
+                      pub node ys: Dimensionless[I] = for i: I { 1.0 };\n\
+                      pub plot p = { mark: line, encode: { x: @xs, y: @ys } };\n\
+                  }\n\
+                  include lib(dim Q: Mass, q: 3.0 kg)::{p};";
+    let result = compile_and_eval(source).expect("the projected plot checks");
+    let [plot] = result.plots.as_slice() else {
+        panic!("expected one projected plot, got {:?}", result.plots);
+    };
+    let x = plot
+        .encoding_meta
+        .iter()
+        .find(|(channel, _)| *channel == graphcal_compiler::syntax::ast::EncodingChannel::X)
+        .map(|(_, metadata)| metadata);
+    assert_eq!(
+        x.and_then(|metadata| metadata.dimension_label.as_deref()),
+        Some("Mass")
+    );
+}
+
+#[test]
+fn projected_type_fields_follow_bound_ports_through_unprojected_derived_dimensions() {
+    // `QR` is not projected, yet the projected `Rate` names it in a field:
+    // the field follows the include's binding of the port `QR` is defined over.
+    for (port, binding, accepted, rejected) in [
+        ("pub(bind) dim Q;", "dim Q: Length", "1.0 m/s", "1.0 kg/s"),
+        (
+            "pub(bind) dim Q = Length;",
+            "dim Q: Mass",
+            "1.0 kg/s",
+            "1.0 m/s",
+        ),
+    ] {
+        let program = |value: &str| {
+            format!(
+                "dag blib {{\n\
+                     {port}\n\
+                     pub dim QR = Q / Time;\n\
+                     pub type Rate {{ Rate(v: QR) }}\n\
+                 }}\n\
+                 include blib({binding})::{{type Rate, Rate}};\n\
+                 node r: Rate = Rate(v: {value});"
+            )
+        };
+        compile_and_eval(&program(accepted))
+            .unwrap_or_else(|error| panic!("`{port}` with `{binding}` rejected: {error:?}"));
+        assert!(
+            compile_and_eval(&program(rejected)).is_err(),
+            "`{port}` with `{binding}` accepted {rejected}"
+        );
+    }
+}
+
+#[test]
+fn template_bodies_may_use_derived_dimensions_over_defaulted_ports() {
+    // A body typed by a derived dimension over a defaulted port does not
+    // observe the port's default (no V007), whether or not it is bound.
+    let library = format!("dag blib {{\n{DEFAULTED_BINDABLE_DIM_LIBRARY}}}\n");
+    let source =
+        format!("{library}include blib(q: 4.0 m)::{{rate}};\nnode y: Length / Time = @rate;");
+    let result = compile_and_eval(&source).expect("no false V007 for a derived dimension");
+    assert_quantity_value(&result, "y", 2.0);
+}
+
 #[test]
 fn included_dag_dimensions_do_not_shadow_importer_dimensions() {
     let prefix = "dag blib {\n\

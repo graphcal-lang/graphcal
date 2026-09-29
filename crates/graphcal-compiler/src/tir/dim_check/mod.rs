@@ -803,7 +803,7 @@ pub fn check_dimensions_tir_with_cancellation(
         checked_plot_shapes.insert(dag_id, plot_shapes);
     }
 
-    install_instance_expression_facts(tir, src, cancellation)?;
+    let port_generic_plot_channels = install_instance_expression_facts(tir, src, cancellation)?;
     concrete_obligations::validate_project(tir, src, cancellation)?;
 
     // Field targets and dimensions were checked before publication; installing
@@ -812,7 +812,7 @@ pub fn check_dimensions_tir_with_cancellation(
     let presentation_facts =
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
     install_presentation_facts(tir, presentation_facts, src)?;
-    crate::tir::typed::install_semantic_presentation_facts(tir, src)?;
+    crate::tir::typed::install_semantic_presentation_facts(tir, &port_generic_plot_channels, src)?;
     crate::tir::typed::install_semantic_plot_projection_facts(tir, src)
 }
 

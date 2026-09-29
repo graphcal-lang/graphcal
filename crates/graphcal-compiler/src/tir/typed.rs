@@ -532,19 +532,49 @@ fn type_resolve_single_impl(
 }
 
 /// Resolve every const/param/node annotation of one HIR DAG.
-///
-/// A value projected from a semantic include instance keeps the annotation of
-/// its template declaration, resolved in the template's scope. Its declared
-/// type is that annotation specialized through the instance's Static
-/// substitution, exactly as the instance output itself is specialized.
 fn resolve_declared_type_exprs(
     hir: &HirDag,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
-    let projection_substitutions = hir
-        .semantic_instances
+    let decls = hir.decls();
+    resolve_declared_types(
+        decls
+            .consts()
+            .map(|entry| (entry.identity(), &entry.type_ann.decl_type))
+            .chain(
+                decls
+                    .params()
+                    .map(|entry| (entry.identity(), &entry.type_ann.decl_type)),
+            )
+            .chain(
+                decls
+                    .nodes()
+                    .map(|entry| (entry.identity(), &entry.type_ann.decl_type)),
+            ),
+        &hir.semantic_instances,
+        module_ctx.types,
+        src,
+        cancellation,
+    )
+}
+
+/// Resolve declaration annotations in the type view `types`.
+///
+/// A value projected from a semantic include instance keeps the annotation of
+/// its template declaration, resolved in the template's scope (with the
+/// defaulted dimension ports the include binds kept rigid). Its declared type
+/// is that annotation specialized through the instance's Static substitution,
+/// exactly as the instance output itself is specialized.
+fn resolve_declared_types<'d>(
+    declarations: impl Iterator<Item = (ResolvedDeclName, &'d hir::DeclType)>,
+    semantic_instances: &[crate::ir::instance::HirInstanceRecord],
+    types: &ProjectTypeStore,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<HashMap<ResolvedDeclName, CheckedDeclType>, GraphcalError> {
+    let projection_substitutions = semantic_instances
         .iter()
         .flat_map(|record| {
             record
@@ -554,29 +584,19 @@ fn resolve_declared_type_exprs(
                 .map(|exposed| (exposed, record.instance.substitution()))
         })
         .collect::<HashMap<_, _>>();
-    let decls = hir.decls();
+    let mut views = HashMap::new();
+    for substitution in projection_substitutions.values() {
+        views.insert(*substitution, instance_type_view(types, substitution, src)?);
+    }
     let mut resolved = Vec::new();
-    for (name, identity, type_ann) in decls
-        .consts()
-        .map(|entry| (&entry.name, entry.identity(), &entry.type_ann))
-        .chain(
-            decls
-                .params()
-                .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
-        )
-        .chain(
-            decls
-                .nodes()
-                .map(|entry| (&entry.name, entry.identity(), &entry.type_ann)),
-        )
-    {
+    for (identity, decl_type) in declarations {
         cancellation.checkpoint()?;
-        let ty = resolve_hir_decl_type(&type_ann.decl_type, src, module_ctx)?;
-        let ty = match projection_substitutions.get(name) {
+        let ty = match projection_substitutions.get(&identity.to_unowned_def_name()) {
             Some(substitution) => {
-                specialization::specialize_type(&ty, substitution, module_ctx.types, src)?
+                let view = views.get(substitution).map_or(types, AsRef::as_ref);
+                resolve_instance_decl_type(decl_type, substitution, view, types, src)?
             }
-            None => ty,
+            None => type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?,
         };
         resolved.push((identity, ty));
     }
@@ -585,6 +605,40 @@ fn resolve_declared_type_exprs(
         .into_iter()
         .map(|(identity, ty)| CheckedDeclType::new(ty, src).map(|checked| (identity, checked)))
         .collect()
+}
+
+/// The type view a template annotation is resolved in for an include with
+/// `substitution`: the defaulted dimension ports it binds stay rigid, so the
+/// substitution reaches every dimension defined over them.
+fn instance_type_view<'s>(
+    types: &'s ProjectTypeStore,
+    substitution: &crate::ir::static_substitution::StaticSubstitution,
+    src: &NamedSource<Arc<String>>,
+) -> Result<std::borrow::Cow<'s, ProjectTypeStore>, GraphcalError> {
+    let ports = types.bound_defaulted_dimension_ports(substitution);
+    if ports.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(types));
+    }
+    types
+        .with_rigid_dimensions(&ports)
+        .map(std::borrow::Cow::Owned)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: Span::new(0, src.inner().len()).into(),
+        })
+}
+
+/// Resolve a template annotation in `view` (from [`instance_type_view`]) and
+/// specialize it through the include's `substitution`.
+fn resolve_instance_decl_type(
+    decl_type: &hir::DeclType,
+    substitution: &crate::ir::static_substitution::StaticSubstitution,
+    view: &ProjectTypeStore,
+    types: &ProjectTypeStore,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
+    specialization::specialize_type(&template_type, substitution, types, src)
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
@@ -1124,6 +1178,13 @@ fn record_resolved_struct_type_def(
         }
     }
 
+    let instance_view = type_def
+        .instance_substitution()
+        .map(|substitution| {
+            instance_type_view(ctx.types, substitution, definition_src)
+                .map(|view| (substitution, view))
+        })
+        .transpose()?;
     if let Some(members) = type_def.union_members() {
         for member in members {
             for field in member.fields() {
@@ -1133,7 +1194,16 @@ fn record_resolved_struct_type_def(
                     field: field.name().clone(),
                 };
                 let annotation = field.type_annotation();
-                let resolved = resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?;
+                let resolved = match &instance_view {
+                    Some((substitution, view)) => resolve_instance_decl_type(
+                        &annotation.decl_type,
+                        substitution,
+                        view,
+                        ctx.types,
+                        definition_src,
+                    )?,
+                    None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
+                };
                 let bounds = annotation
                     .domain_bounds
                     .iter()
@@ -1673,58 +1743,50 @@ impl DagTIRSeed {
     }
 }
 
-/// Build a temporary TIR view in which one optional dimension port is rigid.
+/// Build a temporary TIR view in which the optional dimension `ports` of
+/// `dag_id` are rigid.
 ///
 /// The ordinary checked TIR retains default-resolved signatures for parameter
 /// default reconciliation. This view re-resolves source-authored declaration
-/// signatures against an opaque base identity so Option A can verify executable
-/// bodies without mutating the authoritative result.
+/// signatures against opaque base identities (with every dimension defined
+/// over a rigid port recomputed) so Option A can verify executable bodies,
+/// and an include binding the ports can specialize them, without mutating the
+/// authoritative result.
 pub(crate) fn rigid_dimension_view(
     tir: &TIR,
     dag_id: &crate::dag_id::DagId,
-    dimension: &ResolvedDimName,
+    ports: &[ResolvedDimName],
     src: &NamedSource<Arc<String>>,
 ) -> Result<TIR, GraphcalError> {
-    let rigid_types = tir.project_types.with_rigid_dimension(dimension);
-    let dag = tir.dags.get(dag_id).ok_or_else(|| {
+    let rigid_types = tir
+        .project_types
+        .with_rigid_dimensions(ports)
+        .map_err(|_| GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: Span::new(0, src.inner().len()).into(),
+        })?;
+    let mut rigid = tir.clone();
+    for port in ports {
+        rigid.registry.dimensions.register_rigid_dimension(port);
+    }
+    let rigid_dag = rigid.dags.localized_mut(dag_id).ok_or_else(|| {
         GraphcalError::internal_error(
             format!("template DAG `{dag_id}` is unavailable for rigid checking"),
             src,
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    // Every rigid signature resolves before any is required to be concrete.
-    let resolved = dag
-        .value_decl_types()
-        .map(|(identity, annotation)| {
-            type_expr::resolve_hir_decl_type_with_project_types(
-                &annotation.decl_type,
-                src,
-                &rigid_types,
-            )
-            .map(|resolved| (identity, resolved))
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|(identity, resolved)| {
-            CheckedDeclType::new(resolved, src).map(|checked| (identity, checked))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
-
-    let mut rigid = tir.clone();
-    rigid.project_types = Arc::new(rigid_types);
-    rigid
-        .registry
-        .dimensions
-        .register_rigid_dimension(dimension);
-    let rigid_dag = rigid.dags.get_mut(dag_id).ok_or_else(|| {
-        GraphcalError::internal_error(
-            format!("template DAG `{dag_id}` disappeared while installing rigid signatures"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let resolved = resolve_declared_types(
+        rigid_dag
+            .value_decl_types()
+            .map(|(identity, annotation)| (identity, &annotation.decl_type)),
+        &rigid_dag.semantic_instances,
+        &rigid_types,
+        src,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )?;
     rigid_dag.replace_value_decl_types(resolved);
+    rigid.project_types = Arc::new(rigid_types);
     Ok(rigid)
 }
 

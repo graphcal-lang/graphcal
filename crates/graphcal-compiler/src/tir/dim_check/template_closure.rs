@@ -94,17 +94,28 @@ fn local_owner(
     (declaration.owner() == ctx.env.dag.dag_id()).then_some(declaration)
 }
 
+/// What a body that fails to check in a rigid view reports.
+#[derive(Clone, Copy)]
+enum RigidFailure<'a> {
+    /// The body depends on this optional port's default (V007).
+    Violation(&'a crate::hir::StaticPort),
+    /// The closure check already accepted every body; report the error as is.
+    Propagate,
+}
+
 fn rigid_dimension_error(
     ctx: &DimCheckContext<'_>,
     body: &TemplateBodyIdentity,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
     span: Span,
     result: Result<(), GraphcalError>,
 ) -> Result<(), GraphcalError> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(error @ GraphcalError::Cancelled(_)) => Err(error),
-        Err(_) => emit_violation(ctx, body, port, span),
+    match (result, failure) {
+        (Ok(()), _) => Ok(()),
+        (Err(error @ GraphcalError::Cancelled(_)), _) | (Err(error), RigidFailure::Propagate) => {
+            Err(error)
+        }
+        (Err(_), RigidFailure::Violation(port)) => emit_violation(ctx, body, port, span),
     }
 }
 
@@ -112,7 +123,7 @@ fn check_rigid_plot_field(
     ctx: &DimCheckContext<'_>,
     owner: &ResolvedDeclName,
     body: &TemplateBodyIdentity,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
     field: &crate::ir::lower::LoweredPlotField,
 ) -> Result<(), GraphcalError> {
     let (property, expected) = match &field.property {
@@ -136,7 +147,7 @@ fn check_rigid_plot_field(
     rigid_dimension_error(
         ctx,
         body,
-        port,
+        failure,
         field.value.span,
         super::plot::check_property_value(ctx, owner, property, expected, field),
     )
@@ -144,7 +155,7 @@ fn check_rigid_plot_field(
 
 fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
 ) -> Result<(), GraphcalError> {
     for (kind, name, declaration, annotation, body_span) in ctx
         .env
@@ -181,7 +192,7 @@ fn check_rigid_value_bodies(
         rigid_dimension_error(
             ctx,
             &body,
-            port,
+            failure,
             body_span,
             check_decl_expr_type(ctx, name, &declaration, annotation),
         )?;
@@ -191,7 +202,7 @@ fn check_rigid_value_bodies(
 
 fn check_rigid_assertion_bodies(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
 ) -> Result<(), GraphcalError> {
     for entry in ctx.env.dag.asserts() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
@@ -205,7 +216,7 @@ fn check_rigid_assertion_bodies(
         rigid_dimension_error(
             ctx,
             &body,
-            port,
+            failure,
             entry.span,
             check_hir_assert_body(ctx, &owner, assertion, entry.span).map(|_| ()),
         )?;
@@ -215,7 +226,7 @@ fn check_rigid_assertion_bodies(
 
 fn check_rigid_plot_bodies(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
 ) -> Result<(), GraphcalError> {
     for entry in ctx.env.dag.plots() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
@@ -229,7 +240,7 @@ fn check_rigid_plot_bodies(
             rigid_dimension_error(
                 ctx,
                 &body,
-                port,
+                failure,
                 expression.span,
                 infer_operand(ctx, Some(&owner), expression).map(|_| ()),
             )?;
@@ -240,7 +251,7 @@ fn check_rigid_plot_bodies(
             .iter()
             .chain(&entry.body.properties)
         {
-            check_rigid_plot_field(ctx, &owner, &body, port, field)?;
+            check_rigid_plot_field(ctx, &owner, &body, failure, field)?;
         }
     }
     Ok(())
@@ -248,7 +259,7 @@ fn check_rigid_plot_bodies(
 
 fn check_rigid_composition_bodies(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
 ) -> Result<(), GraphcalError> {
     for (kind, name, declaration, fields) in ctx
         .env
@@ -279,7 +290,7 @@ fn check_rigid_composition_bodies(
             name: name.atom().clone(),
         };
         for field in fields {
-            check_rigid_plot_field(ctx, &owner, &body, port, field)?;
+            check_rigid_plot_field(ctx, &owner, &body, failure, field)?;
         }
     }
     Ok(())
@@ -287,7 +298,7 @@ fn check_rigid_composition_bodies(
 
 fn check_rigid_unit_bodies(
     ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
+    failure: RigidFailure<'_>,
 ) -> Result<(), GraphcalError> {
     for entry in ctx.env.dag.semantic.dynamic_unit_scales.values() {
         if entry.unit.owner() != ctx.env.dag.dag_id() {
@@ -300,7 +311,7 @@ fn check_rigid_unit_bodies(
         rigid_dimension_error(
             ctx,
             &body,
-            port,
+            failure,
             entry.expr.span,
             super::check_dynamic_unit_scale_type(ctx, entry),
         )?;
@@ -308,24 +319,28 @@ fn check_rigid_unit_bodies(
     Ok(())
 }
 
-fn check_rigid_dimension_port(
-    ctx: &DimCheckContext<'_>,
-    port: &crate::hir::StaticPort,
-    dimension: &crate::resolved_name::ResolvedDimName,
-) -> Result<(), GraphcalError> {
-    let rigid_tir = crate::tir::typed::rigid_dimension_view(
-        ctx.env.tir,
-        ctx.env.dag.dag_id(),
-        dimension,
-        ctx.env.src,
-    )?;
-    let rigid_dag = rigid_tir.dags.get(ctx.env.dag.dag_id()).ok_or_else(|| {
+type ExpressionRecords = std::collections::HashMap<
+    crate::expression_id::ExprId,
+    Box<crate::tir::expression_facts::CheckedExpressionRecord>,
+>;
+
+/// Check every source-authored executable body of `template` in the view
+/// where the optional dimension `ports` are rigid, then run `extra` in that
+/// view. Returns `extra`'s result and the facts the rigid inference recorded.
+fn check_in_rigid_view<R>(
+    tir: &crate::tir::typed::TIR,
+    template: &crate::tir::typed::DagTIR,
+    ports: &[crate::resolved_name::ResolvedDimName],
+    failure: RigidFailure<'_>,
+    src: &miette::NamedSource<std::sync::Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+    extra: impl FnOnce(&DimCheckContext<'_>) -> Result<R, GraphcalError>,
+) -> Result<(R, ExpressionRecords), GraphcalError> {
+    let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template.dag_id(), ports, src)?;
+    let rigid_dag = rigid_tir.dags.get(template.dag_id()).ok_or_else(|| {
         GraphcalError::internal_error(
-            format!(
-                "rigid template DAG `{}` is unavailable",
-                ctx.env.dag.dag_id()
-            ),
-            ctx.env.src,
+            format!("rigid template DAG `{}` is unavailable", template.dag_id()),
+            src,
             DiagnosticAnchor::WholeFile,
         )
     })?;
@@ -335,16 +350,80 @@ fn check_rigid_dimension_port(
             dag: rigid_dag,
             tir: &rigid_tir,
             registry: &rigid_tir.registry,
-            src: ctx.env.src,
+            src,
         },
-        cancellation: ctx.cancellation,
+        cancellation,
         expression_facts: &expression_facts,
     };
-    check_rigid_value_bodies(&rigid_ctx, port)?;
-    check_rigid_assertion_bodies(&rigid_ctx, port)?;
-    check_rigid_plot_bodies(&rigid_ctx, port)?;
-    check_rigid_composition_bodies(&rigid_ctx, port)?;
-    check_rigid_unit_bodies(&rigid_ctx, port)
+    check_rigid_value_bodies(&rigid_ctx, failure)?;
+    check_rigid_assertion_bodies(&rigid_ctx, failure)?;
+    check_rigid_plot_bodies(&rigid_ctx, failure)?;
+    check_rigid_composition_bodies(&rigid_ctx, failure)?;
+    check_rigid_unit_bodies(&rigid_ctx, failure)?;
+    let result = extra(&rigid_ctx)?;
+    Ok((result, expression_facts.finish()))
+}
+
+fn check_rigid_dimension_port(
+    ctx: &DimCheckContext<'_>,
+    port: &crate::hir::StaticPort,
+    dimension: &crate::resolved_name::ResolvedDimName,
+) -> Result<(), GraphcalError> {
+    check_in_rigid_view(
+        ctx.env.tir,
+        ctx.env.dag,
+        std::slice::from_ref(dimension),
+        RigidFailure::Violation(port),
+        ctx.env.src,
+        ctx.cancellation,
+        |_| Ok(()),
+    )
+    .map(drop)
+}
+
+/// A template's checked facts in the view where the optional dimension
+/// ports an instance binds are rigid.
+pub(super) struct PortGenericFacts {
+    /// Facts of the template's executable bodies.
+    pub(super) records: ExpressionRecords,
+    /// Channel shapes of the template's own plots.
+    pub(super) plot_channels: super::plot::CheckedPlotChannelShapes,
+}
+
+/// Facts of `template` in the view where the bound optional dimension
+/// `ports` are rigid: what an instance binding these ports specializes,
+/// since the template's own facts saw their defaults.
+///
+/// The closure check has accepted every body with each port rigid, so any
+/// failure here is reported unchanged.
+pub(super) fn port_generic_facts(
+    tir: &crate::tir::typed::TIR,
+    template: &crate::tir::typed::DagTIR,
+    ports: &[crate::resolved_name::ResolvedDimName],
+    src: &miette::NamedSource<std::sync::Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<PortGenericFacts, GraphcalError> {
+    let (plot_channels, records) = check_in_rigid_view(
+        tir,
+        template,
+        ports,
+        RigidFailure::Propagate,
+        src,
+        cancellation,
+        |rigid| {
+            rigid
+                .env
+                .dag
+                .plots()
+                .filter(|entry| local_owner(rigid, entry.identity()).is_some())
+                .map(|entry| super::plot::check_plot_entry(rigid, entry))
+                .collect()
+        },
+    )?;
+    Ok(PortGenericFacts {
+        records,
+        plot_channels,
+    })
 }
 
 fn check_rigid_dimensions(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
