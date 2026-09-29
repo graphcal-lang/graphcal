@@ -345,11 +345,17 @@ fn specialize_record(
     }))
 }
 
+/// Specialize and publish every semantic instance's expression facts.
+///
+/// Returns the template plot channel shapes to specialize for each instance
+/// that rebinds a defaulted dimension port (taken in the view where that port
+/// is rigid, like the instance's facts).
 pub(super) fn install_instance_expression_facts(
     tir: &mut TIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
-) -> Result<(), GraphcalError> {
+) -> Result<HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>, GraphcalError> {
+    let mut port_generic_plot_channels = HashMap::new();
     let owners: Vec<_> = tir
         .local_dags()
         .filter(|(_, dag)| dag.is_semantic_instance())
@@ -377,6 +383,24 @@ pub(super) fn install_instance_expression_facts(
         let facts = template.expression_facts().map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
+        // A rebound defaulted dimension port: the template's facts saw its
+        // default, so the bodies' facts come from the view where it is rigid.
+        let ports = tir
+            .project_type_store()
+            .bound_defaulted_dimension_ports(&specialization.substitution);
+        let port_generic_records = if ports.is_empty() {
+            HashMap::new()
+        } else {
+            let generic = super::template_closure::port_generic_facts(
+                tir,
+                template,
+                &ports,
+                src,
+                cancellation,
+            )?;
+            port_generic_plot_channels.insert(owner.clone(), generic.plot_channels);
+            generic.records
+        };
         let collector = infer::hir::ExpressionFactCollector::new(dag);
         let ctx = DimCheckContext {
             env: infer::hir::InferEnv {
@@ -402,13 +426,16 @@ pub(super) fn install_instance_expression_facts(
             if records.contains_key(id) {
                 continue;
             }
-            let record = facts.get(id).map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::Source(span),
-                )
-            })?;
+            let record = match port_generic_records.get(id) {
+                Some(record) => record,
+                None => facts.get(id).map_err(|error| {
+                    GraphcalError::internal_error(
+                        error.to_string(),
+                        src,
+                        DiagnosticAnchor::Source(span),
+                    )
+                })?,
+            };
             let record = specialize_record(
                 record,
                 dag,
@@ -420,27 +447,42 @@ pub(super) fn install_instance_expression_facts(
             )?;
             records.insert(id.clone(), record);
         }
-        let published = CheckedExpressionFacts::publish(
-            owner.clone(),
-            dag.body_revision().clone(),
-            &dag.owned_expression_roots().collect::<Vec<_>>(),
-            records,
-            &|index| checked_index_cardinality(tir, index),
-        )
-        .map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
-        tir.dags
-            .get_mut(&owner)
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    "instance disappeared during publication",
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?
-            .semantic
-            .expression_facts = Some(published);
+        publish_instance_facts(tir, &owner, records, src)?;
     }
+    Ok(port_generic_plot_channels)
+}
+
+fn publish_instance_facts(
+    tir: &mut TIR,
+    owner: &crate::dag_id::DagId,
+    records: HashMap<
+        crate::expression_id::ExprId,
+        Box<crate::tir::expression_facts::CheckedExpressionRecord>,
+    >,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let disappeared = || {
+        GraphcalError::internal_error(
+            "instance disappeared during publication",
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    };
+    let dag = tir.dags.get(owner).ok_or_else(disappeared)?;
+    let published = CheckedExpressionFacts::publish(
+        owner.clone(),
+        dag.body_revision().clone(),
+        &dag.owned_expression_roots().collect::<Vec<_>>(),
+        records,
+        &|index| checked_index_cardinality(tir, index),
+    )
+    .map_err(|error| {
+        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+    })?;
+    tir.dags
+        .get_mut(owner)
+        .ok_or_else(disappeared)?
+        .semantic
+        .expression_facts = Some(published);
     Ok(())
 }

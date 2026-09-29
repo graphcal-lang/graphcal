@@ -38,7 +38,7 @@ use crate::registry::unit::{
 };
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedUnitName};
-use crate::syntax::ast::UnitConstness;
+use crate::syntax::ast::{BindableVisibility, UnitConstness};
 use crate::syntax::dimension::{DimName, DimRef, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::non_empty::{DuplicateItemError, NonEmptyUnique};
@@ -101,6 +101,18 @@ impl CycleSite<'_> {
             },
         }
     }
+}
+
+/// How the defaulted bindable dimension ports (`pub(bind) dim Q = Length;`)
+/// of a module are seen while evaluating a dimension.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PortView {
+    /// Every port has its default definition.
+    Default,
+    /// The ports of this module stay opaque base dimensions, so a dimension
+    /// defined over them is symbolic in them. This is the view an include
+    /// binding (or the template-closure check) substitutes into.
+    Generic(DagId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -206,6 +218,8 @@ pub struct StaticDefinitionEvaluator<'a> {
     prelude_dimensions: Vec<(DimRef, ResolvedDimName)>,
     modules: HashMap<DagId, ModuleSource<'a>>,
     dimensions: HashMap<ResolvedDimName, Dimension>,
+    /// Port-generic values ([`PortView::Generic`] of the owning module).
+    port_generic_dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, IndexDef>,
     base_dimensions: BTreeMap<BaseDimId, BaseDimensionInfo>,
@@ -247,6 +261,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 .dimensions()
                 .map(|(identity, dimension)| (identity.clone(), dimension.clone()))
                 .collect(),
+            port_generic_dimensions: HashMap::new(),
             units: prelude_definitions
                 .units()
                 .map(|(identity, info)| (identity.clone(), info.clone()))
@@ -403,7 +418,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         expr: &DimExpr,
         overrides: &HashMap<ResolvedDimName, Option<Dimension>>,
     ) -> Result<Dimension, DimExprFailure> {
-        self.evaluate_dim_expr(owner, expr, overrides, None)
+        self.evaluate_dim_expr(owner, expr, overrides, &PortView::Default, None)
     }
 
     /// The owner-qualified definitions of every dimension, unit, and index
@@ -434,6 +449,12 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         if let Some(symbols) = self.resolver.symbols(owner) {
             for symbol in symbols.dimensions().values() {
                 let dimension = self.dimension(symbol.resolved())?;
+                let generic = self.port_generic_dimension(symbol.resolved())?;
+                if generic != dimension {
+                    definitions
+                        .insert_port_generic_dimension(symbol.resolved().clone(), generic)
+                        .map_err(foreign)?;
+                }
                 definitions
                     .insert_dimension(symbol.resolved().clone(), dimension)
                     .map_err(foreign)?;
@@ -580,13 +601,88 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         });
         self.in_progress.insert(item.clone());
         let dimension = match projection {
-            Some(projection) => self.projected_dimension(owner, &projection),
+            Some(projection) => self.projected_dimension(owner, &projection, &PortView::Default),
             None => self.declared_dimension(identity),
         };
         self.in_progress.remove(&item);
         let dimension = dimension?;
         self.dimensions.insert(identity.clone(), dimension.clone());
         Ok(dimension)
+    }
+
+    /// Evaluate a dimension with its module's defaulted bindable dimension
+    /// ports kept opaque ([`PortView::Generic`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns the diagnostic of an invalid definition or a definition cycle.
+    pub(crate) fn port_generic_dimension(
+        &mut self,
+        identity: &ResolvedDimName,
+    ) -> Result<Dimension, GraphcalError> {
+        let view = PortView::Generic(identity.owner().clone());
+        self.dimension_in(identity, &view, None)
+    }
+
+    fn dimension_in(
+        &mut self,
+        identity: &ResolvedDimName,
+        view: &PortView,
+        site: Option<CycleSite<'a>>,
+    ) -> Result<Dimension, GraphcalError> {
+        // The default evaluation validates the definition and rejects cycles
+        // for the whole reference closure the generic view walks again.
+        let default = self.dimension_from(identity, site)?;
+        let PortView::Generic(module) = view else {
+            return Ok(default);
+        };
+        if identity.owner() != module {
+            return Ok(default);
+        }
+        if let Some(generic) = self.port_generic_dimensions.get(identity) {
+            return Ok(generic.clone());
+        }
+        let owner = identity.owner();
+        let projection = self.resolver.symbols(owner).and_then(|symbols| {
+            symbols
+                .dimension_projection(&identity.to_unowned_def_name())
+                .cloned()
+        });
+        let source = self.modules.get(owner).and_then(|module| {
+            module
+                .dimensions
+                .get(&identity.to_unowned_def_name())
+                .map(|source| (*source, module.src))
+        });
+        let generic = match (projection, source) {
+            (Some(projection), _) => self.projected_dimension(owner, &projection, view)?,
+            (None, Some((DimensionSource::Derived(declaration, _), _)))
+                if declaration.visibility == BindableVisibility::PublicBind =>
+            {
+                Dimension::base(BaseDimId::UserDefined(identity.clone()))
+            }
+            (None, Some((DimensionSource::Derived(_, definition), src))) => self
+                .evaluate_dim_expr(owner, definition, &HashMap::new(), view, site)
+                .map_err(|failure| dim_expr_error(failure, src, definition.span))?,
+            (None, Some((DimensionSource::Base(_), _)) | None) => default,
+        };
+        self.port_generic_dimensions
+            .insert(identity.clone(), generic.clone());
+        Ok(generic)
+    }
+
+    /// Whether `identity` is a defaulted bindable dimension port of its module.
+    fn is_defaulted_dimension_port(&self, identity: &ResolvedDimName) -> bool {
+        self.modules
+            .get(identity.owner())
+            .and_then(|module| module.dimensions.get(&identity.to_unowned_def_name()))
+            .is_some_and(|source| {
+                matches!(
+                    source,
+                    DimensionSource::Derived(declaration, _)
+                        if declaration.visibility == BindableVisibility::PublicBind
+                )
+            })
     }
 
     fn dimension_cycle_at(&self, identity: &ResolvedDimName) -> GraphcalError {
@@ -635,6 +731,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     owner,
                     definition,
                     &HashMap::new(),
+                    &PortView::Default,
                     Some(CycleSite::Dimension {
                         name: &declaration.name,
                         src,
@@ -647,19 +744,22 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// Specialize a template dimension through an include's dimension
     /// bindings.
     ///
-    /// A required dimension port is an opaque base dimension owned by the
-    /// template, so a dimension defined over it (`QR = Q / Time`) keeps that
-    /// base. Each such base bound by the projecting include is replaced with
-    /// the importer's bound dimension (`dim Q: Length` makes `QR`
-    /// `Length / Time`). An unknown binding target is left opaque here; the
-    /// include's binding validation reports it.
+    /// The template's dimension is taken in its port-generic view, so a
+    /// dimension defined over a port (`QR = Q / Time`) keeps that port as an
+    /// opaque base whether the port is required (`pub(bind) dim Q;`) or
+    /// defaulted (`pub(bind) dim Q = Length;`). Each port base bound by the
+    /// projecting include is replaced with the importer's bound dimension
+    /// (`dim Q: Mass` makes `QR` `Mass / Time`), evaluated in `view`; an
+    /// unbound defaulted port takes its default. An unknown binding target is
+    /// left opaque here; the include's binding validation reports it.
     fn projected_dimension(
         &mut self,
         owner: &DagId,
         projection: &crate::resolve::symbols::DimensionProjection,
+        view: &PortView,
     ) -> Result<Dimension, GraphcalError> {
-        let template = self.dimension(projection.template())?;
-        let template_owner = projection.template().owner();
+        let template = self.port_generic_dimension(projection.template())?;
+        let template_owner = projection.template().owner().clone();
         let mut bound = HashMap::new();
         for port in projection.ports() {
             let Some(target) =
@@ -667,26 +767,37 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             else {
                 continue;
             };
-            let value = self.dimension(&target)?;
+            let value = self.dimension_in(&target, view, None)?;
             bound.insert(port.port().clone(), value);
+        }
+        let mut factors = Vec::new();
+        for (base, exponent) in template.iter() {
+            let replacement = match base {
+                BaseDimId::UserDefined(port) if port.owner() == &template_owner => {
+                    match bound.get(&port.to_unowned_def_name()) {
+                        Some(value) => Some(value.clone()),
+                        None if self.is_defaulted_dimension_port(port) => {
+                            Some(self.dimension(port)?)
+                        }
+                        None => None,
+                    }
+                }
+                BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
+            };
+            factors.push((
+                replacement.unwrap_or_else(|| Dimension::base(base.clone())),
+                *exponent,
+            ));
         }
         let src = self
             .modules
             .get(owner)
             .map_or_else(empty_source, |module| module.src.clone());
-        template
-            .iter()
-            .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
-                let replacement = match base {
-                    BaseDimId::UserDefined(port) if port.owner() == template_owner => {
-                        bound.get(&port.to_unowned_def_name())
-                    }
-                    BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
-                };
-                replacement
-                    .cloned()
-                    .unwrap_or_else(|| Dimension::base(base.clone()))
-                    .pow(*exponent)
+        factors
+            .into_iter()
+            .try_fold(Dimension::dimensionless(), |acc, (factor, exponent)| {
+                factor
+                    .pow(exponent)
                     .and_then(|factor| acc.checked_mul(&factor))
             })
             .map_err(|_| GraphcalError::DimensionOverflow {
@@ -700,6 +811,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         expr: &DimExpr,
         overrides: &HashMap<ResolvedDimName, Option<Dimension>>,
+        view: &PortView,
         site: Option<CycleSite<'a>>,
     ) -> Result<Dimension, DimExprFailure> {
         let mut factors = Vec::with_capacity(expr.terms.len());
@@ -712,7 +824,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 Some(Some(value)) => value.clone(),
                 Some(None) => return Err(DimExprFailure::Unknown(reference)),
                 None => self
-                    .dimension_from(&identity, site)
+                    .dimension_in(&identity, view, site)
                     .map_err(|error| DimExprFailure::Definition(Box::new(error)))?,
             };
             factors.push((value, item.term.effective_power(), item.op));
@@ -782,7 +894,13 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             src,
         };
         let dim = self
-            .evaluate_dim_expr(owner, &unit.dim_type, &HashMap::new(), None)
+            .evaluate_dim_expr(
+                owner,
+                &unit.dim_type,
+                &HashMap::new(),
+                &PortView::Default,
+                None,
+            )
             .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
         let Some(def) = &unit.definition else {
             let base = dim.base_dimension_id().cloned();
@@ -1013,7 +1131,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             IndexDeclKind::RequiredNamed => IndexKind::Required(RequiredIndexKind::Named),
             IndexDeclKind::RequiredCoordinate { dimension } => {
                 let dim = self
-                    .evaluate_dim_expr(owner, dimension, &HashMap::new(), None)
+                    .evaluate_dim_expr(owner, dimension, &HashMap::new(), &PortView::Default, None)
                     .map_err(|failure| dim_expr_error(failure, src, dimension.span))?;
                 IndexKind::Required(RequiredIndexKind::Coordinate { dimension: dim })
             }
@@ -1573,6 +1691,60 @@ mod tests {
             / &base(PreludeBaseDimension::Time))
             .unwrap();
         assert_eq!(projected, expected);
+    }
+
+    #[test]
+    fn defaulted_ports_are_opaque_only_in_their_module_port_generic_view() {
+        let project = Project::new(&[
+            (
+                "lib",
+                "pub(bind) dim Q = Length;\npub(bind) dim P = Mass;\n\
+                 pub dim QR = Q * P / Time;\npub dim Fixed = Length;\nparam q: Q;",
+            ),
+            ("main", "include lib(dim Q: Time, q: 1.0 s)::{dim QR as R};"),
+        ]);
+        let resolver = project.resolver();
+        let mut evaluator = project.evaluator(&resolver);
+        let lib = Project::id("lib");
+        let identity = |evaluator: &StaticDefinitionEvaluator<'_>, name: &str| {
+            evaluator
+                .resolve_dimension(&lib, &DimRef::local(DimName::expect_valid(name)))
+                .unwrap()
+        };
+        let q = identity(&evaluator, "Q");
+        let p = identity(&evaluator, "P");
+        let qr = identity(&evaluator, "QR");
+        let fixed = identity(&evaluator, "Fixed");
+        let opaque =
+            |identity: &ResolvedDimName| Dimension::base(BaseDimId::UserDefined(identity.clone()));
+
+        // The default view expands every port.
+        let length = base(PreludeBaseDimension::Length);
+        let mass = base(PreludeBaseDimension::Mass);
+        let time = base(PreludeBaseDimension::Time);
+        assert_eq!(
+            evaluator.dimension(&qr).unwrap(),
+            (&(&length * &mass).unwrap() / &time).unwrap()
+        );
+        // The port-generic view keeps both ports opaque.
+        assert_eq!(evaluator.port_generic_dimension(&q).unwrap(), opaque(&q));
+        assert_eq!(
+            evaluator.port_generic_dimension(&qr).unwrap(),
+            (&(&opaque(&q) * &opaque(&p)).unwrap() / &time).unwrap()
+        );
+        assert_eq!(evaluator.port_generic_dimension(&fixed).unwrap(), length);
+        // A projection substitutes the bound port and defaults the other.
+        assert_eq!(
+            dimension_of(&mut evaluator, &Project::id("main"), "R").unwrap(),
+            mass
+        );
+        // Only differing values are recorded, ports as their own bases.
+        let definitions = evaluator.module_definitions(&lib).unwrap().definitions;
+        let recorded = definitions
+            .port_generic_dimensions()
+            .map(|(identity, _)| identity.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(recorded, [q, p, qr].into_iter().collect());
     }
 
     #[test]

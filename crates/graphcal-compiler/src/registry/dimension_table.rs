@@ -159,19 +159,17 @@ impl DimensionFormattingRegistry {
         format_dimension_preferring_alias(&self.display_aliases, dim)
     }
 
-    /// Add diagnostic formatting for one synthetic rigid template dimension.
+    /// Add diagnostic formatting for one rigid template dimension port.
+    ///
+    /// Like a required port (`pub(bind) dim Q;`), a rigid port is an opaque
+    /// base dimension without a canonical unit.
     pub(crate) fn register_rigid_dimension(
         &mut self,
         name: &crate::resolved_name::ResolvedDimName,
     ) {
         let base = BaseDimId::UserDefined(name.clone());
-        self.bases.insert(
-            base.clone(),
-            BaseDimensionInfo {
-                canonical_unit: Some(UnitName::classify(name.atom().clone())),
-                affine_prone: false,
-            },
-        );
+        self.bases
+            .insert(base.clone(), BaseDimensionInfo::default());
         self.display_aliases.insert(
             DimRef::local(DimName::classify(name.atom().clone())),
             Dimension::base(base),

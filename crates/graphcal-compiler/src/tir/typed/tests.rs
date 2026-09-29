@@ -1495,3 +1495,82 @@ fn nat_poly_format_zero() {
     let z = NatPolyForm::from_constant(0);
     assert_eq!(z.format(), "0");
 }
+
+#[test]
+fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimensions() {
+    use crate::dimension::PreludeBaseDimension;
+    use crate::ir::static_substitution::StaticSubstitution;
+    use crate::syntax::dimension::DimName;
+
+    let owner = crate::dag_id::DagId::root_in_package("test", "lib");
+    let dim = |name: &str| ResolvedDimName::from_def(owner.clone(), DimName::expect_valid(name));
+    let opaque =
+        |identity: &ResolvedDimName| Dimension::base(BaseDimId::UserDefined(identity.clone()));
+    let prelude = |base| Dimension::base(BaseDimId::Prelude(base));
+    let (q, p, qp, required) = (dim("Q"), dim("P"), dim("QP"), dim("R"));
+    let length = prelude(PreludeBaseDimension::Length);
+    let mass = prelude(PreludeBaseDimension::Mass);
+
+    // `pub(bind) dim Q = Length; pub(bind) dim P = Mass; dim QP = Q * P;
+    //  pub(bind) dim R;`
+    let mut statics = crate::ir::module_definitions::StaticDefinitions::new(owner);
+    for (identity, default, generic) in [
+        (&q, length.clone(), Some(opaque(&q))),
+        (&p, mass.clone(), Some(opaque(&p))),
+        (
+            &qp,
+            (&length * &mass).unwrap(),
+            Some((&opaque(&q) * &opaque(&p)).unwrap()),
+        ),
+        (&required, opaque(&required), None),
+    ] {
+        statics.insert_dimension(identity.clone(), default).unwrap();
+        if let Some(generic) = generic {
+            statics
+                .insert_port_generic_dimension(identity.clone(), generic)
+                .unwrap();
+        }
+    }
+    let mut store = ProjectTypeStore::default();
+    store
+        .insert_module(
+            &crate::ir::module_definitions::ModuleDefinitions::try_new(
+                statics,
+                crate::hir::nominal::NominalTypeRegistry::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    // Only defaulted ports a substitution binds are reported.
+    let substitution = StaticSubstitution {
+        dimensions: [(q.clone(), p.clone()), (required, p.clone())]
+            .into_iter()
+            .collect(),
+        ..StaticSubstitution::default()
+    };
+    assert_eq!(
+        store.bound_defaulted_dimension_ports(&substitution),
+        vec![q.clone()]
+    );
+
+    let rigid_q = store
+        .with_rigid_dimensions(std::slice::from_ref(&q))
+        .unwrap();
+    assert_eq!(rigid_q.get_dimension(&q), Some(&opaque(&q)));
+    assert_eq!(rigid_q.get_dimension(&p), Some(&mass));
+    assert_eq!(
+        rigid_q.get_dimension(&qp),
+        Some(&(&opaque(&q) * &mass).unwrap())
+    );
+    // Views compose: a view of a rigid view keeps both ports rigid.
+    let rigid_both = rigid_q
+        .with_rigid_dimensions(std::slice::from_ref(&p))
+        .unwrap();
+    assert_eq!(
+        rigid_both.get_dimension(&qp),
+        Some(&(&opaque(&q) * &opaque(&p)).unwrap())
+    );
+    // The canonical store is untouched.
+    assert_eq!(store.get_dimension(&qp), Some(&(&length * &mass).unwrap()));
+}

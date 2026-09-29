@@ -460,7 +460,13 @@ with bindable Static ports rigid, while V005 separately records reconciliation
 obligations for parameter defaults. A semantic include then materializes a
 checked instance DAG with a concrete owner, typed Static substitution, value
 bindings, and explicit value/assertion/plot projections; it never copies or
-rewrites syntax expressions.
+rewrites syntax expressions. A defaulted dimension port
+(`pub(bind) dim Q = Length;`) resolves to its default in the template's own
+signatures and facts, so an instance that rebinds it specializes the
+template's port-generic view instead: static definitions keep each dimension's
+value with the module's defaulted ports opaque, and
+`ProjectTypeStore::with_rigid_dimensions` rebuilds signatures, facts, and plot
+shapes with the bound ports rigid (the same view V007 checks).
 
 Each category-specific declaration record on `DagTIR` owns its strictly lowered
 HIR body exactly once (`ConstEntry.expr`, `ParamEntry.default`, `NodeEntry.expr`,
@@ -1729,9 +1735,9 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 185. `crates/graphcal-compiler/src/ir/include.rs`
 186. `crates/graphcal-compiler/src/ir/lower.rs`
 187. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/nat_forms.rs`
-188. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
-189. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
-190. `crates/graphcal-compiler/src/tir/typed/substitution.rs`
+188. `crates/graphcal-compiler/src/tir/dim_check/expression_axes.rs`
+189. `crates/graphcal-compiler/src/tir/typed/substitution.rs`
+190. `crates/graphcal-compiler/src/tir/typed/specialization.rs`
 191. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
 192. `crates/graphcal-compiler/src/tir/typed/collect.rs`
 193. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
@@ -1739,23 +1745,23 @@ order: `report_form_state.js`, `report_outline_state.js`, `report_results.js`,
 195. `crates/graphcal-compiler/src/tir/typed/ops.rs`
 196. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/context.rs`
 197. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/facts.rs`
-198. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
-199. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/generics.rs`
-200. `crates/graphcal-compiler/src/tir/typed.rs`
-201. `crates/graphcal-compiler/src/tir/dim_check/expression_facts.rs`
-202. `crates/graphcal-compiler/src/tir/dim_check/concrete_obligations.rs`
-203. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-204. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
-205. `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
-206. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
-207. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
-208. `crates/graphcal-compiler/src/tir/typed/tests.rs`
-209. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
-210. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
-211. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
-212. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-213. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
-214. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
+198. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+199. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+200. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/generics.rs`
+201. `crates/graphcal-compiler/src/tir/dim_check/template_closure.rs`
+202. `crates/graphcal-compiler/src/tir/typed.rs`
+203. `crates/graphcal-compiler/src/tir/dim_check/concrete_obligations.rs`
+204. `crates/graphcal-compiler/src/tir/dim_check/expression_facts.rs`
+205. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+206. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
+207. `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
+208. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
+209. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
+210. `crates/graphcal-compiler/src/tir/typed/tests.rs`
+211. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
+212. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
+213. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+214. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
 215. `crates/graphcal-compiler/src/ir/extern_fns/tests.rs`
 216. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/calls.rs`
 217. `crates/graphcal-compiler/src/tir/dim_check/infer/hir/conversion_calls.rs`

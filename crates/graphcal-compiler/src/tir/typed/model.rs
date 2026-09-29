@@ -293,6 +293,12 @@ impl std::fmt::Display for ResolvedIndex {
 pub struct ProjectTypeStore {
     base_dimensions: std::collections::BTreeMap<crate::dimension::BaseDimId, BaseDimensionInfo>,
     dimensions: HashMap<ResolvedDimName, Dimension>,
+    /// Values that differ when each module's defaulted bindable dimension
+    /// ports stay opaque; each such port maps to its own base.
+    port_generic_dimensions: HashMap<ResolvedDimName, Dimension>,
+    /// Defaulted dimension ports this view keeps rigid (empty for the
+    /// canonical store).
+    rigid_ports: std::collections::BTreeSet<ResolvedDimName>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
     struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
@@ -430,6 +436,11 @@ impl ProjectTypeStore {
         for (identity, dimension) in statics.dimensions() {
             self.insert_dimension_definition(identity.clone(), dimension)?;
         }
+        self.port_generic_dimensions.extend(
+            statics
+                .port_generic_dimensions()
+                .map(|(identity, dimension)| (identity.clone(), dimension.clone())),
+        );
         for (identity, info) in statics.units() {
             self.insert_unit_definition(identity.clone(), info)?;
         }
@@ -481,14 +492,78 @@ impl ProjectTypeStore {
         Ok(())
     }
 
+    /// Whether `identity` is a defaulted bindable dimension port
+    /// (`pub(bind) dim Q = Length;`): its port-generic value is its own base.
     #[must_use]
-    pub(crate) fn with_rigid_dimension(&self, name: &ResolvedDimName) -> Self {
+    fn is_defaulted_dimension_port(&self, identity: &ResolvedDimName) -> bool {
+        self.port_generic_dimensions.get(identity)
+            == Some(&Dimension::base(crate::dimension::BaseDimId::UserDefined(
+                identity.clone(),
+            )))
+    }
+
+    /// The defaulted dimension ports `substitution` binds.
+    ///
+    /// A defaulted port is resolved to its default in its template's own
+    /// signatures and facts, so whatever a binding specializes is taken from
+    /// the view where these ports are rigid ([`Self::with_rigid_dimensions`]).
+    #[must_use]
+    pub(crate) fn bound_defaulted_dimension_ports(
+        &self,
+        substitution: &crate::ir::static_substitution::StaticSubstitution,
+    ) -> Vec<ResolvedDimName> {
+        substitution
+            .dimensions
+            .keys()
+            .filter(|port| self.is_defaulted_dimension_port(port))
+            .cloned()
+            .collect()
+    }
+
+    /// The view in which the defaulted bindable dimension `ports` (and every
+    /// port this view already keeps rigid) stay opaque base dimensions, while
+    /// every other port keeps its default.
+    ///
+    /// Every dimension defined over one of `ports` (`QR = Q / Time`) is
+    /// recomputed from its port-generic value, so it stays symbolic in the
+    /// rigid ports.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when re-expanding a default overflows.
+    pub(crate) fn with_rigid_dimensions(
+        &self,
+        ports: &[ResolvedDimName],
+    ) -> Result<Self, crate::ratio::RatioError> {
         let mut rigid = self.clone();
-        rigid.dimensions.insert(
-            name.clone(),
-            Dimension::base(crate::dimension::BaseDimId::UserDefined(name.clone())),
-        );
-        rigid
+        rigid.rigid_ports.extend(ports.iter().cloned());
+        for (identity, generic) in &self.port_generic_dimensions {
+            let value =
+                generic
+                    .iter()
+                    .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
+                        let factor = match base {
+                            crate::dimension::BaseDimId::UserDefined(port)
+                                if self.is_defaulted_dimension_port(port)
+                                    && !rigid.rigid_ports.contains(port) =>
+                            {
+                                self.dimensions
+                                    .get(port)
+                                    .cloned()
+                                    .unwrap_or_else(|| Dimension::base(base.clone()))
+                            }
+                            crate::dimension::BaseDimId::UserDefined(_)
+                            | crate::dimension::BaseDimId::Prelude(_) => {
+                                Dimension::base(base.clone())
+                            }
+                        };
+                        factor
+                            .pow(*exponent)
+                            .and_then(|factor| acc.checked_mul(&factor))
+                    })?;
+            rigid.dimensions.insert(identity.clone(), value);
+        }
+        Ok(rigid)
     }
 
     #[must_use]
@@ -799,6 +874,17 @@ impl DagRegistry {
         } else {
             self.other_dags.get_mut(dag_id)
         }
+    }
+
+    /// Mutably borrow one DAG, first copying a shared (imported) body into
+    /// this registry's local bodies. Used only by temporary views that
+    /// re-resolve an imported template's signatures.
+    pub(crate) fn localized_mut(&mut self, dag_id: &crate::dag_id::DagId) -> Option<&mut DagTIR> {
+        if let Some(shared) = self.shared_dags.remove(dag_id) {
+            self.other_dags
+                .insert(dag_id.clone(), Arc::unwrap_or_clone(shared));
+        }
+        self.get_mut(dag_id)
     }
 
     /// Iterate over local assembly identities and bodies.

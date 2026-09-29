@@ -50,6 +50,10 @@ pub enum ForeignDefinitionError {
 pub struct StaticDefinitions {
     owner: DagId,
     dimensions: HashMap<ResolvedDimName, Dimension>,
+    /// Values of the dimensions that differ in the port-generic view, where
+    /// this module's defaulted bindable dimension ports stay opaque bases.
+    /// Each such port maps to its own base.
+    port_generic_dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, IndexDef>,
     base_dimensions: BTreeMap<BaseDimId, BaseDimensionInfo>,
@@ -62,6 +66,7 @@ impl StaticDefinitions {
         Self {
             owner,
             dimensions: HashMap::new(),
+            port_generic_dimensions: HashMap::new(),
             units: HashMap::new(),
             indexes: HashMap::new(),
             base_dimensions: BTreeMap::new(),
@@ -91,6 +96,27 @@ impl StaticDefinitions {
             });
         }
         self.dimensions.insert(identity, dimension);
+        Ok(())
+    }
+
+    /// Record the port-generic value of one of this module's dimensions,
+    /// when it differs from the default value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignDefinitionError`] when `identity` belongs to another module.
+    pub fn insert_port_generic_dimension(
+        &mut self,
+        identity: ResolvedDimName,
+        dimension: Dimension,
+    ) -> Result<(), ForeignDefinitionError> {
+        if identity.owner() != &self.owner {
+            return Err(ForeignDefinitionError::Dimension {
+                identity,
+                module: self.owner.clone(),
+            });
+        }
+        self.port_generic_dimensions.insert(identity, dimension);
         Ok(())
     }
 
@@ -142,6 +168,12 @@ impl StaticDefinitions {
     /// This module's dimensions.
     pub fn dimensions(&self) -> impl Iterator<Item = (&ResolvedDimName, &Dimension)> {
         self.dimensions.iter()
+    }
+
+    /// This module's dimensions whose port-generic value differs from the
+    /// default one.
+    pub fn port_generic_dimensions(&self) -> impl Iterator<Item = (&ResolvedDimName, &Dimension)> {
+        self.port_generic_dimensions.iter()
     }
 
     /// This module's units.
@@ -253,5 +285,13 @@ mod tests {
         ));
         assert_eq!(statics.dimension(&local), Some(&Dimension::dimensionless()));
         assert_eq!(statics.dimension(&foreign), None);
+        assert!(matches!(
+            statics.insert_port_generic_dimension(foreign.clone(), Dimension::dimensionless()),
+            Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign
+        ));
+        statics
+            .insert_port_generic_dimension(local, Dimension::dimensionless())
+            .unwrap();
+        assert_eq!(statics.port_generic_dimensions().count(), 1);
     }
 }
