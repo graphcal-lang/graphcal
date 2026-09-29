@@ -18,7 +18,7 @@ use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind
 use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::tir::typed::checked::{CheckedDag, CheckedTir};
+use graphcal_compiler::tir::typed::checked::{BodyScope, CheckedDag, CheckedTir};
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -163,6 +163,17 @@ impl<'a> SealedDag<'a> {
     #[must_use]
     pub const fn dag(self) -> &'a CheckedDag {
         self.dag
+    }
+
+    /// The scope the plan runs this DAG's bodies in: the only place a
+    /// checked run obtains the frame that resolves body handles.
+    #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sealed program selects the DAG a checked run executes"
+    )]
+    pub const fn body_scope(self) -> BodyScope<'a> {
+        self.dag.body_scope()
     }
 
     /// The source the DAG's diagnostics point into.

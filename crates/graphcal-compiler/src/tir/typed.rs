@@ -27,8 +27,10 @@ use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
 use crate::syntax::module_name::ScopedName;
 
-pub(crate) mod canonical_frame;
+pub mod checked_instance;
+pub use checked_instance::*;
 pub mod checked;
+pub(crate) mod frame_mint;
 pub use checked::*;
 pub mod model;
 pub use model::*;
@@ -689,9 +691,8 @@ fn type_resolve_dag(
     cancellation.checkpoint()?;
     // A type-resolved module or inline DAG is canonical: it runs the bodies
     // it defines.
-    let frame = crate::ir::instance::frame::InstanceFrame::canonical(
-        canonical_frame::CanonicalFrameMint(()),
-    );
+    let frame =
+        crate::ir::instance::frame::InstanceFrame::canonical(frame_mint::CanonicalFrameMint(()));
     let dependencies = collect_resolved_dag_dependencies(&decls, &frame, module_ctx, src)?;
     cancellation.checkpoint()?;
     let override_reconciliations = override_reconciliations(decls.params());

@@ -10,8 +10,10 @@ use crate::resolved_name::ResolvedDeclName;
 /// declaration a reference denotes depends on which instance runs it. The
 /// handle keeps the reference as the defining template spells it and offers
 /// no public accessor for it: the only way to obtain the declaration identity
-/// is [`InstanceFrame::resolve`](crate::ir::instance::frame::InstanceFrame::resolve)
-/// with the frame of the DAG running the body. Since a handle is not a
+/// is the frame of the DAG running the body — inside the compiler through
+/// that DAG's `InstanceFrame`, outside it through the DAG's
+/// [`BodyScope::resolve`](crate::tir::typed::BodyScope::resolve), which an
+/// evaluator obtains only from its execution plan. Since a handle is not a
 /// [`ResolvedDeclName`], using it where an identity is required without
 /// resolving it does not compile.
 ///

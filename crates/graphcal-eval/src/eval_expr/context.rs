@@ -11,7 +11,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::FormattingRegistry;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, StructFieldConstraintKey};
+use graphcal_compiler::tir::typed::{BodyScope, CheckedDag, CheckedTir, StructFieldConstraintKey};
 use miette::NamedSource;
 
 use crate::checked_program::SealedDag;
@@ -62,10 +62,11 @@ pub struct EvalEnvironment<'a> {
 #[derive(Clone)]
 pub struct EvalContext<'a> {
     environment: EvalEnvironment<'a>,
-    /// The DAG whose bodies this context runs, selected only by the phase
-    /// constructors and scope transitions below. Its frame resolves every
-    /// body handle this context meets.
-    dag: &'a CheckedDag,
+    /// The scope of the DAG whose bodies this context runs, selected only by
+    /// the phase constructors and scope transitions below from the plan (or,
+    /// for provisional constants, from the DAG owning the constants). Its
+    /// frame resolves every body handle this context meets.
+    scope: BodyScope<'a>,
     capabilities: Capabilities<'a>,
 }
 
@@ -105,7 +106,7 @@ impl<'a> EvalContext<'a> {
         src: &'a NamedSource<Arc<String>>,
         cancellation: CancellationToken,
     ) -> Result<Self, GraphcalError> {
-        let dag = tir.dag_registry().get(owner).ok_or_else(|| {
+        let scope = provisional_scope(tir, owner).ok_or_else(|| {
             GraphcalError::internal_error(
                 format!("constant scope `{owner}` has no compiled body"),
                 src,
@@ -114,7 +115,7 @@ impl<'a> EvalContext<'a> {
         })?;
         Ok(Self {
             environment: Self::environment(tir, src, cancellation),
-            dag,
+            scope,
             capabilities: Capabilities::ProvisionalConstants,
         })
     }
@@ -132,7 +133,7 @@ impl<'a> EvalContext<'a> {
     ) -> Self {
         Self {
             environment: Self::environment(plan.tir(), src, cancellation),
-            dag: callable.scope().dag(),
+            scope: callable.scope().body_scope(),
             capabilities: Capabilities::Checked { plan, host },
         }
     }
@@ -142,7 +143,7 @@ impl<'a> EvalContext<'a> {
         &self,
         root: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&'a graphcal_compiler::tir::texpr::TExpr, GraphcalError> {
-        self.dag
+        self.scope
             .bodies()
             .executable_value(root.id())
             .map_err(|error| self.internal_error(error.to_string(), root.span))
@@ -154,7 +155,7 @@ impl<'a> EvalContext<'a> {
         root: &graphcal_compiler::hir::expr::Expr,
     ) -> Result<&'a str, GraphcalError> {
         use graphcal_compiler::tir::texpr::{CheckedBody, ContextualLiteral, TBody};
-        let message = match self.dag.bodies().get(root.id()) {
+        let message = match self.scope.bodies().get(root.id()) {
             Some(CheckedBody::Executable(TBody::Contextual(literal))) => match literal.literal() {
                 ContextualLiteral::String(text) => return Ok(text),
                 ContextualLiteral::OffsetDateTime(_)
@@ -267,7 +268,7 @@ impl<'a> EvalContext<'a> {
     /// The DAG whose bodies this context runs.
     #[must_use]
     pub const fn dag(&self) -> &'a CheckedDag {
-        self.dag
+        self.scope.dag()
     }
 
     /// The declaration `reference` denotes in the DAG this context runs.
@@ -275,7 +276,7 @@ impl<'a> EvalContext<'a> {
     /// The frame is the selected DAG's own; evaluation code cannot pick one.
     #[must_use]
     pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
-        self.dag.resolve(reference)
+        self.scope.resolve(reference)
     }
 
     /// The unit whose scale `unit` has in the DAG this context runs.
@@ -284,7 +285,17 @@ impl<'a> EvalContext<'a> {
         &self,
         unit: &graphcal_compiler::hir::expr::LocalUnit,
     ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
-        self.dag.resolve_unit(unit)
+        self.scope.resolve_unit(unit)
+    }
+
+    /// The nominal type `source` stands for in the DAG this context runs,
+    /// after its Static type substitution.
+    #[must_use]
+    pub fn runtime_struct_type(
+        &self,
+        source: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
+    ) -> graphcal_compiler::resolved_name::ResolvedStructTypeName {
+        self.scope.runtime_struct_type(source)
     }
 
     /// Determine, once for a whole root tree, whether every dependency it may
@@ -327,35 +338,37 @@ impl<'a> EvalContext<'a> {
         context
     }
 
-    /// Re-select a canonical body, preserving capabilities and enclosing work.
+    /// Re-select the body of the DAG `owner`, preserving capabilities and
+    /// enclosing work. The DAG is taken by identity from the plan (or, for
+    /// provisional constants, from the checked registry).
     pub fn for_dag<'b>(
         &'b self,
-        dag: &CheckedDag,
+        owner: &DagId,
         src: &'b NamedSource<Arc<String>>,
     ) -> Result<EvalContext<'b>, GraphcalError>
     where
         'a: 'b,
     {
         let mut context = self.with_src(src);
-        context.dag = match self.capabilities {
+        context.scope = match self.capabilities {
             Capabilities::ProvisionalConstants => {
-                self.tir.dag_registry().get(dag.dag_id()).ok_or_else(|| {
+                provisional_scope(self.tir, owner).ok_or_else(|| {
                     context.internal_error(
-                        format!("constant scope `{}` has no compiled body", dag.dag_id()),
+                        format!("constant scope `{owner}` has no compiled body"),
                         DiagnosticAnchor::WholeFile,
                     )
                 })?
             }
             Capabilities::Checked { plan, .. } => plan
                 .program()
-                .dag(dag.dag_id())
+                .dag(owner)
                 .ok_or_else(|| {
                     context.internal_error(
-                        format!("DAG `{}` has no compiled body", dag.dag_id()),
+                        format!("DAG `{owner}` has no compiled body"),
                         DiagnosticAnchor::WholeFile,
                     )
                 })?
-                .dag(),
+                .body_scope(),
         };
         context.environment.current_decl = None;
         Ok(context)
@@ -369,7 +382,7 @@ impl<'a> EvalContext<'a> {
         'a: 'b,
     {
         let mut context = self.with_src(scope.source());
-        context.dag = scope.dag();
+        context.scope = scope.body_scope();
         context.environment.current_decl = None;
         context
     }
@@ -383,21 +396,25 @@ impl<'a> EvalContext<'a> {
     {
         let scope = step.scope();
         let mut context = self.with_src(scope.source());
-        context.dag = scope.dag();
+        context.scope = scope.body_scope();
         context.environment.current_decl = Some(step.key().clone());
         context
     }
 
+    /// Select `declaration` and the DAG that owns it, preserving capabilities
+    /// and enclosing work. The declaration's own identity chooses the DAG, so
+    /// its body runs in its owner's frame.
     pub fn for_checked_decl<'b>(
         &'b self,
-        dag: &CheckedDag,
         src: &'b NamedSource<Arc<String>>,
         declaration: &ResolvedDeclName,
     ) -> Result<EvalContext<'b>, GraphcalError>
     where
         'a: 'b,
     {
-        Ok(self.for_dag(dag, src)?.for_decl(declaration))
+        Ok(self
+            .for_dag(declaration.owner(), src)?
+            .for_decl(declaration))
     }
 
     #[must_use]
@@ -423,4 +440,14 @@ impl<'a> EvalContext<'a> {
     ) -> GraphcalError {
         GraphcalError::internal_error(message, self.src, anchor.into())
     }
+}
+
+/// The scope provisional constant evaluation runs the constants of `owner`
+/// in, before any execution plan exists: the constants' own DAG.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "provisional constants run in the DAG that owns them, selected by identity"
+)]
+fn provisional_scope<'a>(tir: &'a CheckedTir, owner: &DagId) -> Option<BodyScope<'a>> {
+    tir.dag_registry().get(owner).map(CheckedDag::body_scope)
 }

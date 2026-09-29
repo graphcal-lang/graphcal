@@ -453,7 +453,7 @@ fn collects_canonical_decl_dependencies_from_hir_expr() {
     let deps = collect_expr_dependencies(&expr);
 
     let frame = crate::ir::instance::frame::InstanceFrame::canonical(
-        crate::tir::typed::canonical_frame::CanonicalFrameMint::for_test(),
+        crate::tir::typed::frame_mint::CanonicalFrameMint::for_test(),
     );
     let graph_refs = deps
         .graph_refs
@@ -832,7 +832,7 @@ fn include_output_ref_resolves_only_through_instance_bindings() {
     };
     assert_eq!(
         crate::ir::instance::frame::InstanceFrame::canonical(
-            crate::tir::typed::canonical_frame::CanonicalFrameMint::for_test(),
+            crate::tir::typed::frame_mint::CanonicalFrameMint::for_test(),
         )
         .resolve(&reference.value),
         target
