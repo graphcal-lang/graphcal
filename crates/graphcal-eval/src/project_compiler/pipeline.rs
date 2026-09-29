@@ -91,7 +91,7 @@ fn validate_dag_constant_values(
     const_values: &crate::eval_expr::RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    dag.consts().iter().try_for_each(|entry| {
+    dag.consts().try_for_each(|entry| {
         let key = entry.identity();
         const_values.get(&key).map(|_| ()).ok_or_else(|| {
             GraphcalError::internal_error(

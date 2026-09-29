@@ -149,8 +149,7 @@ fn check_rigid_value_bodies(
     for (kind, name, declaration, annotation, body_span) in ctx
         .env
         .dag
-        .consts
-        .iter()
+        .consts()
         .map(|entry| {
             (
                 DeclarationKind::ConstNode,
@@ -160,7 +159,7 @@ fn check_rigid_value_bodies(
                 entry.expr.span,
             )
         })
-        .chain(ctx.env.dag.nodes.iter().filter_map(|entry| {
+        .chain(ctx.env.dag.nodes().filter_map(|entry| {
             entry.definition.formula().map(|expression| {
                 (
                     DeclarationKind::Node,
@@ -194,7 +193,7 @@ fn check_rigid_assertion_bodies(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
-    for entry in &ctx.env.dag.asserts {
+    for entry in ctx.env.dag.asserts() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
@@ -218,7 +217,7 @@ fn check_rigid_plot_bodies(
     ctx: &DimCheckContext<'_>,
     port: &crate::hir::StaticPort,
 ) -> Result<(), GraphcalError> {
-    for entry in &ctx.env.dag.plots {
+    for entry in ctx.env.dag.plots() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
@@ -254,8 +253,7 @@ fn check_rigid_composition_bodies(
     for (kind, name, declaration, fields) in ctx
         .env
         .dag
-        .figures
-        .iter()
+        .figures()
         .map(|entry| {
             (
                 DeclarationKind::Figure,
@@ -264,7 +262,7 @@ fn check_rigid_composition_bodies(
                 entry.fields.as_slice(),
             )
         })
-        .chain(ctx.env.dag.layers.iter().map(|entry| {
+        .chain(ctx.env.dag.layers().map(|entry| {
             (
                 DeclarationKind::Layer,
                 &entry.name,
@@ -368,8 +366,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
     for (kind, name, declaration, expr) in ctx
         .env
         .dag
-        .consts
-        .iter()
+        .consts()
         .map(|entry| {
             (
                 DeclarationKind::ConstNode,
@@ -378,7 +375,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
                 &entry.expr,
             )
         })
-        .chain(ctx.env.dag.nodes.iter().filter_map(|entry| {
+        .chain(ctx.env.dag.nodes().filter_map(|entry| {
             entry.definition.formula().map(|expression| {
                 (
                     DeclarationKind::Node,
@@ -403,7 +400,7 @@ fn check_template_value_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Graphcal
 }
 
 fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for entry in &ctx.env.dag.asserts {
+    for entry in ctx.env.dag.asserts() {
         ctx.checkpoint()?;
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
@@ -429,7 +426,7 @@ fn check_template_assertion_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Grap
 }
 
 fn check_template_plot_bodies(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    for entry in &ctx.env.dag.plots {
+    for entry in ctx.env.dag.plots() {
         let Some(owner) = local_owner(ctx, entry.identity()) else {
             continue;
         };
@@ -455,8 +452,7 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
     for (kind, name, declaration, fields) in ctx
         .env
         .dag
-        .figures
-        .iter()
+        .figures()
         .map(|entry| {
             (
                 DeclarationKind::Figure,
@@ -465,7 +461,7 @@ fn check_template_composition_bodies(ctx: &DimCheckContext<'_>) -> Result<(), Gr
                 entry.fields.as_slice(),
             )
         })
-        .chain(ctx.env.dag.layers.iter().map(|entry| {
+        .chain(ctx.env.dag.layers().map(|entry| {
             (
                 DeclarationKind::Layer,
                 &entry.name,

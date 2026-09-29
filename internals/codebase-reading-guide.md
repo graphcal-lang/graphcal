@@ -1134,11 +1134,11 @@ DagStore  // published by consuming local assembly, never by cloning its closure
 
 DagTIR
   dag_id: DagId
-  consts, params, nodes, asserts, plots, figures, layers  // Entry<Typed>
+  decls: DeclTable<Typed>  // identity-keyed records in source order
     value records carry CheckedTypeAnnotation { decl_type, span, checked }
     TIR::decl_type(&ResolvedDeclName) finds any value declaration's type
+    instances rebase every record to the instance owner
   semantic: DagSemanticBody
-  source_order: Vec<SourceOrderEntry>  // spelling + (runtime) identity + category
   assert_names
   assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>
   expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>

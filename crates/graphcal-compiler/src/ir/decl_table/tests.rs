@@ -215,3 +215,59 @@ fn try_map_stops_at_the_first_error() {
     assert_eq!(error, "p");
     assert_eq!(calls, 1);
 }
+
+#[test]
+fn rebase_moves_every_declaration_to_the_new_owner() {
+    let table = DeclTable::new(&owner(), [param("b"), node("a", owner()), plot("p")]).unwrap();
+    let instance = DagId::root_in_package("test", "instance");
+    let mut seen = Vec::new();
+    let rebased = table
+        .rebase(&instance, |decl| {
+            seen.push(decl.identity());
+            decl
+        })
+        .unwrap();
+
+    // The transform observes the original identities in source order.
+    assert!(seen.iter().all(|identity| identity.owner() == &owner()));
+    assert_eq!(seen.len(), 3);
+    assert_eq!(leaves(&rebased), ["b", "a", "p"]);
+    assert!(
+        rebased
+            .iter()
+            .all(|decl| decl.declaration_owner() == &instance)
+    );
+    let identity = rebased.lookup(&name("a")).unwrap();
+    assert_eq!(identity.owner(), &instance);
+    assert!(rebased.get(identity).is_some());
+}
+
+#[test]
+fn rebase_revalidates_the_transformed_declarations() {
+    let table = DeclTable::new(&owner(), [param("b"), node("a", owner())]).unwrap();
+    let error = table
+        .rebase(&owner(), |decl| match decl {
+            Decl::Node(mut entry) => {
+                entry.name = name("b");
+                Decl::Node(entry)
+            }
+            other => other,
+        })
+        .unwrap_err();
+    assert!(matches!(error, DeclTableError::Duplicate { .. }));
+}
+
+#[test]
+fn update_edits_bodies_in_source_order() {
+    let mut table =
+        DeclTable::new(&owner(), [param("b"), node("a", owner()), assertion("ok")]).unwrap();
+    let mut visited = Vec::new();
+    table.update(|decl| {
+        visited.push(decl.name().to_string());
+        if let Decl::Param(entry) = decl {
+            entry.default = Some(());
+        }
+    });
+    assert_eq!(visited, ["b", "a", "ok"]);
+    assert!(table.params().all(|entry| entry.default.is_some()));
+}

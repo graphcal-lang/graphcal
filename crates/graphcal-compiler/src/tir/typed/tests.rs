@@ -129,24 +129,6 @@ fn decl_type_rejects_identities_owned_by_unknown_dags() {
 }
 
 #[test]
-fn declaration_records_must_be_owned_by_their_dag() {
-    let tir = parse_and_type_resolve("node n: Bool = true;").unwrap();
-    let mut dag = tir.root().clone();
-    dag.nodes[0].declaration_owner = crate::dag_id::DagId::root_in_package("other", "other");
-    assert!(matches!(
-        dag.index_declaration_records(),
-        Err(DeclarationRecordError::ForeignOwner { .. })
-    ));
-    let mut dag = tir.root().clone();
-    let duplicate = dag.nodes[0].clone();
-    dag.nodes.push(duplicate);
-    assert!(matches!(
-        dag.index_declaration_records(),
-        Err(DeclarationRecordError::Duplicate { .. })
-    ));
-}
-
-#[test]
 fn checked_decl_type_requires_a_concrete_type() {
     let src = NamedSource::new("test.gcl", Arc::new(String::new()));
     let generic =

@@ -6,7 +6,7 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
     let tir = crate::eval::compile_to_tir(source, "plot_property.gcl").unwrap();
     let other = crate::eval::compile_to_tir(source, "other_property.gcl").unwrap();
     let src = NamedSource::new("plot_property.gcl", Arc::new(source.to_owned()));
-    let original = &tir.root().plots()[0];
+    let original = tir.root().plots().next().unwrap();
     let owner = tir
         .root()
         .require_bound_decl_identity(
@@ -28,11 +28,14 @@ fn plot_properties_preserve_fatal_fact_and_cancellation_classification() {
     let errors = HashMap::new();
     assert!(evaluate_plot(original, &values, &presentations, &errors, &ctx).is_ok());
     let mut mark = original.clone();
-    mark.body.mark_properties[0].value = other.root().plots()[0].body.mark_properties[0]
+    mark.body.mark_properties[0].value = other.root().plots().next().unwrap().body.mark_properties
+        [0]
+    .value
+    .clone();
+    let mut property = original.clone();
+    property.body.properties[0].value = other.root().plots().next().unwrap().body.properties[0]
         .value
         .clone();
-    let mut property = original.clone();
-    property.body.properties[0].value = other.root().plots()[0].body.properties[0].value.clone();
     for entry in [mark, property] {
         let result = evaluate_plot(&entry, &values, &presentations, &errors, &ctx);
         assert!(
@@ -70,14 +73,14 @@ fn composition_properties_preserve_fatal_fact_classification() {
             .unwrap();
     for (original, foreign, names) in [
         (
-            &tir.root().figures()[0].fields,
-            &other.root().figures()[0].fields,
-            &tir.root().figures()[0].plot_names,
+            &tir.root().figures().next().unwrap().fields,
+            &other.root().figures().next().unwrap().fields,
+            &tir.root().figures().next().unwrap().plot_names,
         ),
         (
-            &tir.root().layers()[0].fields,
-            &other.root().layers()[0].fields,
-            &tir.root().layers()[0].plot_names,
+            &tir.root().layers().next().unwrap().fields,
+            &other.root().layers().next().unwrap().fields,
+            &tir.root().layers().next().unwrap().plot_names,
         ),
     ] {
         assert!(eval_composition_fields(original, names, &values, &ctx).is_ok());
@@ -96,7 +99,7 @@ fn composition_properties_preserve_fatal_fact_classification() {
             );
         }
         let mut fields = original.clone();
-        fields[0].property = tir.root().plots()[0].body.mark_properties[0]
+        fields[0].property = tir.root().plots().next().unwrap().body.mark_properties[0]
             .property
             .clone();
         assert!(matches!(
@@ -109,8 +112,8 @@ fn composition_properties_preserve_fatal_fact_classification() {
     cancellation.cancel();
     assert!(matches!(
         eval_composition_fields(
-            &tir.root().figures()[0].fields,
-            &tir.root().figures()[0].plot_names,
+            &tir.root().figures().next().unwrap().fields,
+            &tir.root().figures().next().unwrap().plot_names,
             &values,
             &ctx
         ),
@@ -118,8 +121,8 @@ fn composition_properties_preserve_fatal_fact_classification() {
     ));
     assert!(matches!(
         eval_composition_fields(
-            &tir.root().layers()[0].fields,
-            &tir.root().layers()[0].plot_names,
+            &tir.root().layers().next().unwrap().fields,
+            &tir.root().layers().next().unwrap().plot_names,
             &values,
             &ctx
         ),

@@ -38,10 +38,10 @@ impl DagTIR {
     /// applying the call binding or default.
     fn populate_projectable_outputs(&mut self, surface: &ExternalDeclSurface) {
         self.projectable_outputs.extend(
-            self.params
-                .iter()
+            self.decls
+                .params()
                 .map(|entry| &entry.name)
-                .chain(self.nodes.iter().map(|entry| &entry.name))
+                .chain(self.decls.nodes().map(|entry| &entry.name))
                 .filter(|name| surface.can_select_output(name))
                 .cloned(),
         );
@@ -346,11 +346,8 @@ fn type_resolve_impl(
     let imported_bindings_for_hir = imported_bindings.clone();
     let (decls, domain_bounds) =
         attach_checked_types(std::mem::take(&mut ir.decls), decl_types, src)?;
-    let decls = HirDeclarations::split(decls);
     let mut root_dag = type_resolve_dag(
-        decls.consts,
-        decls.params,
-        decls.nodes,
+        decls,
         src,
         module_ctx.owner,
         module_ctx,
@@ -360,12 +357,6 @@ fn type_resolve_impl(
     )?
     .with_body(
         HirBody {
-            asserts: decls.asserts,
-            plots: decls.plots,
-            figures: decls.figures,
-            layers: decls.layers,
-            source_order: decls.source_order,
-            spelling: decls.spelling,
             included_plots: ir.included_plots,
             static_ports: ir.static_ports,
             assumes_map: ir.assumes_map,
@@ -508,11 +499,8 @@ fn type_resolve_single_impl(
     let imported_bindings_for_hir = imported_bindings.clone();
     let (decls, domain_bounds) =
         attach_checked_types(std::mem::take(&mut ir.decls), decl_types, src)?;
-    let decls = HirDeclarations::split(decls);
     let mut dag = type_resolve_dag(
-        decls.consts,
-        decls.params,
-        decls.nodes,
+        decls,
         src,
         module_ctx.owner,
         module_ctx,
@@ -522,12 +510,6 @@ fn type_resolve_single_impl(
     )?
     .with_body(
         HirBody {
-            asserts: decls.asserts,
-            plots: decls.plots,
-            figures: decls.figures,
-            layers: decls.layers,
-            source_order: decls.source_order,
-            spelling: decls.spelling,
             included_plots: ir.included_plots,
             static_ports: ir.static_ports,
             assumes_map: ir.assumes_map,
@@ -706,14 +688,8 @@ fn attach_checked_types(
 
 /// Internal helper: resolve type annotations for the const/param/node
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
-#[expect(
-    clippy::too_many_arguments,
-    reason = "orchestrates per-DAG type resolution across HIR declarations and semantic body data"
-)]
 fn type_resolve_dag(
-    consts: Vec<TypedConstEntry>,
-    params: Vec<TypedParamEntry>,
-    nodes: Vec<TypedNodeEntry>,
+    decls: crate::ir::decl_table::DeclTable<Typed>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
@@ -722,17 +698,16 @@ fn type_resolve_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
-    let dependencies =
-        collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
+    let dependencies = collect_resolved_dag_dependencies(&decls, module_ctx, src)?;
     cancellation.checkpoint()?;
-    let override_reconciliations = override_reconciliations(&params);
+    let override_reconciliations = override_reconciliations(decls.params());
     cancellation.checkpoint()?;
     let type_defs = collect_resolved_type_defs(
-        consts
-            .iter()
+        decls
+            .consts()
             .map(|entry| &entry.type_ann)
-            .chain(params.iter().map(|entry| &entry.type_ann))
-            .chain(nodes.iter().map(|entry| &entry.type_ann)),
+            .chain(decls.params().map(|entry| &entry.type_ann))
+            .chain(decls.nodes().map(|entry| &entry.type_ann)),
         imported_bindings,
         module_ctx,
     )?;
@@ -752,9 +727,7 @@ fn type_resolve_dag(
 
     Ok(DagTIRSeed {
         dag_id: dag_id.clone(),
-        consts,
-        params,
-        nodes,
+        decls,
         semantic,
     })
 }
@@ -785,18 +758,12 @@ fn collect_bindable_nominals(
         .collect())
 }
 
-fn override_reconciliations(
-    params: &[TypedParamEntry],
+fn override_reconciliations<'a>(
+    params: impl Iterator<Item = &'a TypedParamEntry>,
 ) -> HashMap<ResolvedDeclName, Vec<OverrideReconciliation>> {
     params
-        .iter()
         .filter(|entry| !entry.override_reconciliations.is_empty())
-        .map(|entry| {
-            (
-                ResolvedDeclName::from_def(entry.declaration_owner.clone(), entry.name.clone()),
-                entry.override_reconciliations.clone(),
-            )
-        })
+        .map(|entry| (entry.identity(), entry.override_reconciliations.clone()))
         .collect()
 }
 
@@ -1209,7 +1176,7 @@ fn check_hir_body_policies(
     let semantic = &dag.semantic;
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
 
-    for entry in &dag.consts {
+    for entry in dag.consts() {
         let key = entry.identity();
         HirPolicyChecker { ctx, src }.check_expr(
             &entry.expr,
@@ -1219,13 +1186,13 @@ fn check_hir_body_policies(
     }
     check_domain_bound_policies(semantic, ctx)?;
     check_dynamic_unit_policies(semantic, ctx)?;
-    for entry in &dag.nodes {
+    for entry in dag.nodes() {
         let key = entry.identity();
         entry.definition.formula().map_or(Ok(()), |expression| {
             HirPolicyChecker { ctx, src }.check_expr(expression, BodyPhase::Runtime, local(&key))
         })?;
     }
-    for entry in &dag.params {
+    for entry in dag.params() {
         let Some(default) = &entry.default else {
             continue;
         };
@@ -1306,7 +1273,7 @@ fn check_sink_body_policies(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let is_explicit_export = |name: &DeclName| external_surface.is_explicit_export(name);
-    for entry in &dag.asserts {
+    for entry in dag.asserts() {
         let check_literals =
             entry.declaration_owner == *ctx.owner && is_explicit_export(&entry.name);
         let checker = HirPolicyChecker { ctx, src };
@@ -1326,7 +1293,7 @@ fn check_sink_body_policies(
             }
         }
     }
-    for entry in &dag.plots {
+    for entry in dag.plots() {
         let body = &entry.body;
         let check_literals = is_explicit_export(&entry.name);
         let checker = HirPolicyChecker { ctx, src };
@@ -1338,10 +1305,9 @@ fn check_sink_body_policies(
         }
     }
     for (name, fields) in dag
-        .figures
-        .iter()
+        .figures()
         .map(|entry| (&entry.name, &entry.fields))
-        .chain(dag.layers.iter().map(|entry| (&entry.name, &entry.fields)))
+        .chain(dag.layers().map(|entry| (&entry.name, &entry.fields)))
     {
         let check_literals = is_explicit_export(name);
         let checker = HirPolicyChecker { ctx, src };
@@ -1614,61 +1580,8 @@ use collect::{
     collect_resolved_dag_dependencies,
 };
 
-/// HIR declarations split into the per-kind records a [`DagTIR`] stores.
-struct HirDeclarations {
-    consts: Vec<TypedConstEntry>,
-    params: Vec<TypedParamEntry>,
-    nodes: Vec<TypedNodeEntry>,
-    asserts: Vec<TypedAssertEntry>,
-    plots: Vec<TypedPlotEntry>,
-    figures: Vec<TypedFigureEntry>,
-    layers: Vec<TypedLayerEntry>,
-    source_order: Vec<SourceOrderEntry>,
-    spelling: HashMap<DeclName, ResolvedDeclName>,
-}
-
-impl HirDeclarations {
-    fn split(table: crate::ir::decl_table::DeclTable<Typed>) -> Self {
-        let (decls, spelling) = table.into_parts();
-        let mut split = Self {
-            consts: Vec::new(),
-            params: Vec::new(),
-            nodes: Vec::new(),
-            asserts: Vec::new(),
-            plots: Vec::new(),
-            figures: Vec::new(),
-            layers: Vec::new(),
-            source_order: Vec::new(),
-            spelling,
-        };
-        for decl in decls {
-            split.source_order.push(SourceOrderEntry {
-                name: decl.name().clone(),
-                identity: decl.identity(),
-                category: decl.category(),
-            });
-            match decl {
-                crate::ir::entry::Decl::Const(entry) => split.consts.push(entry),
-                crate::ir::entry::Decl::Param(entry) => split.params.push(entry),
-                crate::ir::entry::Decl::Node(entry) => split.nodes.push(entry),
-                crate::ir::entry::Decl::Assert(entry) => split.asserts.push(entry),
-                crate::ir::entry::Decl::Plot(entry) => split.plots.push(entry),
-                crate::ir::entry::Decl::Figure(entry) => split.figures.push(entry),
-                crate::ir::entry::Decl::Layer(entry) => split.layers.push(entry),
-            }
-        }
-        split
-    }
-}
-
 /// The HIR DAG fields beyond the resolved value declarations.
 struct HirBody {
-    asserts: Vec<TypedAssertEntry>,
-    plots: Vec<TypedPlotEntry>,
-    figures: Vec<TypedFigureEntry>,
-    layers: Vec<TypedLayerEntry>,
-    source_order: Vec<SourceOrderEntry>,
-    spelling: HashMap<DeclName, ResolvedDeclName>,
     included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
     static_ports: Vec<crate::hir::StaticPort>,
     assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
@@ -1682,9 +1595,7 @@ struct HirBody {
 /// fields.
 struct DagTIRSeed {
     dag_id: crate::dag_id::DagId,
-    consts: Vec<TypedConstEntry>,
-    params: Vec<TypedParamEntry>,
-    nodes: Vec<TypedNodeEntry>,
+    decls: crate::ir::decl_table::DeclTable<Typed>,
     semantic: DagSemanticBody,
 }
 
@@ -1697,12 +1608,6 @@ impl DagTIRSeed {
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
         let HirBody {
-            asserts,
-            plots,
-            figures,
-            layers,
-            source_order,
-            spelling,
             included_plots,
             static_ports,
             assumes_map,
@@ -1712,9 +1617,11 @@ impl DagTIRSeed {
         } = body;
         // The HIR declaration table already binds every local spelling to its
         // canonical identity; imported values add their lexical targets.
-        let mut decl_bindings = spelling
-            .into_iter()
-            .map(|(name, identity)| (ScopedName::local(name), identity))
+        let mut decl_bindings = self
+            .decls
+            .spelling()
+            .iter()
+            .map(|(name, identity)| (ScopedName::local(name.clone()), identity.clone()))
             .collect::<HashMap<_, _>>();
         decl_bindings.extend(
             imported_bindings
@@ -1743,17 +1650,9 @@ impl DagTIRSeed {
         let mut dag = DagTIR {
             dag_id: self.dag_id,
             body_revision: crate::body_revision::BodyRevision::fresh(),
-            consts: self.consts,
-            params: self.params,
-            nodes: self.nodes,
-            asserts,
-            plots,
-            figures,
-            layers,
+            decls: self.decls,
             included_plots,
-            declaration_index: DagDeclarationIndex::default(),
             semantic,
-            source_order,
             static_ports,
             assumes_map,
             expected_fail,
@@ -1772,12 +1671,6 @@ impl DagTIRSeed {
         for owning_type in &constructed_types {
             record_resolved_struct_type_def(owning_type, module_ctx, &mut dag.semantic.type_defs)?;
         }
-        dag.index_declaration_records()
-            .map_err(|error| GraphcalError::InternalError {
-                message: format!("{error} while building TIR index"),
-                src: src.clone(),
-                span: error.span().into(),
-            })?;
         Ok(dag)
     }
 }

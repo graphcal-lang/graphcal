@@ -45,7 +45,6 @@ pub(super) fn resolve_domain_constraints_for_dag(
     let mut constraints = HashMap::new();
     let decl_iter = dag
         .consts()
-        .iter()
         .map(|entry| {
             (
                 &entry.name,
@@ -55,7 +54,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 true,
             )
         })
-        .chain(dag.params().iter().map(|entry| {
+        .chain(dag.params().map(|entry| {
             (
                 &entry.name,
                 entry.identity(),
@@ -64,7 +63,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
                 false,
             )
         }))
-        .chain(dag.nodes().iter().map(|entry| {
+        .chain(dag.nodes().map(|entry| {
             (
                 &entry.name,
                 entry.identity(),

@@ -510,17 +510,9 @@ fn initialize_instance_identity(
         .runtime_owner_rebases
         .insert(specialization.template.clone(), owner.clone());
     for declaration_owner in template
-        .consts
+        .decls()
         .iter()
-        .map(|entry| &entry.declaration_owner)
-        .chain(template.params.iter().map(|entry| &entry.declaration_owner))
-        .chain(template.nodes.iter().map(|entry| &entry.declaration_owner))
-        .chain(
-            template
-                .asserts
-                .iter()
-                .map(|entry| &entry.declaration_owner),
-        )
+        .map(crate::ir::entry::Decl::declaration_owner)
     {
         instance
             .runtime_owner_rebases
@@ -541,40 +533,31 @@ fn initialize_instance_identity(
         .collect();
 }
 
-fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
+fn specialize_instance_declarations(
+    instance: &mut DagTIR,
+    edge: &HirInstanceRecord,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
-    instance
-        .consts
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
-    for entry in &mut instance.params {
-        let template_port = entry.identity();
-        entry.declaration_owner = owner.clone();
-        if let Some(binding) = edge.value_bindings.get(&template_port) {
-            entry.default = Some(binding.clone());
-        }
-    }
-    instance
-        .nodes
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
-    instance
-        .asserts
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
-    instance
-        .plots
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
-    instance
-        .figures
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
-    instance
-        .layers
-        .iter_mut()
-        .for_each(|entry| entry.declaration_owner = owner.clone());
+    // Bound value ports replace the template default of the parameter they
+    // name; every declaration moves to the instance owner.
+    instance.decls = std::mem::take(&mut instance.decls)
+        .rebase(owner, |mut decl| {
+            if let crate::ir::entry::Decl::Param(entry) = &mut decl
+                && let Some(binding) = edge.value_bindings.get(&entry.identity())
+            {
+                entry.default = Some(binding.clone());
+            }
+            decl
+        })
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                format!("failed to rebase semantic instance `{owner}`: {error}"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
     // Attribute tables are keyed by template-owned identities; the instance
     // addresses the same declarations under its runtime identities.
     instance.assumes_map = std::mem::take(&mut instance.assumes_map)
@@ -596,6 +579,7 @@ fn specialize_instance_declarations(instance: &mut DagTIR, edge: &HirInstanceRec
             (instance.runtime_decl_identity(&assertion), expected)
         })
         .collect();
+    Ok(())
 }
 
 fn specialize_dynamic_unit_scales(
@@ -668,9 +652,6 @@ fn specialize_instance_semantics(
         .iter()
         .map(|(name, target)| (name.clone(), instance_decl(target, specialization, owner)))
         .collect();
-    for entry in &mut instance.source_order {
-        entry.identity = instance_decl(&entry.identity, specialization, owner);
-    }
     specialize_dependencies(&mut instance.semantic.dependencies, specialization, owner);
     for (template_port, binding) in &edge.value_bindings {
         let instance_port = instance_decl(template_port, specialization, owner);
@@ -697,14 +678,7 @@ fn specialize_instance_semantics(
         .map(|(target, bounds)| (local_instance_decl(target, owner), bounds.clone()))
         .collect();
     install_override_reconciliations(instance, edge);
-    instance.declaration_index = super::DagDeclarationIndex::default();
-    instance.index_declaration_records().map_err(|error| {
-        GraphcalError::internal_error(
-            format!("failed to index semantic instance `{owner}`: {error:?}"),
-            src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })
+    Ok(())
 }
 
 fn clone_checked_instance(
@@ -721,7 +695,7 @@ fn clone_checked_instance(
             .type_defs
             .extend_from(&dag.semantic.type_defs);
     }
-    specialize_instance_declarations(&mut instance, edge);
+    specialize_instance_declarations(&mut instance, edge, src)?;
     specialize_dynamic_unit_scales(
         &mut instance,
         edge.instance.specialization(),

@@ -493,12 +493,12 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["ir", "decl_table"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
 path = ["ir", "decl_table", "tests"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
