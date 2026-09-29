@@ -217,8 +217,6 @@ node packet: Packet = Packet(value: @first);
     );
     assert!(preparation.plan_constructions > 0, "{preparation:?}");
     assert_eq!(first_counts.plan_constructions, 0, "{first_counts:?}");
-    assert!(preparation.schedule_constructions > 0);
-    assert_eq!(first_counts.schedule_constructions, 0, "{first_counts:?}");
     assert_eq!(first_counts.imported_source_resolutions, 0);
     assert_eq!(
         first_counts.frame_executions, 3,
@@ -687,7 +685,6 @@ fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
             assert_quantity_value(&result, "output", 8.0);
             assert_quantity_value(&result, "independent", 6.0);
             assert_eq!(counts.plan_constructions, 0);
-            assert_eq!(counts.schedule_constructions, 0);
             assert_eq!(counts.imported_source_resolutions, 0);
             assert!(counts.frame_executions > 0);
         }
@@ -823,20 +820,13 @@ fn shared_frames_reject_dynamic_parameter_domain_violations_without_losing_indep
 }
 
 #[test]
-fn shared_frames_reject_missing_dependencies_and_cancel_before_interpretation() {
+fn shared_frames_cancel_before_interpretation() {
     use crate::execution_frame::{ExecutionFrame, FailurePolicy};
     let (tir, src) = callable_plan_fixture();
-    let mut plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    plan.root.dependencies.clear();
+    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
         let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
         let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
-        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
-            panic!("missing prepared dependencies must not be reconstructed")
-        });
-        assert!(
-            matches!(outcome, Err(GraphcalError::InternalError { message, .. }) if message.contains("has no prepared dependencies"))
-        );
         cancellation.cancel();
         let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
             panic!("cancelled frame must not invoke its expression adapter")
@@ -894,7 +884,6 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
     });
     assert!(runtime.errors.is_empty());
     assert_eq!(counts.imported_source_resolutions, 0);
-    assert_eq!(counts.schedule_constructions, 0);
     assert_eq!(
         counts.frame_executions, 2,
         "one include-closure frame and one inline call"
@@ -8501,6 +8490,22 @@ include recursive(x: 1.0)::{result};
         err_msg.contains("recursive DAG instantiation"),
         "error should mention recursive DAG: {err_msg}"
     );
+}
+
+#[test]
+fn include_closure_cycles_are_rejected_at_the_including_declaration() {
+    // Regression: a cycle through an include port binding used to pass
+    // `check` and fail at evaluation with an internal error.
+    let source = "dag lib { param x: Dimensionless; pub node out: Dimensionless = @x + 1.0; }\n\
+                  include lib(x: @a) as inst;\n\
+                  node a: Dimensionless = @inst::out;";
+    match compile_and_eval(source) {
+        Err(CompileError::Eval(GraphcalError::CyclicDependency { name, span, .. })) => {
+            assert_eq!(name, "a");
+            assert_eq!(span.offset(), source.find("node a").unwrap());
+        }
+        other => panic!("expected a cyclic dependency, got {other:?}"),
+    }
 }
 
 /// Message and label start of the E001 a recursive inline-DAG source reports.

@@ -130,7 +130,7 @@ impl Analysis<'_> {
                     .plan
                     .callable(owner)
                     .map_err(|error| self.invalid(error.to_string()))?;
-                let dependencies = callable.dependencies.get(name).ok_or_else(|| {
+                let dependencies = callable.schedule.dependencies_of(name).ok_or_else(|| {
                     self.invalid(format!("checked declaration `{name}` has no dependencies"))
                 })?;
                 for dependency in dependencies {

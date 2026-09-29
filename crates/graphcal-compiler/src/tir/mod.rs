@@ -5,5 +5,6 @@ pub mod dim_check;
 pub mod expression_facts;
 pub mod materialized_shape;
 pub mod presentation;
+pub mod schedule;
 pub(crate) mod template_closure;
 pub mod typed;

@@ -1063,6 +1063,8 @@ pub struct DagSemanticBody {
     pub(crate) expression_facts: Option<crate::tir::expression_facts::CheckedExpressionFacts>,
     /// Checked structured display and plot-channel presentation facts.
     pub presentation: crate::tir::presentation::DagPresentationFacts,
+    /// Runtime schedule of this DAG as a callable, installed by the checker.
+    pub(crate) runtime_schedule: Option<crate::tir::schedule::RuntimeSchedule>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1237,6 +1239,7 @@ impl TirBuilder {
             dags: self.dags,
             runtime_units: self.runtime_units,
             extern_functions: self.extern_functions,
+            const_schedule: None,
         }
     }
 }
@@ -1255,6 +1258,8 @@ pub struct TIR {
     pub(crate) runtime_units: HashMap<ResolvedUnitName, Arc<UnitInfo>>,
     pub(crate) extern_functions:
         HashMap<crate::plugin_identity::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
+    /// Constant schedule of the local DAGs, installed by the checker.
+    pub(crate) const_schedule: Option<crate::tir::schedule::ConstSchedule>,
 }
 
 impl TIR {
@@ -1277,6 +1282,13 @@ impl TIR {
     #[must_use]
     pub const fn root_dag_id(&self) -> &crate::dag_id::DagId {
         self.dags.root_id()
+    }
+
+    /// Evaluation order of the local DAGs' constants, present once the
+    /// checker has accepted this TIR.
+    #[must_use]
+    pub const fn const_schedule(&self) -> Option<&crate::tir::schedule::ConstSchedule> {
+        self.const_schedule.as_ref()
     }
 
     /// Borrow the root file's immutable post-resolution formatting services.
@@ -1491,6 +1503,7 @@ impl DagTIR {
         self.body_revision = crate::body_revision::BodyRevision::fresh();
         self.semantic.expression_facts = None;
         self.semantic.presentation = crate::tir::presentation::DagPresentationFacts::default();
+        self.semantic.runtime_schedule = None;
     }
 
     #[must_use]
@@ -1567,6 +1580,13 @@ impl DagTIR {
             .ok_or(crate::tir::expression_facts::ExpressionFactsError::WrongEnvironment)?;
         facts.validate_environment(self.dag_id(), self.body_revision())?;
         Ok(facts)
+    }
+
+    /// Runtime schedule of this DAG as a callable, present once the checker
+    /// has accepted it.
+    #[must_use]
+    pub const fn runtime_schedule(&self) -> Option<&crate::tir::schedule::RuntimeSchedule> {
+        self.semantic.runtime_schedule.as_ref()
     }
 
     /// Semantic include edges authored directly by this DAG.

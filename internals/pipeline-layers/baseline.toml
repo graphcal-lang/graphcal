@@ -394,11 +394,11 @@ reason = "Observed eval::project_compiler::entry_interface -> compiler::hir (pro
 
 [[exception]]
 from_package = "eval"
-from_path = ["project_compiler", "execution_check", "const_schedule"]
+from_path = ["project_compiler", "execution_check", "const_eval"]
 to_package = "compiler"
 to_path = ["hir"]
 test_only = false
-reason = "Observed eval::project_compiler::execution_check::const_schedule -> compiler::hir (production) at ./crates/graphcal-eval/src/project_compiler/execution_check/const_schedule.rs:102 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
+reason = "Observed eval::project_compiler::execution_check::const_eval -> compiler::hir (production) at ./crates/graphcal-eval/src/project_compiler/execution_check/const_eval.rs:96 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
 
 [[exception]]
 from_package = "eval"

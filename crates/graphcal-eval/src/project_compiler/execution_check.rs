@@ -12,10 +12,10 @@ use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts, RuntimeValueMap};
 
-mod const_schedule;
+mod const_eval;
 mod domain_resolve;
 
-use const_schedule::{build_runtime_dag, eval_const_pools_for_dags};
+use const_eval::eval_const_pools_for_dags;
 use domain_resolve::{
     DagConstScope, check_dag_const_struct_field_constraints_at_compile_time,
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
@@ -163,13 +163,6 @@ fn check_dag_execution_facts(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
     }));
-    let mut schedules = dag_ids
-        .iter()
-        .map(|dag_id| {
-            build_runtime_dag(&tir.dag_registry()[dag_id], src, cancellation)
-                .map(|order| (dag_id.clone(), order))
-        })
-        .collect::<Result<HashMap<_, _>, _>>()?;
     let mut constraints = dag_ids
         .iter()
         .map(|dag_id| {
@@ -187,7 +180,7 @@ fn check_dag_execution_facts(
         .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
-    // executable artifacts with missing constraints or schedules.
+    // executable artifacts with missing constraints.
     let const_scopes = provisional_const_scopes(inherited, &const_pools, src);
     cancellation.checkpoint()?;
     let field_constraints = resolve_struct_field_constraints_for_dags(
@@ -231,7 +224,6 @@ fn check_dag_execution_facts(
                 source: src.clone(),
                 const_presentations: constant_presentations(&const_values, &presentations),
                 const_values: Arc::new(const_values),
-                topo_order: Arc::new(schedules.remove(&dag_id).ok_or_else(missing)?),
                 domain_constraints: Arc::new(constraints.remove(&dag_id).ok_or_else(missing)?),
             };
             Ok((dag_id, Arc::new(facts)))

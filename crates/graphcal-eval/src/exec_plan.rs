@@ -6,7 +6,6 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
-use graphcal_compiler::dependency_graph::{DependencyGraph, TopoOrder};
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{DagTIR, TIR};
@@ -49,93 +48,6 @@ pub fn compile_with_cancellation(
     let facts =
         crate::project_compiler::check_execution_facts_with_cancellation(tir, src, cancellation)?;
     compile_checked_with_cancellation(tir, &facts, src, cancellation)
-}
-
-pub fn semantic_runtime_dags_from<'a>(
-    tir: &'a TIR,
-    root: &'a graphcal_compiler::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<&'a graphcal_compiler::tir::typed::DagTIR>, GraphcalError> {
-    let mut owners = vec![root.dag_id().clone()];
-    let mut visited = HashSet::from([root.dag_id().clone()]);
-    let mut cursor = 0;
-    while let Some(owner) = owners.get(cursor).cloned() {
-        cursor = cursor.saturating_add(1);
-        let dag = tir.dag_registry().get(&owner).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("semantic runtime instance `{owner}` has no compiled DAG"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        for edge in dag.semantic_instances() {
-            let child = edge.instance.id().owner().clone();
-            if visited.insert(child.clone()) {
-                owners.push(child);
-            }
-        }
-    }
-    let mut instances = owners
-        .into_iter()
-        .skip(1)
-        .map(|owner| &tir.dag_registry()[&owner])
-        .collect::<Vec<_>>();
-    instances.sort_by(|left, right| left.dag_id().cmp(right.dag_id()));
-    Ok(std::iter::once(root).chain(instances).collect())
-}
-
-pub fn combined_runtime_order_for(
-    tir: &TIR,
-    root: &graphcal_compiler::tir::typed::DagTIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ResolvedDeclName>, GraphcalError> {
-    crate::pipeline_metrics::record(crate::pipeline_metrics::Event::ScheduleConstruction);
-    let dags = semantic_runtime_dags_from(tir, root, src)?;
-    let candidates = dags
-        .iter()
-        .flat_map(|dag| {
-            dag.decls()
-                .iter()
-                .filter(|entry| {
-                    matches!(
-                        entry.category(),
-                        graphcal_compiler::declaration_category::DeclCategory::Value(
-                            graphcal_compiler::declaration_category::ValueDeclCategory::Param
-                                | graphcal_compiler::declaration_category::ValueDeclCategory::Node
-                        )
-                    )
-                })
-                .map(graphcal_compiler::ir::entry::Decl::identity)
-        })
-        .collect::<Vec<_>>();
-    let mut graph = DependencyGraph::new();
-    for candidate in candidates {
-        graph.add_node(candidate);
-    }
-    for dag in dags {
-        for (declaration, dependencies) in &dag.semantic().dependencies.runtime_deps {
-            let declaration = dag.runtime_decl_identity(declaration);
-            if !graph.contains(&declaration) {
-                continue;
-            }
-            for dependency in dependencies {
-                let dependency = dag.runtime_decl_identity(dependency);
-                if graph.contains(&dependency) {
-                    graph.add_dependency(declaration.clone(), dependency);
-                }
-            }
-        }
-    }
-    graph
-        .into_topo_order()
-        .map(TopoOrder::into_vec)
-        .map_err(|_| {
-            GraphcalError::internal_error(
-                "semantic instance runtime dependencies are cyclic",
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })
 }
 
 /// Build a runtime schedule from facts retained by the checked project.
@@ -190,7 +102,25 @@ fn prepare_callable_plan(
     let root_scope = checked_scope(tir, facts, body.dag_id(), src)?;
     let root_facts = root_scope.facts();
     let src = root_facts.source();
-    let semantic_dags = semantic_runtime_dags_from(tir, root_scope.dag(), src)?;
+    let invalid =
+        |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
+    let schedule = body.runtime_schedule().ok_or_else(|| {
+        invalid(format!(
+            "callable `{}` has no checked runtime schedule",
+            body.dag_id()
+        ))
+    })?;
+    let semantic_dags = schedule
+        .execution_dags()
+        .iter()
+        .map(|owner| {
+            tir.dag_registry().get(owner).ok_or_else(|| {
+                invalid(format!(
+                    "semantic runtime instance `{owner}` has no compiled DAG"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let semantic_facts = semantic_dags
         .iter()
         .map(|dag| checked_scope(tir, facts, dag.dag_id(), src).map(CheckedExecutionScope::facts))
@@ -215,18 +145,19 @@ fn prepare_callable_plan(
     } else {
         Arc::clone(&root_facts.domain_constraints)
     };
-    let topo_order = if has_instances {
-        combined_runtime_order_for(tir, body, src)?
-    } else {
-        root_facts.topo_order.as_ref().clone()
-    };
-
     validate_schedule_locations(
-        &topo_order,
+        schedule.order().as_slice(),
         declaration_locations,
         &semantic_dags.iter().map(|dag| dag.dag_id()).collect(),
         src,
     )?;
+    for (_, reads) in schedule.steps() {
+        for dependency in reads {
+            declaration_locations
+                .body_for(dependency)
+                .map_err(|error| invalid(error.to_string()))?;
+        }
+    }
 
     Ok(CallablePlan {
         owner: body.dag_id().clone(),
@@ -236,8 +167,7 @@ fn prepare_callable_plan(
             .collect(),
         const_values,
         imports: prepare_imports(tir, facts, &semantic_dags, declaration_locations, src)?,
-        dependencies: prepare_dependencies(tir, &topo_order, declaration_locations, src)?,
-        topo_order,
+        schedule: schedule.clone(),
         assumes_map: merge_assumes_maps(semantic_dags.iter().map(|dag| dag.assumes_map())),
         expected_fail: semantic_dags
             .iter()
@@ -265,56 +195,6 @@ fn merge_assumes_maps<'a>(
         }
     }
     merged
-}
-
-fn prepare_dependencies(
-    tir: &TIR,
-    order: &[ResolvedDeclName],
-    locations: &DeclarationLocations,
-    source: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>, GraphcalError> {
-    let invalid = |message: String| {
-        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
-    };
-    let positions = order
-        .iter()
-        .enumerate()
-        .map(|(position, key)| (key, position))
-        .collect::<HashMap<_, _>>();
-    order
-        .iter()
-        .map(|key| {
-            let body = locations
-                .body_for(key)
-                .map_err(|error| invalid(error.to_string()))?;
-            let dag = tir
-                .dag_registry()
-                .get(body)
-                .ok_or_else(|| invalid(format!("prepared body `{body}` is absent")))?;
-            let dependencies = dag
-                .semantic()
-                .dependencies
-                .runtime_deps
-                .get(key)
-                .into_iter()
-                .flatten()
-                .map(|dependency| dag.runtime_decl_identity(dependency))
-                .collect::<Vec<_>>();
-            for dependency in &dependencies {
-                locations
-                    .body_for(dependency)
-                    .map_err(|error| invalid(error.to_string()))?;
-                if let Some(dependency_position) = positions.get(dependency)
-                    && dependency_position >= &positions[key]
-                {
-                    return Err(invalid(format!(
-                        "schedule evaluates `{key}` before its dependency `{dependency}`"
-                    )));
-                }
-            }
-            Ok((key.clone(), dependencies))
-        })
-        .collect()
 }
 
 fn prepare_imports(
@@ -404,8 +284,6 @@ fn validate_execution_facts(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
-    use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
-
     for dag in tir.dag_registry().values() {
         cancellation.checkpoint()?;
         let scope = checked_scope(tir, all_facts, dag.dag_id(), src)?;
@@ -418,24 +296,6 @@ fn validate_execution_facts(
                 .map(|_| ())
                 .map_err(|error| invalid(error.to_string()))
         })?;
-        let expected = dag
-            .decls()
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.category(),
-                    DeclCategory::Value(ValueDeclCategory::Param | ValueDeclCategory::Node)
-                )
-            })
-            .map(graphcal_compiler::ir::entry::Decl::identity)
-            .collect::<HashSet<_>>();
-        let scheduled = facts.topo_order.iter().cloned().collect::<HashSet<_>>();
-        if scheduled != expected || scheduled.len() != facts.topo_order.len() {
-            return Err(invalid(format!(
-                "DAG `{}` has incomplete or duplicate runtime schedule entries",
-                dag.dag_id()
-            )));
-        }
         for entry in dag.consts() {
             let key = entry.identity();
             if !facts.const_values.contains_key(&key) {
@@ -561,29 +421,6 @@ mod tests {
     }
 
     #[test]
-    fn preparation_rejects_dependency_order_corruption() {
-        let (tir, src) = tir_from_source(
-            "node antecedent: Dimensionless = 1.0; node subsequent: Dimensionless = @antecedent;",
-        );
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let mut facts = crate::project_compiler::check_execution_facts_with_cancellation(
-            &tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        let root = Arc::make_mut(
-            Arc::make_mut(&mut facts.by_dag)
-                .get_mut(tir.root_dag_id())
-                .unwrap(),
-        );
-        Arc::make_mut(&mut root.topo_order).reverse();
-        assert!(
-            matches!(compile_checked_with_cancellation(&tir, &facts, &src, &cancellation), Err(GraphcalError::InternalError { message, .. }) if message.contains("before its dependency"))
-        );
-    }
-
-    #[test]
     fn constant_pool_views_reject_duplicates_and_missing_imports() {
         let key = resolved_key("constant");
         let pool = Arc::new(HashMap::from([(
@@ -612,7 +449,7 @@ mod tests {
             (quantity(plan.root.const_values.get(&resolved_key("g0")).unwrap()) - 9.80665).abs()
                 < f64::EPSILON
         );
-        assert!(plan.root.topo_order.is_empty());
+        assert!(plan.root.schedule.order().is_empty());
     }
 
     #[test]
@@ -666,8 +503,6 @@ mod tests {
             MissingDag,
             WrongOwner,
             MissingConstant,
-            MissingScheduleEntry,
-            DuplicateScheduleEntry,
             MissingConstraint,
         }
 
@@ -687,8 +522,6 @@ mod tests {
             Damage::MissingDag,
             Damage::WrongOwner,
             Damage::MissingConstant,
-            Damage::MissingScheduleEntry,
-            Damage::DuplicateScheduleEntry,
             Damage::MissingConstraint,
         ] {
             let mut corrupted = checked.clone();
@@ -705,13 +538,6 @@ mod tests {
                     .unwrap();
                 }
                 Damage::MissingConstant => Arc::make_mut(&mut facts.const_values).clear(),
-                Damage::MissingScheduleEntry => {
-                    Arc::make_mut(&mut facts.topo_order).pop().unwrap();
-                }
-                Damage::DuplicateScheduleEntry => {
-                    let key = facts.topo_order[0].clone();
-                    Arc::make_mut(&mut facts.topo_order).push(key);
-                }
                 Damage::MissingConstraint => {
                     Arc::make_mut(&mut facts.domain_constraints).clear();
                 }
@@ -796,6 +622,35 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn callable_plans_use_the_checked_closure_schedule() {
+        let source = "dag lib { param x: Dimensionless; pub node out: Dimensionless = @x + 1.0; }\n\
+                      include lib(x: @seed) as inst;\n\
+                      param seed: Dimensionless = 1.0;\n\
+                      node result: Dimensionless = @inst::out;";
+        let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
+        let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
+            .check()
+            .unwrap();
+        let tir = checked.tir();
+        let src = make_src(source);
+        let plan = compile(tir, &src).unwrap();
+        let schedule = tir.root().runtime_schedule().unwrap();
+        assert_eq!(plan.root.schedule, *schedule);
+        assert_eq!(plan.root.execution_dags, schedule.execution_dags());
+        assert_eq!(schedule.execution_dags().len(), 2);
+        let position = |name: &str| {
+            schedule
+                .order()
+                .iter()
+                .position(|key| key.as_str() == name)
+                .unwrap()
+        };
+        assert!(position("seed") < position("x"));
+        assert!(position("x") < position("out"));
+        assert!(position("out") < position("result"));
     }
 
     #[test]
@@ -889,19 +744,22 @@ mod tests {
         .unwrap();
         let x_pos = plan
             .root
-            .topo_order
+            .schedule
+            .order()
             .iter()
             .position(|n| n.as_str() == "x")
             .unwrap();
         let y_pos = plan
             .root
-            .topo_order
+            .schedule
+            .order()
             .iter()
             .position(|n| n.as_str() == "y")
             .unwrap();
         let z_pos = plan
             .root
-            .topo_order
+            .schedule
+            .order()
             .iter()
             .position(|n| n.as_str() == "z")
             .unwrap();
@@ -957,7 +815,8 @@ mod tests {
         let plan = compile(&tir, &src).unwrap();
         let a_pos = plan
             .root
-            .topo_order
+            .schedule
+            .order()
             .iter()
             .position(|name| {
                 name == &ResolvedDeclName::for_test(
@@ -968,7 +827,8 @@ mod tests {
             .unwrap();
         let b_pos = plan
             .root
-            .topo_order
+            .schedule
+            .order()
             .iter()
             .position(|name| {
                 name == &ResolvedDeclName::for_test(
