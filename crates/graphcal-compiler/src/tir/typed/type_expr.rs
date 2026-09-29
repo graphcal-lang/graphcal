@@ -5,6 +5,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
+use crate::generic_param::GenericParamId;
 use crate::hir;
 use crate::hir::{NominalGenericParam, NominalTypeDef};
 use crate::nat::NatPolyForm;
@@ -15,7 +16,6 @@ use crate::syntax::ast::GenericConstraint;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::GenericParamName;
 
 use super::{
     ModuleTypeContext, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
@@ -115,7 +115,7 @@ fn resolve_hir_value_type(
             Ok(ResolvedTypeExpr::Struct(name.value.clone(), name.span))
         }
         hir::ValueTypeKind::GenericTypeParam(param) => Ok(ResolvedTypeExpr::GenericTypeParam(
-            param.value.name.clone(),
+            param.value.clone(),
             param.span,
         )),
         hir::ValueTypeKind::TypeApplication { name, generic_args } => {
@@ -248,7 +248,7 @@ fn resolve_hir_dim_expr_item(
             op: item.op,
         }),
         hir::DimTermTarget::GenericParam(param) => Ok(ResolvedDimTerm::GenericParam {
-            name: param.value.name.clone(),
+            name: param.value.clone(),
             power,
             op: item.op,
             span: item.term.span,
@@ -265,43 +265,22 @@ fn resolve_hir_index_ref(
             hir_index_name(&name.value, name.span, ctx)?;
             Ok(ResolvedIndex::Concrete(name.value.clone(), name.span))
         }
-        hir::IndexRef::GenericParam(param) => Ok(ResolvedIndex::GenericParam(
-            param.value.name.clone(),
-            param.span,
+        hir::IndexRef::GenericParam(param) => {
+            Ok(ResolvedIndex::GenericParam(param.value.clone(), param.span))
+        }
+        hir::IndexRef::Finite(cardinality) => Ok(ResolvedIndex::Finite(
+            cardinality.value.clone(),
+            cardinality.span,
         )),
-        hir::IndexRef::Finite(nat_expr) => Ok(ResolvedIndex::Finite(
-            normalize_hir_nat_expr(nat_expr)
-                .map_err(|err| nat_overflow_error(err, ctx.src, nat_expr.span()))?,
-            nat_expr.span(),
-        )),
-    }
-}
-
-fn normalize_hir_nat_expr(
-    expr: &hir::NatExpr,
-) -> Result<NatPolyForm, crate::nat::NatOverflowError> {
-    match expr {
-        hir::NatExpr::Literal(value, _) => Ok(NatPolyForm::from_constant(*value)),
-        hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
-        hir::NatExpr::Add(operands, _) => operands
-            .iter()
-            .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
-                sum.add(&normalize_hir_nat_expr(operand)?)
-            }),
-        hir::NatExpr::Mul(operands, _) => operands
-            .iter()
-            .try_fold(NatPolyForm::from_constant(1), |product, operand| {
-                product.mul(&normalize_hir_nat_expr(operand)?)
-            }),
     }
 }
 
 #[derive(Default)]
 struct ResolvedGenericSubstitutions {
-    dims: HashMap<GenericParamName, ResolvedDimArg>,
-    indexes: HashMap<GenericParamName, ResolvedIndex>,
-    nats: HashMap<GenericParamName, NatPolyForm>,
-    types: HashMap<GenericParamName, ResolvedTypeExpr>,
+    dims: HashMap<GenericParamId, ResolvedDimArg>,
+    indexes: HashMap<GenericParamId, ResolvedIndex>,
+    nats: HashMap<GenericParamId, NatPolyForm>,
+    types: HashMap<GenericParamId, ResolvedTypeExpr>,
 }
 
 impl ResolvedGenericSubstitutions {
@@ -314,22 +293,20 @@ impl ResolvedGenericSubstitutions {
             |mut substitutions, (param, arg)| {
                 match arg {
                     ResolvedGenericArg::Dim(dim) => {
-                        substitutions.dims.insert(param.name().clone(), dim.clone());
+                        substitutions.dims.insert(param.id().clone(), dim.clone());
                     }
                     ResolvedGenericArg::Index(index) => {
                         substitutions
                             .indexes
-                            .insert(param.name().clone(), index.clone());
+                            .insert(param.id().clone(), index.clone());
                     }
                     ResolvedGenericArg::Nat(form, _) => {
-                        substitutions
-                            .nats
-                            .insert(param.name().clone(), form.clone());
+                        substitutions.nats.insert(param.id().clone(), form.clone());
                     }
                     ResolvedGenericArg::Type(type_expr) => {
                         substitutions
                             .types
-                            .insert(param.name().clone(), type_expr.clone());
+                            .insert(param.id().clone(), type_expr.clone());
                     }
                 }
                 substitutions
@@ -715,11 +692,9 @@ fn resolve_hir_generic_arg_for_param(
         (GenericConstraint::Index, hir::GenericArg::Index(index)) => {
             resolve_hir_index_ref(index, ctx).map(ResolvedGenericArg::Index)
         }
-        (GenericConstraint::Nat, hir::GenericArg::Nat(nat)) => Ok(ResolvedGenericArg::Nat(
-            normalize_hir_nat_expr(nat)
-                .map_err(|err| nat_overflow_error(err, ctx.src, nat.span()))?,
-            nat.span(),
-        )),
+        (GenericConstraint::Nat, hir::GenericArg::Nat(nat)) => {
+            Ok(ResolvedGenericArg::Nat(nat.value.clone(), nat.span))
+        }
         (GenericConstraint::Type, hir::GenericArg::Type(value_type)) => {
             resolve_hir_value_type(value_type, ctx).map(ResolvedGenericArg::Type)
         }

@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::assertion_expectation::ExpectedFail;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
+use crate::generic_param::GenericParamId;
 use crate::hir;
 use crate::hir::NominalTypeDef;
 use crate::nat::NatPolyForm;
@@ -20,10 +21,9 @@ use crate::resolved_name::{
     ResolvedStructTypeName, ResolvedUnitName,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
+use crate::syntax::type_name::{ConstructorName, FieldName};
 
 // ---------------------------------------------------------------------------
 // Resolved type types
@@ -34,7 +34,7 @@ use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 pub enum ResolvedDimArg {
     Dimensionless,
     Concrete(Dimension),
-    GenericParam(GenericParamName, Span),
+    GenericParam(GenericParamId, Span),
     Expr {
         terms: Vec<ResolvedDimTerm>,
         span: Span,
@@ -120,9 +120,9 @@ pub enum ResolvedTypeExpr {
         span: Span,
     },
     /// A single generic dimension parameter, e.g. `D`
-    GenericDimParam(GenericParamName, Span),
+    GenericDimParam(GenericParamId, Span),
     /// A generic type parameter, e.g. `F: Type`.
-    GenericTypeParam(GenericParamName, Span),
+    GenericTypeParam(GenericParamId, Span),
     /// A compound dimension expression containing at least one generic param, e.g. `D^2`
     GenericDimExpr {
         terms: Vec<ResolvedDimTerm>,
@@ -199,7 +199,7 @@ pub enum ResolvedDimTerm {
     },
     /// A generic dimension parameter with power and combining operator.
     GenericParam {
-        name: GenericParamName,
+        name: GenericParamId,
         power: Rational,
         op: MulDivOp,
         span: Span,
@@ -241,51 +241,6 @@ impl ResolvedDimTerm {
     }
 }
 
-/// Normalize an AST `NatExpr` into a `NatPolyForm`.
-///
-/// All variables referenced must be Nat generic parameters in scope.
-/// Returns an error if a variable is not a known Nat param.
-pub fn normalize_nat_expr(
-    expr: &crate::desugar::desugared_ast::NatExpr,
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-) -> Result<NatPolyForm, GraphcalError> {
-    use crate::desugar::desugared_ast::NatExpr;
-    match expr {
-        NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
-        NatExpr::Var(ident) => {
-            let gp = nat_params
-                .iter()
-                .find(|p| p.as_str() == ident.name.as_str())
-                .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: IndexName::classify(ident.name.atom().clone()).into(),
-                    src: src.clone(),
-                    span: ident.span.into(),
-                })?;
-            Ok(NatPolyForm::from_var(gp.clone()))
-        }
-        NatExpr::Add(operands, span) => {
-            operands
-                .iter()
-                .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
-                    let value = normalize_nat_expr(operand, nat_params, src)?;
-                    sum.add(&value)
-                        .map_err(|err| nat_overflow_error(err, src, *span))
-                })
-        }
-        NatExpr::Mul(operands, span) => {
-            operands
-                .iter()
-                .try_fold(NatPolyForm::from_constant(1), |product, operand| {
-                    let value = normalize_nat_expr(operand, nat_params, src)?;
-                    product
-                        .mul(&value)
-                        .map_err(|err| nat_overflow_error(err, src, *span))
-                })
-        }
-    }
-}
-
 /// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
 /// into a spanned [`GraphcalError`].
 #[must_use]
@@ -307,7 +262,7 @@ pub enum ResolvedIndex {
     /// A concrete index name, e.g. `Maneuver`.
     Concrete(ResolvedIndexName, Span),
     /// A generic index parameter, e.g. `I`
-    GenericParam(GenericParamName, Span),
+    GenericParam(GenericParamId, Span),
     /// A structural finite index `Fin(N)` carrying a normalized Nat cardinality.
     Finite(NatPolyForm, Span),
 }
@@ -995,8 +950,7 @@ pub struct ResolvedTypeDefs {
     /// Atomic field semantics resolved in each owning type's generic scope.
     fields: HashMap<ResolvedStructFieldTypeKey, ResolvedStructFieldSemantics>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
-    pub(crate) generic_defaults:
-        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericDefault>,
+    pub(crate) generic_defaults: HashMap<GenericParamId, ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {

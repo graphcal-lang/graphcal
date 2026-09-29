@@ -22,7 +22,7 @@ use crate::syntax::type_name::{FieldName, GenericParamName};
 use crate::tir::dim_check::{InferredGenericArg, InferredType};
 
 use super::context::InferEnv;
-use super::nat_forms::{finite_index_error, resolve_hir_nat_form};
+use super::nat_forms::finite_index_error;
 
 pub(in crate::tir::dim_check) fn resolved_type_field_key(
     owning_type: &ResolvedStructTypeName,
@@ -60,13 +60,13 @@ fn generic_substitution_prefix(
         match param.constraint() {
             GenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
-                    subs.dims.insert(param.name().clone(), dim.clone());
+                    subs.dims.insert(param.id().clone(), dim.clone());
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             GenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
-                    subs.indexes.insert(param.name().clone(), index.clone());
+                    subs.indexes.insert(param.id().clone(), index.clone());
                 }
                 InferredGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
@@ -80,7 +80,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Nat => match arg {
                 InferredGenericArg::Nat(form) if form.is_constant() => {
-                    subs.nats.insert(param.name().clone(), form.constant());
+                    subs.nats.insert(param.id().clone(), form.constant());
                 }
                 InferredGenericArg::Nat(form) => {
                     return Err(non_concrete_generic_argument(
@@ -94,7 +94,7 @@ fn generic_substitution_prefix(
             },
             GenericConstraint::Type => match arg {
                 InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
-                    subs.types.insert(param.name().clone(), type_expr.clone());
+                    subs.types.insert(param.id().clone(), type_expr.clone());
                 }
                 InferredGenericArg::Type(type_expr) => {
                     return Err(non_concrete_generic_argument(
@@ -130,16 +130,7 @@ pub(in crate::tir::dim_check) fn concrete_generic_substitutions(
         });
     }
     let values = generic_substitution_prefix(type_def, type_args, src, span)?;
-    let nats = type_def
-        .generic_params()
-        .iter()
-        .zip(type_args)
-        .filter_map(|(parameter, arg)| match arg {
-            InferredGenericArg::Nat(form) => Some((parameter.id().clone(), form.constant())),
-            _ => None,
-        })
-        .collect();
-    Ok(ConcreteGenericSubstitutions { values, nats })
+    Ok(ConcreteGenericSubstitutions { values })
 }
 
 fn inferred_index_is_concrete(index: &IndexTypeRef) -> bool {
@@ -198,20 +189,19 @@ fn generic_arg_internal_sort_error(
 
 #[derive(Clone, Default)]
 pub(super) struct GenericSubstitutions {
-    dims: HashMap<GenericParamName, Dimension>,
-    indexes: HashMap<GenericParamName, IndexTypeRef>,
-    nats: HashMap<GenericParamName, u64>,
-    types: HashMap<GenericParamName, InferredType>,
+    dims: HashMap<GenericParamId, Dimension>,
+    indexes: HashMap<GenericParamId, IndexTypeRef>,
+    nats: HashMap<GenericParamId, u64>,
+    types: HashMap<GenericParamId, InferredType>,
 }
 
 /// Complete, sort-checked, concrete bindings for one nominal application.
 ///
 /// This wrapper can only be constructed after exact arity, sort, and
-/// concreteness validation. Nat substitutions retain their lexical owner.
+/// concreteness validation.
 #[derive(Clone)]
 pub(in crate::tir::dim_check) struct ConcreteGenericSubstitutions {
     values: GenericSubstitutions,
-    nats: HashMap<GenericParamId, u64>,
 }
 
 impl ConcreteGenericSubstitutions {
@@ -220,7 +210,7 @@ impl ConcreteGenericSubstitutions {
     }
 
     pub(in crate::tir::dim_check) const fn nats(&self) -> &HashMap<GenericParamId, u64> {
-        &self.nats
+        &self.values.nats
     }
 
     pub(in crate::tir::dim_check) fn field_type(
@@ -341,12 +331,7 @@ impl InferEnv<'_> {
                     })?;
                 Ok(InferredType::Struct(
                     StructTypeRef::from_resolved(name.value.clone()),
-                    self.resolve_applied_generic_args(
-                        &name.value,
-                        type_def,
-                        generic_args,
-                        name.span,
-                    )?,
+                    self.resolve_applied_generic_args(type_def, generic_args, name.span)?,
                 ))
             }
         }
@@ -366,9 +351,7 @@ impl InferEnv<'_> {
             GenericArg::Index(index) => {
                 inferred_index_from_type_arg(index, self.src).map(InferredGenericArg::Index)
             }
-            GenericArg::Nat(nat) => {
-                resolve_hir_nat_form(nat, self.src).map(InferredGenericArg::Nat)
-            }
+            GenericArg::Nat(nat) => Ok(InferredGenericArg::Nat(nat.value.clone())),
             GenericArg::Type(value_type) => self
                 .infer_hir_generic_type_arg(value_type)
                 .map(InferredGenericArg::Type),
@@ -390,11 +373,8 @@ fn inferred_index_from_type_arg(
             src: src.clone(),
             span: param.span.into(),
         }),
-        IndexRef::Finite(nat_expr) => {
-            let form = resolve_hir_nat_form(nat_expr, src)?;
-            IndexTypeRef::from_finite_index_form(form)
-                .map_err(|err| finite_index_error(err, src, nat_expr.span()))
-        }
+        IndexRef::Finite(nat_expr) => IndexTypeRef::from_finite_index_form(nat_expr.value.clone())
+            .map_err(|err| finite_index_error(err, src, nat_expr.span)),
     }
 }
 
@@ -457,7 +437,6 @@ fn infer_hir_dim_expr_arg(
 impl InferEnv<'_> {
     pub(super) fn resolve_applied_generic_args(
         &self,
-        owning_type: &ResolvedStructTypeName,
         type_def: &NominalTypeDef,
         applied_generic_args: &[GenericArg],
         span: Span,
@@ -513,7 +492,7 @@ impl InferEnv<'_> {
                 .semantic
                 .type_defs
                 .generic_defaults
-                .get(&(owning_type.clone(), param.name().clone()))
+                .get(param.id())
                 .ok_or_else(|| GraphcalError::EvalError {
                     message: format!(
                         "internal: generic parameter `{}` has no default",

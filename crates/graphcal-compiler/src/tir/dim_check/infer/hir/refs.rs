@@ -8,11 +8,11 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
+use crate::generic_param::GenericParamId;
 use crate::registry::declared_type::StructTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::GenericParamName;
 
 use crate::tir::dim_check::InferredType;
 use crate::tir::dim_check::infer::rules;
@@ -49,7 +49,7 @@ impl InferEnv<'_> {
                 })?;
         let dim_sub = HashMap::new();
         let index_sub =
-            HashMap::<GenericParamName, crate::registry::declared_type::IndexTypeRef>::new();
+            HashMap::<GenericParamId, crate::registry::declared_type::IndexTypeRef>::new();
         let nat_sub = HashMap::new();
         crate::tir::typed::substitute_resolved_type(
             checked.resolved(),
@@ -91,7 +91,6 @@ impl Infer<'_> {
                     });
                 }
                 let type_args = self.env.resolve_applied_generic_args(
-                    target_def.owning_type(),
                     target_def.definition(),
                     &[],
                     target.span,

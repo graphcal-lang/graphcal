@@ -1483,6 +1483,27 @@ fn selective_include_projects_structural_index_binding_target() {
 }
 
 #[test]
+fn structural_index_binding_cardinality_must_be_closed() {
+    let program = |cardinality: &str| {
+        format!(
+            "dag target {{ pub(bind) index Axis; }}\n\
+             include target(index Axis: Fin({cardinality}))::{{ index Axis as EffectiveAxis }};\n\
+             node indexed: Dimensionless[EffectiveAxis] = for i: EffectiveAxis {{ 1.0 }};"
+        )
+    };
+    compile_and_eval(&program("1 + 2 * 3")).expect("a closed cardinality binds");
+    assert!(matches!(
+        compile_and_eval(&program("N + 1")).unwrap_err(),
+        CompileError::Eval(GraphcalError::UnknownIndex { ref name, .. }) if name.to_string() == "N"
+    ));
+    assert!(matches!(
+        compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
+        CompileError::Eval(GraphcalError::EvalError { ref message, .. })
+            if message.contains("type-level Nat arithmetic overflow")
+    ));
+}
+
+#[test]
 fn include_rejects_required_static_inputs_as_binding_targets() {
     let source = "pub(bind) type Replacement;\n\
                   dag target { pub(bind) type Slot; }\n\

@@ -1441,7 +1441,6 @@ fn check_field_domain_constraint_dimensions(
                     cancellation,
                     collector.clone(),
                 )?;
-                collector.retain_nat_scope(&bound.value, type_def.generic_params());
                 match &expected {
                     Some(expected) => check_one_bound_with_display_name(
                         &display_name,

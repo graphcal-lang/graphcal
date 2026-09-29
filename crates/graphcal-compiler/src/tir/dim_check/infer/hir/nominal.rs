@@ -115,7 +115,6 @@ impl Infer<'_> {
         let owning_type_name = type_def.name();
 
         let resolved_type_args = self.env.resolve_applied_generic_args(
-            target.owning_type(),
             type_def,
             constructor_generic_args,
             callee.span,

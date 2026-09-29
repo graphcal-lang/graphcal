@@ -24,6 +24,7 @@ pub mod expression_source;
 pub mod finite_value;
 pub(crate) mod fresh_identity;
 pub mod function_signature;
+pub mod generic_param;
 pub mod hir;
 pub mod import_cycle;
 pub mod ir;

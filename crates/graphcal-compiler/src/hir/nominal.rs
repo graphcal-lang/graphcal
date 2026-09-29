@@ -372,6 +372,9 @@ pub enum NominalTypeError {
         constructor: ResolvedConstructorName,
         first_owner: ResolvedStructTypeName,
     },
+    /// Re-owning a specialized definition's Nat forms overflowed.
+    #[error(transparent)]
+    NatOverflow(#[from] crate::nat::NatOverflowError),
 }
 
 /// Canonical nominal definitions owned by one HIR DAG.

@@ -10,6 +10,7 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 #[cfg(test)]
 use crate::dimension::Rational;
+use crate::generic_param::GenericParamId;
 #[cfg(test)]
 use crate::nat::Monomial;
 use crate::nat::NatPolyForm;
@@ -20,7 +21,6 @@ use crate::registry::types::FormattingRegistry;
 #[cfg(test)]
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
-use crate::syntax::type_name::GenericParamName;
 use crate::tir::dim_check::InferredGenericArg;
 
 use super::{ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
@@ -230,7 +230,9 @@ fn resolved_index_matches_inferred(
 fn resolved_index_display_name(index: &ResolvedIndex) -> IndexDisplayName {
     match index {
         ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name().into(),
-        ResolvedIndex::GenericParam(name, _) => IndexName::classify(name.atom().clone()).into(),
+        ResolvedIndex::GenericParam(name, _) => {
+            IndexName::classify(name.name.atom().clone()).into()
+        }
         ResolvedIndex::Finite(form, _) => IndexDisplayName::Finite(form.clone()),
     }
 }
@@ -249,7 +251,7 @@ fn resolved_index_display_name(index: &ResolvedIndex) -> IndexDisplayName {
 pub(in crate::tir::typed) fn unify_nat_poly_form(
     form: &NatPolyForm,
     target: u64,
-    nat_sub: &mut HashMap<GenericParamName, u64>,
+    nat_sub: &mut HashMap<GenericParamId, u64>,
     actual_idx: &IndexDisplayName,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -268,7 +270,7 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
 fn unify_nat_generic_arg(
     expected: &NatPolyForm,
     actual: &NatPolyForm,
-    nat_sub: &mut HashMap<GenericParamName, u64>,
+    nat_sub: &mut HashMap<GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
@@ -319,7 +321,7 @@ impl NatUnificationSite<'_> {
     fn reduced_mismatch(
         self,
         form: &NatPolyForm,
-        nat_sub: &HashMap<GenericParamName, u64>,
+        nat_sub: &HashMap<GenericParamId, u64>,
         src: &NamedSource<Arc<String>>,
         span: Span,
     ) -> GraphcalError {
@@ -384,7 +386,7 @@ impl NatUnificationSite<'_> {
 fn solve_nat_poly_form(
     form: &NatPolyForm,
     target: u64,
-    nat_sub: &mut HashMap<GenericParamName, u64>,
+    nat_sub: &mut HashMap<GenericParamId, u64>,
     site: NatUnificationSite<'_>,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -461,7 +463,7 @@ fn solve_nat_poly_form(
     }
 
     // Multiple unbound variables or non-linear — ambiguous
-    let var_names: Vec<&str> = unbound_vars.iter().map(GenericParamName::as_str).collect();
+    let var_names: Vec<&str> = unbound_vars.iter().map(|id| id.name.as_str()).collect();
     let source = site.inference_source();
     Err(GraphcalError::EvalError {
         message: format!(
@@ -525,9 +527,9 @@ where
 pub(in crate::tir::typed) fn unify_resolved_type(
     resolved: &ResolvedTypeExpr,
     actual: &crate::tir::dim_check::InferredType,
-    dim_sub: &mut HashMap<GenericParamName, Dimension>,
-    index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &mut HashMap<GenericParamName, u64>,
+    dim_sub: &mut HashMap<GenericParamId, Dimension>,
+    index_sub: &mut HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &mut HashMap<GenericParamId, u64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -959,9 +961,9 @@ fn resolved_dim_arg_as_type(arg: &ResolvedDimArg) -> ResolvedTypeExpr {
 fn unify_resolved_generic_arg(
     expected: &ResolvedGenericArg,
     actual: &InferredGenericArg,
-    dim_sub: &mut HashMap<GenericParamName, Dimension>,
-    index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &mut HashMap<GenericParamName, u64>,
+    dim_sub: &mut HashMap<GenericParamId, Dimension>,
+    index_sub: &mut HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &mut HashMap<GenericParamId, u64>,
     registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -1036,9 +1038,9 @@ fn unify_resolved_generic_arg(
 /// This replaces `resolve_type_with_substitution()` from `dim_check.rs`.
 pub fn substitute_resolved_type(
     resolved: &ResolvedTypeExpr,
-    dim_sub: &HashMap<GenericParamName, Dimension>,
-    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamName, u64>,
+    dim_sub: &HashMap<GenericParamId, Dimension>,
+    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
     let no_type_sub = HashMap::new();
@@ -1047,10 +1049,10 @@ pub fn substitute_resolved_type(
 
 pub fn substitute_resolved_generic_arg(
     resolved: &ResolvedGenericArg,
-    dim_sub: &HashMap<GenericParamName, Dimension>,
-    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamName, u64>,
-    type_sub: &HashMap<GenericParamName, crate::tir::dim_check::InferredType>,
+    dim_sub: &HashMap<GenericParamId, Dimension>,
+    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamId, u64>,
+    type_sub: &HashMap<GenericParamId, crate::tir::dim_check::InferredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredGenericArg, GraphcalError> {
     match resolved {
@@ -1098,8 +1100,8 @@ pub fn substitute_resolved_generic_arg(
 /// yielding the concrete inferred index identity.
 fn substitute_resolved_index(
     index: &ResolvedIndex,
-    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamName, u64>,
+    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::registry::declared_type::IndexTypeRef, GraphcalError> {
     match index {
@@ -1150,10 +1152,10 @@ fn substitute_resolved_index(
 )]
 pub fn substitute_resolved_type_with_types(
     resolved: &ResolvedTypeExpr,
-    dim_sub: &HashMap<GenericParamName, Dimension>,
-    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
-    nat_sub: &HashMap<GenericParamName, u64>,
-    type_sub: &HashMap<GenericParamName, crate::tir::dim_check::InferredType>,
+    dim_sub: &HashMap<GenericParamId, Dimension>,
+    index_sub: &HashMap<GenericParamId, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamId, u64>,
+    type_sub: &HashMap<GenericParamId, crate::tir::dim_check::InferredType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::dim_check::InferredType, GraphcalError> {
     use crate::tir::dim_check::InferredType;
@@ -1290,7 +1292,7 @@ pub fn substitute_resolved_type_with_types(
                             let unbound: Vec<&str> = vars
                                 .iter()
                                 .filter(|k| !nat_sub.contains_key(*k))
-                                .map(GenericParamName::as_str)
+                                .map(|id| id.name.as_str())
                                 .collect();
                             GraphcalError::EvalError {
                                 message: format!(

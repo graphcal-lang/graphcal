@@ -7,46 +7,14 @@
 //! owning type signature.
 
 use crate::dimension::Rational;
+use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName};
 use crate::syntax::ast::MulDivOp;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::GenericParamName;
 
-/// Canonical identity for a generic parameter in a lexical generic scope.
-///
-/// Generic parameters are not module-level symbols, so they should not be
-/// represented as `ResolvedName<GenericParam>`. Their identity is the owning
-/// generic scope plus the parameter leaf name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GenericParamId {
-    owner: GenericParamOwner,
-    pub name: GenericParamName,
-}
-
-impl GenericParamId {
-    /// Create a generic parameter identity from its owner and leaf name.
-    #[must_use]
-    pub(crate) const fn new(owner: GenericParamOwner, name: GenericParamName) -> Self {
-        Self { owner, name }
-    }
-
-    /// The lexical scope that owns this parameter.
-    #[must_use]
-    pub(crate) const fn owner(&self) -> &GenericParamOwner {
-        &self.owner
-    }
-}
-
-/// The lexical scope that owns a generic parameter list.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum GenericParamOwner {
-    /// Generic parameter on a user-defined `type` declaration.
-    Type(ResolvedStructTypeName),
-    /// Dimension or index binder of an extern plugin function signature.
-    ExternFn(crate::plugin_identity::ExternFnKey),
-}
+pub use crate::generic_param::{GenericParamId, GenericParamOwner};
 
 /// Built-in type forms with closed semantic meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -172,7 +140,8 @@ impl DimArg {
 pub enum GenericArg {
     Dim(DimArg),
     Index(IndexRef),
-    Nat(NatExpr),
+    /// A type-level natural number, normalized at the AST-to-HIR boundary.
+    Nat(Spanned<NatPolyForm>),
     /// A `Type`-sorted argument: always a (non-indexed) value type.
     Type(ValueType),
 }
@@ -184,7 +153,7 @@ impl GenericArg {
         match self {
             Self::Dim(arg) => arg.span(),
             Self::Index(index) => index.span(),
-            Self::Nat(nat) => nat.span(),
+            Self::Nat(nat) => nat.span,
             Self::Type(value_type) => value_type.span,
         }
     }
@@ -229,8 +198,9 @@ pub enum IndexRef {
     Concrete(Spanned<ResolvedIndexName>),
     /// A generic index parameter (`I: Index`).
     GenericParam(Spanned<GenericParamId>),
-    /// A structural finite index `Fin(N)`.
-    Finite(NatExpr),
+    /// A structural finite index `Fin(N)` whose cardinality is normalized at
+    /// the AST-to-HIR boundary.
+    Finite(Spanned<NatPolyForm>),
 }
 
 impl std::fmt::Display for IndexRef {
@@ -239,7 +209,7 @@ impl std::fmt::Display for IndexRef {
         match self {
             Self::Concrete(name) => f.write_str(name.value.as_str()),
             Self::GenericParam(param) => write!(f, "{}", param.value.name),
-            Self::Finite(cardinality) => write!(f, "Fin({cardinality})"),
+            Self::Finite(cardinality) => write!(f, "Fin({})", cardinality.value),
         }
     }
 }
@@ -251,18 +221,20 @@ impl IndexRef {
         match self {
             Self::Concrete(name) => name.span,
             Self::GenericParam(param) => param.span,
-            Self::Finite(cardinality) => cardinality.span(),
+            Self::Finite(cardinality) => cardinality.span,
         }
     }
 }
 
-/// A resolved type-level natural-number expression.
+/// A static natural-number expression (a `linspace` point count).
+///
+/// A static count has no generic scope, so it never names a parameter.
+/// Type-level Nat expressions are normalized to [`NatPolyForm`] during
+/// lowering instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NatExpr {
     /// Integer literal.
     Literal(u64, Span),
-    /// Generic natural-number parameter (`N: Nat`).
-    Param(Spanned<GenericParamId>),
     /// Addition of two or more operands.
     Add(AtLeastTwo<Self>, Span),
     /// Multiplication of two or more operands.
@@ -287,7 +259,6 @@ impl std::fmt::Display for NatExpr {
         }
         match self {
             Self::Literal(value, _) => write!(f, "{value}"),
-            Self::Param(param) => write!(f, "{}", param.value.name),
             Self::Add(operands, _) => join(f, operands, " + "),
             Self::Mul(operands, _) => join(f, operands, " * "),
         }
@@ -300,7 +271,6 @@ impl NatExpr {
     pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Literal(_, span) | Self::Add(_, span) | Self::Mul(_, span) => *span,
-            Self::Param(param) => param.span,
         }
     }
 }

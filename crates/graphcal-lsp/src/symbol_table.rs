@@ -679,13 +679,16 @@ impl<'a> HirRefCollector<'a> {
     }
 }
 
-/// Short display label for a HIR type-level natural-number expression,
-/// used in local-variable hover details.
-fn nat_expr_label(nat_expr: &hir::NatExpr) -> String {
-    match nat_expr {
-        hir::NatExpr::Literal(value, _) => value.to_string(),
-        hir::NatExpr::Param(param) => param.value.name.to_string(),
-        hir::NatExpr::Add(..) | hir::NatExpr::Mul(..) => "..".to_string(),
+/// Short display label for a normalized type-level natural-number form,
+/// used in local-variable hover details: a constant, a lone parameter, or
+/// `..` for anything larger.
+fn nat_expr_label(
+    form: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::nat::NatPolyForm>,
+) -> String {
+    match (form.value.constant_value(), form.value.as_variable()) {
+        (Some(value), _) => value.to_string(),
+        (None, Some(parameter)) => parameter.name.to_string(),
+        (None, None) => "..".to_string(),
     }
 }
 
@@ -2743,6 +2746,25 @@ mod tests {
                 .filter(|(key, _)| matches!(key, SymbolKey::BuiltinFunction(_)))
                 .count(),
             BuiltinFn::all().count()
+        );
+    }
+
+    #[test]
+    fn finite_loop_variables_describe_their_normalized_cardinality() {
+        let table = table_for(
+            "node a: Dimensionless[Fin(2)] = for i: Fin(1 + 1) { 1.0 };\n\
+             node b: Dimensionless[Fin(3)] = for j: Fin(3) { 1.0 };",
+        );
+        let mut details: Vec<_> = table
+            .definitions
+            .values()
+            .filter_map(|definition| definition.detail.clone())
+            .filter(|detail| detail.starts_with("loop variable over"))
+            .collect();
+        details.sort();
+        assert_eq!(
+            details,
+            ["loop variable over Fin(2)", "loop variable over Fin(3)"]
         );
     }
 

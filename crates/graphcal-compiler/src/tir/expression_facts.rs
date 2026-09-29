@@ -297,11 +297,6 @@ pub struct CheckedExpressionRecord {
         HashMap<crate::resolved_name::ResolvedConstructorName, ConstructorMatch>,
     /// Binder-aware nominal observations for a checked root (V005).
     pub(crate) nominal_observations: Option<std::sync::Arc<[NominalObservation]>>,
-    pub nat_parameters: Option<
-        std::sync::Arc<
-            HashMap<crate::syntax::type_name::GenericParamName, crate::hir::types::GenericParamId>,
-        >,
-    >,
 }
 
 fn share_nonempty<T>(values: Vec<T>) -> Option<std::sync::Arc<[T]>> {
@@ -367,7 +362,6 @@ impl CheckedExpressionRecord {
                 _ => Vec::new(),
             }),
             constructor_matches: HashMap::new(),
-            nat_parameters: None,
             nominal_observations: None,
         })
     }

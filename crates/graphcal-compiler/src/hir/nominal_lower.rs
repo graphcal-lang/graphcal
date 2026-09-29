@@ -15,6 +15,7 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::registry::error::GraphcalError;
 use crate::registry::index::FiniteIndex;
 use crate::registry::reserved_name::validate_reserved_name;
@@ -34,7 +35,7 @@ use super::nominal::{
 };
 use super::types::{
     DeclType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg, GenericParamId,
-    GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, ValueType, ValueTypeKind,
+    GenericParamOwner, IndexRef, TypeAnnotation, ValueType, ValueTypeKind,
 };
 
 /// Services one nominal lowering run needs.
@@ -152,7 +153,8 @@ fn member_error(
         }
         error @ (NominalTypeError::ConstructorOwnerMismatch { .. }
         | NominalTypeError::DuplicateType { .. }
-        | NominalTypeError::DuplicateCanonicalConstructor { .. }) => invariant_error(
+        | NominalTypeError::DuplicateCanonicalConstructor { .. }
+        | NominalTypeError::NatOverflow(_)) => invariant_error(
             format!(
                 "invalid HIR nominal type `{}`: {error}",
                 declaration.name.value
@@ -515,14 +517,17 @@ pub fn specialize_nominal_type(
         .generic_params()
         .iter()
         .map(|param| {
-            NominalGenericParam::new(
+            Ok(NominalGenericParam::new(
                 specializer.generic_param(param.id()),
                 param.constraint(),
-                param.default().map(|arg| specializer.generic_arg(arg)),
+                param
+                    .default()
+                    .map(|arg| specializer.generic_arg(arg))
+                    .transpose()?,
                 param.span(),
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<_, NatOverflowError>>()?;
     match template.kind() {
         NominalTypeKind::Required => Ok(NominalTypeDef::required(
             identity,
@@ -541,16 +546,16 @@ pub fn specialize_nominal_type(
                             .iter()
                             .map(|field| {
                                 let annotation = field.type_annotation();
-                                NominalField::new(
+                                Ok(NominalField::new(
                                     field.name().clone(),
                                     TypeAnnotation {
-                                        decl_type: specializer.decl_type(&annotation.decl_type),
+                                        decl_type: specializer.decl_type(&annotation.decl_type)?,
                                         domain_bounds: annotation.domain_bounds.clone(),
                                         span: annotation.span,
                                     },
-                                )
+                                ))
                             })
-                            .collect(),
+                            .collect::<Result<_, NatOverflowError>>()?,
                     )
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -596,22 +601,22 @@ impl Specializer<'_> {
         Spanned::new(self.generic_param(&id.value), id.span)
     }
 
-    fn decl_type(&self, decl_type: &DeclType) -> DeclType {
-        match decl_type {
-            DeclType::Value(value) => DeclType::Value(self.value_type(value)),
+    fn decl_type(&self, decl_type: &DeclType) -> Result<DeclType, NatOverflowError> {
+        Ok(match decl_type {
+            DeclType::Value(value) => DeclType::Value(self.value_type(value)?),
             DeclType::Indexed {
                 element,
                 indexes,
                 span,
             } => DeclType::Indexed {
-                element: self.value_type(element),
-                indexes: indexes.map_ref(|index| self.index(index)),
+                element: self.value_type(element)?,
+                indexes: indexes.try_map_ref(|index| self.index(index))?,
                 span: *span,
             },
-        }
+        })
     }
 
-    fn value_type(&self, value: &ValueType) -> ValueType {
+    fn value_type(&self, value: &ValueType) -> Result<ValueType, NatOverflowError> {
         let kind = match &value.kind {
             ValueTypeKind::Builtin(builtin) => ValueTypeKind::Builtin(*builtin),
             ValueTypeKind::DimExpr(expr) => ValueTypeKind::DimExpr(self.dim_expr(expr)),
@@ -620,27 +625,27 @@ impl Specializer<'_> {
                 ValueTypeKind::GenericTypeParam(self.spanned_param(id))
             }
             ValueTypeKind::Complex(arg) => ValueTypeKind::Complex(self.dim_arg(arg)),
-            ValueTypeKind::Key(index) => ValueTypeKind::Key(self.index(index)),
+            ValueTypeKind::Key(index) => ValueTypeKind::Key(self.index(index)?),
             ValueTypeKind::TypeApplication { name, generic_args } => {
                 ValueTypeKind::TypeApplication {
                     name: self.struct_type(name),
                     generic_args: generic_args
                         .iter()
                         .map(|arg| self.generic_arg(arg))
-                        .collect(),
+                        .collect::<Result<_, _>>()?,
                 }
             }
         };
-        ValueType::new(kind, value.span)
+        Ok(ValueType::new(kind, value.span))
     }
 
-    fn generic_arg(&self, arg: &GenericArg) -> GenericArg {
-        match arg {
+    fn generic_arg(&self, arg: &GenericArg) -> Result<GenericArg, NatOverflowError> {
+        Ok(match arg {
             GenericArg::Dim(arg) => GenericArg::Dim(self.dim_arg(arg)),
-            GenericArg::Index(index) => GenericArg::Index(self.index(index)),
-            GenericArg::Nat(nat) => GenericArg::Nat(self.nat(nat)),
-            GenericArg::Type(value) => GenericArg::Type(self.value_type(value)),
-        }
+            GenericArg::Index(index) => GenericArg::Index(self.index(index)?),
+            GenericArg::Nat(nat) => GenericArg::Nat(self.nat(nat)?),
+            GenericArg::Type(value) => GenericArg::Type(self.value_type(value)?),
+        })
     }
 
     fn dim_arg(&self, arg: &DimArg) -> DimArg {
@@ -682,33 +687,38 @@ impl Specializer<'_> {
         }
     }
 
-    fn index(&self, index: &IndexRef) -> IndexRef {
-        match index {
+    fn index(&self, index: &IndexRef) -> Result<IndexRef, NatOverflowError> {
+        Ok(match index {
             IndexRef::Concrete(name) => match self.substitution.indexes.get(&name.value) {
                 Some(NominalIndexTarget::Declared(target)) => {
                     IndexRef::Concrete(Spanned::new(target.clone(), name.span))
                 }
-                Some(NominalIndexTarget::Finite(finite)) => {
-                    IndexRef::Finite(NatExpr::Literal(finite.size_u64(), name.span))
-                }
+                Some(NominalIndexTarget::Finite(finite)) => IndexRef::Finite(Spanned::new(
+                    NatPolyForm::from_constant(finite.size_u64()),
+                    name.span,
+                )),
                 None => IndexRef::Concrete(name.clone()),
             },
             IndexRef::GenericParam(id) => IndexRef::GenericParam(self.spanned_param(id)),
-            IndexRef::Finite(nat) => IndexRef::Finite(self.nat(nat)),
-        }
+            IndexRef::Finite(nat) => IndexRef::Finite(self.nat(nat)?),
+        })
     }
 
-    fn nat(&self, nat: &NatExpr) -> NatExpr {
-        match nat {
-            NatExpr::Literal(value, span) => NatExpr::Literal(*value, *span),
-            NatExpr::Param(id) => NatExpr::Param(self.spanned_param(id)),
-            NatExpr::Add(operands, span) => {
-                NatExpr::Add(operands.map_ref(|operand| self.nat(operand)), *span)
-            }
-            NatExpr::Mul(operands, span) => {
-                NatExpr::Mul(operands.map_ref(|operand| self.nat(operand)), *span)
-            }
-        }
+    /// Re-own the template's Nat parameters in a normalized form.
+    fn nat(&self, nat: &Spanned<NatPolyForm>) -> Result<Spanned<NatPolyForm>, NatOverflowError> {
+        let reowned = nat
+            .value
+            .variables()
+            .into_iter()
+            .map(|id| {
+                let target = NatPolyForm::from_var(self.generic_param(&id));
+                (id, target)
+            })
+            .collect();
+        Ok(Spanned::new(
+            nat.value.substitute_forms(&reowned)?,
+            nat.span,
+        ))
     }
 }
 
@@ -822,7 +832,8 @@ mod tests {
         let source = "pub(bind) dim Q;\n\
                       pub(bind) index Axis;\n\
                       pub(bind) type Slot;\n\
-                      pub type Box<T: Type = Slot> { Box(v: Q, s: Slot, xs: Q[Axis], t: T) }";
+                      pub type Box<T: Type = Slot, N: Nat = 2> \
+                      { Box(v: Q, s: Slot, xs: Q[Axis], t: T, ys: Q[Fin(N + 1)]) }";
         let file = parse(source);
         let mut modules = TestModules::default();
         modules.add(template_id.clone(), &file.declarations);
@@ -890,9 +901,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(specialized.identity(), &identity);
-        let [param] = specialized.generic_params() else {
-            panic!("Box keeps one generic parameter");
+        let [param, nat_param] = specialized.generic_params() else {
+            panic!("Box keeps two generic parameters");
         };
+        assert_eq!(
+            nat_param.id().owner(),
+            &GenericParamOwner::Type(identity.clone())
+        );
         assert_eq!(
             param.id().owner(),
             &GenericParamOwner::Type(identity.clone())
@@ -906,9 +921,22 @@ mod tests {
             panic!("Box keeps one constructor");
         };
         assert_eq!(constructor.identity().owner(), &importer_id);
-        let [v, s, xs, t] = constructor.fields() else {
-            panic!("Box keeps four fields");
+        let [v, s, xs, t, ys] = constructor.fields() else {
+            panic!("Box keeps five fields");
         };
+        // The Nat form is re-owned by the specialized identity.
+        let DeclType::Indexed { indexes, .. } = &ys.type_annotation().decl_type else {
+            panic!("ys stays indexed");
+        };
+        let [IndexRef::Finite(cardinality)] = indexes.as_slice() else {
+            panic!("ys keeps one finite axis");
+        };
+        assert_eq!(
+            cardinality.value,
+            NatPolyForm::from_var(nat_param.id().clone())
+                .add(&NatPolyForm::from_constant(1))
+                .unwrap()
+        );
         assert!(matches!(
             &v.type_annotation().decl_type,
             DeclType::Value(ValueType { kind: ValueTypeKind::DimExpr(expr), .. })
@@ -921,7 +949,7 @@ mod tests {
         assert!(matches!(
             &xs.type_annotation().decl_type,
             DeclType::Indexed { indexes, .. }
-                if matches!(indexes.first(), IndexRef::Finite(NatExpr::Literal(3, _)))
+                if matches!(indexes.first(), IndexRef::Finite(n) if n.value.constant_value() == Some(3))
         ));
         assert!(matches!(
             &t.type_annotation().decl_type,

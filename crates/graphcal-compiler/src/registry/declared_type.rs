@@ -339,10 +339,11 @@ pub type StructTypeRef = TypeNameRef<StructTypeNameNamespace>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::type_name::{GenericParamName, StructTypeName};
+    use crate::generic_param::test_support::type_param;
+    use crate::syntax::type_name::StructTypeName;
 
     fn symbolic_n_plus_one() -> NatPolyForm {
-        NatPolyForm::from_var(GenericParamName::expect_valid("N"))
+        NatPolyForm::from_var(type_param("N"))
             .add(&NatPolyForm::from_constant(1))
             .unwrap()
     }
