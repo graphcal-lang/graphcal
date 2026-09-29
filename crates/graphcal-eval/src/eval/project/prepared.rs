@@ -213,7 +213,7 @@ impl ParameterBindingBuilder<'_> {
         let CheckedType::Key(index) = &port.declared_type else {
             return Err(self.project.binding_kind_error(port, "Key"));
         };
-        let Some(definition) = index_def_for_ref(index, &self.project.tir) else {
+        let Some(definition) = index_def_for_ref(index, self.project.tir()) else {
             return Err(self
                 .project
                 .binding_value_error(port, "index definition is unavailable"));
@@ -241,23 +241,16 @@ impl ParameterBindingBuilder<'_> {
         )
     }
 }
-struct ImportedConstantOutput {
-    declaration: ResolvedDeclName,
-    value: RuntimeValue,
-    declared_type: CheckedType,
-}
-
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     include_debug_names: IncludeDebugNameMap,
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    imported_values: HashMap<ScopedName, ImportedConstantOutput>,
+    imported_values: HashMap<ScopedName, crate::checked_program::ImportedConstant>,
 }
 
 /// A checked, value-independent Graphcal project ready for repeated evaluation.
 pub struct PreparedProject {
     plan_id: u64,
-    tir: graphcal_compiler::tir::typed::CheckedTir,
     plan: crate::execution_plan::ExecPlan,
     source: NamedSource<Arc<String>>,
     host_fns: crate::host_fns::HostFunctionRegistry,
@@ -281,6 +274,11 @@ impl std::fmt::Debug for PreparedProject {
 }
 
 impl PreparedProject {
+    /// The checked TIR this project evaluates.
+    const fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
+        self.plan.tir()
+    }
+
     /// Source-visible index spelling for closed entry bindings, when available.
     #[must_use]
     pub fn source_index_path(
@@ -288,48 +286,43 @@ impl PreparedProject {
         index: &graphcal_compiler::resolved_name::ResolvedIndexName,
     ) -> Option<graphcal_compiler::syntax::names::NamePath> {
         self.module_resolver
-            .source_index_path(self.tir.root_dag_id(), index)
+            .source_index_path(self.tir().root_dag_id(), index)
     }
 
     pub(in crate::eval::project) fn from_compiled(
         compiled: CompiledFile,
-        plan: crate::execution_plan::ExecPlan,
         source: NamedSource<Arc<String>>,
         host_fns: crate::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
-        let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
         let CompiledFile {
-            tir,
-            checked_execution_facts: _,
+            program,
             entry_interface,
-            imported_values,
             imported_source_order,
             output_surface,
             include_debug_names,
         } = compiled;
+        let plan =
+            crate::exec_plan::compile_checked_with_cancellation(program, &source, cancellation)?;
+        let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
 
-        let imported_values = imported_values
-            .into_iter()
-            .map(|(name, (value, declared_type))| {
-                let binding = tir.root().imported_bindings().get(&name).ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::internal_error(
-                        format!("imported output `{name}` has no checked binding"),
-                        &source,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
-                Ok((
-                    name,
-                    ImportedConstantOutput {
-                        declaration: binding.target().clone(),
-                        value,
-                        declared_type,
-                    },
+        let tir = plan.tir();
+        let imported_values = plan
+            .program()
+            .dag(tir.root_dag_id())
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::internal_error(
+                    format!("DAG `{}` has no compiled body", tir.root_dag_id()),
+                    &source,
+                    DiagnosticAnchor::WholeFile,
                 ))
-            })
-            .collect::<Result<_, CompileError>>()?;
-        let mut schema_builder = ModelSchemaGraphBuilder::new(&tir, &source);
+            })?
+            .imported_constants()
+            .iter()
+            .map(|constant| (constant.name().clone(), constant.clone()))
+            .collect();
+        let mut schema_builder = ModelSchemaGraphBuilder::new(tir, &source);
         let parameter_ports =
             build_parameter_ports(plan_id, &entry_interface, &plan, &mut schema_builder)?;
         let parameter_lookup = parameter_ports
@@ -342,7 +335,6 @@ impl PreparedProject {
 
         Ok(Self {
             plan_id,
-            tir,
             plan,
             source,
             host_fns,
@@ -416,7 +408,6 @@ impl PreparedProject {
         self.validate_row_identity(row)?;
         let eval_result =
             super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
-                &self.tir,
                 &self.plan,
                 &row.bindings,
                 &self.source,
@@ -450,7 +441,6 @@ impl PreparedProject {
         self.validate_row_identity(row)?;
         Ok(
             super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
-                &self.tir,
                 &self.plan,
                 &row.bindings,
                 &self.source,
@@ -494,14 +484,16 @@ impl PreparedProject {
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
                 let mut value = crate::eval::public_projection::EvaluatedValue::new(
-                    &imported.value,
-                    &imported.declared_type,
+                    imported.value().value(),
+                    imported.declared_type(),
                 )
-                .project(&self.tir, &self.source)
+                .project(self.tir(), &self.source)
                 .map_err(CompileError::from)?;
                 let diagnostics = crate::eval::display::attach_presentation(
                     &mut value,
-                    evaluation.presentation_instances.get(&imported.declaration),
+                    evaluation
+                        .presentation_instances
+                        .get(imported.value().key()),
                 )
                 .map_err(|error| {
                     CompileError::Eval(GraphcalError::internal_error(
@@ -514,7 +506,7 @@ impl PreparedProject {
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {
                         crate::presentation_evidence::PresentationDiagnostic {
-                            declaration: imported.declaration.clone(),
+                            declaration: imported.value().key().clone(),
                             channel: None,
                             detail,
                         }
@@ -617,13 +609,13 @@ pub(super) fn prepare_checked_project(
         ));
     }
 
-    let plan = crate::exec_plan::compile_checked_with_cancellation(
-        &compiled.tir,
-        &compiled.checked_execution_facts,
-        &source,
+    PreparedProject::from_compiled(
+        compiled,
+        source,
+        host_fns.clone(),
+        module_resolver,
         cancellation,
-    )?;
-    PreparedProject::from_compiled(compiled, plan, source, host_fns.clone(), module_resolver)
+    )
 }
 
 impl ProjectCompiler<'_, HostFunctionRegistry> {

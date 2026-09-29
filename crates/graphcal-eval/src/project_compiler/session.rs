@@ -164,8 +164,8 @@ impl std::fmt::Debug for CheckedProject {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CheckedProject")
-            .field("root", self.compiled.tir.root_dag_id())
-            .field("modules", &self.compiled.tir.dag_registry().len())
+            .field("root", self.compiled.program.tir().root_dag_id())
+            .field("modules", &self.compiled.program.tir().dag_registry().len())
             .finish_non_exhaustive()
     }
 }
@@ -174,7 +174,7 @@ impl CheckedProject {
     /// Borrow the checked typed program.
     #[must_use]
     pub const fn tir(&self) -> &graphcal_compiler::tir::typed::CheckedTir {
-        &self.compiled.tir
+        self.compiled.program.tir()
     }
 
     /// Borrow the canonical resolver built by this compilation session.
@@ -186,7 +186,7 @@ impl CheckedProject {
     /// Whether the entry DAG still requires runtime inputs.
     #[must_use]
     pub fn is_library(&self) -> bool {
-        self.compiled.tir.is_library()
+        self.compiled.program.tir().is_library()
     }
 
     /// Consume the checked semantic result at the runtime-preparation boundary.
@@ -220,7 +220,7 @@ pub fn check_project(project: &LoadedProject) -> Result<CheckedProject, CompileE
 pub fn compile_to_tir_from_project(
     project: &LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::CheckedTir, CompileError> {
-    check_project(project).map(|checked| checked.compiled.tir)
+    check_project(project).map(|checked| checked.compiled.program.into_parts().0)
 }
 
 /// Test-only convenience projection from source through [`CheckedProject`].

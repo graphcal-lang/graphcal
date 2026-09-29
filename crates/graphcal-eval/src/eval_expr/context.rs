@@ -14,10 +14,9 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, StructFieldConstraintKey};
 use miette::NamedSource;
 
+use crate::constant_pools::RuntimeValueMap;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::execution_facts::{CheckedExecutionFacts, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
-use crate::execution_scope::CheckedExecutionScope;
 use crate::host_fns::HostFunctionRegistry;
 use crate::presentation_evidence::PresentationInstanceMap;
 
@@ -122,7 +121,6 @@ impl<'a> EvalContext<'a> {
     /// Select a checked runtime scope. Field constraints cannot be omitted or
     /// supplied independently of the selected checked project facts.
     pub fn checked(
-        tir: &'a CheckedTir,
         plan: &'a ExecPlan,
         owner: &DagId,
         src: &'a NamedSource<Arc<String>>,
@@ -132,13 +130,15 @@ impl<'a> EvalContext<'a> {
         plan.callable(owner).map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })?;
-        let scope = CheckedExecutionScope::new(tir, &plan.checked_execution_facts, owner).map_err(
-            |error| {
-                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-            },
-        )?;
+        let dag = plan.program().dag(owner).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("DAG `{owner}` has no compiled body"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         Ok(Self {
-            environment: Self::environment(tir, scope.dag(), src, cancellation),
+            environment: Self::environment(plan.tir(), dag.dag(), src, cancellation),
             capabilities: Capabilities::Checked { plan, host },
             independent_expressions: None,
         })
@@ -195,13 +195,6 @@ impl<'a> EvalContext<'a> {
         }
     }
 
-    pub const fn checked_execution_facts(&self) -> Option<&'a CheckedExecutionFacts> {
-        match self.capabilities {
-            Capabilities::ProvisionalConstants => None,
-            Capabilities::Checked { plan, .. } => Some(&plan.checked_execution_facts),
-        }
-    }
-
     pub fn execution_plan(&self) -> Result<&'a ExecPlan, GraphcalError> {
         match self.capabilities {
             Capabilities::ProvisionalConstants => Err(self.internal_error(
@@ -215,8 +208,12 @@ impl<'a> EvalContext<'a> {
     pub fn struct_field_constraints(
         &self,
     ) -> Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>> {
-        self.checked_execution_facts()
-            .map(|facts| facts.struct_field_constraints.as_ref())
+        match self.capabilities {
+            Capabilities::ProvisionalConstants => None,
+            Capabilities::Checked { plan, .. } => {
+                Some(plan.program().facts().struct_field_constraints())
+            }
+        }
     }
 
     pub const fn host_fns(&self) -> Option<&'a HostFunctionRegistry> {
@@ -350,9 +347,13 @@ impl<'a> EvalContext<'a> {
                 plan.callable(dag.dag_id()).map_err(|error| {
                     context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
                 })?;
-                CheckedExecutionScope::new(self.tir, &plan.checked_execution_facts, dag.dag_id())
-                    .map_err(|error| {
-                        context.internal_error(error.to_string(), DiagnosticAnchor::WholeFile)
+                plan.program()
+                    .dag(dag.dag_id())
+                    .ok_or_else(|| {
+                        context.internal_error(
+                            format!("DAG `{}` has no compiled body", dag.dag_id()),
+                            DiagnosticAnchor::WholeFile,
+                        )
                     })?
                     .dag()
             }

@@ -1,10 +1,10 @@
 //! Shared frame mechanics. Expression interpretation and result reporting are adapters.
 
+use crate::checked_program::SealedDag;
+use crate::constant_pools::RuntimeValueMap;
 use crate::domain_check::check_domain_constraint;
 use crate::eval::types::NodeUnavailable;
-use crate::execution_facts::RuntimeValueMap;
 use crate::execution_plan::{CallablePlan, ExecPlan};
-use crate::execution_scope::CheckedExecutionScope;
 use crate::presentation_evidence::PresentationInstanceMap;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
@@ -12,7 +12,6 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::checked::CheckedTir;
 use miette::NamedSource;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,8 +26,6 @@ pub enum FailurePolicy {
 pub enum FramePreparationError {
     #[error(transparent)]
     Callable(#[from] crate::execution_plan::CallablePlanError),
-    #[error(transparent)]
-    Constant(#[from] crate::constant_pools::ConstantPoolError),
 }
 
 pub struct ExecutionFrame<'a> {
@@ -42,7 +39,7 @@ pub struct ExecutionFrame<'a> {
 
 pub struct ScheduledDeclaration<'a> {
     pub key: &'a ResolvedDeclName,
-    pub scope: CheckedExecutionScope<'a>,
+    pub scope: SealedDag<'a>,
     pub expression: &'a graphcal_compiler::hir::expr::Expr,
 }
 
@@ -76,7 +73,7 @@ impl<'a> ExecutionFrame<'a> {
         let callable = plan.callable(owner)?;
         let mut values = RuntimeValueMap::new();
         for import in &callable.imports.constants {
-            values.insert(import.destination.clone(), import.value.value()?.clone());
+            values.insert(import.destination.clone(), import.value.value().clone());
         }
         values.extend(
             callable
@@ -85,10 +82,9 @@ impl<'a> ExecutionFrame<'a> {
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
         let presentations = plan
-            .checked_execution_facts
-            .by_dag
-            .values()
-            .flat_map(|facts| facts.const_presentations.iter())
+            .program()
+            .facts()
+            .const_presentations()
             .filter(|(key, _)| values.contains_key(*key))
             .map(|(key, evidence)| (key.clone(), evidence.clone()))
             .collect();
@@ -151,7 +147,6 @@ impl<'a> ExecutionFrame<'a> {
 
     pub fn run(
         &mut self,
-        tir: &CheckedTir,
         source: &NamedSource<Arc<String>>,
         cancellation: &CancellationToken,
         mut evaluate: impl FnMut(
@@ -173,8 +168,11 @@ impl<'a> ExecutionFrame<'a> {
                 .declaration_locations
                 .body_for(key)
                 .map_err(|error| internal(error.to_string()))?;
-            let scope = CheckedExecutionScope::new(tir, &self.plan.checked_execution_facts, body)
-                .map_err(|error| internal(error.to_string()))?;
+            let scope = self
+                .plan
+                .program()
+                .dag(body)
+                .ok_or_else(|| internal(format!("DAG `{body}` has no compiled body")))?;
             if scope.dag().todo(key).is_some() {
                 self.errors.insert(
                     key.clone(),
@@ -209,7 +207,7 @@ impl<'a> ExecutionFrame<'a> {
             match result {
                 Ok(evaluated) => {
                     let (value, presentation) = evaluated.into_parts();
-                    self.bind(key, value, scope.facts().source(), expression.span)?;
+                    self.bind(key, value, scope.source(), expression.span)?;
                     if self.values.contains_key(key) && !presentation.is_none() {
                         self.presentations.insert(key.clone(), presentation);
                     }

@@ -86,59 +86,29 @@ fn lower_single_file_to_hir(
     lowering::lower_file_to_hir(semantic, loaded_file, ctx, cancellation)
 }
 
-fn validate_dag_constant_values(
-    dag: &graphcal_compiler::tir::typed::CheckedDag,
-    const_values: &crate::eval_expr::RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    dag.consts().try_for_each(|entry| {
-        let key = entry.identity();
-        const_values.get(&key).map(|_| ()).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked constant `{key}` has no value at module publication"),
-                src,
-                DiagnosticAnchor::Source(entry.span),
-            )
-        })
-    })
-}
-
-/// Store one pure compile-time module artifact for downstream imports.
+/// Store one pure compile-time module artifact for downstream imports, and
+/// return its execution facts for the programs of downstream files.
 fn store_module_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
+) -> Result<crate::checked_program::ExecutionFacts, CompileError> {
     cancellation.checkpoint()?;
-    compiled.tir.local_dags().try_for_each(|(dag_id, dag)| {
-        let scope = crate::execution_scope::CheckedExecutionScope::new(
-            &compiled.tir,
-            &compiled.checked_execution_facts,
-            dag_id,
-        )
-        .map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), file_src, DiagnosticAnchor::WholeFile)
-        })?;
-        validate_dag_constant_values(dag, &scope.facts().const_values, file_src)
-    })?;
-    let local_owners = compiled
-        .tir
-        .local_dags()
-        .map(|(dag_id, _)| dag_id.clone())
-        .collect();
+    let (tir, execution_facts) = compiled.program.into_parts();
+    let local_owners = tir.local_dags().map(|(dag_id, _)| dag_id.clone()).collect();
     let override_dependencies =
         graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
-            &compiled.tir,
+            &tir,
             file_src,
             cancellation,
         )?;
-    let extern_functions = compiled.tir.extern_functions().clone();
+    let extern_functions = tir.extern_functions().clone();
     // The checked file is no longer needed after publication. Consume its
     // mutable assembly registry so each local body becomes one immutable
     // handle; no DAG body is cloned for an importer.
-    let dag_store = compiled.tir.freeze_local_dag_store().map_err(|error| {
+    let dag_store = tir.freeze_local_dag_store().map_err(|error| {
         CompileError::Eval(GraphcalError::internal_error(
             error.to_string(),
             file_src,
@@ -162,7 +132,8 @@ fn store_module_artifact(
                 file_src,
                 DiagnosticAnchor::WholeFile,
             ))
-        })
+        })?;
+    Ok(execution_facts)
 }
 
 /// Lower the complete loaded project into one authoritative HIR value.
@@ -290,12 +261,12 @@ pub(in crate::project_compiler) fn check_hir_project(
     } = hir;
     let (deps, root_file) = files.into_parts();
     let mut module_artifacts = ModuleArtifactStore::default();
-    let mut inherited_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
+    let mut inherited_execution_facts = crate::checked_program::ExecutionFacts::default();
     // Check one HIR file against every dependency artifact published so far
     // and verify its declared host functions.
     let check_file = |hir_file: HirFile,
                       module_artifacts: &ModuleArtifactStore,
-                      inherited_execution_facts: &crate::execution_facts::CheckedExecutionFacts|
+                      inherited_execution_facts: &crate::checked_program::ExecutionFacts|
      -> Result<(CompiledFile, NamedSource<Arc<String>>), CompileError> {
         cancellation.checkpoint()?;
         let file_src = hir_file.source.clone();
@@ -310,7 +281,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         )?;
         verify_host_functions(
             plugins,
-            &compiled.tir,
+            compiled.program.tir(),
             &file_src,
             host_metadata,
             &cancellation,
@@ -322,8 +293,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         let file_dag_id = hir_file.root.dag_id().clone();
         let (compiled, file_src) =
             check_file(hir_file, &module_artifacts, &inherited_execution_facts)?;
-        inherited_execution_facts = compiled.checked_execution_facts.clone();
-        store_module_artifact(
+        inherited_execution_facts = store_module_artifact(
             compiled,
             &file_dag_id,
             &file_src,

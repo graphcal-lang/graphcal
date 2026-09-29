@@ -1,4 +1,4 @@
-//! Runtime execution-plan selection from retained checked facts.
+//! Runtime execution-plan selection from a sealed checked program.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -10,21 +10,20 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir};
 
-use crate::constant_pools::{ConstantPools, ConstantReference};
+use crate::checked_program::{CheckedProgram, SealedDag};
+use crate::constant_pools::ConstantPools;
 use crate::declaration_locations::DeclarationLocations;
-use crate::execution_facts::CheckedExecutionFacts;
 use crate::execution_plan::{CallablePlan, ExecPlan, PreparedConstantImport, PreparedImports};
-use crate::execution_scope::CheckedExecutionScope;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Check a TIR and select its root execution plan.
 ///
-/// This test convenience mirrors the production check-then-prepare pipeline.
+/// This test convenience mirrors the production check-then-prepare pipeline
+/// on a copy of `tir`.
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] when static execution-fact checking or plan
-/// selection fails.
+/// Returns a [`GraphcalError`] when execution checking or plan selection fails.
 #[cfg(test)]
 pub fn compile(
     tir: &CheckedTir,
@@ -37,7 +36,8 @@ pub fn compile(
     )
 }
 
-/// Compile a TIR into an execution plan with cooperative cancellation.
+/// Seal a copy of a TIR and select its root execution plan with cooperative
+/// cancellation.
 ///
 /// # Errors
 ///
@@ -48,24 +48,25 @@ pub fn compile_with_cancellation(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
-    let facts =
-        crate::project_compiler::check_execution_facts_with_cancellation(tir, src, cancellation)?;
-    compile_checked_with_cancellation(tir, &facts, src, cancellation)
+    let program = crate::project_compiler::seal_checked_program_with_cancellation(
+        tir.clone(),
+        src,
+        cancellation,
+    )?;
+    compile_checked_with_cancellation(program, src, cancellation)
 }
 
-/// Build a runtime schedule from facts retained by the checked project.
+/// Prepare the callable plans of a sealed program.
 pub fn compile_checked_with_cancellation(
-    tir: &CheckedTir,
-    facts: &CheckedExecutionFacts,
+    program: CheckedProgram,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
-    validate_execution_facts(tir, facts, src, cancellation)?;
+    let tir = program.tir();
     let declaration_locations = prepare_declaration_locations(tir, src)?;
     let root = prepare_callable_plan(
-        tir,
-        facts,
+        &program,
         tir.root(),
         &declaration_locations,
         src,
@@ -76,25 +77,25 @@ pub fn compile_checked_with_cancellation(
         .values()
         .filter(|dag| dag.dag_id() != tir.root_dag_id())
         .map(|dag| {
-            prepare_callable_plan(tir, facts, dag, &declaration_locations, src, cancellation)
+            prepare_callable_plan(&program, dag, &declaration_locations, src, cancellation)
                 .map(|plan| (plan.owner.clone(), plan))
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
+    let has_unfinished_definitions = tir
+        .dag_registry()
+        .values()
+        .any(|dag| dag.nodes().any(|node| node.definition.todo().is_some()));
     Ok(ExecPlan {
-        has_unfinished_definitions: tir
-            .dag_registry()
-            .values()
-            .any(|dag| dag.nodes().any(|node| node.definition.todo().is_some())),
+        has_unfinished_definitions,
         declaration_locations,
         root,
         callables,
-        checked_execution_facts: facts.clone(),
+        program,
     })
 }
 
 fn prepare_callable_plan(
-    tir: &CheckedTir,
-    facts: &CheckedExecutionFacts,
+    program: &CheckedProgram,
     body: &CheckedDag,
     declaration_locations: &DeclarationLocations,
     src: &NamedSource<Arc<String>>,
@@ -102,9 +103,8 @@ fn prepare_callable_plan(
 ) -> Result<CallablePlan, GraphcalError> {
     cancellation.checkpoint()?;
     crate::pipeline_metrics::record(crate::pipeline_metrics::Event::PlanConstruction);
-    let root_scope = checked_scope(tir, facts, body.dag_id(), src)?;
-    let root_facts = root_scope.facts();
-    let src = root_facts.source();
+    let root = sealed_dag(program, body.dag_id(), src)?;
+    let src = root.source();
     let invalid =
         |message: String| GraphcalError::internal_error(message, src, DiagnosticAnchor::WholeFile);
     let schedule = body.runtime_schedule();
@@ -112,41 +112,35 @@ fn prepare_callable_plan(
         .execution_dags()
         .iter()
         .map(|owner| {
-            tir.dag_registry().get(owner).ok_or_else(|| {
+            program.dag(owner).ok_or_else(|| {
                 invalid(format!(
                     "semantic runtime instance `{owner}` has no compiled DAG"
                 ))
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let semantic_facts = semantic_dags
-        .iter()
-        .map(|dag| checked_scope(tir, facts, dag.dag_id(), src).map(CheckedExecutionScope::facts))
-        .collect::<Result<Vec<_>, _>>()?;
     let has_instances = semantic_dags.len() > 1;
     let const_values = ConstantPools::try_new(
-        semantic_facts
+        semantic_dags
             .iter()
-            .map(|facts| Arc::clone(&facts.const_values)),
+            .map(|dag| Arc::clone(dag.const_values())),
     )
-    .map_err(|error| {
-        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-    })?;
+    .map_err(|error| invalid(error.to_string()))?;
     let domain_constraints = if has_instances {
         Arc::new(
-            semantic_facts
+            semantic_dags
                 .iter()
-                .flat_map(|facts| facts.domain_constraints.iter())
+                .flat_map(|dag| dag.domain_constraints().iter())
                 .map(|(key, constraint)| (key.clone(), constraint.clone()))
                 .collect(),
         )
     } else {
-        Arc::clone(&root_facts.domain_constraints)
+        Arc::clone(root.domain_constraints())
     };
     validate_schedule_locations(
         schedule.order().as_slice(),
         declaration_locations,
-        &semantic_dags.iter().map(|dag| dag.dag_id()).collect(),
+        &semantic_dags.iter().map(|dag| dag.dag().dag_id()).collect(),
         src,
     )?;
     for (_, reads) in schedule.steps() {
@@ -161,15 +155,15 @@ fn prepare_callable_plan(
         owner: body.dag_id().clone(),
         execution_dags: semantic_dags
             .iter()
-            .map(|dag| dag.dag_id().clone())
+            .map(|dag| dag.dag().dag_id().clone())
             .collect(),
         const_values,
-        imports: prepare_imports(tir, facts, &semantic_dags, declaration_locations, src)?,
+        imports: prepare_imports(&semantic_dags, declaration_locations, src)?,
         schedule: schedule.clone(),
-        assumes_map: merge_assumes_maps(semantic_dags.iter().map(|dag| dag.assumes_map())),
+        assumes_map: merge_assumes_maps(semantic_dags.iter().map(|dag| dag.dag().assumes_map())),
         expected_fail: semantic_dags
             .iter()
-            .flat_map(|dag| dag.expected_fail_entries())
+            .flat_map(|dag| dag.dag().expected_fail_entries())
             .map(|(assertion, expected)| (assertion.clone(), expected.clone()))
             .collect(),
         domain_constraints,
@@ -195,36 +189,41 @@ fn merge_assumes_maps<'a>(
     merged
 }
 
+/// Select the imports of a callable's execution DAGs: the constants the
+/// program resolved when it was sealed, and the explicit runtime imports.
 fn prepare_imports(
-    tir: &CheckedTir,
-    facts: &CheckedExecutionFacts,
-    dags: &[&CheckedDag],
+    dags: &[SealedDag<'_>],
     locations: &DeclarationLocations,
     source: &NamedSource<Arc<String>>,
 ) -> Result<PreparedImports, GraphcalError> {
     use graphcal_compiler::ir::imported_binding::ImportedValueKind;
-    let invalid = |message: String| {
-        GraphcalError::internal_error(message, source, DiagnosticAnchor::WholeFile)
-    };
     let mut result = PreparedImports::default();
     for dag in dags {
-        for binding in dag.imported_bindings().values() {
-            let source_key = binding.target().clone();
-            let owner = locations
-                .body_for(&source_key)
-                .map_err(|error| invalid(error.to_string()))?;
-            let scope = checked_scope(tir, facts, owner, source)?;
-            match binding.kind() {
-                ImportedValueKind::Constant => result.constants.push(PreparedConstantImport {
-                    destination: dag.runtime_decl_identity(binding.target()),
-                    value: ConstantReference::try_new(
-                        Arc::clone(&scope.facts().const_values),
-                        source_key,
-                    )
-                    .map_err(|error| invalid(error.to_string()))?,
-                }),
-                ImportedValueKind::Runtime => result.runtime.push(source_key),
-            }
+        result
+            .constants
+            .extend(
+                dag.imported_constants()
+                    .iter()
+                    .map(|constant| PreparedConstantImport {
+                        destination: dag.dag().runtime_decl_identity(constant.value().key()),
+                        value: constant.value().clone(),
+                    }),
+            );
+        for binding in dag
+            .dag()
+            .imported_bindings()
+            .values()
+            .filter(|binding| matches!(binding.kind(), ImportedValueKind::Runtime))
+        {
+            let target = binding.target();
+            locations.body_for(target).map_err(|error| {
+                GraphcalError::internal_error(
+                    error.to_string(),
+                    source,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            result.runtime.push(target.clone());
         }
     }
     Ok(result)
@@ -264,57 +263,18 @@ fn validate_schedule_locations(
     })
 }
 
-fn checked_scope<'a>(
-    tir: &'a CheckedTir,
-    facts: &'a CheckedExecutionFacts,
-    owner: &graphcal_compiler::dag_id::DagId,
+fn sealed_dag<'a>(
+    program: &'a CheckedProgram,
+    owner: &DagId,
     src: &NamedSource<Arc<String>>,
-) -> Result<CheckedExecutionScope<'a>, GraphcalError> {
-    CheckedExecutionScope::new(tir, facts, owner).map_err(|error| {
-        GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+) -> Result<SealedDag<'a>, GraphcalError> {
+    program.dag(owner).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("DAG `{owner}` has no compiled body"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
     })
-}
-
-/// Validate coverage once at preparation, including DAGs reached only by calls.
-fn validate_execution_facts(
-    tir: &CheckedTir,
-    all_facts: &CheckedExecutionFacts,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
-    for dag in tir.dag_registry().values() {
-        cancellation.checkpoint()?;
-        let scope = checked_scope(tir, all_facts, dag.dag_id(), src)?;
-        let facts = scope.facts();
-        let invalid = |message: String| {
-            GraphcalError::internal_error(message, facts.source(), DiagnosticAnchor::WholeFile)
-        };
-        dag.imported_bindings().values().try_for_each(|binding| {
-            crate::execution_scope::checked_imported_constant(tir, all_facts, binding)
-                .map(|_| ())
-                .map_err(|error| invalid(error.to_string()))
-        })?;
-        for entry in dag.consts() {
-            let key = entry.identity();
-            if !facts.const_values.contains_key(&key) {
-                return Err(invalid(format!(
-                    "checked constant `{key}` has no evaluated value"
-                )));
-            }
-        }
-        for declaration in dag.semantic().domain_bounds.keys() {
-            if !facts.domain_constraints.contains_key(declaration) {
-                return Err(invalid(format!(
-                    "declaration `{declaration}` has no resolved domain constraint"
-                )));
-            }
-        }
-        // Also reject dangling include edges in non-root callable DAGs.
-        for edge in dag.semantic_instances() {
-            checked_scope(tir, all_facts, edge.instance.id().owner(), facts.source())?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -449,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn constant_pool_views_reject_duplicates_and_missing_imports() {
+    fn constant_pool_views_reject_duplicates() {
         let key = resolved_key("constant");
         let pool = Arc::new(HashMap::from([(
             key.clone(),
@@ -459,15 +419,12 @@ mod tests {
             ConstantPools::try_new([Arc::clone(&pool), Arc::clone(&pool)]),
             Err(crate::constant_pools::ConstantPoolError::Duplicate(_))
         ));
-        assert!(matches!(
-            ConstantReference::try_new(Arc::clone(&pool), resolved_key("absent")),
-            Err(crate::constant_pools::ConstantPoolError::Missing(_))
-        ));
-        let imported = ConstantReference::try_new(Arc::clone(&pool), key.clone()).unwrap();
+        let pools = ConstantPools::try_new([Arc::clone(&pool)]).unwrap();
         assert!(std::ptr::eq(
-            imported.value().unwrap(),
+            pools.get(&key).unwrap(),
             pool.get(&key).unwrap()
         ));
+        assert!(pools.get(&resolved_key("absent")).is_none());
     }
 
     #[test]
@@ -494,162 +451,23 @@ mod tests {
     }
 
     #[test]
-    fn checked_fact_stores_are_reused_by_runtime_planning() {
+    fn sealed_fact_stores_are_reused_by_runtime_planning() {
         let (tir, src) = tir_from_source(
             "const node lower: Dimensionless = 1.0;\n\
              param x: Dimensionless(min: @lower, max: 3.0) = 2.0;",
         );
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let facts = crate::project_compiler::check_execution_facts_with_cancellation(
-            &tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
-        let root_facts = facts.for_dag(tir.root_dag_id()).unwrap();
+        let plan = compile(&tir, &src).unwrap();
+        let root = plan.program().dag(tir.root_dag_id()).unwrap();
 
         let key = resolved_key("lower");
         assert!(std::ptr::eq(
-            root_facts.const_values.get(&key).unwrap(),
+            root.const_values().get(&key).unwrap(),
             plan.root.const_values.get(&key).unwrap()
         ));
         assert!(Arc::ptr_eq(
-            &root_facts.domain_constraints,
+            root.domain_constraints(),
             &plan.root.domain_constraints
         ));
-        assert!(Arc::ptr_eq(
-            &facts.struct_field_constraints,
-            &plan.checked_execution_facts.struct_field_constraints
-        ));
-    }
-
-    #[test]
-    fn preparation_rejects_incomplete_or_mismatched_facts() {
-        #[derive(Debug, Clone, Copy)]
-        enum Damage {
-            MissingDag,
-            WrongOwner,
-            MissingConstant,
-            MissingConstraint,
-        }
-
-        let (tir, src) = tir_from_source(
-            "const node lower_bound: Dimensionless = 0.0;\n\
-             param x: Dimensionless(min: @lower_bound);\n\
-             node y: Dimensionless = @x + 1.0;",
-        );
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let checked = crate::project_compiler::check_execution_facts_with_cancellation(
-            &tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        for damage in [
-            Damage::MissingDag,
-            Damage::WrongOwner,
-            Damage::MissingConstant,
-            Damage::MissingConstraint,
-        ] {
-            let mut corrupted = checked.clone();
-            let dags = Arc::make_mut(&mut corrupted.by_dag);
-            let facts = Arc::make_mut(dags.get_mut(tir.root_dag_id()).unwrap());
-            match damage {
-                Damage::MissingDag => {
-                    dags.remove(tir.root_dag_id()).unwrap();
-                }
-                Damage::WrongOwner => {
-                    facts.dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-                        std::path::Path::new("other.gcl"),
-                    )
-                    .unwrap();
-                }
-                Damage::MissingConstant => Arc::make_mut(&mut facts.const_values).clear(),
-                Damage::MissingConstraint => {
-                    Arc::make_mut(&mut facts.domain_constraints).clear();
-                }
-            }
-            let error = compile_checked_with_cancellation(&tir, &corrupted, &src, &cancellation)
-                .expect_err("corrupt checked facts must never produce an executable plan");
-            assert!(
-                matches!(error, GraphcalError::InternalError { .. }),
-                "{damage:?}: {error:?}"
-            );
-        }
-        // Mutation of a clone must not damage already published artifacts.
-        compile_checked_with_cancellation(&tir, &checked, &src, &cancellation).unwrap();
-    }
-
-    #[test]
-    fn imported_constants_require_defining_facts_and_runtime_absence_is_explicit() {
-        use crate::execution_scope::{ExecutionScopeError, checked_imported_constant};
-        use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
-
-        let (tir, src) =
-            tir_from_source("const node C: Dimensionless = 2.0; param x: Dimensionless;");
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let facts = crate::project_compiler::check_execution_facts_with_cancellation(
-            &tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        let binding = |name, kind| {
-            let target = resolved_key(name);
-            ImportedBinding::new(
-                target.clone(),
-                tir.decl_type(&target).unwrap().declared().clone(),
-                kind,
-            )
-        };
-        let constant = binding("C", ImportedValueKind::Constant);
-        assert!(
-            (quantity(
-                checked_imported_constant(&tir, &facts, &constant)
-                    .unwrap()
-                    .unwrap()
-            ) - 2.0)
-                .abs()
-                < f64::EPSILON
-        );
-        assert!(
-            checked_imported_constant(&tir, &facts, &binding("x", ImportedValueKind::Runtime))
-                .unwrap()
-                .is_none()
-        );
-        for wrong in [
-            binding("C", ImportedValueKind::Runtime),
-            binding("x", ImportedValueKind::Constant),
-        ] {
-            assert!(matches!(
-                checked_imported_constant(&tir, &facts, &wrong),
-                Err(ExecutionScopeError::WrongImportedKind { .. })
-            ));
-        }
-        let mut missing_value = facts.clone();
-        let dag_facts = Arc::make_mut(
-            Arc::make_mut(&mut missing_value.by_dag)
-                .get_mut(tir.root_dag_id())
-                .unwrap(),
-        );
-        Arc::make_mut(&mut dag_facts.const_values).clear();
-        assert!(matches!(
-            checked_imported_constant(&tir, &missing_value, &constant),
-            Err(ExecutionScopeError::MissingConstant(_))
-        ));
-        let mut missing_owner = facts.clone();
-        Arc::make_mut(&mut missing_owner.by_dag).clear();
-        assert!(matches!(
-            checked_imported_constant(&tir, &missing_owner, &constant),
-            Err(ExecutionScopeError::MissingFacts(_))
-        ));
-        // Corrupting isolated test copies must not damage the published facts.
-        assert!(
-            checked_imported_constant(&tir, &facts, &constant)
-                .unwrap()
-                .is_some()
-        );
     }
 
     #[test]
@@ -682,50 +500,13 @@ mod tests {
     }
 
     #[test]
-    fn preparation_rejects_missing_included_instance_facts() {
-        let source = "dag lib { pub node out: Dimensionless = 1.0; }\n\
-                      include lib() as inst;\n\
-                      node result: Dimensionless = @inst::out;";
-        let loaded = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
-        let checked = crate::project_compiler::ProjectCompiler::new(&loaded)
-            .check()
-            .unwrap();
-        let tir = checked.tir();
-        let src = make_src(source);
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let mut facts = crate::project_compiler::check_execution_facts_with_cancellation(
-            tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        let instance = tir
-            .root()
-            .semantic_instances()
-            .first()
-            .unwrap()
-            .instance
-            .id()
-            .owner();
-        Arc::make_mut(&mut facts.by_dag).remove(instance).unwrap();
-        let error =
-            compile_checked_with_cancellation(tir, &facts, &src, &cancellation).unwrap_err();
-        assert!(matches!(error, GraphcalError::InternalError { .. }));
-    }
-
-    #[test]
     fn constructor_application_constraints_match_resolved_field_contracts() {
         let (tir, src) = tir_from_source(
             "type Bounded { Bounded(value: Dimensionless(min: 1.0)), } node item: Bounded = Bounded(value: 2.0);",
         );
-        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let facts = crate::project_compiler::check_execution_facts_with_cancellation(
-            &tir,
-            &src,
-            &cancellation,
-        )
-        .unwrap();
-        assert_eq!(facts.struct_field_constraints.len(), 1);
+        let plan = compile(&tir, &src).unwrap();
+        let field_constraints = plan.program().facts().struct_field_constraints();
+        assert_eq!(field_constraints.len(), 1);
         let applications = tir
             .root()
             .expression_facts()
@@ -755,11 +536,7 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(
             keys,
-            facts
-                .struct_field_constraints
-                .keys()
-                .cloned()
-                .collect::<HashSet<_>>()
+            field_constraints.keys().cloned().collect::<HashSet<_>>()
         );
     }
 

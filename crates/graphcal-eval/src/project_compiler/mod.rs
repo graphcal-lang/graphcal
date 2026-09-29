@@ -15,7 +15,6 @@ use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::checked_type::CheckedType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -41,15 +40,16 @@ mod session;
 mod template;
 
 pub(crate) use entry_interface::CheckedEntryInterface;
+/// Test-only sealing of a single checked TIR without checked modules.
 #[cfg(test)]
-pub(crate) fn check_execution_facts_with_cancellation(
-    tir: &graphcal_compiler::tir::typed::CheckedTir,
+pub(crate) fn seal_checked_program_with_cancellation(
+    tir: graphcal_compiler::tir::typed::CheckedTir,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<crate::execution_facts::CheckedExecutionFacts, GraphcalError> {
-    execution_check::check_execution_facts_with_inherited(
+) -> Result<crate::checked_program::CheckedProgram, GraphcalError> {
+    execution_check::seal_checked_program(
         tir,
-        &crate::execution_facts::CheckedExecutionFacts::empty(),
+        &crate::checked_program::ExecutionFacts::default(),
         src,
         cancellation,
     )
@@ -58,7 +58,7 @@ pub(crate) fn check_execution_facts_with_cancellation(
 #[cfg(test)]
 pub(crate) fn resolve_struct_field_constraints(
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    const_values: &crate::execution_facts::RuntimeValueMap,
+    const_values: &crate::constant_pools::RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<
     HashMap<

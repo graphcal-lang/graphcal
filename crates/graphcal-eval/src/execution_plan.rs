@@ -7,10 +7,10 @@ use graphcal_compiler::assertion_expectation::ExpectedFail;
 use graphcal_compiler::dag_id::DagId;
 use thiserror::Error;
 
+use crate::checked_program::CheckedProgram;
 use crate::constant_pools::{ConstantPools, ConstantReference};
 use crate::declaration_locations::DeclarationLocations;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::execution_facts::CheckedExecutionFacts;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// A compiled execution plan ready for runtime evaluation.
@@ -22,7 +22,8 @@ pub struct ExecPlan {
     pub(crate) root: CallablePlan,
     /// Non-root bodies; the root has the same callable contract without a copy.
     pub(crate) callables: HashMap<DagId, CallablePlan>,
-    pub(crate) checked_execution_facts: CheckedExecutionFacts,
+    /// The sealed program every callable plan was prepared from.
+    pub(crate) program: CheckedProgram,
 }
 
 #[derive(Debug, Error)]
@@ -34,6 +35,16 @@ pub enum CallablePlanError {
 }
 
 impl ExecPlan {
+    /// The sealed program this plan executes.
+    pub(crate) const fn program(&self) -> &CheckedProgram {
+        &self.program
+    }
+
+    /// The checked TIR this plan executes.
+    pub(crate) const fn tir(&self) -> &graphcal_compiler::tir::typed::checked::CheckedTir {
+        self.program.tir()
+    }
+
     pub(crate) fn callable(&self, owner: &DagId) -> Result<&CallablePlan, CallablePlanError> {
         let plan = if owner == &self.root.owner {
             &self.root

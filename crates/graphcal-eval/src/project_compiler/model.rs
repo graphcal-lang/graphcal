@@ -9,8 +9,6 @@ use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::ir::static_substitution::StaticSubstitution;
-use graphcal_compiler::registry::checked_type::CheckedType;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::resolved_name::ResolvedIndexName;
@@ -135,10 +133,8 @@ pub(super) struct ModuleArtifactOwnerConflict {
 
 /// Result of checking one file in project context.
 pub struct CompiledFile {
-    pub(crate) tir: graphcal_compiler::tir::typed::CheckedTir,
-    pub(crate) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
+    pub(crate) program: crate::checked_program::CheckedProgram,
     pub(crate) entry_interface: super::CheckedEntryInterface,
-    pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, CheckedType)>,
     pub(crate) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(crate) output_surface: HashSet<ScopedName>,
     pub(crate) include_debug_names: IncludeDebugNameMap,

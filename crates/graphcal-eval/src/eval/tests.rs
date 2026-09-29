@@ -1,5 +1,6 @@
 mod checked_expressions;
 mod presentation_evidence;
+mod sealed_program;
 
 use std::collections::HashSet;
 
@@ -404,19 +405,12 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
     )
     .unwrap();
     assert!(provisional.host_fns().is_none());
-    assert!(provisional.checked_execution_facts().is_none());
     assert!(provisional.struct_field_constraints().is_none());
     assert!(provisional.execution_plan().is_err());
 
-    let checked =
-        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
-            .unwrap();
-    let plan =
-        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
-            .unwrap();
+    let plan = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
     let host = crate::host_fns::HostFunctionRegistry::new();
     let context = crate::eval_expr::EvalContext::checked(
-        &tir,
         &plan,
         tir.root_dag_id(),
         &src,
@@ -424,27 +418,20 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
         cancellation.clone(),
     )
     .unwrap();
-    assert!(std::ptr::eq(context.current_dag, tir.root()));
+    assert!(std::ptr::eq(context.tir, plan.tir()));
+    assert!(std::ptr::eq(context.current_dag, plan.tir().root()));
     assert!(std::ptr::eq(
         context.struct_field_constraints().unwrap(),
-        checked.struct_field_constraints.as_ref()
+        plan.program().facts().struct_field_constraints()
     ));
     assert!(!context.struct_field_constraints().unwrap().is_empty());
     assert!(std::ptr::eq(context.host_fns().unwrap(), &raw const host));
-    let mut broken_plan =
-        crate::exec_plan::compile_checked_with_cancellation(&tir, &checked, &src, &cancellation)
-            .unwrap();
-    broken_plan.checked_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
+    let foreign = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
+        std::path::Path::new("other.gcl"),
+    )
+    .unwrap();
     assert!(
-        crate::eval_expr::EvalContext::checked(
-            &tir,
-            &broken_plan,
-            tir.root_dag_id(),
-            &src,
-            &host,
-            cancellation,
-        )
-        .is_err()
+        crate::eval_expr::EvalContext::checked(&plan, &foreign, &src, &host, cancellation).is_err()
     );
 }
 
@@ -485,7 +472,7 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     .unwrap();
     let own = std::collections::HashMap::from([(a, 3)]);
     let foreign = std::collections::HashMap::from([(b, 3)]);
-    let values = crate::execution_facts::RuntimeValueMap::new();
+    let values = crate::constant_pools::RuntimeValueMap::new();
     let locals = crate::eval_expr::HirLocalValueMap::root();
     let facts =
         graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
@@ -528,19 +515,13 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
         std::sync::Arc::new(source.to_string()),
     );
     let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let facts =
-        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
-            .unwrap();
-    let plan =
-        crate::exec_plan::compile_checked_with_cancellation(&tir, &facts, &src, &cancellation)
-            .unwrap();
+    let plan = crate::exec_plan::compile_with_cancellation(&tir, &src, &cancellation).unwrap();
     let hosts = crate::host_fns::HostFunctionRegistry::new();
     let owner = graphcal_compiler::resolved_name::ResolvedDeclName::for_test(
         tir.root_dag_id().clone(),
         graphcal_compiler::syntax::decl_name::DeclName::expect_valid("values"),
     );
     let context = crate::eval_expr::EvalContext::checked(
-        &tir,
         &plan,
         tir.root_dag_id(),
         &src,
@@ -563,120 +544,13 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     assert_eq!(shifted.id(), original.id());
     let value = crate::eval_expr::eval_hir_expr(
         &shifted,
-        &crate::execution_facts::RuntimeValueMap::new(),
+        &crate::constant_pools::RuntimeValueMap::new(),
         &crate::eval_expr::HirLocalValueMap::root(),
         &context,
     )
     .unwrap();
     assert!(
         matches!(value, graphcal_compiler::registry::runtime_value::RuntimeValue::Indexed { entries, .. } if entries.len() == 2)
-    );
-}
-
-/// Resolve a single-file root body into a draft that has not been checked.
-fn root_draft(
-    source: &str,
-    path: &str,
-) -> (
-    graphcal_compiler::tir::typed::TirDraft,
-    miette::NamedSource<std::sync::Arc<String>>,
-) {
-    let raw_file = graphcal_compiler::syntax::parser::Parser::new(source)
-        .parse_file()
-        .unwrap();
-    let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
-    let src = miette::NamedSource::new(path, std::sync::Arc::new(source.to_string()));
-    let ir = graphcal_compiler::ir::lower::lower(&file, &src).unwrap();
-    let resolver = graphcal_compiler::resolve::ModuleResolver::without_edges([(
-        ir.dag_id().clone(),
-        file.declarations.as_slice(),
-    )])
-    .unwrap();
-    let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
-    project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_module(ir.definitions()).unwrap();
-    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let signed =
-        graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
-            ir,
-            &src,
-            &resolver,
-            &project_types,
-            &cancellation,
-        )
-        .unwrap();
-    let draft = graphcal_compiler::tir::typed::TirDraft::resolve_root(
-        signed,
-        std::collections::HashMap::<_, _, std::hash::RandomState>::new(),
-        &src,
-        &resolver,
-        std::sync::Arc::new(project_types),
-        &cancellation,
-    )
-    .unwrap();
-    (draft, src)
-}
-
-fn check_draft(
-    draft: graphcal_compiler::tir::typed::TirDraft,
-    src: &miette::NamedSource<std::sync::Arc<String>>,
-) -> graphcal_compiler::tir::typed::CheckedTir {
-    draft
-        .instantiate(
-            &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
-            src,
-        )
-        .unwrap()
-        .check(
-            src,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-        .unwrap()
-}
-
-#[test]
-fn checked_scopes_reject_another_semantic_revision_even_when_source_ids_are_shared() {
-    let source = "node x: Dimensionless = 1.0;";
-    let (draft, src) = root_draft(source, "revisions.gcl");
-    let tir = check_draft(draft.clone(), &src);
-    let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-    let facts =
-        crate::project_compiler::check_execution_facts_with_cancellation(&tir, &src, &cancellation)
-            .unwrap();
-    assert!(
-        crate::execution_scope::CheckedExecutionScope::new(&tir, &facts, tir.root_dag_id()).is_ok()
-    );
-    let revised = check_draft(draft, &src);
-    assert_eq!(revised.root_dag_id(), tir.root_dag_id());
-    assert_eq!(
-        revised
-            .root()
-            .nodes()
-            .next()
-            .unwrap()
-            .definition
-            .formula()
-            .unwrap()
-            .id(),
-        tir.root()
-            .nodes()
-            .next()
-            .unwrap()
-            .definition
-            .formula()
-            .unwrap()
-            .id()
-    );
-    assert_ne!(revised.root().body_revision(), tir.root().body_revision());
-    assert!(matches!(
-        crate::execution_scope::CheckedExecutionScope::new(&revised, &facts, revised.root_dag_id()),
-        Err(crate::execution_scope::ExecutionScopeError::WrongRevision(
-            _
-        ))
-    ));
-    assert!(
-        crate::exec_plan::compile_checked_with_cancellation(&revised, &facts, &src, &cancellation)
-            .is_err()
     );
 }
 
@@ -693,7 +567,6 @@ fn root_execution_does_not_fall_back_when_a_prepared_location_is_missing() {
     let result = super::runtime::run_eval_loop_with_bindings(
         &plan,
         &super::bindings::RuntimeParameterBindings::new(),
-        &tir,
         &src,
         &crate::host_fns::HostFunctionRegistry::new(),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
@@ -778,9 +651,9 @@ fn every_body_has_one_prepared_callable_with_retained_single_body_pools() {
         let callable = plan.callable(dag.dag_id()).unwrap();
         assert_eq!(&callable.owner, dag.dag_id());
         assert_eq!(callable.execution_dags, [dag.dag_id().clone()]);
-        let facts = plan.checked_execution_facts.for_dag(dag.dag_id()).unwrap();
-        assert!(!facts.const_values.is_empty());
-        for (key, value) in facts.const_values.iter() {
+        let sealed = plan.program().dag(dag.dag_id()).unwrap();
+        assert!(!sealed.const_values().is_empty());
+        for (key, value) in sealed.const_values().iter() {
             assert!(std::ptr::eq(value, callable.const_values.get(key).unwrap()));
         }
     }
@@ -809,7 +682,6 @@ fn calls_require_prepared_plans_even_when_bodies_and_facts_exist() {
     let result = super::runtime::run_eval_loop_with_bindings(
         &plan,
         &super::bindings::RuntimeParameterBindings::new(),
-        &tir,
         &src,
         &crate::host_fns::HostFunctionRegistry::new(),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
@@ -887,7 +759,7 @@ fn shared_frames_cancel_before_interpretation() {
         let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
         let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
         cancellation.cancel();
-        let outcome = frame.run(&tir, &src, &cancellation.token(), |_, _| {
+        let outcome = frame.run(&src, &cancellation.token(), |_, _| {
             panic!("cancelled frame must not invoke its expression adapter")
         });
         assert!(matches!(outcome, Err(GraphcalError::Cancelled(_))));
@@ -909,20 +781,22 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
         for (key, value) in callable.const_values.iter() {
             let body = plan.declaration_locations.body_for(key).unwrap();
             let canonical = plan
-                .checked_execution_facts
-                .for_dag(body)
+                .program()
+                .dag(body)
                 .unwrap()
-                .const_values
+                .const_values()
                 .get(key)
                 .unwrap();
             assert!(std::ptr::eq(value, canonical));
             constants += 1;
         }
         for import in &callable.imports.constants {
-            let value = import.value.value().unwrap();
-            assert!(plan.checked_execution_facts.by_dag.values().any(|facts| {
-                facts
-                    .const_values
+            let value = import.value.value();
+            assert!(plan.tir().dag_registry().keys().any(|dag_id| {
+                plan.program()
+                    .dag(dag_id)
+                    .unwrap()
+                    .const_values()
                     .values()
                     .any(|canonical| std::ptr::eq(value, canonical))
             }));
@@ -934,7 +808,6 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
         super::runtime::run_eval_loop_with_bindings(
             &plan,
             &super::bindings::RuntimeParameterBindings::new(),
-            &tir,
             &src,
             &crate::host_fns::HostFunctionRegistry::new(),
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
@@ -965,7 +838,7 @@ fn shared_frame_dependency_and_fatal_error_policies_are_explicit() {
     for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
         for fatal in [false, true] {
             let mut frame = ExecutionFrame::new(&plan, tir.root_dag_id(), policy).unwrap();
-            let outcome = frame.run(&tir, &src, &token, |entry, _| {
+            let outcome = frame.run(&src, &token, |entry, _| {
                 if entry.key.as_str() == "a" {
                     return Err(if fatal {
                         GraphcalError::internal_error(
