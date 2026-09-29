@@ -746,7 +746,7 @@ fn semantic_instance_dag<'tir>(
     tir: &'tir graphcal_compiler::tir::typed::CheckedTir,
     record: &graphcal_compiler::ir::instance::HirInstanceRecord,
     src: &NamedSource<Arc<String>>,
-) -> Result<&'tir graphcal_compiler::tir::typed::DagTIR, GraphcalError> {
+) -> Result<&'tir graphcal_compiler::tir::typed::CheckedDag, GraphcalError> {
     tir.dag_registry()
         .get(record.instance.id().owner())
         .ok_or_else(|| {

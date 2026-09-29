@@ -14,7 +14,7 @@ use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{ConcreteIndexKind, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::model::DagTIR;
+use graphcal_compiler::tir::typed::checked::CheckedDag;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
@@ -2771,7 +2771,7 @@ fn check_inline_plan_asserts(
 /// the calling expression (fault-isolated to the calling declaration).
 /// `#[expected_fail]` inversion applies as usual.
 fn check_inline_dag_asserts(
-    dag_tir: &DagTIR,
+    dag_tir: &CheckedDag,
     dag_values: &RuntimeValueMap,
     dag_ctx: &EvalContext<'_>,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,

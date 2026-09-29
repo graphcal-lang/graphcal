@@ -152,10 +152,7 @@ fn one_checking_pass_records_every_expression_once() {
         );
         let (tir, src) = module_aware_tir(&source);
         let tir = check_draft(tir, &src).unwrap();
-        assert_eq!(
-            tir.root().expression_facts().unwrap().records().count(),
-            depth + 1
-        );
+        assert_eq!(tir.root().expression_facts().records().count(), depth + 1);
     }
 }
 
@@ -164,7 +161,7 @@ fn consuming_rules_record_contextual_literals() {
     let (tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
     let tir = check_draft(tir, &src).unwrap();
-    assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 1);
+    assert_eq!(count_contextual(tir.root().expression_facts()), 1);
     let node = tir.root().nodes().next().unwrap();
     let independent = check_external_value_expr_type(
         &tir,
@@ -189,7 +186,7 @@ fn consuming_rules_record_contextual_literals() {
     let tir = check_draft(tir, &src).unwrap();
     // Two zoned-datetime arguments, one civil literal, the string encoding,
     // and the string property.
-    assert_eq!(count_contextual(tir.root().expression_facts().unwrap()), 5);
+    assert_eq!(count_contextual(tir.root().expression_facts()), 5);
 }
 
 #[test]
@@ -411,7 +408,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let totals = |tir: &crate::tir::typed::CheckedTir| {
         ids.iter()
             .map(
-                |id| match &tir.root().expression_facts().unwrap().get(id).unwrap().fact {
+                |id| match &tir.root().expression_facts().get(id).unwrap().fact {
                     crate::tir::expression_facts::ExpressionFact::Executable(value) => value
                         .checked_type
                         .materialized_shape(|axis| {
@@ -445,7 +442,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let rebuilt = check_draft(rebuilt, &rebuilt_src).unwrap();
     assert!(
         ids.iter()
-            .all(|id| rebuilt.root().expression_facts().unwrap().get(id).is_err())
+            .all(|id| rebuilt.root().expression_facts().get(id).is_err())
     );
 }
 
@@ -3767,14 +3764,14 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
     let (draft, src) = module_aware_tir(source);
     let tir = check_draft(draft.clone(), &src).unwrap();
 
-    let constants = tir.const_schedule().unwrap();
+    let constants = tir.const_schedule();
     assert_eq!(constants.dags(), [test_dag_id()]);
     assert_eq!(
         constants.order().as_slice(),
         [root_decl("a"), root_decl("b"), root_decl("c")]
     );
 
-    let runtime = tir.root().runtime_schedule().unwrap();
+    let runtime = tir.root().runtime_schedule();
     assert_eq!(runtime.execution_dags(), [test_dag_id()]);
     assert_eq!(
         runtime.order().as_slice(),
@@ -3806,8 +3803,8 @@ fn checker_retains_dependency_then_source_ordered_schedules() {
 
     // A new checking revision rebuilds the same schedules.
     let retained = check_draft(draft, &src).unwrap();
-    assert_eq!(retained.root().runtime_schedule(), Some(runtime));
-    assert_eq!(retained.const_schedule(), Some(constants));
+    assert_eq!(retained.root().runtime_schedule(), runtime);
+    assert_eq!(retained.const_schedule(), constants);
 }
 
 #[test]
@@ -3859,7 +3856,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
         .override_reconciliations
         .insert(owner, vec![reconciliation]);
     let tir = check_draft(tir, &src).unwrap();
-    assert_eq!(tir.root().expression_facts().unwrap().records().count(), 5);
+    assert_eq!(tir.root().expression_facts().records().count(), 5);
 }
 
 #[test]
@@ -3881,7 +3878,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
     let tir = check_draft(tir, &src).unwrap();
     let dag = tir.root();
     let bodies = dag.typed_bodies().unwrap();
-    crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts().unwrap()).unwrap();
+    crate::tir::texpr::fact_agreement::check(bodies, dag.expression_facts()).unwrap();
     let root = |name: &str| {
         let formula = dag
             .nodes()

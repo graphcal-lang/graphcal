@@ -356,9 +356,10 @@ fn check_in_rigid_view<R>(
         env: infer::hir::InferEnv {
             dag: rigid_dag,
             tir: &rigid_tir,
-            registry: &rigid_tir.registry,
+            registry: rigid_tir.registry(),
             src,
         },
+        assembly: &rigid_tir,
         cancellation,
         observations: &observations,
     };
@@ -377,7 +378,7 @@ fn check_rigid_dimension_port(
 ) -> Result<(), GraphcalError> {
     let failure = RigidFailure::Violation(port);
     check_in_rigid_view(
-        ctx.env.tir,
+        ctx.assembly,
         ctx.env.dag,
         std::slice::from_ref(dimension),
         failure,

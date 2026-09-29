@@ -29,7 +29,7 @@ mod helpers;
     reason = "large match on ExprKind variants is inherently long"
 )]
 mod infer;
-use expression_facts::install_instance_expression_facts;
+use expression_facts::instance_expression_facts;
 mod model_schema;
 mod plot;
 mod presentation;
@@ -56,6 +56,9 @@ pub use crate::tir::typed::override_dependencies::{
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     env: infer::hir::InferEnv<'a>,
+    /// The unchecked project being checked, from which derived checking views
+    /// (such as a template with rigid dimension ports) are built.
+    assembly: &'a crate::tir::typed::UncheckedTir,
     cancellation: &'a crate::cancellation::CancellationToken,
     observations: &'a infer::hir::BodyObservations,
 }
@@ -631,31 +634,13 @@ fn validate_expected_fail(
     }
 }
 
-fn install_presentation_facts(
-    tir: &mut crate::tir::typed::UncheckedTir,
-    facts: HashMap<crate::dag_id::DagId, crate::tir::presentation::DagPresentationFacts>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    for (dag_id, facts) in facts {
-        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        dag.semantic.presentation = facts;
-    }
-    Ok(())
-}
-
 impl crate::tir::typed::InstantiatedTir {
     /// Check every local body and publish its facts: the only transition
     /// into a [`CheckedTir`](crate::tir::typed::CheckedTir).
     ///
     /// For each const/param/node, infers the dimension of the RHS expression
     /// and verifies it matches the checked type carried by its declaration
-    /// record; canonical bodies are inferred once and semantic instances
+    /// record. Canonical bodies are inferred once; semantic instances
     /// specialize their template's facts.
     ///
     /// # Errors
@@ -666,98 +651,90 @@ impl crate::tir::typed::InstantiatedTir {
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::tir::typed::CheckedTir, GraphcalError> {
-        let mut tir = self.tir;
-        check_dimensions_tir_with_cancellation(&mut tir, src, cancellation)?;
-        Ok(crate::tir::typed::CheckedTir::new(tir))
-    }
-}
+        let tir = self.tir;
+        cancellation.checkpoint()?;
+        let schedules = schedules::ScheduleBuilder::build(&tir, src)?;
+        detect_cross_dag_cycles(&tir, src)?;
 
-/// Check dimensions while observing cooperative cancellation.
-fn check_dimensions_tir_with_cancellation(
-    tir: &mut crate::tir::typed::UncheckedTir,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
-    cancellation.checkpoint()?;
-    tir.dags
-        .values_mut()
-        .for_each(crate::tir::typed::DagTIR::begin_checking_revision);
-    tir.const_schedule = None;
-    let schedules = schedules::CheckedSchedules::build(tir, src)?;
-    detect_cross_dag_cycles(tir, src)?;
-
-    // Canonical bodies are checked once. Instance facts are specialized below,
-    // after canonical publication; only independently lowered bindings infer.
-    let checked_dag_facts = tir
-        .local_dags()
-        .filter(|(_, dag)| !dag.is_semantic_instance())
-        .map(|(dag_id, dag)| {
-            cancellation.checkpoint()?;
-            let observations = infer::hir::BodyObservations::new(dag);
-            let plot_shapes =
-                check_dimensions_dag(dag, tir, &tir.registry, src, cancellation, &observations)?;
-            Ok((dag_id.clone(), observations, plot_shapes))
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let sinks: HashMap<_, _> = checked_dag_facts
-        .iter()
-        .map(|(owner, observations, _)| (owner, observations))
-        .collect();
-    check_field_domain_constraint_targets(tir, src)?;
-    check_field_domain_constraint_dimensions(tir, &tir.registry, src, cancellation, &sinks)?;
-    drop(sinks);
-    let mut checked_plot_shapes = HashMap::new();
-    for (dag_id, observations, plot_shapes) in checked_dag_facts {
-        let dag = tir.dags.get(&dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        let (facts, typed_bodies) = observations
-            .finish()
-            .publish(
-                dag.dag_id().clone(),
-                dag.body_revision().clone(),
-                &dag.owned_expression_roots().collect::<Vec<_>>(),
-                &|index| expression_axes::checked_index_cardinality(tir, index),
-            )
-            .map_err(|error| {
-                GraphcalError::internal_error(
-                    format!("DAG `{dag_id}`: {error}"),
-                    src,
-                    DiagnosticAnchor::WholeFile,
+        // Canonical bodies are checked once. Instance facts are specialized
+        // below from the canonical facts; only independently lowered bindings
+        // infer.
+        let checked_dag_facts = tir
+            .local_dags()
+            .filter(|(_, dag)| !dag.is_semantic_instance())
+            .map(|(dag_id, dag)| {
+                cancellation.checkpoint()?;
+                let observations = infer::hir::BodyObservations::new(dag);
+                let plot_shapes =
+                    check_dimensions_dag(dag, &tir, src, cancellation, &observations)?;
+                Ok((dag_id, dag, observations, plot_shapes))
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        let sinks: HashMap<_, _> = checked_dag_facts
+            .iter()
+            .map(|(owner, _, observations, _)| (*owner, observations))
+            .collect();
+        check_field_domain_constraint_targets(&tir, src)?;
+        check_field_domain_constraint_dimensions(&tir, src, cancellation, &sinks)?;
+        drop(sinks);
+        let mut facts = HashMap::new();
+        let mut typed_bodies = HashMap::new();
+        let mut checked_plot_shapes = HashMap::new();
+        for (dag_id, dag, observations, plot_shapes) in checked_dag_facts {
+            let (published, bodies) = observations
+                .finish()
+                .publish(
+                    dag_id.clone(),
+                    dag.body_revision().clone(),
+                    &dag.owned_expression_roots().collect::<Vec<_>>(),
+                    &|index| expression_axes::checked_index_cardinality(&tir, index),
                 )
-            })?;
-        let semantic = &mut tir
-            .dags
-            .get_mut(&dag_id)
-            .ok_or_else(|| {
-                GraphcalError::internal_error(
-                    "checked DAG disappeared during fact publication",
-                    src,
-                    DiagnosticAnchor::WholeFile,
-                )
-            })?
-            .semantic;
-        semantic.expression_facts = Some(facts);
-        semantic.typed_bodies = Some(typed_bodies);
-        checked_plot_shapes.insert(dag_id, plot_shapes);
+                .map_err(|error| {
+                    GraphcalError::internal_error(
+                        format!("DAG `{dag_id}`: {error}"),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    )
+                })?;
+            facts.insert(dag_id.clone(), published);
+            typed_bodies.insert(dag_id.clone(), bodies);
+            checked_plot_shapes.insert(dag_id.clone(), plot_shapes);
+        }
+
+        let instances = instance_expression_facts(&tir, &facts, src, cancellation)?;
+        facts.extend(instances.facts);
+        let checking = crate::tir::typed::CheckingTir {
+            tir: &tir,
+            facts: &facts,
+        };
+        concrete_obligations::validate_project(&checking, src, cancellation)?;
+
+        // Field targets and dimensions were checked before publication;
+        // specializing instance expression facts does not change their nominal
+        // definitions.
+        cancellation.checkpoint()?;
+        let mut presentation = presentation::collect_presentation_facts(
+            &tir,
+            &checked_plot_shapes,
+            src,
+            cancellation,
+        )?;
+        crate::tir::typed::specialization::add_semantic_presentation_facts(
+            &tir,
+            &mut presentation,
+            &instances.port_generic_plot_channels,
+            src,
+        )?;
+        tir.into_checked(
+            crate::tir::typed::CheckedParts {
+                expression_facts: facts,
+                typed_bodies,
+                presentation,
+                schedules: schedules.into_parts(),
+            },
+            src,
+        )
     }
-
-    let port_generic_plot_channels = install_instance_expression_facts(tir, src, cancellation)?;
-    concrete_obligations::validate_project(tir, src, cancellation)?;
-
-    // Field targets and dimensions were checked before publication; installing
-    // instance expression facts does not change their nominal definitions.
-    cancellation.checkpoint()?;
-    let presentation_facts =
-        presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
-    install_presentation_facts(tir, presentation_facts, src)?;
-    crate::tir::typed::install_semantic_presentation_facts(tir, &port_generic_plot_channels, src)?;
-    crate::tir::typed::install_semantic_plot_projection_facts(tir, src)?;
-    schedules.install(tir, src)
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default
@@ -796,9 +773,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
 
     for (_, dag) in tir.local_dags() {
         cancellation.checkpoint()?;
-        let facts = dag.expression_facts().map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
+        let facts = dag.expression_facts();
         for param in dag.params() {
             let Some(default) = &param.default else {
                 continue;
@@ -873,12 +848,11 @@ pub fn check_external_value_expr_type(
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
-    let tir = tir.tir();
     let observations = infer::hir::BodyObservations::new(tir.root());
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
         tir,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
     }
     .infer_root(
@@ -916,8 +890,8 @@ pub fn check_external_value_expr_type(
             })
     } else {
         Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_checked_type(expected, &tir.registry),
-            inferred: format_checked_type(&inferred, &tir.registry),
+            declared: format_checked_type(expected, tir.registry()),
+            inferred: format_checked_type(&inferred, tir.registry()),
             src: src.clone(),
             span: expr.span.into(),
         })
@@ -941,7 +915,6 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> 
 fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::UncheckedTir,
-    registry: &crate::registry::types::FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     observations: &infer::hir::BodyObservations,
@@ -951,9 +924,10 @@ fn check_dimensions_dag(
         env: infer::hir::InferEnv {
             dag,
             tir,
-            registry,
+            registry: tir.registry(),
             src,
         },
+        assembly: tir,
         cancellation,
         observations,
     };
@@ -1209,7 +1183,7 @@ fn field_constraint_definition_dag<'a>(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<&'a crate::tir::typed::DagTIR, GraphcalError> {
-    tir.dag_registry()
+    tir.dags
         .get(key.owning_type.owner())
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!(
@@ -1230,11 +1204,11 @@ fn field_constraint_definition_dag<'a>(
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::UncheckedTir,
-    registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     sinks: &HashMap<&crate::dag_id::DagId, &infer::hir::BodyObservations>,
 ) -> Result<(), GraphcalError> {
+    let registry = tir.registry();
     let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
         for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {

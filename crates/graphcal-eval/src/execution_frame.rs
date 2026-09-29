@@ -12,7 +12,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::{error::GraphcalError, runtime_value::RuntimeValue};
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::tir::typed::model::CheckedTir;
+use graphcal_compiler::tir::typed::checked::CheckedTir;
 use miette::NamedSource;
 use std::collections::HashMap;
 use std::sync::Arc;

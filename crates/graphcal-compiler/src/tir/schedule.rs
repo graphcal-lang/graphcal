@@ -195,7 +195,7 @@ fn instance_closure<'a>(
         for edge in dag.semantic_instances() {
             let owner = edge.instance.id().owner();
             let instance = tir
-                .dag_registry()
+                .dags
                 .get(owner)
                 .ok_or_else(|| RuntimeScheduleError::MissingInstance(owner.clone()))?;
             if visited.insert(instance.dag_id()) {

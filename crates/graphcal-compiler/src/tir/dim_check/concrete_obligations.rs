@@ -11,7 +11,7 @@ use crate::registry::checked_type::{
 use crate::registry::error::GraphcalError;
 use crate::syntax::span::Span;
 use crate::tir::expression_facts::{ExpressionFact, ValueFact};
-use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, UncheckedTir};
+use crate::tir::typed::model::{DagTIR, ResolvedStructFieldTypeKey, TirRead};
 use miette::NamedSource;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ struct Application {
 
 struct Context<'a> {
     dag: &'a DagTIR,
-    tir: &'a UncheckedTir,
+    tir: &'a dyn TirRead,
     src: &'a NamedSource<Arc<String>>,
     span: Span,
     cancellation: &'a CancellationToken,
@@ -32,7 +32,7 @@ struct Context<'a> {
 pub(super) fn validate_concrete_type_obligations(
     inferred: &CheckedType<Symbolic>,
     dag: &DagTIR,
-    tir: &UncheckedTir,
+    tir: &dyn TirRead,
     src: &NamedSource<Arc<String>>,
     span: Span,
     cancellation: &CancellationToken,
@@ -51,11 +51,12 @@ pub(super) fn validate_concrete_type_obligations(
 }
 
 pub(super) fn validate_project(
-    tir: &UncheckedTir,
+    checking: &crate::tir::typed::CheckingTir<'_>,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
 ) -> Result<(), GraphcalError> {
-    for (_, dag) in tir.local_dags() {
+    let tir: &dyn TirRead = checking;
+    for (dag_id, dag) in checking.tir.local_dags() {
         for (_, annotation) in dag.value_decl_types() {
             validate_concrete_type_obligations(
                 &annotation.checked().declared().to_symbolic(),
@@ -66,8 +67,12 @@ pub(super) fn validate_project(
                 cancellation,
             )?;
         }
-        let facts = dag.expression_facts().map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
+        let facts = checking.facts.get(dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("DAG `{dag_id}` has no published expression facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
         })?;
         for (id, record) in facts.records() {
             if let Some(value) = record.fact.symbolic_value()
@@ -207,7 +212,7 @@ fn check_bound(
 ) -> Result<(), GraphcalError> {
     let expected = super::expected_bound_from_inferred(target).ok_or_else(|| {
         GraphcalError::InvalidDomainTarget {
-            type_kind: super::format_checked_type(target, &ctx.tir.registry),
+            type_kind: super::format_checked_type(target, ctx.tir.registry()),
             src: bound.src.clone(),
             span: bound.span.into(),
         }
@@ -217,17 +222,13 @@ fn check_bound(
     } else {
         format!("{}.{}.{}", definition.name(), member.name(), key.field)
     };
-    let owner = ctx
-        .tir
-        .dag_registry()
-        .get(key.owning_type.owner())
-        .ok_or_else(|| {
-            GraphcalError::internal_error(
-                "field-constraint owner has no checked DAG",
-                &bound.src,
-                DiagnosticAnchor::Source(bound.span),
-            )
-        })?;
+    let owner = ctx.tir.dag(key.owning_type.owner()).ok_or_else(|| {
+        GraphcalError::internal_error(
+            "field-constraint owner has no checked DAG",
+            &bound.src,
+            DiagnosticAnchor::Source(bound.span),
+        )
+    })?;
     let facts = super::expression_facts::specialize_bound_facts(
         ctx.tir,
         owner,
@@ -255,7 +256,7 @@ fn check_bound(
         bound,
         checked_type,
         &expected,
-        &ctx.tir.registry,
+        ctx.tir.registry(),
         &bound.src,
     )
 }

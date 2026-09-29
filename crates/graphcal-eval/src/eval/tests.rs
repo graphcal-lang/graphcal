@@ -117,7 +117,7 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
             .unwrap();
             let checked = ProjectCompiler::new(&project).check().unwrap();
             let dag = checked.tir().root();
-            let facts = dag.expression_facts().unwrap();
+            let facts = dag.expression_facts();
             let mut ids = std::collections::HashSet::new();
             dag.owned_expression_roots().for_each(|root| {
                 graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
@@ -181,7 +181,7 @@ node packet: Packet = Packet(value: @first);
             .tir()
             .dag_registry()
             .values()
-            .flat_map(|dag| dag.expression_facts().unwrap().records())
+            .flat_map(|dag| dag.expression_facts().records())
             .filter(|(_, record)| {
                 record
                     .fact

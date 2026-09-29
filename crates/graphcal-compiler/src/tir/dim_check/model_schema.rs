@@ -79,7 +79,7 @@ struct ModelTypeDefinition<'tir> {
 /// model-boundary state in which every such identity has been bound.
 #[derive(Debug)]
 pub struct ValidatedModelType<'tir> {
-    tir: &'tir crate::tir::typed::UncheckedTir,
+    tir: &'tir crate::tir::typed::CheckedTir,
     identity: StructTypeRef,
     generic_args: Vec<CheckedGenericArg>,
     definition: ModelTypeDefinition<'tir>,
@@ -102,7 +102,6 @@ impl<'tir> ValidatedModelType<'tir> {
         generic_args: &[CheckedGenericArg],
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, ConcreteModelTypeError> {
-        let tir = tir.tir();
         let definition = validate_model_type_definition(tir, identity, generic_args)?;
         validate_application_obligations(tir, identity, generic_args, &definition, src)?;
         Ok(Self {
@@ -132,10 +131,10 @@ impl<'tir> ValidatedModelType<'tir> {
         &self,
         _src: &NamedSource<Arc<String>>,
     ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
-        let metadata_dag = self
-            .tir
+        let tir: &dyn crate::tir::typed::TirRead = self.tir;
+        let metadata_dag = tir
             .dag_with_type_metadata(self.identity.resolved())
-            .unwrap_or_else(|| self.tir.root());
+            .unwrap_or_else(|| tir.root());
         self.definition
             .constructors
             .iter()
@@ -199,7 +198,7 @@ impl<'tir> ConcreteModelType<'tir> {
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, ConcreteModelTypeError> {
         let validated = ValidatedModelType::try_new(tir, identity, generic_args, src)?;
-        validate_bound_generic_arguments(tir.tir(), identity, generic_args)?;
+        validate_bound_generic_arguments(tir, identity, generic_args)?;
         Ok(Self { validated })
     }
 
@@ -227,7 +226,7 @@ impl<'tir> ConcreteModelType<'tir> {
 }
 
 fn validate_application_obligations(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
     definition: &ModelTypeDefinition<'_>,
@@ -249,7 +248,7 @@ fn validate_application_obligations(
 }
 
 fn validate_model_type_definition<'tir>(
-    tir: &'tir crate::tir::typed::UncheckedTir,
+    tir: &'tir dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
 ) -> Result<ModelTypeDefinition<'tir>, ConcreteModelTypeError> {
@@ -266,7 +265,7 @@ fn validate_model_type_definition<'tir>(
 }
 
 fn validate_nominal_signature<'tir>(
-    tir: &'tir crate::tir::typed::UncheckedTir,
+    tir: &'tir dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
 ) -> Result<&'tir NominalTypeDef, ConcreteModelTypeError> {
@@ -307,7 +306,7 @@ const fn generic_argument_sort(argument: &CheckedGenericArg) -> GenericConstrain
 }
 
 fn validate_generic_argument_shape(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
     argument: &CheckedGenericArg,
@@ -322,7 +321,7 @@ fn validate_generic_argument_shape(
 }
 
 fn validate_type_argument_shape(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
     declared_type: &CheckedType,
@@ -345,7 +344,7 @@ fn validate_type_argument_shape(
 }
 
 fn validate_bound_generic_arguments(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     generic_args: &[CheckedGenericArg],
 ) -> Result<(), ConcreteModelTypeError> {
@@ -360,7 +359,7 @@ fn validate_bound_generic_arguments(
 }
 
 fn validate_bound_generic_argument(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
     argument: &CheckedGenericArg,
@@ -375,7 +374,7 @@ fn validate_bound_generic_argument(
 }
 
 fn validate_bound_type_argument(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     identity: &StructTypeRef,
     parameter: &GenericParamName,
     declared_type: &CheckedType,
@@ -404,14 +403,14 @@ fn validate_bound_type_argument(
 }
 
 fn validate_index_reference(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     index: &IndexTypeRef,
 ) -> Result<(), ConcreteModelTypeError> {
     index_definition(tir, index).map(|_| ())
 }
 
 fn validate_bound_index(
-    tir: &crate::tir::typed::UncheckedTir,
+    tir: &dyn crate::tir::typed::TirRead,
     index: &IndexTypeRef,
 ) -> Result<(), ConcreteModelTypeError> {
     let Some(definition) = index_definition(tir, index)? else {
@@ -426,7 +425,7 @@ fn validate_bound_index(
 }
 
 fn index_definition<'tir>(
-    tir: &'tir crate::tir::typed::UncheckedTir,
+    tir: &'tir dyn crate::tir::typed::TirRead,
     index: &IndexTypeRef,
 ) -> Result<Option<&'tir crate::registry::types::IndexDef>, ConcreteModelTypeError> {
     if index.finite_index().is_some() {

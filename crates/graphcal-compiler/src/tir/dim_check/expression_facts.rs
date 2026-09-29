@@ -12,7 +12,7 @@ use crate::registry::error::GraphcalError;
 use crate::tir::expression_facts::{
     CheckedExpressionFacts, CheckingEnvironment, ExpressionFact, ValueFact,
 };
-use crate::tir::typed::model::UncheckedTir;
+use crate::tir::typed::model::{TirRead, UncheckedTir};
 use crate::tir::typed::specialization::{specialize_expression_type, specialize_index_ref};
 
 use super::expression_axes::{check_materializable, checked_index_cardinality};
@@ -26,17 +26,17 @@ use super::{DimCheckContext, check_decl_expr_type, infer};
 )]
 pub fn specialize_bound_expression_facts(
     tir: &crate::tir::typed::CheckedTir,
-    dag: &crate::tir::typed::model::DagTIR,
+    dag: &crate::tir::typed::CheckedDag,
     root: &crate::hir::expr::Expr,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<CheckedExpressionFacts, GraphcalError> {
-    specialize_bound_facts(tir.tir(), dag, root, bindings, src)
+    specialize_bound_facts(tir, dag, root, bindings, src)
 }
 
 /// [`specialize_bound_expression_facts`] while the project is being checked.
 pub(super) fn specialize_bound_facts(
-    tir: &UncheckedTir,
+    tir: &dyn TirRead,
     dag: &crate::tir::typed::model::DagTIR,
     root: &crate::hir::expr::Expr,
     bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
@@ -44,9 +44,12 @@ pub(super) fn specialize_bound_facts(
 ) -> Result<CheckedExpressionFacts, GraphcalError> {
     let diagnostic =
         |message| GraphcalError::internal_error(message, src, DiagnosticAnchor::Source(root.span));
-    let facts = dag
-        .expression_facts()
-        .map_err(|error| diagnostic(error.to_string()))?;
+    let facts = tir.expression_facts(dag.dag_id()).ok_or_else(|| {
+        diagnostic(format!(
+            "DAG `{}` has no published expression facts",
+            dag.dag_id()
+        ))
+    })?;
     let mut ids = Vec::new();
     visit_expr(root, &mut |expr| ids.push(expr.id().clone()));
     let substitution = crate::tir::typed::Substitution::for_nats(bindings);
@@ -248,7 +251,7 @@ impl FactSubstitution<'_> {
     fn value_type(
         &self,
         ty: &CheckedType<Symbolic>,
-        tir: &UncheckedTir,
+        tir: &dyn TirRead,
         src: &NamedSource<Arc<String>>,
         span: crate::syntax::span::Span,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
@@ -282,7 +285,7 @@ impl FactSubstitution<'_> {
 fn specialize_record(
     record: &crate::tir::expression_facts::CheckedExpressionRecord,
     dag: &crate::tir::typed::model::DagTIR,
-    tir: &UncheckedTir,
+    tir: &dyn TirRead,
     substitution: &FactSubstitution<'_>,
     src: &NamedSource<Arc<String>>,
     span: crate::syntax::span::Span,
@@ -358,34 +361,37 @@ fn specialize_record(
     }))
 }
 
-/// Specialize and publish every semantic instance's expression facts.
-///
-/// Returns the template plot channel shapes to specialize for each instance
-/// that rebinds a defaulted dimension port (taken in the view where that port
-/// is rigid, like the instance's facts).
-pub(super) fn install_instance_expression_facts(
-    tir: &mut UncheckedTir,
+/// The published facts of every semantic instance, and the template plot
+/// channel shapes to specialize for each instance that rebinds a defaulted
+/// dimension port (taken in the view where that port is rigid, like the
+/// instance's facts).
+pub(super) struct InstanceFacts {
+    pub(super) facts: Vec<(crate::dag_id::DagId, CheckedExpressionFacts)>,
+    pub(super) port_generic_plot_channels:
+        HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>,
+}
+
+/// Specialize and publish every semantic instance's expression facts from its
+/// template's `canonical` facts.
+pub(super) fn instance_expression_facts(
+    tir: &UncheckedTir,
+    canonical: &HashMap<crate::dag_id::DagId, CheckedExpressionFacts>,
     src: &NamedSource<Arc<String>>,
     cancellation: &CancellationToken,
-) -> Result<HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>, GraphcalError> {
+) -> Result<InstanceFacts, GraphcalError> {
+    let checking = crate::tir::typed::CheckingTir {
+        tir,
+        facts: canonical,
+    };
     let mut port_generic_plot_channels = HashMap::new();
-    let owners: Vec<_> = tir
-        .local_dags()
-        .filter(|(_, dag)| dag.is_semantic_instance())
-        .map(|(owner, _)| owner.clone())
-        .collect();
-    for owner in owners {
+    let mut published = Vec::new();
+    let instances = tir.local_dags().filter_map(|(owner, dag)| {
+        dag.semantic_specialization
+            .as_ref()
+            .map(|specialization| (owner, dag, specialization))
+    });
+    for (owner, dag, specialization) in instances {
         cancellation.checkpoint()?;
-        let dag = tir.dags.get(&owner).ok_or_else(|| {
-            GraphcalError::internal_error("instance disappeared", src, DiagnosticAnchor::WholeFile)
-        })?;
-        let specialization = dag.semantic_specialization.as_ref().ok_or_else(|| {
-            GraphcalError::internal_error(
-                "instance has no Static application",
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
         let template = tir.dags.get(&specialization.template).ok_or_else(|| {
             GraphcalError::internal_error(
                 "instance has no canonical template",
@@ -393,9 +399,18 @@ pub(super) fn install_instance_expression_facts(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        let facts = template.expression_facts().map_err(|error| {
-            GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-        })?;
+        let facts = checking
+            .expression_facts(&specialization.template)
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "canonical template `{}` has no published expression facts",
+                        specialization.template
+                    ),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
         // A rebound defaulted dimension port: the template's facts saw its
         // default, so the bodies' facts come from the view where it is rigid.
         let ports = tir
@@ -418,74 +433,85 @@ pub(super) fn install_instance_expression_facts(
         let ctx = DimCheckContext {
             env: infer::hir::InferEnv {
                 dag,
-                tir,
-                registry: &tir.registry,
+                tir: &checking,
+                registry: tir.registry(),
                 src,
             },
+            assembly: tir,
             cancellation,
             observations: &observations,
         };
         check_instance_defaults(&ctx, template, facts, &specialization.substitution)?;
         // Instance bodies are specialized from the template; only the facts of
         // independently checked defaults are kept.
-        let mut records = observations.finish().records;
-        let environment =
-            CheckingEnvironment::new(dag.dag_id().clone(), dag.body_revision().clone());
-        let mut inventory = Vec::new();
-        dag.owned_expression_roots().for_each(|root| {
-            visit_expr(root, &mut |expr| inventory.push(expr));
-        });
-        for expr in inventory {
-            let span = expr.span;
-            let id = expr.id();
-            if records.contains_key(id) {
-                continue;
-            }
-            let record = match port_generic_records.get(id) {
-                Some(record) => record,
-                None => facts.get(id).map_err(|error| {
-                    GraphcalError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::Source(span),
-                    )
-                })?,
-            };
-            let record = specialize_record(
-                record,
-                dag,
-                tir,
-                &FactSubstitution::Static(&specialization.substitution),
-                src,
-                span,
-                &environment,
-            )?;
-            records.insert(id.clone(), record);
-        }
-        publish_instance_facts(tir, &owner, records, src)?;
+        let facts = complete_instance_facts(
+            dag,
+            &checking,
+            observations.finish().records,
+            facts,
+            &port_generic_records,
+            &specialization.substitution,
+            src,
+        )?;
+        published.push((owner.clone(), facts));
     }
-    Ok(port_generic_plot_channels)
+    Ok(InstanceFacts {
+        facts: published,
+        port_generic_plot_channels,
+    })
 }
 
-fn publish_instance_facts(
-    tir: &mut UncheckedTir,
-    owner: &crate::dag_id::DagId,
-    records: HashMap<
+/// Complete an instance's independently inferred `records` with its template's
+/// specialized facts (or their port-generic counterparts) and publish them.
+fn complete_instance_facts(
+    dag: &crate::tir::typed::model::DagTIR,
+    tir: &dyn TirRead,
+    mut records: HashMap<
         crate::expression_id::ExprId,
         Box<crate::tir::expression_facts::CheckedExpressionRecord>,
     >,
+    template_facts: &CheckedExpressionFacts,
+    port_generic_records: &HashMap<
+        crate::expression_id::ExprId,
+        Box<crate::tir::expression_facts::CheckedExpressionRecord>,
+    >,
+    substitution: &crate::ir::static_substitution::StaticSubstitution,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let disappeared = || {
-        GraphcalError::internal_error(
-            "instance disappeared during publication",
+) -> Result<CheckedExpressionFacts, GraphcalError> {
+    let environment = CheckingEnvironment::new(dag.dag_id().clone(), dag.body_revision().clone());
+    let mut inventory = Vec::new();
+    dag.owned_expression_roots().for_each(|root| {
+        visit_expr(root, &mut |expr| inventory.push(expr));
+    });
+    for expr in inventory {
+        let span = expr.span;
+        let id = expr.id();
+        if records.contains_key(id) {
+            continue;
+        }
+        let record = match port_generic_records.get(id) {
+            Some(record) => record,
+            None => template_facts.get(id).map_err(|error| {
+                GraphcalError::internal_error(
+                    error.to_string(),
+                    src,
+                    DiagnosticAnchor::Source(span),
+                )
+            })?,
+        };
+        let record = specialize_record(
+            record,
+            dag,
+            tir,
+            &FactSubstitution::Static(substitution),
             src,
-            DiagnosticAnchor::WholeFile,
-        )
-    };
-    let dag = tir.dags.get(owner).ok_or_else(disappeared)?;
-    let published = CheckedExpressionFacts::publish(
-        owner.clone(),
+            span,
+            &environment,
+        )?;
+        records.insert(id.clone(), record);
+    }
+    CheckedExpressionFacts::publish(
+        dag.dag_id().clone(),
         dag.body_revision().clone(),
         &dag.owned_expression_roots().collect::<Vec<_>>(),
         records,
@@ -493,11 +519,5 @@ fn publish_instance_facts(
     )
     .map_err(|error| {
         GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
-    })?;
-    tir.dags
-        .get_mut(owner)
-        .ok_or_else(disappeared)?
-        .semantic
-        .expression_facts = Some(published);
-    Ok(())
+    })
 }

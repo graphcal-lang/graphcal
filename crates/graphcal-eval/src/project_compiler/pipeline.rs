@@ -87,7 +87,7 @@ fn lower_single_file_to_hir(
 }
 
 fn validate_dag_constant_values(
-    dag: &graphcal_compiler::tir::typed::DagTIR,
+    dag: &graphcal_compiler::tir::typed::CheckedDag,
     const_values: &crate::eval_expr::RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {

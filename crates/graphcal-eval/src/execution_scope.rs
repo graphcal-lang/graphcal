@@ -4,7 +4,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::imported_binding::{ImportedBinding, ImportedValueKind};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
-use graphcal_compiler::tir::typed::{CheckedTir, DagTIR};
+use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir};
 use thiserror::Error;
 
 use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts};
@@ -37,7 +37,7 @@ pub enum ExecutionScopeError {
 /// `CheckedProject` remains responsible for completing mandatory static checks.
 #[derive(Debug, Clone, Copy)]
 pub struct CheckedExecutionScope<'a> {
-    dag: &'a DagTIR,
+    dag: &'a CheckedDag,
     facts: &'a CheckedDagExecutionFacts,
 }
 
@@ -97,7 +97,7 @@ impl<'a> CheckedExecutionScope<'a> {
         Ok(Self { dag, facts })
     }
 
-    pub(crate) const fn dag(self) -> &'a DagTIR {
+    pub(crate) const fn dag(self) -> &'a CheckedDag {
         self.dag
     }
 

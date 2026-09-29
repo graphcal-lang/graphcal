@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::tir::typed::{CheckedTir, DagTIR, DiagnosticDeclProbe};
+use graphcal_compiler::tir::typed::{CheckedDag, CheckedTir, DiagnosticDeclProbe};
 use thiserror::Error;
 
 /// Stable identity of a graph node: the declaration's canonical resolved name.
@@ -155,12 +155,12 @@ pub enum GraphProjectionError {
 /// Returns [`GraphProjectionError`] if the checked TIR is missing an
 /// authoritative declaration identity or consistent module provenance.
 pub fn project_tir(tir: &CheckedTir) -> Result<GraphIr, GraphProjectionError> {
-    let mut child_dags: Vec<&DagTIR> = tir
+    let mut child_dags: Vec<&CheckedDag> = tir
         .local_dags()
         .filter_map(|(dag_id, dag)| (dag_id != tir.root_dag_id()).then_some(dag))
         .collect();
     child_dags.sort_by(|a, b| a.dag_id().cmp(b.dag_id()));
-    let local_dags: Vec<&DagTIR> = std::iter::once(tir.root())
+    let local_dags: Vec<&CheckedDag> = std::iter::once(tir.root())
         .chain(child_dags.iter().copied())
         .collect();
 
@@ -269,7 +269,7 @@ pub fn project_tir(tir: &CheckedTir) -> Result<GraphIr, GraphProjectionError> {
 
 fn project_cluster_provenance(
     tir: &CheckedTir,
-    local_dags: &[&DagTIR],
+    local_dags: &[&CheckedDag],
 ) -> Result<ProjectedClusterProvenance, GraphProjectionError> {
     let mut clusters = BTreeMap::<DagId, GraphCluster>::new();
     let mut output_names = BTreeMap::<DagId, HashSet<DeclName>>::new();
@@ -330,7 +330,7 @@ fn project_cluster_provenance(
 /// body; grouping happens after this projection.
 fn project_dag_nodes(
     tir: &CheckedTir,
-    dag: &DagTIR,
+    dag: &CheckedDag,
     output_names: &BTreeMap<DagId, HashSet<DeclName>>,
 ) -> Vec<GraphNode> {
     dag.decls()
