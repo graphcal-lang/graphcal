@@ -544,14 +544,11 @@ fn lower_generic_default(
             if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = default {
                 super::diagnostics::validate_type_annotation(type_expr, ctx.src)?;
             }
-            let prelude = super::PreludeTypeScope::graphcal();
-            let type_ctx = super::TypeLoweringContext::new(identity.owner(), ctx.resolver, scope)
-                .with_prelude(&prelude);
             super::lower::lower_generic_arg_for_constraint(
                 default,
                 param.constraint,
                 &param.name,
-                type_ctx,
+                super::ModuleScope::new(identity.owner(), ctx.resolver, scope),
             )
             .map_err(|error| super::diagnostics::hir_lower_error_to_graphcal(&error, ctx.src))
         })
@@ -565,20 +562,15 @@ fn lower_nominal_field(
     ctx: &NominalLoweringContext<'_>,
 ) -> Result<NominalField, GraphcalError> {
     super::diagnostics::validate_type_annotation(field.type_ann(), ctx.src)?;
-    let prelude = super::PreludeTypeScope::graphcal();
-    let type_ctx = super::TypeLoweringContext::new(identity.owner(), ctx.resolver, generic_scope)
-        .with_prelude(&prelude);
-    let decl_type = super::lower_decl_type(field.type_ann(), type_ctx).map_err(|error| {
+    let scope = super::ModuleScope::new(identity.owner(), ctx.resolver, generic_scope);
+    let decl_type = super::lower_decl_type(field.type_ann(), scope).map_err(|error| {
         super::diagnostics::type_lower_error_to_graphcal(&error, field.type_ann(), ctx.src)
     })?;
-    let expr_ctx = super::ExprLoweringContext::new(
-        identity.owner(),
-        ctx.resolver,
-        generic_scope,
+    let expr_ctx = super::ExprLoweringContext::with_overlay(
+        scope,
         &ctx.registry.time_zones,
-    )
-    .with_prelude(&prelude)
-    .with_unit_registry(&ctx.registry.units);
+        super::BindingOverlay::RegistryUnits(&ctx.registry.units),
+    );
     let domain_bounds = field
         .type_ann()
         .domain_bounds()

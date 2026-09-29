@@ -324,19 +324,16 @@ impl UnfrozenIR {
         }
 
         let generic_scope = crate::hir::GenericScope::new();
-        let prelude = crate::hir::PreludeTypeScope::graphcal();
+        let overlay = crate::hir::BindingOverlay::Frozen(crate::hir::FrozenBindings {
+            unit_registry: &registry.units,
+            unit_bindings: &self.unit_bindings,
+            decl_bindings: &decl_bindings,
+            instance_templates: &instance_templates,
+        });
         let lower_in = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
-            let expr_ctx = crate::hir::ExprLoweringContext::new(
-                resolution_owner,
-                resolver,
-                &generic_scope,
-                &registry.time_zones,
-            )
-            .with_prelude(&prelude)
-            .with_unit_registry(&registry.units)
-            .with_unit_bindings(&self.unit_bindings)
-            .with_decl_bindings(&decl_bindings)
-            .with_instance_templates(&instance_templates);
+            let scope = crate::hir::ModuleScope::new(resolution_owner, resolver, &generic_scope);
+            let expr_ctx =
+                crate::hir::ExprLoweringContext::with_overlay(scope, &registry.time_zones, overlay);
             crate::hir::lower_expr(expr, expr_ctx)
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src))
         };
@@ -345,16 +342,11 @@ impl UnfrozenIR {
              resolution_owner: &crate::dag_id::DagId|
              -> Result<crate::hir::TypeAnnotation, GraphcalError> {
                 crate::hir::diagnostics::validate_type_annotation(type_ann, src)?;
-                let type_ctx = crate::hir::TypeLoweringContext::new(
-                    resolution_owner,
-                    resolver,
-                    &generic_scope,
-                )
-                .with_prelude(&prelude);
-                let decl_type =
-                    crate::hir::lower_decl_type(type_ann, type_ctx).map_err(|error| {
-                        crate::hir::diagnostics::type_lower_error_to_graphcal(&error, type_ann, src)
-                    })?;
+                let scope =
+                    crate::hir::ModuleScope::new(resolution_owner, resolver, &generic_scope);
+                let decl_type = crate::hir::lower_decl_type(type_ann, scope).map_err(|error| {
+                    crate::hir::diagnostics::type_lower_error_to_graphcal(&error, type_ann, src)
+                })?;
                 let domain_bounds = type_ann
                     .domain_bounds()
                     .iter()
@@ -466,22 +458,19 @@ impl UnfrozenIR {
                         &entry.type_ann,
                         &entry.type_resolution_owner,
                     )?,
-                    definition: {
-                        let context = crate::hir::ExprLoweringContext::new(
-                            &entry.body_resolution_owner,
-                            resolver,
-                            &generic_scope,
+                    definition: super::node_definition::lower(
+                        &entry.definition,
+                        crate::hir::ExprLoweringContext::with_overlay(
+                            crate::hir::ModuleScope::new(
+                                &entry.body_resolution_owner,
+                                resolver,
+                                &generic_scope,
+                            ),
                             &registry.time_zones,
-                        )
-                        .with_prelude(&prelude)
-                        .with_unit_registry(&registry.units)
-                        .with_unit_bindings(&self.unit_bindings)
-                        .with_decl_bindings(&decl_bindings)
-                        .with_instance_templates(&instance_templates);
-                        super::node_definition::lower(&entry.definition, context).map_err(
-                            |error| crate::hir::expr_lower_error_to_graphcal(&error, src),
-                        )?
-                    },
+                            overlay,
+                        ),
+                    )
+                    .map_err(|error| crate::hir::expr_lower_error_to_graphcal(&error, src))?,
                     span: entry.span,
                 })
             })
@@ -495,22 +484,21 @@ impl UnfrozenIR {
                 Ok(AssertEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    body: {
-                        let expr_ctx = crate::hir::ExprLoweringContext::new(
-                            &entry.body_resolution_owner,
-                            resolver,
-                            &generic_scope,
+                    body: crate::hir::lower_assert_body(
+                        &entry.body,
+                        crate::hir::ExprLoweringContext::with_overlay(
+                            crate::hir::ModuleScope::new(
+                                &entry.body_resolution_owner,
+                                resolver,
+                                &generic_scope,
+                            ),
                             &registry.time_zones,
-                        )
-                        .with_prelude(&prelude)
-                        .with_unit_registry(&registry.units)
-                        .with_unit_bindings(&self.unit_bindings)
-                        .with_decl_bindings(&decl_bindings)
-                        .with_instance_templates(&instance_templates);
-                        crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
-                            crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
-                        })?
-                    },
+                            overlay,
+                        ),
+                    )
+                    .map_err(|err| {
+                        crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, src)
+                    })?,
                     span: entry.span,
                 })
             })

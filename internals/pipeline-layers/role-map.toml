@@ -412,6 +412,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["hir", "expr_lower", "context", "tests"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["hir", "expr_lower", "error"]
 role = "checking"
 

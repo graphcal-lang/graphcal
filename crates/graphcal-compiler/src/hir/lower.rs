@@ -9,6 +9,7 @@ use crate::resolved_name::{ResolvedDimName, ResolvedName, ResolvedUnitName};
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use thiserror::Error;
 
@@ -150,14 +151,17 @@ impl PreludeTypeScope {
         }
     }
 
-    /// Create the built-in Graphcal prelude type scope.
+    /// The built-in Graphcal prelude type scope, built once per process.
     #[must_use]
-    pub fn graphcal() -> Self {
-        Self::new(
-            crate::registry::prelude::prelude_dag_id(),
-            crate::registry::prelude::prelude_dimension_names().map(DimName::expect_valid),
-            crate::registry::prelude::prelude_unit_names().map(UnitName::expect_valid),
-        )
+    pub fn graphcal() -> &'static Self {
+        static GRAPHCAL: LazyLock<PreludeTypeScope> = LazyLock::new(|| {
+            PreludeTypeScope::new(
+                crate::registry::prelude::prelude_dag_id(),
+                crate::registry::prelude::prelude_dimension_names().map(DimName::expect_valid),
+                crate::registry::prelude::prelude_unit_names().map(UnitName::expect_valid),
+            )
+        });
+        &GRAPHCAL
     }
 
     #[must_use]
@@ -252,19 +256,23 @@ impl GenericScope {
     }
 }
 
-/// Context required to lower one type expression into HIR.
+/// The module-level scope one type or expression lowering runs in.
+///
+/// Source paths resolve as seen from one owner module, with its lexical
+/// generic parameters, through the module-aware resolver. The implicit
+/// Graphcal prelude ([`PreludeTypeScope::graphcal`]) is in scope everywhere,
+/// so it is not a field.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct TypeLoweringContext<'a> {
-    owner: &'a DagId,
-    resolver: &'a ModuleResolver,
-    generic_scope: &'a GenericScope,
-    prelude: Option<&'a PreludeTypeScope>,
+pub struct ModuleScope<'a> {
+    pub(crate) owner: &'a DagId,
+    pub(crate) resolver: &'a ModuleResolver,
+    pub(crate) generic_scope: &'a GenericScope,
 }
 
-impl<'a> TypeLoweringContext<'a> {
-    /// Create a type-lowering context.
+impl<'a> ModuleScope<'a> {
+    /// Create the scope of `owner` with the lexical generic parameters `generic_scope`.
     #[must_use]
-    pub(crate) const fn new(
+    pub const fn new(
         owner: &'a DagId,
         resolver: &'a ModuleResolver,
         generic_scope: &'a GenericScope,
@@ -273,24 +281,7 @@ impl<'a> TypeLoweringContext<'a> {
             owner,
             resolver,
             generic_scope,
-            prelude: None,
         }
-    }
-
-    /// Add implicit prelude type symbols to this lowering context.
-    #[must_use]
-    pub(crate) const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
-        Self {
-            owner: self.owner,
-            resolver: self.resolver,
-            generic_scope: self.generic_scope,
-            prelude: Some(prelude),
-        }
-    }
-
-    fn resolve_prelude_dimension_path(self, path: &NamePath) -> Option<ResolvedDimName> {
-        self.prelude
-            .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
 }
 
@@ -336,7 +327,7 @@ enum LoweredTypeSyntax {
 /// used as a value type.
 pub(crate) fn lower_decl_type(
     type_ann: &ast::TypeExpr,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<DeclType, HirLowerError> {
     match lower_type_syntax(type_ann, ctx)? {
         LoweredTypeSyntax::Slot(slot) => slot.into_value_type().map(DeclType::Value),
@@ -354,7 +345,7 @@ pub(crate) fn lower_decl_type(
 
 fn lower_type_syntax(
     type_ann: &ast::TypeExpr,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<LoweredTypeSyntax, HirLowerError> {
     match &type_ann.kind {
         ast::TypeExprKind::Indexed { base, indexes } => Ok(LoweredTypeSyntax::Indexed {
@@ -368,7 +359,7 @@ fn lower_type_syntax(
 
 fn lower_type_slot(
     type_ann: &ast::TypeExpr,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<TypeSlot, HirLowerError> {
     let kind = match &type_ann.kind {
         ast::TypeExprKind::Dimensionless => ValueTypeKind::Builtin(BuiltinType::Dimensionless),
@@ -428,7 +419,7 @@ fn lower_type_slot(
 fn lower_complex_application(
     span: Span,
     args: &[ast::GenericArg],
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<DimArg, HirLowerError> {
     let [arg] = args else {
         return Err(HirLowerError::WrongGenericArgCount {
@@ -455,7 +446,7 @@ fn lower_complex_application(
 fn lower_key_application(
     span: Span,
     args: &[ast::GenericArg],
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<IndexRef, HirLowerError> {
     let [arg] = args else {
         return Err(HirLowerError::WrongGenericArgCount {
@@ -484,7 +475,7 @@ pub(crate) fn lower_generic_args(
     params: &[crate::resolve::symbols::GenericParamSignature],
     args: &[ast::GenericArg],
     span: Span,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<Vec<GenericArg>, HirLowerError> {
     check_generic_arg_count(target, params, args.len(), span)?;
     params
@@ -526,7 +517,7 @@ pub(crate) fn lower_generic_arg_for_constraint(
     arg: &ast::GenericArg,
     constraint: GenericConstraint,
     parameter: &GenericParamName,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<GenericArg, HirLowerError> {
     match constraint {
         GenericConstraint::Dim => {
@@ -616,7 +607,7 @@ fn lower_generic_arg_as_type_syntax(
     arg: &ast::GenericArg,
     parameter: &GenericParamName,
     constraint: GenericConstraint,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<LoweredTypeSyntax, HirLowerError> {
     match arg {
         ast::GenericArg::Type(type_expr) => lower_type_syntax(type_expr, ctx),
@@ -640,7 +631,7 @@ fn lower_generic_arg_as_type_syntax(
 
 fn non_nat_sort_for_ambiguous_arg(
     arg: &ast::AmbiguousGenericArg,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Option<&'static str> {
     match arg {
         ast::AmbiguousGenericArg::Name(ident) => {
@@ -669,7 +660,9 @@ fn non_nat_sort_for_ambiguous_arg(
                 .resolve_dimension_path(ctx.owner, &path)
                 .map(crate::resolve::symbols::SymbolRef::into_resolved)
                 .is_ok()
-                || ctx.resolve_prelude_dimension_path(&path).is_some()
+                || PreludeTypeScope::graphcal()
+                    .resolve_dimension_path(&path)
+                    .is_some()
             {
                 return Some("Dim argument");
             }
@@ -773,7 +766,7 @@ fn lower_time_scale_arg(arg: &ast::TypeExpr) -> Result<TimeScale, HirLowerError>
 fn lower_dim_expr_as_type(
     dim_expr: &ast::DimExpr,
     span: Span,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<TypeSlot, HirLowerError> {
     match lower_single_term_nominal_type(dim_expr, span, ctx)? {
         NominalTypeLookup::Found(slot) => Ok(slot),
@@ -800,7 +793,7 @@ fn lower_dim_expr_as_type(
 fn lower_single_term_nominal_type(
     dim_expr: &ast::DimExpr,
     type_span: Span,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<NominalTypeLookup, HirLowerError> {
     let [item] = dim_expr.terms.as_slice() else {
         return Ok(NominalTypeLookup::absent());
@@ -888,10 +881,7 @@ fn lower_single_term_nominal_type(
     Ok(NominalTypeLookup::Absent { deferred_error })
 }
 
-fn lower_dim_expr(
-    dim_expr: &ast::DimExpr,
-    ctx: TypeLoweringContext<'_>,
-) -> Result<DimExpr, HirLowerError> {
+fn lower_dim_expr(dim_expr: &ast::DimExpr, ctx: ModuleScope<'_>) -> Result<DimExpr, HirLowerError> {
     let terms = dim_expr
         .terms
         .iter()
@@ -905,7 +895,7 @@ fn lower_dim_expr(
 
 fn lower_dim_expr_item(
     item: &ast::DimExprItem,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<DimExprItem, HirLowerError> {
     Ok(DimExprItem {
         op: item.op,
@@ -913,10 +903,7 @@ fn lower_dim_expr_item(
     })
 }
 
-fn lower_dim_term(
-    term: &ast::DimTerm,
-    ctx: TypeLoweringContext<'_>,
-) -> Result<DimTermRef, HirLowerError> {
+fn lower_dim_term(term: &ast::DimTerm, ctx: ModuleScope<'_>) -> Result<DimTermRef, HirLowerError> {
     if let Some(atom) = term.name.value.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
     {
@@ -943,8 +930,8 @@ fn lower_dim_term(
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
     {
         Ok(resolved) => resolved,
-        Err(ModuleResolveError::UnknownName { .. }) => ctx
-            .resolve_prelude_dimension_path(&term.name.value)
+        Err(ModuleResolveError::UnknownName { .. }) => PreludeTypeScope::graphcal()
+            .resolve_dimension_path(&term.name.value)
             .ok_or_else(|| HirLowerError::UnknownTypePath {
                 path: term.name.value.display_path(),
                 span: term.name.span,
@@ -966,7 +953,7 @@ fn lower_dim_term(
 
 fn lower_index_expr(
     index: &ast::IndexExpr,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<IndexRef, HirLowerError> {
     match index {
         ast::IndexExpr::Name(path) => lower_index_expr_name(path, ctx),
@@ -982,7 +969,7 @@ fn lower_index_expr(
 
 fn lower_index_expr_name(
     path: &Spanned<NamePath>,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<IndexRef, HirLowerError> {
     if let Some(atom) = path.value.as_bare()
         && let Some(binding) = ctx.generic_scope.get_atom(atom)
@@ -1028,7 +1015,7 @@ fn lower_index_expr_name(
 /// parameter or a generic parameter whose constraint is not `Nat`.
 pub(crate) fn lower_nat_expr(
     nat_expr: &ast::NatExpr,
-    ctx: TypeLoweringContext<'_>,
+    ctx: ModuleScope<'_>,
 ) -> Result<NatExpr, HirLowerError> {
     match nat_expr {
         ast::NatExpr::Literal(value, span) => Ok(NatExpr::Literal(*value, *span)),
@@ -1174,7 +1161,7 @@ mod tests {
         let scope = GenericScope::new();
         let lowered = lower_decl_type(
             first_param_type(&main),
-            TypeLoweringContext::new(&main_id, &resolver, &scope),
+            ModuleScope::new(&main_id, &resolver, &scope),
         )
         .unwrap();
 
@@ -1247,7 +1234,7 @@ mod tests {
             .expect("Series constructor should have payload");
         let value_type = lower_decl_type(
             &payload[0].type_ann,
-            TypeLoweringContext::new(&owner_id, &resolver, &scope),
+            ModuleScope::new(&owner_id, &resolver, &scope),
         )
         .unwrap();
         let DeclType::Value(ValueType {
@@ -1261,7 +1248,7 @@ mod tests {
 
         let samples_type = lower_decl_type(
             &payload[1].type_ann,
-            TypeLoweringContext::new(&owner_id, &resolver, &scope),
+            ModuleScope::new(&owner_id, &resolver, &scope),
         )
         .unwrap();
         let DeclType::Indexed {
@@ -1308,7 +1295,7 @@ mod tests {
         let scope = GenericScope::new();
         lower_decl_type(
             first_param_type(&file),
-            TypeLoweringContext::new(&owner_id, &resolver, &scope),
+            ModuleScope::new(&owner_id, &resolver, &scope),
         )
     }
 
@@ -1423,11 +1410,8 @@ mod tests {
             constraints: Vec::new(),
             span: inner.span,
         };
-        let error = lower_decl_type(
-            &nested,
-            TypeLoweringContext::new(&owner_id, &resolver, &scope),
-        )
-        .unwrap_err();
+        let error =
+            lower_decl_type(&nested, ModuleScope::new(&owner_id, &resolver, &scope)).unwrap_err();
         assert_eq!(error, HirLowerError::NestedIndexedType { span: inner.span });
     }
 

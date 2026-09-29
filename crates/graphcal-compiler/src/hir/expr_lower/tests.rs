@@ -16,7 +16,7 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
 use super::call::lowering_arity;
-use super::context::ExprLoweringContext;
+use super::context::{BindingOverlay, ExprLoweringContext, FrozenBindings};
 use super::error::ExprLowerError;
 use super::lower::{lower_expr, lower_expr_tolerant};
 use crate::hir::expr::LocalEnv;
@@ -26,6 +26,8 @@ use crate::hir::expr::{
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr};
 use crate::hir::expr::{collect_expr_dependencies, visit_expr};
 use crate::hir::lower::GenericScope;
+use crate::hir::lower::ModuleScope;
+use crate::registry::types::RegistryBuilder;
 use crate::syntax::parser::Parser;
 
 fn desugared_source(source: &str) -> ast::File {
@@ -142,7 +144,10 @@ fn strict_lowering_publishes_identity_and_source_coverage_for_every_child() {
     let scope = GenericScope::new();
     let body = lower_expr(
         node_value(&file, "value"),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap();
     let mut count = 0;
@@ -196,7 +201,10 @@ fn lowers_qualified_index_variant_literal_to_canonical_owner() {
 
     let expr = lower_expr(
         node_value(&main, "phase"),
-        ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&main_id, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -229,7 +237,10 @@ fn lowers_qualified_quantity_literal_to_canonical_owner() {
 
     let expr = lower_expr(
         node_value(&main, "amount"),
-        ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&main_id, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -257,7 +268,10 @@ fn lowers_qualified_nullary_constructor_const_ref_to_canonical_owner() {
 
     let expr = lower_expr(
         node_value(&main, "burn"),
-        ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&main_id, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -284,7 +298,10 @@ fn lowers_unambiguous_timezone_datetime_to_resolved_hir() {
 
     let expr = lower_expr(
         node_value(&file, "t"),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -317,7 +334,10 @@ fn lowers_epoch_static_scale_and_civil_literal_to_typed_hir() {
 
     let expr = lower_expr(
         node_value(&file, "t"),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -345,7 +365,10 @@ fn lowers_for_locals_to_lexical_ids() {
 
     let expr = lower_expr(
         node_value(&file, "x"),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -376,7 +399,10 @@ fn lowers_qualified_constructor_match_pattern_and_binding() {
 
     let expr = lower_expr(
         node_value(&main, "dv"),
-        ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&main_id, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap()
     .into_expr_for_test();
@@ -419,7 +445,10 @@ fn collects_canonical_decl_dependencies_from_hir_expr() {
 
     let expr = lower_expr(
         node_value(&main, "x"),
-        ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&main_id, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
     .unwrap();
     let deps = collect_expr_dependencies(&expr);
@@ -449,7 +478,10 @@ fn lower_tolerant_node(source: &str, name: &str) -> Expr<Tolerant> {
     let scope = GenericScope::new();
     lower_expr_tolerant(
         node_value(&file, name),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
 }
 
@@ -461,7 +493,10 @@ fn lower_strict_node(source: &str, name: &str) -> Result<CheckedExpr, ExprLowerE
     let scope = GenericScope::new();
     lower_expr(
         node_value(&file, name),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        ExprLoweringContext::new(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+        ),
     )
 }
 
@@ -613,11 +648,20 @@ fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
         scoped_name,
         ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p")),
     )]);
+    let registry = RegistryBuilder::new().build();
 
     let err = lower_expr(
         node_value(&file, "x"),
-        ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled())
-            .with_decl_bindings(&bindings),
+        ExprLoweringContext::with_overlay(
+            ModuleScope::new(&owner, &resolver, &scope),
+            &TimeZoneRegistry::bundled(),
+            BindingOverlay::Frozen(FrozenBindings {
+                unit_registry: &registry.units,
+                unit_bindings: &HashMap::new(),
+                decl_bindings: &bindings,
+                instance_templates: &HashMap::new(),
+            }),
+        ),
     )
     .unwrap_err();
 
@@ -652,7 +696,10 @@ fn bare_graph_declaration_refs_require_at_sigil() {
 
         let err = lower_expr(
             node_value(&file, "output"),
-            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+            ExprLoweringContext::new(
+                ModuleScope::new(&owner, &resolver, &scope),
+                &TimeZoneRegistry::bundled(),
+            ),
         )
         .unwrap_err();
 

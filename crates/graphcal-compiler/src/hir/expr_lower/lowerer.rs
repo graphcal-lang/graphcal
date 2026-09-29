@@ -58,8 +58,9 @@ impl<'a> ExprLowerer<'a> {
             let builtin_occupied = validate_reserved_name(Namespace::Term, atom).is_err();
             let visible = self
                 .ctx
+                .scope
                 .resolver
-                .visible_span(self.ctx.owner, Namespace::Term, atom)
+                .visible_span(self.ctx.scope.owner, Namespace::Term, atom)
                 .map_err(|source| ExprLowerError::ModuleResolve {
                     source,
                     span: binding.span,
