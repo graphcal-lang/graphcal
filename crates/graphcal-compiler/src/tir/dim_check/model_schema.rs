@@ -157,13 +157,14 @@ impl<'tir> ValidatedModelType<'tir> {
                     .iter()
                     .map(|field| {
                         super::infer::hir::resolved_field_type(
-                            self.identity.resolved(),
-                            constructor,
-                            field.name(),
+                            &super::infer::hir::resolved_type_field_key(
+                                self.identity.resolved(),
+                                constructor,
+                                field.name(),
+                            ),
                             self.definition.type_def,
                             &inferred_args,
                             metadata_dag,
-                            &self.tir.registry,
                             self.definition.type_def.source(),
                             field.type_annotation().span,
                         )

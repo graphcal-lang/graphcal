@@ -50,7 +50,7 @@ pub(super) fn infer_fn_dim(
         });
     }
 
-    let mut bindings: HashMap<DimBinder, Dimension> = HashMap::new();
+    let mut walk = SignatureDimWalk::new(fn_name, sig, registry, src);
 
     for (param, arg) in sig.params().iter().zip(args) {
         let ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
@@ -63,17 +63,7 @@ pub(super) fn infer_fn_dim(
                 DiagnosticAnchor::Source(arg.span),
             ));
         };
-        check_quantity_param(
-            fn_name,
-            sig,
-            &param.name,
-            monomial,
-            &arg.value,
-            &mut bindings,
-            registry,
-            src,
-            arg.span,
-        )?;
+        walk.check_quantity_param(&param.name, monomial, &arg.value, arg.span)?;
     }
 
     let ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(result))) = sig.result()
@@ -86,78 +76,98 @@ pub(super) fn infer_fn_dim(
             DiagnosticAnchor::Source(call_span),
         ));
     };
-    eval_result_monomial(fn_name, result, &bindings, src, call_span)
+    walk.result(result, call_span)
 }
 
-/// Check one quantity argument against its parameter monomial, binding or
-/// comparing dimension variables as required. Shared by built-in and extern
-/// call checking.
-#[expect(clippy::too_many_arguments, reason = "signature-walk context")]
-pub(super) fn check_quantity_param<S: StructResult>(
-    fn_name: &str,
-    sig: &FunctionSignature<S>,
-    param_name: &crate::syntax::function_name::FnParamName,
-    monomial: &DimMonomial,
-    arg_dim: &Dimension,
-    bindings: &mut HashMap<DimBinder, Dimension>,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    arg_span: Span,
-) -> Result<(), GraphcalError> {
-    if let Some(var) = monomial.as_bare_var() {
-        if let Some(bound) = bindings.get(var) {
-            if arg_dim != bound {
-                let bind_param_name = first_binding_param(sig, var).ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!(
-                            "signature for `{fn_name}` lost the parameter that binds dimension variable `{var}`"
-                        ),
-                        src,
-                        DiagnosticAnchor::Source(arg_span),
-                    )
-                })?;
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(bound),
-                    found: registry.dimensions.format_dimension(arg_dim),
-                    help: format!(
-                        "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
-                    ),
-                    src: src.clone(),
-                    span: arg_span.into(),
-                });
-            }
-        } else {
-            bindings.insert(var.clone(), arg_dim.clone());
+/// Dimension-variable bindings accumulated while checking one call against
+/// its signature. Shared by built-in and extern call checking.
+pub(super) struct SignatureDimWalk<'a, S: StructResult = crate::function_signature::StructShape> {
+    fn_name: &'a str,
+    sig: &'a FunctionSignature<S>,
+    bindings: HashMap<DimBinder, Dimension>,
+    registry: &'a FormattingRegistry,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl<'a, S: StructResult> SignatureDimWalk<'a, S> {
+    /// Start walking `sig` with no dimension variables bound.
+    pub(super) fn new(
+        fn_name: &'a str,
+        sig: &'a FunctionSignature<S>,
+        registry: &'a FormattingRegistry,
+        src: &'a NamedSource<Arc<String>>,
+    ) -> Self {
+        Self {
+            fn_name,
+            sig,
+            bindings: HashMap::new(),
+            registry,
+            src,
         }
-        return Ok(());
     }
 
-    let expected = eval_monomial(fn_name, monomial, bindings, src, arg_span)?;
-    if *arg_dim != expected {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: registry.dimensions.format_dimension(&expected),
-            found: registry.dimensions.format_dimension(arg_dim),
-            help: format!(
-                "parameter `{param_name}` requires {}",
-                registry.dimensions.format_dimension(&expected),
-            ),
-            src: src.clone(),
-            span: arg_span.into(),
-        });
-    }
-    Ok(())
-}
+    /// Check one quantity argument against its parameter monomial, binding or
+    /// comparing dimension variables as required.
+    pub(super) fn check_quantity_param(
+        &mut self,
+        param_name: &crate::syntax::function_name::FnParamName,
+        monomial: &DimMonomial,
+        arg_dim: &Dimension,
+        arg_span: Span,
+    ) -> Result<(), GraphcalError> {
+        if let Some(var) = monomial.as_bare_var() {
+            if let Some(bound) = self.bindings.get(var) {
+                if arg_dim != bound {
+                    let bind_param_name = first_binding_param(self.sig, var).ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "signature for `{}` lost the parameter that binds dimension variable `{var}`",
+                                self.fn_name
+                            ),
+                            self.src,
+                            DiagnosticAnchor::Source(arg_span),
+                        )
+                    })?;
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: self.registry.dimensions.format_dimension(bound),
+                        found: self.registry.dimensions.format_dimension(arg_dim),
+                        help: format!(
+                            "parameter `{param_name}` must have the same dimension as `{bind_param_name}`",
+                        ),
+                        src: self.src.clone(),
+                        span: arg_span.into(),
+                    });
+                }
+            } else {
+                self.bindings.insert(var.clone(), arg_dim.clone());
+            }
+            return Ok(());
+        }
 
-/// Compute the result dimension of a signature from the bound variables.
-/// Shared by built-in and extern call checking.
-pub(super) fn eval_result_monomial(
-    fn_name: &str,
-    result: &DimMonomial,
-    bindings: &HashMap<DimBinder, Dimension>,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Dimension, GraphcalError> {
-    eval_monomial(fn_name, result, bindings, src, span)
+        let expected = eval_monomial(self.fn_name, monomial, &self.bindings, self.src, arg_span)?;
+        if *arg_dim != expected {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: self.registry.dimensions.format_dimension(&expected),
+                found: self.registry.dimensions.format_dimension(arg_dim),
+                help: format!(
+                    "parameter `{param_name}` requires {}",
+                    self.registry.dimensions.format_dimension(&expected),
+                ),
+                src: self.src.clone(),
+                span: arg_span.into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Compute the result dimension of the signature from the bound variables.
+    pub(super) fn result(
+        &self,
+        result: &DimMonomial,
+        span: Span,
+    ) -> Result<Dimension, GraphcalError> {
+        eval_monomial(self.fn_name, result, &self.bindings, self.src, span)
+    }
 }
 
 fn eval_monomial(
@@ -232,24 +242,21 @@ mod tests {
             panic!("passthrough takes a quantity");
         };
         let variable = foreign_monomial.as_bare_var().unwrap().clone();
-        let mut bindings = HashMap::from([(
+        let mut walk = SignatureDimWalk::new("f", &signature, &registry, &source);
+        walk.bindings = HashMap::from([(
             variable.clone(),
             Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length)),
         )]);
         let argument_dimension = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
 
-        let error = check_quantity_param(
-            "f",
-            &signature,
-            &FnParamName::expect_valid("value"),
-            &DimMonomial::var(variable),
-            &argument_dimension,
-            &mut bindings,
-            &registry,
-            &source,
-            argument_span,
-        )
-        .unwrap_err();
+        let error = walk
+            .check_quantity_param(
+                &FnParamName::expect_valid("value"),
+                &DimMonomial::var(variable),
+                &argument_dimension,
+                argument_span,
+            )
+            .unwrap_err();
 
         match error {
             GraphcalError::InternalError { message, .. } => assert!(

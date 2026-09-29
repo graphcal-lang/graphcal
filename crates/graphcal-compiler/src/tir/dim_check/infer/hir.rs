@@ -339,67 +339,75 @@ impl ExpressionFactCollector {
     }
 }
 
-/// Lexical inference environment plus operation-scoped control state.
+/// Read-only inputs every inference rule consults while checking one DAG body.
+#[derive(Clone, Copy)]
+pub(in crate::tir::dim_check) struct InferEnv<'a> {
+    pub(in crate::tir::dim_check) declared_types: &'a HashMap<ScopedName, DeclaredType>,
+    pub(in crate::tir::dim_check) dag: &'a crate::tir::typed::DagTIR,
+    pub(in crate::tir::dim_check) tir: &'a crate::tir::typed::TIR,
+    pub(in crate::tir::dim_check) registry: &'a FormattingRegistry,
+    pub(in crate::tir::dim_check) src: &'a NamedSource<Arc<String>>,
+}
+
+impl InferEnv<'_> {
+    /// Infer an expression's type, recording checked facts for every visited node.
+    pub(in crate::tir::dim_check) fn infer_with_expression_facts(
+        self,
+        expr: &hir::Expr,
+        owner: Option<&ResolvedDeclName>,
+        cancellation: &crate::cancellation::CancellationToken,
+        collector: ExpressionFactCollector,
+    ) -> Result<InferredType, GraphcalError> {
+        let control = InferenceControl {
+            cancellation: cancellation.clone(),
+            type_definition_dependencies: TypeDefinitionDependencyTracking::Disabled,
+            expression_facts: Some((collector, expr.id().clone())),
+        };
+        Infer::root(self, owner, &control).infer_hir_type(expr)
+    }
+
+    /// Collect uses that inspect nominal type definitions while inferring a whole body.
+    ///
+    /// Running through the ordinary inference recursion preserves every lexical
+    /// local environment instead of speculatively inferring detached subexpressions.
+    /// Bodies without a definition-observing operation need no inference; this is
+    /// important for context-typed leaves such as plot label strings.
+    pub(in crate::tir::dim_check) fn collect_type_definition_dependencies(
+        self,
+        expr: &hir::Expr,
+        owner: Option<&ResolvedDeclName>,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<Vec<TypeDefinitionDependency>, GraphcalError> {
+        if !contains_type_definition_observation(expr) {
+            return Ok(Vec::new());
+        }
+        let collector = TypeDefinitionDependencyCollector::default();
+        let control = InferenceControl {
+            cancellation: cancellation.clone(),
+            type_definition_dependencies: TypeDefinitionDependencyTracking::Collect(
+                collector.clone(),
+            ),
+            expression_facts: None,
+        };
+        Infer::root(self, owner, &control).infer_hir_type(expr)?;
+        Ok(collector.snapshot())
+    }
+}
+
+/// Operation-scoped policy shared by every recursive inference step.
 ///
-/// Every recursive inference path already carries the local environment. Keeping
-/// cancellation and nominal-use tracking in the same
-/// typed context prevents nested helpers from silently dropping any policy.
-struct HirInferenceControl {
+/// Keeping cancellation, nominal-use tracking, and expression-fact recording in
+/// one value that [`Infer`] always carries prevents nested helpers from
+/// silently dropping any policy.
+struct InferenceControl {
     cancellation: crate::cancellation::CancellationToken,
     type_definition_dependencies: TypeDefinitionDependencyTracking,
     expression_facts: Option<(ExpressionFactCollector, ExprId)>,
 }
 
-struct HirLocalTypes<'a> {
-    bindings: hir::LocalEnv<'a, InferredType>,
-    control: Rc<HirInferenceControl>,
-}
-
-impl HirLocalTypes<'_> {
-    fn collecting_type_definition_dependencies(
-        cancellation: &crate::cancellation::CancellationToken,
-    ) -> (Self, TypeDefinitionDependencyCollector) {
-        let collector = TypeDefinitionDependencyCollector::default();
-        let locals = Self::root_with_tracking(
-            cancellation,
-            TypeDefinitionDependencyTracking::Collect(collector.clone()),
-            None,
-        );
-        (locals, collector)
-    }
-
-    fn root_with_expression_facts(
-        cancellation: &crate::cancellation::CancellationToken,
-        collector: ExpressionFactCollector,
-        root: ExprId,
-    ) -> Self {
-        Self::root_with_tracking(
-            cancellation,
-            TypeDefinitionDependencyTracking::Disabled,
-            Some((collector, root)),
-        )
-    }
-
-    fn root_with_tracking(
-        cancellation: &crate::cancellation::CancellationToken,
-        type_definition_dependencies: TypeDefinitionDependencyTracking,
-        expression_facts: Option<(ExpressionFactCollector, ExprId)>,
-    ) -> Self {
-        Self {
-            bindings: hir::LocalEnv::root(),
-            control: Rc::new(HirInferenceControl {
-                cancellation: cancellation.clone(),
-                type_definition_dependencies,
-                expression_facts,
-            }),
-        }
-    }
-
+impl InferenceControl {
     fn checkpoint(&self) -> Result<(), GraphcalError> {
-        self.control
-            .cancellation
-            .checkpoint()
-            .map_err(GraphcalError::from)
+        self.cancellation.checkpoint().map_err(GraphcalError::from)
     }
 
     fn retain_static_index(
@@ -410,7 +418,7 @@ impl HirLocalTypes<'_> {
         position: u64,
         usage: crate::tir::expression_facts::StaticIndexUse,
     ) {
-        if let Some((collector, _)) = &self.control.expression_facts {
+        if let Some((collector, _)) = &self.expression_facts {
             collector
                 .static_indexes
                 .borrow_mut()
@@ -424,19 +432,54 @@ impl HirLocalTypes<'_> {
                 });
         }
     }
+}
 
-    fn get(&self, id: hir::LocalId) -> Option<&InferredType> {
-        self.bindings.get(id)
+/// One inference position: the DAG environment, the declaration whose body is
+/// being inferred (when override reconciliation applies), the lexical locals in
+/// scope, and the operation-scoped control state.
+#[derive(Clone, Copy)]
+struct Infer<'a> {
+    env: InferEnv<'a>,
+    owner: Option<&'a ResolvedDeclName>,
+    locals: &'a hir::LocalEnv<'a, InferredType>,
+    control: &'a InferenceControl,
+}
+
+/// The empty lexical scope every inference operation starts from.
+const ROOT_LOCALS: &hir::LocalEnv<'static, InferredType> = &hir::LocalEnv::root();
+
+impl<'a> Infer<'a> {
+    const fn root(
+        env: InferEnv<'a>,
+        owner: Option<&'a ResolvedDeclName>,
+        control: &'a InferenceControl,
+    ) -> Self {
+        Self {
+            env,
+            owner,
+            locals: ROOT_LOCALS,
+            control,
+        }
     }
 
-    fn bind(&mut self, id: hir::LocalId, value: InferredType) {
-        self.bindings.bind(id, value);
+    /// Continue inference inside a nested lexical scope.
+    const fn with_locals<'b>(self, locals: &'b hir::LocalEnv<'b, InferredType>) -> Infer<'b>
+    where
+        'a: 'b,
+    {
+        Infer {
+            env: self.env,
+            owner: self.owner,
+            locals,
+            control: self.control,
+        }
     }
 
-    fn child(&self, bindings: Vec<(hir::LocalId, InferredType)>) -> HirLocalTypes<'_> {
-        HirLocalTypes {
-            bindings: self.bindings.child(bindings),
-            control: Rc::clone(&self.control),
+    /// Infer a subexpression outside the owning declaration's override checks.
+    const fn without_owner(self) -> Self {
+        Self {
+            owner: None,
+            ..self
         }
     }
 }
@@ -463,78 +506,80 @@ impl TypeNominalUse<'_> {
     }
 }
 
-fn check_type_override_dependency(
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    owner_decl: Option<&ResolvedDeclName>,
-    actual: &ResolvedStructTypeName,
-    nominal_use: TypeNominalUse<'_>,
-) -> Result<(), GraphcalError> {
-    if let Some((collector, root)) = &local_types.control.expression_facts {
-        collector.observe(
-            root,
-            match nominal_use {
-                TypeNominalUse::Field { field, .. } => NominalObservation::Field {
-                    identity: actual.clone(),
-                    field: field.clone(),
-                },
-                TypeNominalUse::Constructor { constructor, .. } => {
-                    NominalObservation::Constructor {
+impl Infer<'_> {
+    fn check_type_override_dependency(
+        &self,
+        actual: &ResolvedStructTypeName,
+        nominal_use: TypeNominalUse<'_>,
+    ) -> Result<(), GraphcalError> {
+        if let Some((collector, root)) = &self.control.expression_facts {
+            collector.observe(
+                root,
+                match nominal_use {
+                    TypeNominalUse::Field { field, .. } => NominalObservation::Field {
                         identity: actual.clone(),
-                        constructor: constructor.clone(),
+                        field: field.clone(),
+                    },
+                    TypeNominalUse::Constructor { constructor, .. } => {
+                        NominalObservation::Constructor {
+                            identity: actual.clone(),
+                            constructor: constructor.clone(),
+                        }
                     }
-                }
-                TypeNominalUse::TypeArgument => NominalObservation::TypeArgument(actual.clone()),
-            },
-        );
-    }
-    if let Some(span) = nominal_use.definition_span() {
-        local_types
-            .control
-            .type_definition_dependencies
-            .record(actual, span);
-    }
-    let Some(owner_decl) = owner_decl else {
-        return Ok(());
-    };
-    let Some(reconciliations) = dag.semantic.override_reconciliations.get(owner_decl) else {
-        return Ok(());
-    };
-
-    for reconciliation in reconciliations {
-        for target in &reconciliation.targets {
-            let crate::tir::typed::OverrideTarget::Type {
-                overridden,
-                source,
-                replacement,
-            } = target
-            else {
-                continue;
-            };
-            if actual != source && actual != replacement {
-                continue;
-            }
-            let detail = match nominal_use {
-                TypeNominalUse::Field { field, .. } => {
-                    format!("field `{field}` of type `{overridden}`")
-                }
-                TypeNominalUse::Constructor { constructor, .. } => format!(
-                    "constructor `{}` of type `{overridden}`",
-                    constructor.as_str()
-                ),
-                TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
-            };
-            return Err(GraphcalError::IncludeMustReconcileOverride {
-                overridden: overridden.to_string(),
-                overridden_kind: "type".to_string(),
-                orphan_decl: reconciliation.orphan_decl().to_string(),
-                detail,
-                src: reconciliation.src.clone(),
-                span: reconciliation.include_span.into(),
-            });
+                    TypeNominalUse::TypeArgument => {
+                        NominalObservation::TypeArgument(actual.clone())
+                    }
+                },
+            );
         }
+        if let Some(span) = nominal_use.definition_span() {
+            self.control
+                .type_definition_dependencies
+                .record(actual, span);
+        }
+        let Some(owner) = self.owner else {
+            return Ok(());
+        };
+        let Some(reconciliations) = self.env.dag.semantic.override_reconciliations.get(owner)
+        else {
+            return Ok(());
+        };
+
+        for reconciliation in reconciliations {
+            for target in &reconciliation.targets {
+                let crate::tir::typed::OverrideTarget::Type {
+                    overridden,
+                    source,
+                    replacement,
+                } = target
+                else {
+                    continue;
+                };
+                if actual != source && actual != replacement {
+                    continue;
+                }
+                let detail = match nominal_use {
+                    TypeNominalUse::Field { field, .. } => {
+                        format!("field `{field}` of type `{overridden}`")
+                    }
+                    TypeNominalUse::Constructor { constructor, .. } => format!(
+                        "constructor `{}` of type `{overridden}`",
+                        constructor.as_str()
+                    ),
+                    TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
+                };
+                return Err(GraphcalError::IncludeMustReconcileOverride {
+                    overridden: overridden.to_string(),
+                    overridden_kind: "type".to_string(),
+                    orphan_decl: reconciliation.orphan_decl().to_string(),
+                    detail,
+                    src: reconciliation.src.clone(),
+                    span: reconciliation.include_span.into(),
+                });
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -543,169 +588,121 @@ enum IndexNominalUse<'a> {
     TypeArgument,
 }
 
-fn check_index_override_dependency(
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    owner_decl: Option<&ResolvedDeclName>,
-    actual: &IndexTypeRef,
-    nominal_use: IndexNominalUse<'_>,
-) -> Result<(), GraphcalError> {
-    if let Some((collector, root)) = &local_types.control.expression_facts {
-        collector.observe(
-            root,
-            match nominal_use {
-                IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
-                    identity: actual.clone(),
-                    variant: variant.clone(),
+impl Infer<'_> {
+    fn check_index_override_dependency(
+        &self,
+        actual: &IndexTypeRef,
+        nominal_use: IndexNominalUse<'_>,
+    ) -> Result<(), GraphcalError> {
+        if let Some((collector, root)) = &self.control.expression_facts {
+            collector.observe(
+                root,
+                match nominal_use {
+                    IndexNominalUse::Label(variant) => NominalObservation::IndexLabel {
+                        identity: actual.clone(),
+                        variant: variant.clone(),
+                    },
+                    IndexNominalUse::TypeArgument => {
+                        NominalObservation::IndexArgument(actual.clone())
+                    }
                 },
-                IndexNominalUse::TypeArgument => NominalObservation::IndexArgument(actual.clone()),
-            },
-        );
-    }
-    let Some(owner_decl) = owner_decl else {
-        return Ok(());
-    };
-    let Some(reconciliations) = dag.semantic.override_reconciliations.get(owner_decl) else {
-        return Ok(());
-    };
+            );
+        }
+        let Some(owner) = self.owner else {
+            return Ok(());
+        };
+        let Some(reconciliations) = self.env.dag.semantic.override_reconciliations.get(owner)
+        else {
+            return Ok(());
+        };
 
-    for reconciliation in reconciliations {
-        for target in &reconciliation.targets {
-            let crate::tir::typed::OverrideTarget::Index {
-                overridden,
-                source,
-                replacement,
-            } = target
-            else {
-                continue;
-            };
-            let source_matches = actual.declared_resolved() == Some(source);
-            if !source_matches && !replacement.matches_ref(actual) {
-                continue;
-            }
-            let detail = match nominal_use {
-                IndexNominalUse::Label(variant) => {
-                    format!("index label `{overridden}#{variant}`")
+        for reconciliation in reconciliations {
+            for target in &reconciliation.targets {
+                let crate::tir::typed::OverrideTarget::Index {
+                    overridden,
+                    source,
+                    replacement,
+                } = target
+                else {
+                    continue;
+                };
+                let source_matches = actual.declared_resolved() == Some(source);
+                if !source_matches && !replacement.matches_ref(actual) {
+                    continue;
                 }
-                IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
-            };
-            return Err(GraphcalError::IncludeMustReconcileOverride {
-                overridden: overridden.to_string(),
-                overridden_kind: "index".to_string(),
-                orphan_decl: reconciliation.orphan_decl().to_string(),
-                detail,
-                src: reconciliation.src.clone(),
-                span: reconciliation.include_span.into(),
-            });
+                let detail = match nominal_use {
+                    IndexNominalUse::Label(variant) => {
+                        format!("index label `{overridden}#{variant}`")
+                    }
+                    IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
+                };
+                return Err(GraphcalError::IncludeMustReconcileOverride {
+                    overridden: overridden.to_string(),
+                    overridden_kind: "index".to_string(),
+                    orphan_decl: reconciliation.orphan_decl().to_string(),
+                    detail,
+                    src: reconciliation.src.clone(),
+                    span: reconciliation.include_span.into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn check_hir_index_ref_override_dependency(
+        &self,
+        index: &hir::IndexRef,
+    ) -> Result<(), GraphcalError> {
+        let actual = match index {
+            hir::IndexRef::Concrete(index) => IndexTypeRef::from_resolved(index.value.clone()),
+            hir::IndexRef::Finite(cardinality) => {
+                let Ok(form) = hir_nat_to_linear_form(cardinality) else {
+                    return Ok(());
+                };
+                let Ok(index) = IndexTypeRef::from_finite_index_form(form) else {
+                    return Ok(());
+                };
+                index
+            }
+            hir::IndexRef::GenericParam(_) => return Ok(()),
+        };
+        self.check_index_override_dependency(&actual, IndexNominalUse::TypeArgument)
+    }
+
+    fn check_hir_generic_arg_override_dependencies(
+        &self,
+        arg: &hir::GenericArg,
+    ) -> Result<(), GraphcalError> {
+        match arg {
+            hir::GenericArg::Index(index) => self.check_hir_index_ref_override_dependency(index),
+            hir::GenericArg::Type(value_type) => {
+                self.check_hir_type_override_dependencies(value_type)
+            }
+            hir::GenericArg::Dim(_) | hir::GenericArg::Nat(_) => Ok(()),
         }
     }
-    Ok(())
-}
 
-fn check_hir_index_ref_override_dependency(
-    index: &hir::IndexRef,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    owner_decl: Option<&ResolvedDeclName>,
-) -> Result<(), GraphcalError> {
-    let actual = match index {
-        hir::IndexRef::Concrete(index) => IndexTypeRef::from_resolved(index.value.clone()),
-        hir::IndexRef::Finite(cardinality) => {
-            let Ok(form) = hir_nat_to_linear_form(cardinality) else {
-                return Ok(());
-            };
-            let Ok(index) = IndexTypeRef::from_finite_index_form(form) else {
-                return Ok(());
-            };
-            index
+    fn check_hir_type_override_dependencies(
+        &self,
+        value_type: &hir::ValueType,
+    ) -> Result<(), GraphcalError> {
+        match &value_type.kind {
+            hir::ValueTypeKind::Struct(name) => {
+                self.check_type_override_dependency(&name.value, TypeNominalUse::TypeArgument)
+            }
+            hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+                self.check_type_override_dependency(&name.value, TypeNominalUse::TypeArgument)?;
+                generic_args
+                    .iter()
+                    .try_for_each(|arg| self.check_hir_generic_arg_override_dependencies(arg))
+            }
+            hir::ValueTypeKind::Key(index) => self.check_hir_index_ref_override_dependency(index),
+            hir::ValueTypeKind::Builtin(_)
+            | hir::ValueTypeKind::DimExpr(_)
+            | hir::ValueTypeKind::GenericTypeParam(_)
+            | hir::ValueTypeKind::Complex(_) => Ok(()),
         }
-        hir::IndexRef::GenericParam(_) => return Ok(()),
-    };
-    check_index_override_dependency(
-        local_types,
-        dag,
-        owner_decl,
-        &actual,
-        IndexNominalUse::TypeArgument,
-    )
-}
-
-fn check_hir_generic_arg_override_dependencies(
-    arg: &hir::GenericArg,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    owner_decl: Option<&ResolvedDeclName>,
-) -> Result<(), GraphcalError> {
-    match arg {
-        hir::GenericArg::Index(index) => {
-            check_hir_index_ref_override_dependency(index, local_types, dag, owner_decl)
-        }
-        hir::GenericArg::Type(value_type) => {
-            check_hir_type_override_dependencies(value_type, local_types, dag, owner_decl)
-        }
-        hir::GenericArg::Dim(_) | hir::GenericArg::Nat(_) => Ok(()),
     }
-}
-
-fn check_hir_type_override_dependencies(
-    value_type: &hir::ValueType,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    owner_decl: Option<&ResolvedDeclName>,
-) -> Result<(), GraphcalError> {
-    match &value_type.kind {
-        hir::ValueTypeKind::Struct(name) => check_type_override_dependency(
-            local_types,
-            dag,
-            owner_decl,
-            &name.value,
-            TypeNominalUse::TypeArgument,
-        ),
-        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
-            check_type_override_dependency(
-                local_types,
-                dag,
-                owner_decl,
-                &name.value,
-                TypeNominalUse::TypeArgument,
-            )?;
-            generic_args.iter().try_for_each(|arg| {
-                check_hir_generic_arg_override_dependencies(arg, local_types, dag, owner_decl)
-            })
-        }
-        hir::ValueTypeKind::Key(index) => {
-            check_hir_index_ref_override_dependency(index, local_types, dag, owner_decl)
-        }
-        hir::ValueTypeKind::Builtin(_)
-        | hir::ValueTypeKind::DimExpr(_)
-        | hir::ValueTypeKind::GenericTypeParam(_)
-        | hir::ValueTypeKind::Complex(_) => Ok(()),
-    }
-}
-
-pub(in crate::tir::dim_check) fn infer_hir_type_with_expression_facts_and_cancellation(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-    collector: ExpressionFactCollector,
-) -> Result<InferredType, GraphcalError> {
-    let locals =
-        HirLocalTypes::root_with_expression_facts(cancellation, collector, expr.id().clone());
-    infer_hir_type(
-        expr,
-        owner_decl_name,
-        declared_types,
-        &locals,
-        dag,
-        tir,
-        registry,
-        src,
-    )
 }
 
 fn contains_type_definition_observation(expr: &hir::Expr) -> bool {
@@ -728,406 +725,152 @@ fn contains_type_definition_observation(expr: &hir::Expr) -> bool {
     found
 }
 
-/// Collect uses that inspect nominal type definitions while inferring a whole body.
-///
-/// Running through the ordinary inference recursion preserves every lexical
-/// local environment instead of speculatively inferring detached subexpressions.
-/// Bodies without a definition-observing operation need no inference; this is
-/// important for context-typed leaves such as plot label strings.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors syntax inference context"
-)]
-pub(in crate::tir::dim_check) fn collect_hir_type_definition_dependencies_with_cancellation(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<Vec<TypeDefinitionDependency>, GraphcalError> {
-    if !contains_type_definition_observation(expr) {
-        return Ok(Vec::new());
+impl Infer<'_> {
+    fn infer_hir_type(&self, expr: &hir::Expr) -> Result<InferredType, GraphcalError> {
+        self.control.checkpoint()?;
+        // Recursion choke point: inference recurses once per tree level
+        // (unbounded for left-nested operator chains).
+        crate::stack::with_stack_growth(|| self.infer_hir_type_inner(expr))
     }
-    let (locals, collector) = HirLocalTypes::collecting_type_definition_dependencies(cancellation);
-    infer_hir_type(
-        expr,
-        owner_decl_name,
-        declared_types,
-        &locals,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    Ok(collector.snapshot())
-}
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors syntax inference context"
-)]
-fn infer_hir_type(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    local_types.checkpoint()?;
-    // Recursion choke point: inference recurses once per tree level
-    // (unbounded for left-nested operator chains).
-    crate::stack::with_stack_growth(|| {
-        infer_hir_type_inner(
-            expr,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )
-    })
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "mirrors infer_hir_type's signature"
-)]
-fn infer_hir_type_inner(
-    expr: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let inferred = match expr.kind() {
-        hir::ExprKind::Error(no_error) => no_error.absurd(),
-        hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
-        hir::ExprKind::Integer(_) => InferredType::Int,
-        hir::ExprKind::Bool(_) => InferredType::Bool,
-        hir::ExprKind::StringLiteral(_)
-        | hir::ExprKind::OffsetDateTimeLiteral(_)
-        | hir::ExprKind::CivilDateTimeLiteral(_)
-        | hir::ExprKind::ZonedDateTimeLiteral(_)
-        | hir::ExprKind::IanaTimeZoneLiteral(_) => {
-            return Err(GraphcalError::DimensionMismatch {
-                expected: "a numeric or boolean expression".to_string(),
-                found: "contextual string literal".to_string(),
-                help: "string literals can only be used in their declared datetime contexts"
-                    .to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        hir::ExprKind::TypeSystemRef(name) => {
-            return Err(GraphcalError::EvalError {
-                message: name.value.value_position_error(),
-                src: src.clone(),
-                span: name.span.into(),
-            });
-        }
-        hir::ExprKind::QuantityLiteral { unit, .. } => infer_hir_quantity_literal(unit, tir, src)?,
-        hir::ExprKind::VariantLiteral(variant) => {
-            check_index_override_dependency(
-                local_types,
-                dag,
-                owner_decl_name,
-                &IndexTypeRef::from_resolved(variant.variant.index().clone()),
-                IndexNominalUse::Label(variant.variant.variant()),
-            )?;
-            // A qualified label is self-typed: `Maneuver#Departure` is a
-            // constant of type `Key<Maneuver>` — the axis is in the spelling.
-            InferredType::Key(IndexTypeRef::from_resolved(variant.variant.index().clone()))
-        }
-        hir::ExprKind::GraphRef(target) => {
-            infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, tir, src)?
-        }
-        hir::ExprKind::ConstRef(target) => infer_hir_const_ref(
-            target,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::LocalRef(local) => {
-            local_types
-                .get(local.value)
-                .cloned()
-                .ok_or_else(|| GraphcalError::UnknownLocalRef {
-                    name: format!("#{}", local.value.index()),
-                    src: src.clone(),
-                    span: local.span.into(),
-                })?
-        }
-        hir::ExprKind::FnCall { callee, args, .. } => {
-            if owner_decl_name
-                .is_some_and(|owner| dag.semantic.override_reconciliations.contains_key(owner))
-            {
-                // Function inference has several specialized signature paths.
-                // Check each argument once with the declaration identity intact
-                // before those paths infer it for their own type rule.
-                args.iter().try_for_each(|arg| {
-                    infer_hir_type(
-                        arg,
-                        owner_decl_name,
-                        declared_types,
-                        local_types,
-                        dag,
-                        tir,
-                        registry,
-                        src,
-                    )
-                    .map(|_| ())
-                })?;
+    fn infer_hir_type_inner(&self, expr: &hir::Expr) -> Result<InferredType, GraphcalError> {
+        let inferred = match expr.kind() {
+            hir::ExprKind::Error(no_error) => no_error.absurd(),
+            hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
+            hir::ExprKind::Integer(_) => InferredType::Int,
+            hir::ExprKind::Bool(_) => InferredType::Bool,
+            hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::OffsetDateTimeLiteral(_)
+            | hir::ExprKind::CivilDateTimeLiteral(_)
+            | hir::ExprKind::ZonedDateTimeLiteral(_)
+            | hir::ExprKind::IanaTimeZoneLiteral(_) => {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "a numeric or boolean expression".to_string(),
+                    found: "contextual string literal".to_string(),
+                    help: "string literals can only be used in their declared datetime contexts"
+                        .to_string(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
+                });
             }
-            infer_hir_fn_call(
+            hir::ExprKind::TypeSystemRef(name) => {
+                return Err(GraphcalError::EvalError {
+                    message: name.value.value_position_error(),
+                    src: self.env.src.clone(),
+                    span: name.span.into(),
+                });
+            }
+            hir::ExprKind::QuantityLiteral { unit, .. } => {
+                infer_hir_quantity_literal(unit, self.env.tir, self.env.src)?
+            }
+            hir::ExprKind::VariantLiteral(variant) => {
+                self.check_index_override_dependency(
+                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                    IndexNominalUse::Label(variant.variant.variant()),
+                )?;
+                // A qualified label is self-typed: `Maneuver#Departure` is a
+                // constant of type `Key<Maneuver>` — the axis is in the spelling.
+                InferredType::Key(IndexTypeRef::from_resolved(variant.variant.index().clone()))
+            }
+            hir::ExprKind::GraphRef(target) => self
+                .env
+                .infer_resolved_decl_ref_type(&target.value, target.span)?,
+            hir::ExprKind::ConstRef(target) => self.infer_hir_const_ref(target)?,
+            hir::ExprKind::LocalRef(local) => {
+                self.locals.get(local.value).cloned().ok_or_else(|| {
+                    GraphcalError::UnknownLocalRef {
+                        name: format!("#{}", local.value.index()),
+                        src: self.env.src.clone(),
+                        span: local.span.into(),
+                    }
+                })?
+            }
+            hir::ExprKind::FnCall { callee, args, .. } => {
+                if self.owner.is_some_and(|owner| {
+                    self.env
+                        .dag
+                        .semantic
+                        .override_reconciliations
+                        .contains_key(owner)
+                }) {
+                    // Function inference has several specialized signature paths.
+                    // Check each argument once with the declaration identity intact
+                    // before those paths infer it for their own type rule.
+                    args.iter()
+                        .try_for_each(|arg| self.infer_hir_type(arg).map(|_| ()))?;
+                }
+                self.infer_hir_fn_call(callee, args)?
+            }
+            hir::ExprKind::ForComp { bindings, body } => self.infer_hir_for_comp(bindings, body)?,
+            hir::ExprKind::IndexAccess { expr: inner, args } => {
+                self.infer_hir_index_access(expr, inner, args.as_slice())?
+            }
+            hir::ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => self.infer_hir_if(condition, then_branch, else_branch)?,
+            hir::ExprKind::UnaryOp { op, operand } => self.infer_hir_unary(*op, operand)?,
+            hir::ExprKind::BinOp { op, lhs, rhs } => {
+                self.infer_hir_binop(expr.span, *op, lhs, rhs)?
+            }
+            hir::ExprKind::Convert {
+                expr: inner,
+                target,
+            } => self.infer_hir_convert(inner, target)?,
+            hir::ExprKind::DisplayTimezone {
+                expr: inner,
+                timezone,
+            } => self.infer_hir_display_timezone(inner, timezone)?,
+            hir::ExprKind::FieldAccess { expr: inner, field } => {
+                self.infer_hir_field_access(inner, field)?
+            }
+            hir::ExprKind::ConstructorCall {
                 callee,
+                generic_args,
+                fields,
+            } => self.infer_hir_constructor_call(expr, callee, generic_args, fields)?,
+            hir::ExprKind::MapLiteral { entries } => self.infer_hir_map_literal(expr, entries)?,
+            hir::ExprKind::Scan {
+                source,
+                init,
+                acc,
+                val,
+                body,
+            } => self.infer_hir_scan(source, init, acc, val, body)?,
+            hir::ExprKind::Unfold {
+                recurrence,
+                init,
+                body,
+            } => self.infer_hir_unfold(
+                &recurrence.axis,
+                init,
+                &recurrence.previous_state,
+                &recurrence.previous_index,
+                &recurrence.current_index,
+                body,
+            )?,
+            hir::ExprKind::KeyForm {
+                kind,
+                axis,
+                axis_span,
+                arg,
+            } => self.infer_hir_key_form(expr, *kind, axis, *axis_span, arg)?,
+            hir::ExprKind::Match { scrutinee, arms } => {
+                self.infer_hir_match(expr, scrutinee, arms)?
+            }
+            hir::ExprKind::DagCall {
+                target,
                 args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                src,
-            )?
+                static_bindings,
+                output,
+            } => self.infer_hir_dag_call(expr, target, args, static_bindings, output)?,
+        };
+        if let Some((collector, _)) = &self.control.expression_facts {
+            collector.record(expr, &inferred, self.env.dag, self.env.tir, self.env.src)?;
         }
-        hir::ExprKind::ForComp { bindings, body } => infer_hir_for_comp(
-            bindings,
-            body,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::IndexAccess { expr: inner, args } => infer_hir_index_access(
-            expr,
-            inner,
-            args.as_slice(),
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => infer_hir_if(
-            condition,
-            then_branch,
-            else_branch,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::UnaryOp { op, operand } => infer_hir_unary(
-            *op,
-            operand,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::BinOp { op, lhs, rhs } => infer_hir_binop(
-            expr.span,
-            *op,
-            lhs,
-            rhs,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::Convert {
-            expr: inner,
-            target,
-        } => infer_hir_convert(
-            inner,
-            target,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::DisplayTimezone {
-            expr: inner,
-            timezone,
-        } => infer_hir_display_timezone(
-            inner,
-            timezone,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::FieldAccess { expr: inner, field } => infer_hir_field_access(
-            inner,
-            field,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            fields,
-        } => infer_hir_constructor_call(
-            expr,
-            callee,
-            generic_args,
-            fields,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::MapLiteral { entries } => infer_hir_map_literal(
-            expr,
-            entries,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::Scan {
-            source,
-            init,
-            acc,
-            val,
-            body,
-        } => infer_hir_scan(
-            source,
-            init,
-            acc,
-            val,
-            body,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::Unfold {
-            recurrence,
-            init,
-            body,
-        } => infer_hir_unfold(
-            &recurrence.axis,
-            init,
-            &recurrence.previous_state,
-            &recurrence.previous_index,
-            &recurrence.current_index,
-            body,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::KeyForm {
-            kind,
-            axis,
-            axis_span,
-            arg,
-        } => infer_hir_key_form(
-            expr,
-            *kind,
-            axis,
-            *axis_span,
-            arg,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::Match { scrutinee, arms } => infer_hir_match(
-            expr,
-            scrutinee,
-            arms,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-        hir::ExprKind::DagCall {
-            target,
-            args,
-            static_bindings,
-            output,
-        } => infer_hir_dag_call(
-            expr,
-            target,
-            args,
-            static_bindings,
-            output,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?,
-    };
-    if let Some((collector, _)) = &local_types.control.expression_facts {
-        collector.record(expr, &inferred, dag, tir, src)?;
+        Ok(inferred)
     }
-    Ok(inferred)
 }
 
 fn infer_hir_quantity_literal(
@@ -1139,53 +882,56 @@ fn infer_hir_quantity_literal(
     Ok(InferredType::Quantity(dim))
 }
 
-fn infer_resolved_decl_ref_type(
-    target: &ResolvedDeclName,
-    span: Span,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    // HIR references preserve their definition-time owner. A concrete semantic
-    // instance is the authoritative boundary that maps those references to the
-    // corresponding runtime declaration before any type lookup.
-    let runtime_target = dag.runtime_decl_identity(target);
-    let local_name = ScopedName::local(runtime_target.to_unowned_def_name());
+impl InferEnv<'_> {
+    fn infer_resolved_decl_ref_type(
+        &self,
+        target: &ResolvedDeclName,
+        span: Span,
+    ) -> Result<InferredType, GraphcalError> {
+        // HIR references preserve their definition-time owner. A concrete semantic
+        // instance is the authoritative boundary that maps those references to the
+        // corresponding runtime declaration before any type lookup.
+        let runtime_target = self.dag.runtime_decl_identity(target);
+        let local_name = ScopedName::local(runtime_target.to_unowned_def_name());
 
-    if runtime_target.owner() == &dag.dag_id
-        && let Some(inferred) = infer_bound_decl_type(&local_name, declared_types, dag, src)?
-    {
-        return Ok(inferred);
-    }
-
-    for name in dag
-        .semantic
-        .decl_bindings
-        .iter()
-        .filter_map(|(name, resolved)| (resolved == &runtime_target).then_some(name))
-    {
-        if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
+        if runtime_target.owner() == &self.dag.dag_id
+            && let Some(inferred) =
+                infer_bound_decl_type(&local_name, self.declared_types, self.dag, self.src)?
+        {
             return Ok(inferred);
         }
-    }
 
-    if let Some(target_dag) = tir.dag_containing_declaration(&runtime_target)
-        && let Some(inferred) = infer_bound_decl_type(
-            &local_name,
-            &target_dag.build_declared_types(src)?,
-            target_dag,
-            src,
-        )?
-    {
-        return Ok(inferred);
-    }
+        for name in self
+            .dag
+            .semantic
+            .decl_bindings
+            .iter()
+            .filter_map(|(name, resolved)| (resolved == &runtime_target).then_some(name))
+        {
+            if let Some(inferred) =
+                infer_bound_decl_type(name, self.declared_types, self.dag, self.src)?
+            {
+                return Ok(inferred);
+            }
+        }
 
-    Err(GraphcalError::UnknownGraphRef {
-        name: local_name,
-        src: src.clone(),
-        span: span.into(),
-    })
+        if let Some(target_dag) = self.tir.dag_containing_declaration(&runtime_target)
+            && let Some(inferred) = infer_bound_decl_type(
+                &local_name,
+                &target_dag.build_declared_types(self.src)?,
+                target_dag,
+                self.src,
+            )?
+        {
+            return Ok(inferred);
+        }
+
+        Err(GraphcalError::UnknownGraphRef {
+            name: local_name,
+            src: self.src.clone(),
+            span: span.into(),
+        })
+    }
 }
 
 fn infer_bound_decl_type(
@@ -1212,23 +958,18 @@ fn infer_bound_decl_type(
     Ok(declared_types.get(name).map(InferredType::from))
 }
 
-fn infer_hir_const_ref(
-    target: &crate::syntax::span::Spanned<ConstRef>,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    match &target.value {
-        ConstRef::Decl(resolved) => {
-            infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, tir, src)
-        }
-        ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
-        ConstRef::Constructor(constructor) => {
-            let target_def = dag
+impl Infer<'_> {
+    fn infer_hir_const_ref(
+        &self,
+        target: &crate::syntax::span::Spanned<ConstRef>,
+    ) -> Result<InferredType, GraphcalError> {
+        match &target.value {
+            ConstRef::Decl(resolved) => {
+                self.env.infer_resolved_decl_ref_type(resolved, target.span)
+            }
+            ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
+            ConstRef::Constructor(constructor) => {
+                let target_def = self.env.dag
                 .semantic
                 .constructor_refs
                 .constructor_defs
@@ -1237,66 +978,43 @@ fn infer_hir_const_ref(
                     message: format!(
                         "semantic constructor metadata missing for nullary constructor `{constructor}`"
                     ),
-                    src: src.clone(),
+                    src: self.env.src.clone(),
                     span: target.span.into(),
                 })?;
-            check_type_override_dependency(
-                local_types,
-                dag,
-                owner_decl_name,
-                &target_def.owning_type,
-                TypeNominalUse::Constructor {
-                    constructor,
-                    span: target.span,
-                },
-            )?;
-            if !target_def.variant.fields().is_empty() {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "constructor `{}` requires field arguments",
-                        target_def.variant.name()
-                    ),
-                    src: src.clone(),
-                    span: target.span.into(),
-                });
+                self.check_type_override_dependency(
+                    &target_def.owning_type,
+                    TypeNominalUse::Constructor {
+                        constructor,
+                        span: target.span,
+                    },
+                )?;
+                if !target_def.variant.fields().is_empty() {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "constructor `{}` requires field arguments",
+                            target_def.variant.name()
+                        ),
+                        src: self.env.src.clone(),
+                        span: target.span.into(),
+                    });
+                }
+                let type_args = self.env.resolve_applied_generic_args(
+                    &target_def.owning_type,
+                    &target_def.type_def,
+                    &[],
+                    target.span,
+                )?;
+                Ok(InferredType::Struct(
+                    StructTypeRef::from_resolved(target_def.owning_type.clone()),
+                    type_args,
+                ))
             }
-            let type_args = resolve_applied_generic_args(
-                &target_def.owning_type,
-                &target_def.type_def,
-                &[],
-                dag,
-                tir,
-                registry,
-                src,
-                target.span,
-            )?;
-            Ok(InferredType::Struct(
-                StructTypeRef::from_resolved(target_def.owning_type.clone()),
-                type_args,
-            ))
         }
     }
-}
 
-fn infer_arg(
-    arg: &hir::Expr,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    infer_hir_type(
-        arg,
-        None,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )
+    fn infer_arg(&self, arg: &hir::Expr) -> Result<InferredType, GraphcalError> {
+        self.without_owner().infer_hir_type(arg)
+    }
 }
 
 /// Check a built-in call's argument count against its static entry.
@@ -1328,37 +1046,32 @@ fn check_builtin_arity(
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_linear_algebra_call(
-    function: crate::builtin::LinearAlgebraFn,
-    callee_span: Span,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let argument_types = args
-        .iter()
-        .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
-        .collect::<Result<Vec<_>, _>>()?;
+impl Infer<'_> {
+    fn infer_hir_linear_algebra_call(
+        &self,
+        function: crate::builtin::LinearAlgebraFn,
+        callee_span: Span,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        let argument_types = args
+            .iter()
+            .map(|arg| self.infer_arg(arg))
+            .collect::<Result<Vec<_>, _>>()?;
 
-    infer_linear_algebra_type(function, &argument_types, |index| {
-        super::concrete_cardinality_for_inferred(index, tir)
+        infer_linear_algebra_type(function, &argument_types, |index| {
+        super::concrete_cardinality_for_inferred(index, self.env.tir)
     })
     .map_err(|error| match error {
         LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
             GraphcalError::DimensionMismatch {
                 expected: format!("rank-{rank} indexed quantity"),
-                found: format_inferred_type(&argument_types[argument], registry),
+                found: format_inferred_type(&argument_types[argument], self.env.registry),
                 help: format!(
                     "{}() requires argument {} to be a rank-{rank} indexed quantity",
                     function.as_str(),
                     argument.saturating_add(1)
                 ),
-                src: src.clone(),
+                src: self.env.src.clone(),
                 span: args[argument].span.into(),
             }
         }
@@ -1372,7 +1085,7 @@ fn infer_hir_linear_algebra_call(
             found: found.to_string(),
             help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
                 .to_string(),
-            src: src.clone(),
+            src: self.env.src.clone(),
             span: args[argument].span.into(),
         },
         LinearAlgebraTypeError::CardinalityMismatch {
@@ -1387,7 +1100,7 @@ fn infer_hir_linear_algebra_call(
                 |cardinality| format!("an axis with {cardinality} entries"),
             ),
             help: format!("{}() is defined only for three-component vectors", function.as_str()),
-            src: src.clone(),
+            src: self.env.src.clone(),
             span: args[argument].span.into(),
         },
         LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
@@ -1399,536 +1112,410 @@ fn infer_hir_linear_algebra_call(
                     "{}() needs a concrete matrix size because its result dimension depends on that size",
                     function.as_str()
                 ),
-                src: src.clone(),
+                src: self.env.src.clone(),
                 span: args[argument].span.into(),
             }
         }
         LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
-            src: src.clone(),
+            src: self.env.src.clone(),
             span: callee_span.into(),
         },
     })
-}
+    }
 
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_fn_call(
-    callee: &crate::syntax::span::Spanned<FunctionRef>,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let (builtin, epoch_scale) = match &callee.value {
-        FunctionRef::Builtin(builtin) => (builtin.function(), None),
-        FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
-        FunctionRef::External(ext) => {
-            return infer_extern_fn_call(
-                ext,
-                callee.span,
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                src,
-            );
-        }
-    };
-    // The single arity check for every built-in family, driven by its static
-    // entry and run before any argument is inferred. Family rules below may
-    // rely on the accepted argument count.
-    check_builtin_arity(builtin, args.len(), callee.span, src)?;
-    match builtin {
-        BuiltinFn::Complex(function) => infer_hir_complex_call(
-            function,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        ),
-        BuiltinFn::Aggregation(kind) => {
-            let arg_type = infer_arg(
-                &args[0],
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                src,
-            )?;
-            let InferredType::Indexed { element, index } = &arg_type else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "indexed collection".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: format!("{}() requires an indexed value", builtin.as_str()),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            };
-            let rank = arg_type.indexed_rank();
-            if rank > 1 {
-                return Err(GraphcalError::MultiAxisAggregation {
-                    function: kind,
-                    rank,
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
+    fn infer_hir_fn_call(
+        &self,
+        callee: &crate::syntax::span::Spanned<FunctionRef>,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        let (builtin, epoch_scale) = match &callee.value {
+            FunctionRef::Builtin(builtin) => (builtin.function(), None),
+            FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
+            FunctionRef::External(ext) => {
+                return self.infer_extern_fn_call(ext, callee.span, args);
             }
-            if kind == AggregationFn::Value(ValueAggregation::Count) {
-                return Ok(InferredType::Int);
-            }
-            if matches!(kind, AggregationFn::Key(_)) {
-                // The extremum's identity: a key of the reduced axis. The
-                // element-type requirement below still applies, so check it
-                // before returning.
-                if element.quantity_dimension().is_none() {
+        };
+        // The single arity check for every built-in family, driven by its static
+        // entry and run before any argument is inferred. Family rules below may
+        // rely on the accepted argument count.
+        check_builtin_arity(builtin, args.len(), callee.span, self.env.src)?;
+        match builtin {
+            BuiltinFn::Complex(function) => self.infer_hir_complex_call(function, args),
+            BuiltinFn::Aggregation(kind) => {
+                let arg_type = self.infer_arg(&args[0])?;
+                let InferredType::Indexed { element, index } = &arg_type else {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "indexed collection".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: format!("{}() requires an indexed value", builtin.as_str()),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                let rank = arg_type.indexed_rank();
+                if rank > 1 {
+                    return Err(GraphcalError::MultiAxisAggregation {
+                        function: kind,
+                        rank,
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                if kind == AggregationFn::Value(ValueAggregation::Count) {
+                    return Ok(InferredType::Int);
+                }
+                if matches!(kind, AggregationFn::Key(_)) {
+                    // The extremum's identity: a key of the reduced axis. The
+                    // element-type requirement below still applies, so check it
+                    // before returning.
+                    if element.quantity_dimension().is_none() {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "indexed quantity collection".to_string(),
+                            found: format_inferred_type(element, self.env.registry),
+                            help: format!(
+                                "{}() requires every indexed element to be quantity",
+                                builtin.as_str()
+                            ),
+                            src: self.env.src.clone(),
+                            span: args[0].span.into(),
+                        });
+                    }
+                    return Ok(InferredType::Key(index.clone()));
+                }
+                let Some(dimension) = element.quantity_dimension().cloned() else {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "indexed quantity collection".to_string(),
-                        found: format_inferred_type(element, registry),
+                        found: format_inferred_type(element, self.env.registry),
                         help: format!(
                             "{}() requires every indexed element to be quantity",
                             builtin.as_str()
                         ),
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: args[0].span.into(),
                     });
+                };
+                if kind != AggregationFn::Value(ValueAggregation::Product)
+                    || dimension.is_dimensionless()
+                {
+                    return Ok(InferredType::Quantity(dimension));
                 }
-                return Ok(InferredType::Key(index.clone()));
-            }
-            let Some(dimension) = element.quantity_dimension().cloned() else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "indexed quantity collection".to_string(),
-                    found: format_inferred_type(element, registry),
-                    help: format!(
-                        "{}() requires every indexed element to be quantity",
-                        builtin.as_str()
-                    ),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            };
-            if kind != AggregationFn::Value(ValueAggregation::Product)
-                || dimension.is_dimensionless()
-            {
-                return Ok(InferredType::Quantity(dimension));
-            }
-            let cardinality =
-                super::concrete_cardinality_for_inferred(index, tir).ok_or_else(|| {
-                    GraphcalError::AggregationCardinalityUnknown {
+                let cardinality = super::concrete_cardinality_for_inferred(index, self.env.tir)
+                    .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
                         function: kind,
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    }
-                })?;
-            i32::try_from(cardinality)
-                .ok()
-                .and_then(|exponent| Rational::integer(exponent).ok())
-                .and_then(|exponent| dimension.pow(exponent).ok())
-                .map(InferredType::Quantity)
-                .ok_or_else(|| GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                })
-        }
-        BuiltinFn::LinearAlgebra(function) => infer_hir_linear_algebra_call(
-            function,
-            callee.span,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        ),
-        BuiltinFn::Conversion(kind) => infer_hir_type_conversion(
-            kind,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        ),
-        BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            infer_hir_timescale_conversion(
-                builtin,
-                conversion.target(),
-                args,
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                src,
-            )
-        }
-        BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => infer_hir_datetime_constructor(
-            kind,
-            epoch_scale,
-            callee.span,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        ),
-        BuiltinFn::Datetime(DatetimeFn::Field(_)) => infer_hir_datetime_unary(
-            builtin,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-            InferredType::Int,
-        ),
-        BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
-            let arg_type = infer_arg(
-                &args[0],
-                declared_types,
-                local_types,
-                dag,
-                tir,
-                registry,
-                src,
-            )?;
-            match &arg_type {
-                t if t
-                    .quantity_dimension()
-                    .is_some_and(Dimension::is_dimensionless) => {}
-                InferredType::Int => {}
-                _ => {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Dimensionless or Int".to_string(),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: format!(
-                            "{}() requires a dimensionless numeric argument",
-                            builtin.as_str()
-                        ),
-                        src: src.clone(),
+                    })?;
+                i32::try_from(cardinality)
+                    .ok()
+                    .and_then(|exponent| Rational::integer(exponent).ok())
+                    .and_then(|exponent| dimension.pow(exponent).ok())
+                    .map(InferredType::Quantity)
+                    .ok_or_else(|| GraphcalError::DimensionOverflow {
+                        src: self.env.src.clone(),
                         span: args[0].span.into(),
-                    });
-                }
+                    })
             }
-            Ok(InferredType::Datetime(
-                crate::registry::time_scale::TimeScale::UTC,
-            ))
-        }
-        BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => infer_hir_datetime_unary(
-            builtin,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-            InferredType::Quantity(Dimension::dimensionless()),
-        ),
-        BuiltinFn::Scalar(function) => infer_hir_builtin_fn(
-            function,
-            callee.span,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        ),
-    }
-}
-
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_complex_call(
-    function: crate::builtin::ComplexFn,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    use super::complex::ComplexTypeError;
-
-    let inferred = args
-        .iter()
-        .map(|arg| infer_arg(arg, declared_types, local_types, dag, tir, registry, src))
-        .collect::<Result<Vec<_>, _>>()?;
-    super::complex::infer(function, &inferred).map_err(|error| match error {
-        ComplexTypeError::ExpectedQuantity { argument } => GraphcalError::DimensionMismatch {
-            expected: "quantity type".to_string(),
-            found: format_inferred_type(&inferred[argument], registry),
-            help: format!(
-                "{}() requires a quantity in argument {}",
-                function.as_str(),
-                argument.saturating_add(1)
-            ),
-            src: src.clone(),
-            span: args[argument].span.into(),
-        },
-        ComplexTypeError::ExpectedComplex { argument } => GraphcalError::DimensionMismatch {
-            expected: "Complex<D>".to_string(),
-            found: format_inferred_type(&inferred[argument], registry),
-            help: format!("{}() requires a complex quantity", function.as_str()),
-            src: src.clone(),
-            span: args[argument].span.into(),
-        },
-        ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
-            GraphcalError::DimensionMismatch {
-                expected: "a real or complex quantity".to_string(),
-                found: format_inferred_type(&inferred[argument], registry),
-                help: format!(
-                    "{}() requires a real or complex quantity",
-                    function.as_str()
-                ),
-                src: src.clone(),
-                span: args[argument].span.into(),
+            BuiltinFn::LinearAlgebra(function) => {
+                self.infer_hir_linear_algebra_call(function, callee.span, args)
             }
-        }
-        ComplexTypeError::DimensionMismatch { left, right } => GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&inferred[left], registry),
-            found: format_inferred_type(&inferred[right], registry),
-            help: "real and imaginary components must have the same dimension".to_string(),
-            src: src.clone(),
-            span: args[right].span.into(),
-        },
-        ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
-            expected: "Angle".to_string(),
-            found: format_inferred_type(&inferred[argument], registry),
-            help: "polar() phase must be an Angle quantity".to_string(),
-            src: src.clone(),
-            span: args[argument].span.into(),
-        },
-        ComplexTypeError::ExpectedDimensionless { argument } => GraphcalError::DimensionMismatch {
-            expected: "Dimensionless or Complex<Dimensionless>".to_string(),
-            found: format_inferred_type(&inferred[argument], registry),
-            help: "exp() requires a dimensionless real or complex argument".to_string(),
-            src: src.clone(),
-            span: args[argument].span.into(),
-        },
-    })
-}
-
-/// Check an extern (plugin) function call against its declared
-/// [`crate::function_signature::FunctionSignature`], using the same
-/// bind/check dimension-variable walk as built-in signatures.
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_extern_fn_call(
-    ext: &hir::ExternFnRef,
-    callee_span: Span,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
-
-    use super::super::builtins::{check_quantity_param, eval_result_monomial};
-
-    let Some(function) = tir.extern_functions.get(&ext.key()) else {
-        return Err(GraphcalError::UnknownExternFunction {
-            alias: ext.alias.clone(),
-            name: ext.name.clone(),
-            src: src.clone(),
-            span: callee_span.into(),
-        });
-    };
-    let sig = &function.signature;
-    if args.len() != sig.arity() {
-        return Err(GraphcalError::WrongArity {
-            name: ext.name.clone(),
-            expected: sig.arity(),
-            got: args.len(),
-            src: src.clone(),
-            span: callee_span.into(),
-        });
-    }
-
-    // Boundary rendering for diagnostics only.
-    let display_name = ext.to_string();
-    let mut bindings: HashMap<crate::function_signature::DimBinder, Dimension> = HashMap::new();
-    let mut index_bindings: HashMap<crate::function_signature::IndexBinder, IndexTypeRef> =
-        HashMap::new();
-    for (param, arg) in sig.params().iter().zip(args) {
-        let arg_type = infer_arg(arg, declared_types, local_types, dag, tir, registry, src)?;
-        match &param.kind {
-            ParamKind::Scalar(ScalarValueKind::Bool) => {
-                if !matches!(arg_type, InferredType::Bool) {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Bool".to_string(),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: format!("parameter `{}` requires Bool", param.name),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    });
-                }
+            BuiltinFn::Conversion(kind) => self.infer_hir_type_conversion(kind, args),
+            BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
+                self.infer_hir_timescale_conversion(builtin, conversion.target(), args)
             }
-            ParamKind::Scalar(ScalarValueKind::Int) => {
-                if arg_type != InferredType::Int {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "Int".to_string(),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: format!("parameter `{}` requires Int", param.name),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    });
-                }
+            BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => {
+                self.infer_hir_datetime_constructor(kind, epoch_scale, callee.span, args)
             }
-            ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
-                let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
-                check_quantity_param(
-                    &display_name,
-                    sig,
-                    &param.name,
-                    monomial,
-                    &arg_dim,
-                    &mut bindings,
-                    registry,
-                    src,
-                    arg.span,
-                )?;
+            BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
+                self.infer_hir_datetime_unary(builtin, args, InferredType::Int)
             }
-            ParamKind::Indexed { element, indexes } => {
-                let mut current = &arg_type;
-                let mut arg_indexes = Vec::with_capacity(indexes.len());
-                for _ in indexes {
-                    let InferredType::Indexed {
-                        element,
-                        index: arg_index,
-                    } = current
-                    else {
+            BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
+                let arg_type = self.infer_arg(&args[0])?;
+                match &arg_type {
+                    t if t
+                        .quantity_dimension()
+                        .is_some_and(Dimension::is_dimensionless) => {}
+                    InferredType::Int => {}
+                    _ => {
                         return Err(GraphcalError::DimensionMismatch {
-                            expected: format!("a rank-{} indexed collection", indexes.len()),
-                            found: format_inferred_type(&arg_type, registry),
+                            expected: "Dimensionless or Int".to_string(),
+                            found: format_inferred_type(&arg_type, self.env.registry),
                             help: format!(
-                                "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
-                                param.name
+                                "{}() requires a dimensionless numeric argument",
+                                builtin.as_str()
                             ),
-                            src: src.clone(),
+                            src: self.env.src.clone(),
+                            span: args[0].span.into(),
+                        });
+                    }
+                }
+                Ok(InferredType::Datetime(
+                    crate::registry::time_scale::TimeScale::UTC,
+                ))
+            }
+            BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
+                builtin,
+                args,
+                InferredType::Quantity(Dimension::dimensionless()),
+            ),
+            BuiltinFn::Scalar(function) => self.infer_hir_builtin_fn(function, callee.span, args),
+        }
+    }
+
+    fn infer_hir_complex_call(
+        &self,
+        function: crate::builtin::ComplexFn,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        use super::complex::ComplexTypeError;
+
+        let inferred = args
+            .iter()
+            .map(|arg| self.infer_arg(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        super::complex::infer(function, &inferred).map_err(|error| match error {
+            ComplexTypeError::ExpectedQuantity { argument } => GraphcalError::DimensionMismatch {
+                expected: "quantity type".to_string(),
+                found: format_inferred_type(&inferred[argument], self.env.registry),
+                help: format!(
+                    "{}() requires a quantity in argument {}",
+                    function.as_str(),
+                    argument.saturating_add(1)
+                ),
+                src: self.env.src.clone(),
+                span: args[argument].span.into(),
+            },
+            ComplexTypeError::ExpectedComplex { argument } => GraphcalError::DimensionMismatch {
+                expected: "Complex<D>".to_string(),
+                found: format_inferred_type(&inferred[argument], self.env.registry),
+                help: format!("{}() requires a complex quantity", function.as_str()),
+                src: self.env.src.clone(),
+                span: args[argument].span.into(),
+            },
+            ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
+                GraphcalError::DimensionMismatch {
+                    expected: "a real or complex quantity".to_string(),
+                    found: format_inferred_type(&inferred[argument], self.env.registry),
+                    help: format!(
+                        "{}() requires a real or complex quantity",
+                        function.as_str()
+                    ),
+                    src: self.env.src.clone(),
+                    span: args[argument].span.into(),
+                }
+            }
+            ComplexTypeError::DimensionMismatch { left, right } => {
+                GraphcalError::DimensionMismatch {
+                    expected: format_inferred_type(&inferred[left], self.env.registry),
+                    found: format_inferred_type(&inferred[right], self.env.registry),
+                    help: "real and imaginary components must have the same dimension".to_string(),
+                    src: self.env.src.clone(),
+                    span: args[right].span.into(),
+                }
+            }
+            ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
+                expected: "Angle".to_string(),
+                found: format_inferred_type(&inferred[argument], self.env.registry),
+                help: "polar() phase must be an Angle quantity".to_string(),
+                src: self.env.src.clone(),
+                span: args[argument].span.into(),
+            },
+            ComplexTypeError::ExpectedDimensionless { argument } => {
+                GraphcalError::DimensionMismatch {
+                    expected: "Dimensionless or Complex<Dimensionless>".to_string(),
+                    found: format_inferred_type(&inferred[argument], self.env.registry),
+                    help: "exp() requires a dimensionless real or complex argument".to_string(),
+                    src: self.env.src.clone(),
+                    span: args[argument].span.into(),
+                }
+            }
+        })
+    }
+
+    /// Check an extern (plugin) function call against its declared
+    /// [`crate::function_signature::FunctionSignature`], using the same
+    /// bind/check dimension-variable walk as built-in signatures.
+    fn infer_extern_fn_call(
+        &self,
+        ext: &hir::ExternFnRef,
+        callee_span: Span,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        use crate::function_signature::{ParamKind, ResultKind, ScalarValueKind};
+
+        use super::super::builtins::SignatureDimWalk;
+
+        let Some(function) = self.env.tir.extern_functions.get(&ext.key()) else {
+            return Err(GraphcalError::UnknownExternFunction {
+                alias: ext.alias.clone(),
+                name: ext.name.clone(),
+                src: self.env.src.clone(),
+                span: callee_span.into(),
+            });
+        };
+        let sig = &function.signature;
+        if args.len() != sig.arity() {
+            return Err(GraphcalError::WrongArity {
+                name: ext.name.clone(),
+                expected: sig.arity(),
+                got: args.len(),
+                src: self.env.src.clone(),
+                span: callee_span.into(),
+            });
+        }
+
+        // Boundary rendering for diagnostics only.
+        let display_name = ext.to_string();
+        let mut dim_walk =
+            SignatureDimWalk::new(&display_name, sig, self.env.registry, self.env.src);
+        let mut index_bindings: HashMap<crate::function_signature::IndexBinder, IndexTypeRef> =
+            HashMap::new();
+        for (param, arg) in sig.params().iter().zip(args) {
+            let arg_type = self.infer_arg(arg)?;
+            match &param.kind {
+                ParamKind::Scalar(ScalarValueKind::Bool) => {
+                    if !matches!(arg_type, InferredType::Bool) {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Bool".to_string(),
+                            found: format_inferred_type(&arg_type, self.env.registry),
+                            help: format!("parameter `{}` requires Bool", param.name),
+                            src: self.env.src.clone(),
                             span: arg.span.into(),
                         });
-                    };
-                    arg_indexes.push(arg_index);
-                    current = element;
+                    }
                 }
-                match element {
-                    ScalarValueKind::Quantity(monomial) => {
-                        let Some(arg_dim) = current.quantity_dimension().cloned() else {
+                ParamKind::Scalar(ScalarValueKind::Int) => {
+                    if arg_type != InferredType::Int {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: "Int".to_string(),
+                            found: format_inferred_type(&arg_type, self.env.registry),
+                            help: format!("parameter `{}` requires Int", param.name),
+                            src: self.env.src.clone(),
+                            span: arg.span.into(),
+                        });
+                    }
+                }
+                ParamKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
+                    let arg_dim =
+                        expect_quantity(&arg_type, self.env.registry, self.env.src, arg.span)?;
+                    dim_walk.check_quantity_param(&param.name, monomial, &arg_dim, arg.span)?;
+                }
+                ParamKind::Indexed { element, indexes } => {
+                    let mut current = &arg_type;
+                    let mut arg_indexes = Vec::with_capacity(indexes.len());
+                    for _ in indexes {
+                        let InferredType::Indexed {
+                            element,
+                            index: arg_index,
+                        } = current
+                        else {
                             return Err(GraphcalError::DimensionMismatch {
-                                expected: format!(
-                                    "a rank-{} indexed quantity collection",
-                                    indexes.len()
-                                ),
-                                found: format_inferred_type(&arg_type, registry),
+                                expected: format!("a rank-{} indexed collection", indexes.len()),
+                                found: format_inferred_type(&arg_type, self.env.registry),
                                 help: format!(
-                                    "parameter `{}` of `{display_name}` requires quantity elements",
+                                    "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
                                     param.name
                                 ),
-                                src: src.clone(),
+                                src: self.env.src.clone(),
                                 span: arg.span.into(),
                             });
                         };
-                        check_quantity_param(
-                            &display_name,
-                            sig,
-                            &param.name,
-                            monomial,
-                            &arg_dim,
-                            &mut bindings,
-                            registry,
-                            src,
-                            arg.span,
-                        )?;
+                        arg_indexes.push(arg_index);
+                        current = element;
                     }
-                    scalar @ (ScalarValueKind::Bool | ScalarValueKind::Int) => {
-                        let name = if matches!(scalar, ScalarValueKind::Bool) {
-                            "Bool"
-                        } else {
-                            "Int"
-                        };
-                        let matches = matches!(
-                            (scalar, current),
-                            (ScalarValueKind::Bool, InferredType::Bool)
-                                | (ScalarValueKind::Int, InferredType::Int)
-                        );
-                        if !matches {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format!(
-                                    "{name} with exactly {} indexed axes",
-                                    indexes.len()
-                                ),
-                                found: format_inferred_type(&arg_type, registry),
-                                help: format!(
-                                    "parameter `{}` of `{display_name}` requires {name} elements",
-                                    param.name
-                                ),
-                                src: src.clone(),
-                                span: arg.span.into(),
-                            });
-                        }
-                    }
-                }
-                for (index, arg_index) in indexes.iter().zip(arg_indexes) {
-                    match index_bindings.entry(index.clone()) {
-                        std::collections::hash_map::Entry::Vacant(slot) => {
-                            slot.insert(arg_index.clone());
-                        }
-                        std::collections::hash_map::Entry::Occupied(bound) => {
-                            if bound.get() != arg_index {
+                    match element {
+                        ScalarValueKind::Quantity(monomial) => {
+                            let Some(arg_dim) = current.quantity_dimension().cloned() else {
                                 return Err(GraphcalError::DimensionMismatch {
                                     expected: format!(
-                                        "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
-                                        bound.get()
+                                        "a rank-{} indexed quantity collection",
+                                        indexes.len()
                                     ),
-                                    found: format_inferred_type(&arg_type, registry),
+                                    found: format_inferred_type(&arg_type, self.env.registry),
                                     help: format!(
-                                        "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
+                                        "parameter `{}` of `{display_name}` requires quantity elements",
+                                        param.name
                                     ),
-                                    src: src.clone(),
+                                    src: self.env.src.clone(),
                                     span: arg.span.into(),
                                 });
+                            };
+                            dim_walk.check_quantity_param(
+                                &param.name,
+                                monomial,
+                                &arg_dim,
+                                arg.span,
+                            )?;
+                        }
+                        scalar @ (ScalarValueKind::Bool | ScalarValueKind::Int) => {
+                            let name = if matches!(scalar, ScalarValueKind::Bool) {
+                                "Bool"
+                            } else {
+                                "Int"
+                            };
+                            let matches = matches!(
+                                (scalar, current),
+                                (ScalarValueKind::Bool, InferredType::Bool)
+                                    | (ScalarValueKind::Int, InferredType::Int)
+                            );
+                            if !matches {
+                                return Err(GraphcalError::DimensionMismatch {
+                                    expected: format!(
+                                        "{name} with exactly {} indexed axes",
+                                        indexes.len()
+                                    ),
+                                    found: format_inferred_type(&arg_type, self.env.registry),
+                                    help: format!(
+                                        "parameter `{}` of `{display_name}` requires {name} elements",
+                                        param.name
+                                    ),
+                                    src: self.env.src.clone(),
+                                    span: arg.span.into(),
+                                });
+                            }
+                        }
+                    }
+                    for (index, arg_index) in indexes.iter().zip(arg_indexes) {
+                        match index_bindings.entry(index.clone()) {
+                            std::collections::hash_map::Entry::Vacant(slot) => {
+                                slot.insert(arg_index.clone());
+                            }
+                            std::collections::hash_map::Entry::Occupied(bound) => {
+                                if bound.get() != arg_index {
+                                    return Err(GraphcalError::DimensionMismatch {
+                                        expected: format!(
+                                            "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
+                                            bound.get()
+                                        ),
+                                        found: format_inferred_type(&arg_type, self.env.registry),
+                                        help: format!(
+                                            "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
+                                        ),
+                                        src: self.env.src.clone(),
+                                        span: arg.span.into(),
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
 
-    match sig.result() {
-        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(InferredType::Bool),
-        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(InferredType::Int),
-        ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => {
-            eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
-                .map(InferredType::Quantity)
-        }
-        ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
-            let leaf = match element {
-                ScalarValueKind::Quantity(monomial) => {
-                    eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
-                        .map(InferredType::Quantity)?
-                }
-                ScalarValueKind::Bool => InferredType::Bool,
-                ScalarValueKind::Int => InferredType::Int,
-            };
-            indexes.iter().rev().try_fold(leaf, |element, index| {
+        match sig.result() {
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Bool)) => Ok(InferredType::Bool),
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Int)) => Ok(InferredType::Int),
+            ResultKind::Value(ParamKind::Scalar(ScalarValueKind::Quantity(monomial))) => dim_walk
+                .result(monomial, callee_span)
+                .map(InferredType::Quantity),
+            ResultKind::Value(ParamKind::Indexed { element, indexes }) => {
+                let leaf = match element {
+                    ScalarValueKind::Quantity(monomial) => dim_walk
+                        .result(monomial, callee_span)
+                        .map(InferredType::Quantity)?,
+                    ScalarValueKind::Bool => InferredType::Bool,
+                    ScalarValueKind::Int => InferredType::Int,
+                };
+                indexes.iter().rev().try_fold(leaf, |element, index| {
                 let Some(bound) = index_bindings.get(index) else {
                     // try_new guarantees every result index variable indexes
                     // some parameter, so this is a compiler bug.
@@ -1936,7 +1523,7 @@ fn infer_extern_fn_call(
                         message: format!(
                             "result index variable `{index}` of `{display_name}` was not bound by any argument"
                         ),
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: callee_span.into(),
                     });
                 };
@@ -1945,410 +1532,306 @@ fn infer_extern_fn_call(
                     index: bound.clone(),
                 })
             })
-        }
-        // Extern struct returns are non-generic records, so the argument
-        // list is empty.
-        ResultKind::Struct(result_struct) => Ok(InferredType::Struct(
-            StructTypeRef::from_resolved(result_struct.resolved.clone()),
-            Vec::new(),
-        )),
-    }
-}
-
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_builtin_fn(
-    name: ScalarFn,
-    callee_span: Span,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let func = crate::registry::builtins::scalar_function(name);
-    let dimension_args = args
-        .iter()
-        .map(|arg| {
-            let inferred = infer_arg(arg, declared_types, local_types, dag, tir, registry, src)?;
-            let dimension = expect_quantity(&inferred, registry, src, arg.span)?;
-            Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-    infer_fn_dim(
-        name.as_str(),
-        func.signature(),
-        &dimension_args,
-        callee_span,
-        registry,
-        src,
-    )
-    .map(InferredType::Quantity)
-}
-
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_type_conversion(
-    kind: ConversionFn,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let arg_type = infer_arg(
-        &args[0],
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    match kind {
-        ConversionFn::ToFloat => {
-            if arg_type != InferredType::Int {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Int".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "to_float() requires an Int argument".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
             }
-            Ok(InferredType::Quantity(Dimension::dimensionless()))
-        }
-        ConversionFn::ToInt => {
-            // A `Fin`-axis key exposes its position: the position is the
-            // key's semantic content. Named and coordinate keys stay opaque.
-            if let InferredType::Key(index) = &arg_type {
-                if index.finite_index_form().is_some() {
-                    return Ok(InferredType::Int);
-                }
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Key<Fin(N)>".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "to_int() extracts positions from Fin-axis keys only; \
-                           named and coordinate keys have no ordinal"
-                        .to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            let dim = expect_quantity(&arg_type, registry, src, args[0].span)?;
-            if !dim.is_dimensionless() {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Dimensionless".to_string(),
-                    found: registry.dimensions.format_dimension(&dim),
-                    help: "to_int() requires a Dimensionless argument".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            Ok(InferredType::Int)
-        }
-        ConversionFn::Coord => {
-            let InferredType::Key(index) = &arg_type else {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Key<C> for a coordinate axis C".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "coord() extracts the coordinate quantity of a \
-                           coordinate-axis key"
-                        .to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            };
-            if index.finite_index_form().is_some() {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Key<C> for a coordinate axis C".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "coord() applies to coordinate-axis keys only; named \
-                           keys are opaque and Fin keys expose to_int()"
-                        .to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            let index_def = super::index_def_for_inferred(index, tir).ok_or_else(|| {
-                GraphcalError::UnknownIndex {
-                    name: index.display_name(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                }
-            })?;
-            index_def.coordinate_dimension().map_or_else(
-                || {
-                    Err(GraphcalError::DimensionMismatch {
-                        expected: "Key<C> for a coordinate axis C".to_string(),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: "coord() applies to coordinate-axis keys only; named \
-                               keys are opaque and Fin keys expose to_int()"
-                            .to_string(),
-                        src: src.clone(),
-                        span: args[0].span.into(),
-                    })
-                },
-                |dimension| Ok(InferredType::Quantity(dimension.clone())),
-            )
+            // Extern struct returns are non-generic records, so the argument
+            // list is empty.
+            ResultKind::Struct(result_struct) => Ok(InferredType::Struct(
+                StructTypeRef::from_resolved(result_struct.resolved.clone()),
+                Vec::new(),
+            )),
         }
     }
-}
 
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_timescale_conversion(
-    name: BuiltinFn,
-    scale: crate::registry::time_scale::TimeScale,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let arg_type = infer_arg(
-        &args[0],
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if !matches!(arg_type, InferredType::Datetime(_)) {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Datetime".to_string(),
-            found: format_inferred_type(&arg_type, registry),
-            help: format!("{}() requires a Datetime argument", name.as_str()),
-            src: src.clone(),
-            span: args[0].span.into(),
-        });
-    }
-    Ok(InferredType::Datetime(scale))
-}
-
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_datetime_constructor(
-    kind: DatetimeConstructorFn,
-    epoch_scale: Option<crate::registry::time_scale::TimeScale>,
-    span: crate::syntax::span::Span,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    match kind {
-        DatetimeConstructorFn::Datetime => {
-            let first_is_valid = match args.len() {
-                1 => matches!(args[0].kind(), hir::ExprKind::OffsetDateTimeLiteral(_)),
-                2 => matches!(args[0].kind(), hir::ExprKind::ZonedDateTimeLiteral(_)),
-                _ => false,
-            };
-            if !first_is_valid {
-                let found = infer_arg(
-                    &args[0],
-                    declared_types,
-                    local_types,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?;
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "datetime literal".to_string(),
-                    found: format_inferred_type(&found, registry),
-                    help: "datetime() requires a contextual datetime string literal".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            if args.len() == 2 && !matches!(args[1].kind(), hir::ExprKind::IanaTimeZoneLiteral(_)) {
-                let found = infer_arg(
-                    &args[1],
-                    declared_types,
-                    local_types,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?;
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "timezone literal".to_string(),
-                    found: format_inferred_type(&found, registry),
-                    help: "datetime() second argument must be an IANA timezone literal".to_string(),
-                    src: src.clone(),
-                    span: args[1].span.into(),
-                });
-            }
-            let resolved_timezone_matches_argument = match args {
-                [datetime, time_zone] => match (datetime.kind(), time_zone.kind()) {
-                    (
-                        hir::ExprKind::ZonedDateTimeLiteral(datetime),
-                        hir::ExprKind::IanaTimeZoneLiteral(time_zone),
-                    ) => datetime.time_zone() == time_zone,
-                    _ => true,
-                },
-                _ => true,
-            };
-            if !resolved_timezone_matches_argument {
-                return Err(GraphcalError::InternalError {
-                    message: "resolved datetime timezone does not match its source argument"
-                        .to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            Ok(InferredType::Datetime(
-                crate::registry::time_scale::TimeScale::UTC,
-            ))
-        }
-        DatetimeConstructorFn::Epoch => {
-            if !matches!(args[0].kind(), hir::ExprKind::CivilDateTimeLiteral(_)) {
-                let found = infer_arg(
-                    &args[0],
-                    declared_types,
-                    local_types,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?;
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "scale-free datetime literal".to_string(),
-                    found: format_inferred_type(&found, registry),
-                    help: "epoch<S>() requires one civil datetime string literal".to_string(),
-                    src: src.clone(),
-                    span: args[0].span.into(),
-                });
-            }
-            epoch_scale
-                .map(InferredType::Datetime)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: "epoch call reached type inference without a static time scale"
-                        .to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                })
-        }
-    }
-}
-
-#[expect(clippy::too_many_arguments, reason = "function-call context")]
-fn infer_hir_datetime_unary(
-    name: BuiltinFn,
-    args: &[hir::Expr],
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    result: InferredType,
-) -> Result<InferredType, GraphcalError> {
-    let arg_type = infer_arg(
-        &args[0],
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if !matches!(arg_type, InferredType::Datetime(_)) {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Datetime".to_string(),
-            found: format_inferred_type(&arg_type, registry),
-            help: format!("{}() requires a Datetime argument", name.as_str()),
-            src: src.clone(),
-            span: args[0].span.into(),
-        });
-    }
-    Ok(result)
-}
-
-#[expect(clippy::too_many_arguments, reason = "if expression context")]
-fn infer_hir_if(
-    condition: &hir::Expr,
-    then_branch: &hir::Expr,
-    else_branch: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let infer = |expr: &hir::Expr| {
-        infer_hir_type(
-            expr,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
+    fn infer_hir_builtin_fn(
+        &self,
+        name: ScalarFn,
+        callee_span: Span,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        let func = crate::registry::builtins::scalar_function(name);
+        let dimension_args = args
+            .iter()
+            .map(|arg| {
+                let inferred = self.infer_arg(arg)?;
+                let dimension =
+                    expect_quantity(&inferred, self.env.registry, self.env.src, arg.span)?;
+                Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        infer_fn_dim(
+            name.as_str(),
+            func.signature(),
+            &dimension_args,
+            callee_span,
+            self.env.registry,
+            self.env.src,
         )
-    };
-    let cond_type = infer(condition)?;
-    let then_type = infer(then_branch)?;
-    let else_type = infer(else_branch)?;
-    rules::if_rule(
-        &Operand {
-            ty: cond_type,
-            span: condition.span,
-        },
-        &Operand {
-            ty: then_type,
-            span: then_branch.span,
-        },
-        &Operand {
-            ty: else_type,
-            span: else_branch.span,
-        },
-        registry,
-        src,
-    )
-}
+        .map(InferredType::Quantity)
+    }
 
-#[expect(clippy::too_many_arguments, reason = "unary expression context")]
-fn infer_hir_unary(
-    op: crate::desugar::desugared_ast::UnaryOp,
-    operand: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let operand_type = infer_hir_type(
-        operand,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    rules::unary_rule(
-        op,
-        &Operand {
-            ty: operand_type,
-            span: operand.span,
-        },
-        registry,
-        src,
-    )
+    fn infer_hir_type_conversion(
+        &self,
+        kind: ConversionFn,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        let arg_type = self.infer_arg(&args[0])?;
+        match kind {
+            ConversionFn::ToFloat => {
+                if arg_type != InferredType::Int {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Int".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "to_float() requires an Int argument".to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                Ok(InferredType::Quantity(Dimension::dimensionless()))
+            }
+            ConversionFn::ToInt => {
+                // A `Fin`-axis key exposes its position: the position is the
+                // key's semantic content. Named and coordinate keys stay opaque.
+                if let InferredType::Key(index) = &arg_type {
+                    if index.finite_index_form().is_some() {
+                        return Ok(InferredType::Int);
+                    }
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Key<Fin(N)>".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "to_int() extracts positions from Fin-axis keys only; \
+                           named and coordinate keys have no ordinal"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                let dim =
+                    expect_quantity(&arg_type, self.env.registry, self.env.src, args[0].span)?;
+                if !dim.is_dimensionless() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Dimensionless".to_string(),
+                        found: self.env.registry.dimensions.format_dimension(&dim),
+                        help: "to_int() requires a Dimensionless argument".to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                Ok(InferredType::Int)
+            }
+            ConversionFn::Coord => {
+                let InferredType::Key(index) = &arg_type else {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Key<C> for a coordinate axis C".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "coord() extracts the coordinate quantity of a \
+                           coordinate-axis key"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                };
+                if index.finite_index_form().is_some() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Key<C> for a coordinate axis C".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "coord() applies to coordinate-axis keys only; named \
+                           keys are opaque and Fin keys expose to_int()"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                let index_def =
+                    super::index_def_for_inferred(index, self.env.tir).ok_or_else(|| {
+                        GraphcalError::UnknownIndex {
+                            name: index.display_name(),
+                            src: self.env.src.clone(),
+                            span: args[0].span.into(),
+                        }
+                    })?;
+                index_def.coordinate_dimension().map_or_else(
+                    || {
+                        Err(GraphcalError::DimensionMismatch {
+                            expected: "Key<C> for a coordinate axis C".to_string(),
+                            found: format_inferred_type(&arg_type, self.env.registry),
+                            help: "coord() applies to coordinate-axis keys only; named \
+                               keys are opaque and Fin keys expose to_int()"
+                                .to_string(),
+                            src: self.env.src.clone(),
+                            span: args[0].span.into(),
+                        })
+                    },
+                    |dimension| Ok(InferredType::Quantity(dimension.clone())),
+                )
+            }
+        }
+    }
+
+    fn infer_hir_timescale_conversion(
+        &self,
+        name: BuiltinFn,
+        scale: crate::registry::time_scale::TimeScale,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        let arg_type = self.infer_arg(&args[0])?;
+        if !matches!(arg_type, InferredType::Datetime(_)) {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: "Datetime".to_string(),
+                found: format_inferred_type(&arg_type, self.env.registry),
+                help: format!("{}() requires a Datetime argument", name.as_str()),
+                src: self.env.src.clone(),
+                span: args[0].span.into(),
+            });
+        }
+        Ok(InferredType::Datetime(scale))
+    }
+
+    fn infer_hir_datetime_constructor(
+        &self,
+        kind: DatetimeConstructorFn,
+        epoch_scale: Option<crate::registry::time_scale::TimeScale>,
+        span: crate::syntax::span::Span,
+        args: &[hir::Expr],
+    ) -> Result<InferredType, GraphcalError> {
+        match kind {
+            DatetimeConstructorFn::Datetime => {
+                let first_is_valid = match args.len() {
+                    1 => matches!(args[0].kind(), hir::ExprKind::OffsetDateTimeLiteral(_)),
+                    2 => matches!(args[0].kind(), hir::ExprKind::ZonedDateTimeLiteral(_)),
+                    _ => false,
+                };
+                if !first_is_valid {
+                    let found = self.infer_arg(&args[0])?;
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "datetime literal".to_string(),
+                        found: format_inferred_type(&found, self.env.registry),
+                        help: "datetime() requires a contextual datetime string literal"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                if args.len() == 2
+                    && !matches!(args[1].kind(), hir::ExprKind::IanaTimeZoneLiteral(_))
+                {
+                    let found = self.infer_arg(&args[1])?;
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "timezone literal".to_string(),
+                        found: format_inferred_type(&found, self.env.registry),
+                        help: "datetime() second argument must be an IANA timezone literal"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: args[1].span.into(),
+                    });
+                }
+                let resolved_timezone_matches_argument = match args {
+                    [datetime, time_zone] => match (datetime.kind(), time_zone.kind()) {
+                        (
+                            hir::ExprKind::ZonedDateTimeLiteral(datetime),
+                            hir::ExprKind::IanaTimeZoneLiteral(time_zone),
+                        ) => datetime.time_zone() == time_zone,
+                        _ => true,
+                    },
+                    _ => true,
+                };
+                if !resolved_timezone_matches_argument {
+                    return Err(GraphcalError::InternalError {
+                        message: "resolved datetime timezone does not match its source argument"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: span.into(),
+                    });
+                }
+                Ok(InferredType::Datetime(
+                    crate::registry::time_scale::TimeScale::UTC,
+                ))
+            }
+            DatetimeConstructorFn::Epoch => {
+                if !matches!(args[0].kind(), hir::ExprKind::CivilDateTimeLiteral(_)) {
+                    let found = self.infer_arg(&args[0])?;
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "scale-free datetime literal".to_string(),
+                        found: format_inferred_type(&found, self.env.registry),
+                        help: "epoch<S>() requires one civil datetime string literal".to_string(),
+                        src: self.env.src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                epoch_scale.map(InferredType::Datetime).ok_or_else(|| {
+                    GraphcalError::InternalError {
+                        message: "epoch call reached type inference without a static time scale"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: span.into(),
+                    }
+                })
+            }
+        }
+    }
+
+    fn infer_hir_datetime_unary(
+        &self,
+        name: BuiltinFn,
+        args: &[hir::Expr],
+        result: InferredType,
+    ) -> Result<InferredType, GraphcalError> {
+        let arg_type = self.infer_arg(&args[0])?;
+        if !matches!(arg_type, InferredType::Datetime(_)) {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: "Datetime".to_string(),
+                found: format_inferred_type(&arg_type, self.env.registry),
+                help: format!("{}() requires a Datetime argument", name.as_str()),
+                src: self.env.src.clone(),
+                span: args[0].span.into(),
+            });
+        }
+        Ok(result)
+    }
+
+    fn infer_hir_if(
+        &self,
+        condition: &hir::Expr,
+        then_branch: &hir::Expr,
+        else_branch: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        let infer = |expr: &hir::Expr| self.infer_hir_type(expr);
+        let cond_type = infer(condition)?;
+        let then_type = infer(then_branch)?;
+        let else_type = infer(else_branch)?;
+        rules::if_rule(
+            &Operand {
+                ty: cond_type,
+                span: condition.span,
+            },
+            &Operand {
+                ty: then_type,
+                span: then_branch.span,
+            },
+            &Operand {
+                ty: else_type,
+                span: else_branch.span,
+            },
+            self.env.registry,
+            self.env.src,
+        )
+    }
+
+    fn infer_hir_unary(
+        &self,
+        op: crate::desugar::desugared_ast::UnaryOp,
+        operand: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        let operand_type = self.infer_hir_type(operand)?;
+        rules::unary_rule(
+            op,
+            &Operand {
+                ty: operand_type,
+                span: operand.span,
+            },
+            self.env.registry,
+            self.env.src,
+        )
+    }
 }
 
 use super::rules::{self, Operand};
@@ -2379,64 +1862,41 @@ fn try_const_int(expr: &hir::Expr) -> Option<i64> {
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "binary expression context")]
-fn infer_hir_binop(
-    span: crate::syntax::span::Span,
-    op: crate::desugar::desugared_ast::BinOp,
-    lhs: &hir::Expr,
-    rhs: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    use crate::desugar::desugared_ast::BinOp;
-    let lhs_type = infer_hir_type(
-        lhs,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    let rhs_type = infer_hir_type(
-        rhs,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
-    // needed for runtime-classified right-associated Int power chains and for
-    // the additive Fin-key rule (`k + c` shifts the bound by a static Nat).
-    let rhs_const_int = if matches!(op, BinOp::Pow(_) | BinOp::Add) {
-        try_const_int(rhs)
-    } else {
-        None
-    };
-    rules::binop_rule(
-        span,
-        op,
-        &Operand {
-            ty: lhs_type,
-            span: lhs.span,
-        },
-        &Operand {
-            ty: rhs_type,
-            span: rhs.span,
-        },
-        rhs_const_int,
-        registry,
-        src,
-    )
+impl Infer<'_> {
+    fn infer_hir_binop(
+        &self,
+        span: crate::syntax::span::Span,
+        op: crate::desugar::desugared_ast::BinOp,
+        lhs: &hir::Expr,
+        rhs: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        use crate::desugar::desugared_ast::BinOp;
+        let lhs_type = self.infer_hir_type(lhs)?;
+        let rhs_type = self.infer_hir_type(rhs)?;
+        // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
+        // needed for runtime-classified right-associated Int power chains and for
+        // the additive Fin-key rule (`k + c` shifts the bound by a static Nat).
+        let rhs_const_int = if matches!(op, BinOp::Pow(_) | BinOp::Add) {
+            try_const_int(rhs)
+        } else {
+            None
+        };
+        rules::binop_rule(
+            span,
+            op,
+            &Operand {
+                ty: lhs_type,
+                span: lhs.span,
+            },
+            &Operand {
+                ty: rhs_type,
+                span: rhs.span,
+            },
+            rhs_const_int,
+            self.env.registry,
+            self.env.src,
+        )
+    }
 }
 
 pub(in crate::tir::dim_check) fn hir_nat_to_linear_form(
@@ -2489,246 +1949,219 @@ fn finite_index_error(
     }
 }
 
-/// Infer a key introduction form.
-///
-/// `key(Fin(N), c)` is compile-time membership-checked and infallible;
-/// `fin_key(Fin(N), e)` is the explicit runtime-checked constructor; the
-/// coordinate searches require a coordinate axis and a matching-dimension
-/// quantity argument.
-#[expect(clippy::too_many_arguments, reason = "expression inference context")]
-fn infer_hir_key_form(
-    expr: &hir::Expr,
-    kind: crate::syntax::ast::KeyFormKind,
-    axis: &hir::expr::ForBindingIndex,
-    axis_span: Span,
-    arg: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    use crate::syntax::ast::KeyFormKind;
+impl Infer<'_> {
+    /// Infer a key introduction form.
+    ///
+    /// `key(Fin(N), c)` is compile-time membership-checked and infallible;
+    /// `fin_key(Fin(N), e)` is the explicit runtime-checked constructor; the
+    /// coordinate searches require a coordinate axis and a matching-dimension
+    /// quantity argument.
+    fn infer_hir_key_form(
+        &self,
+        expr: &hir::Expr,
+        kind: crate::syntax::ast::KeyFormKind,
+        axis: &hir::expr::ForBindingIndex,
+        axis_span: Span,
+        arg: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        use crate::syntax::ast::KeyFormKind;
 
-    let arg_type = infer_hir_type(
-        arg,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    // Resolve the axis identity and, for Fin axes, its cardinality form.
-    let (index_identity, finite_form) = match axis {
-        hir::expr::ForBindingIndex::Named(index) => {
-            let identity = IndexTypeRef::from_resolved(index.value.clone());
-            let idx_def = super::index_def_for_inferred(&identity, tir).ok_or_else(|| {
-                GraphcalError::UnknownIndex {
-                    name: identity.display_name(),
-                    src: src.clone(),
-                    span: index.span.into(),
+        let arg_type = self.infer_hir_type(arg)?;
+        // Resolve the axis identity and, for Fin axes, its cardinality form.
+        let (index_identity, finite_form) =
+            match axis {
+                hir::expr::ForBindingIndex::Named(index) => {
+                    let identity = IndexTypeRef::from_resolved(index.value.clone());
+                    let idx_def = super::index_def_for_inferred(&identity, self.env.tir)
+                        .ok_or_else(|| GraphcalError::UnknownIndex {
+                            name: identity.display_name(),
+                            src: self.env.src.clone(),
+                            span: index.span.into(),
+                        })?;
+                    let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
+                    (identity, finite_form)
                 }
-            })?;
-            let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
-            (identity, finite_form)
-        }
-        hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-            let form = resolve_hir_nat_form(cardinality, src)?;
-            let identity = IndexTypeRef::from_finite_index_form(form.clone())
-                .map_err(|err| finite_index_error(err, src, *span))?;
-            (identity, Some(form))
-        }
-    };
-    match kind {
-        KeyFormKind::Static => {
-            let Some(form) = &finite_form else {
-                return Err(GraphcalError::EvalError {
-                    message: "key() constructs Fin-axis keys; named-axis keys are written as \
+                hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                    let form = resolve_hir_nat_form(cardinality, self.env.src)?;
+                    let identity = IndexTypeRef::from_finite_index_form(form.clone())
+                        .map_err(|err| finite_index_error(err, self.env.src, *span))?;
+                    (identity, Some(form))
+                }
+            };
+        match kind {
+            KeyFormKind::Static => {
+                let Some(form) = &finite_form else {
+                    return Err(GraphcalError::EvalError {
+                        message: "key() constructs Fin-axis keys; named-axis keys are written as \
                               qualified labels and coordinate keys come from argmax/argmin or \
                               the coordinate searches"
-                        .to_string(),
-                    src: src.clone(),
-                    span: axis_span.into(),
-                });
-            };
-            if arg_type != InferredType::Int {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "a static Nat position".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "key(Fin(N), position) takes an integer position".to_string(),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            }
-            let Some(position) = try_const_int(arg) else {
-                return Err(GraphcalError::EvalError {
-                    message: "key() requires a static position; use fin_key() for a \
-                              runtime-checked position"
-                        .to_string(),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            };
-            if position < 0 {
-                return Err(GraphcalError::EvalError {
-                    message: format!("key() position evaluated to negative value: {position}"),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            }
-            if form.is_constant() {
-                let size = form.constant();
-                let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
-                if position_u64 >= size {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "key() position {position} is out of bounds for {}",
-                            IndexDisplayName::Finite(form.clone())
-                        ),
-                        src: src.clone(),
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: axis_span.into(),
+                    });
+                };
+                if arg_type != InferredType::Int {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "a static Nat position".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "key(Fin(N), position) takes an integer position".to_string(),
+                        src: self.env.src.clone(),
                         span: arg.span.into(),
                     });
                 }
+                let Some(position) = try_const_int(arg) else {
+                    return Err(GraphcalError::EvalError {
+                        message: "key() requires a static position; use fin_key() for a \
+                              runtime-checked position"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: arg.span.into(),
+                    });
+                };
+                if position < 0 {
+                    return Err(GraphcalError::EvalError {
+                        message: format!("key() position evaluated to negative value: {position}"),
+                        src: self.env.src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+                if form.is_constant() {
+                    let size = form.constant();
+                    let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
+                    if position_u64 >= size {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "key() position {position} is out of bounds for {}",
+                                IndexDisplayName::Finite(form.clone())
+                            ),
+                            src: self.env.src.clone(),
+                            span: arg.span.into(),
+                        });
+                    }
+                }
+                self.control.retain_static_index(
+                    expr,
+                    arg,
+                    &index_identity,
+                    u64::try_from(position).map_err(|_| {
+                        GraphcalError::internal_error(
+                            "checked position is negative",
+                            self.env.src,
+                            DiagnosticAnchor::Source(arg.span),
+                        )
+                    })?,
+                    crate::tir::expression_facts::StaticIndexUse::Key,
+                );
+                Ok(InferredType::Key(index_identity))
             }
-            local_types.retain_static_index(
-                expr,
-                arg,
-                &index_identity,
-                u64::try_from(position).map_err(|_| {
-                    GraphcalError::internal_error(
-                        "checked position is negative",
-                        src,
-                        DiagnosticAnchor::Source(arg.span),
-                    )
-                })?,
-                crate::tir::expression_facts::StaticIndexUse::Key,
-            );
-            Ok(InferredType::Key(index_identity))
-        }
-        KeyFormKind::Fin => {
-            if finite_form.is_none() {
-                return Err(GraphcalError::EvalError {
-                    message: format!("fin_key() requires a Fin(...) axis, got `{index_identity}`"),
-                    src: src.clone(),
-                    span: axis_span.into(),
-                });
-            }
-            if arg_type != InferredType::Int {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: "Int".to_string(),
-                    found: format_inferred_type(&arg_type, registry),
-                    help: "fin_key(Fin(N), position) takes an Int position, checked at \
-                           runtime"
-                        .to_string(),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
-            }
-            Ok(InferredType::Key(index_identity))
-        }
-        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
-            let idx_def = super::index_def_for_inferred(&index_identity, tir);
-            let dimension = match idx_def
-                .as_deref()
-                .and_then(crate::registry::types::IndexDef::coordinate_dimension)
-            {
-                Some(dimension) => dimension.clone(),
-                None => {
+            KeyFormKind::Fin => {
+                if finite_form.is_none() {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "{}() requires a coordinate axis, got `{}`",
-                            kind.as_str(),
-                            index_identity
+                            "fin_key() requires a Fin(...) axis, got `{index_identity}`"
                         ),
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: axis_span.into(),
                     });
                 }
-            };
-            let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
-            if arg_dim != dimension {
-                return Err(GraphcalError::DimensionMismatch {
-                    expected: registry.dimensions.format_dimension(&dimension),
-                    found: registry.dimensions.format_dimension(&arg_dim),
-                    help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
-                    src: src.clone(),
-                    span: arg.span.into(),
-                });
+                if arg_type != InferredType::Int {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Int".to_string(),
+                        found: format_inferred_type(&arg_type, self.env.registry),
+                        help: "fin_key(Fin(N), position) takes an Int position, checked at \
+                           runtime"
+                            .to_string(),
+                        src: self.env.src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+                Ok(InferredType::Key(index_identity))
             }
-            Ok(InferredType::Key(index_identity))
+            KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
+                let idx_def = super::index_def_for_inferred(&index_identity, self.env.tir);
+                let dimension = match idx_def
+                    .as_deref()
+                    .and_then(crate::registry::types::IndexDef::coordinate_dimension)
+                {
+                    Some(dimension) => dimension.clone(),
+                    None => {
+                        return Err(GraphcalError::EvalError {
+                            message: format!(
+                                "{}() requires a coordinate axis, got `{}`",
+                                kind.as_str(),
+                                index_identity
+                            ),
+                            src: self.env.src.clone(),
+                            span: axis_span.into(),
+                        });
+                    }
+                };
+                let arg_dim =
+                    expect_quantity(&arg_type, self.env.registry, self.env.src, arg.span)?;
+                if arg_dim != dimension {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: self.env.registry.dimensions.format_dimension(&dimension),
+                        found: self.env.registry.dimensions.format_dimension(&arg_dim),
+                        help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
+                        src: self.env.src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+                Ok(InferredType::Key(index_identity))
+            }
         }
     }
-}
 
-#[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
-fn infer_hir_for_comp(
-    bindings: &[hir::expr::ForBinding],
-    body: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let mut inner_locals = local_types.child(Vec::new());
-    for binding in bindings {
-        // Every loop variable is a key of its axis. Coordinate arithmetic
-        // goes through coord(), integer use of a Fin key through to_int().
-        let var_type = match &binding.index {
-            hir::expr::ForBindingIndex::Named(index) => {
-                let index_identity = IndexTypeRef::from_resolved(index.value.clone());
-                super::index_def_for_inferred(&index_identity, tir).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: index_identity.display_name(),
-                        src: src.clone(),
-                        span: index.span.into(),
-                    }
-                })?;
-                InferredType::Key(index_identity)
-            }
-            hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form = resolve_hir_nat_form(cardinality, src)?;
-                InferredType::Key(
+    fn infer_hir_for_comp(
+        &self,
+        bindings: &[hir::expr::ForBinding],
+        body: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        let mut inner_locals = self.locals.child(Vec::new());
+        for binding in bindings {
+            // Every loop variable is a key of its axis. Coordinate arithmetic
+            // goes through coord(), integer use of a Fin key through to_int().
+            let var_type = match &binding.index {
+                hir::expr::ForBindingIndex::Named(index) => {
+                    let index_identity = IndexTypeRef::from_resolved(index.value.clone());
+                    super::index_def_for_inferred(&index_identity, self.env.tir).ok_or_else(
+                        || GraphcalError::UnknownIndex {
+                            name: index_identity.display_name(),
+                            src: self.env.src.clone(),
+                            span: index.span.into(),
+                        },
+                    )?;
+                    InferredType::Key(index_identity)
+                }
+                hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                    let form = resolve_hir_nat_form(cardinality, self.env.src)?;
+                    InferredType::Key(
+                        IndexTypeRef::from_finite_index_form(form)
+                            .map_err(|err| finite_index_error(err, self.env.src, *span))?,
+                    )
+                }
+            };
+            inner_locals.bind(binding.local.id, var_type);
+        }
+        let mut result = self.with_locals(&inner_locals).infer_hir_type(body)?;
+        for binding in bindings.iter().rev() {
+            let index = match &binding.index {
+                hir::expr::ForBindingIndex::Named(index) => {
+                    IndexTypeRef::from_resolved(index.value.clone())
+                }
+                hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                    let form = resolve_hir_nat_form(cardinality, self.env.src)?;
                     IndexTypeRef::from_finite_index_form(form)
-                        .map_err(|err| finite_index_error(err, src, *span))?,
-                )
-            }
-        };
-        inner_locals.bind(binding.local.id, var_type);
+                        .map_err(|err| finite_index_error(err, self.env.src, *span))?
+                }
+            };
+            result = InferredType::Indexed {
+                element: Box::new(result),
+                index,
+            };
+        }
+        Ok(result)
     }
-    let mut result = infer_hir_type(
-        body,
-        owner_decl_name,
-        declared_types,
-        &inner_locals,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    for binding in bindings.iter().rev() {
-        let index = match &binding.index {
-            hir::expr::ForBindingIndex::Named(index) => {
-                IndexTypeRef::from_resolved(index.value.clone())
-            }
-            hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form = resolve_hir_nat_form(cardinality, src)?;
-                IndexTypeRef::from_finite_index_form(form)
-                    .map_err(|err| finite_index_error(err, src, *span))?
-            }
-        };
-        result = InferredType::Indexed {
-            element: Box::new(result),
-            index,
-        };
-    }
-    Ok(result)
 }
 
 fn finite_axis_form(
@@ -2797,193 +2230,170 @@ mod finite_axis_form_tests {
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "index-access context")]
-fn infer_hir_index_access(
-    expr: &hir::Expr,
-    inner: &hir::Expr,
-    args: &[hir::expr::IndexArg],
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let mut current = infer_hir_type(
-        inner,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    for arg in args {
-        let InferredType::Indexed { element, index } = current else {
-            return Err(GraphcalError::EvalError {
-                message: "indexing a non-indexed value".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        };
-        match arg {
-            hir::expr::IndexArg::Variant(variant) => {
-                check_index_override_dependency(
-                    local_types,
-                    dag,
-                    owner_decl_name,
-                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
-                    IndexNominalUse::Label(variant.variant.variant()),
-                )?;
-                let arg_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
-                if arg_index != index {
-                    return Err(GraphcalError::IndexMismatch {
-                        expected: index.display_name(),
-                        found: arg_index.display_name(),
-                        src: src.clone(),
-                        span: variant.path_span().into(),
-                    });
+impl Infer<'_> {
+    fn infer_hir_index_access(
+        &self,
+        expr: &hir::Expr,
+        inner: &hir::Expr,
+        args: &[hir::expr::IndexArg],
+    ) -> Result<InferredType, GraphcalError> {
+        let mut current = self.infer_hir_type(inner)?;
+        for arg in args {
+            let InferredType::Indexed { element, index } = current else {
+                return Err(GraphcalError::EvalError {
+                    message: "indexing a non-indexed value".to_string(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
+                });
+            };
+            match arg {
+                hir::expr::IndexArg::Variant(variant) => {
+                    self.check_index_override_dependency(
+                        &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                        IndexNominalUse::Label(variant.variant.variant()),
+                    )?;
+                    let arg_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
+                    if arg_index != index {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index.display_name(),
+                            found: arg_index.display_name(),
+                            src: self.env.src.clone(),
+                            span: variant.path_span().into(),
+                        });
+                    }
                 }
-            }
-            hir::expr::IndexArg::Var(local) => {
-                let Some(var_type) = local_types.get(local.value) else {
-                    return Err(GraphcalError::UnknownLocalRef {
-                        name: format!("#{}", local.value.index()),
-                        src: src.clone(),
-                        span: local.span.into(),
-                    });
-                };
-                match var_type {
-                    // Loop variables are keys of their axes: accept on axis
-                    // identity, with Fin widening (`N <= M`).
-                    InferredType::Key(key_index) => {
-                        let axis_form = finite_axis_form(
-                            &index,
-                            super::index_def_for_inferred(&index, tir).as_deref(),
-                            src,
-                            local.span,
-                        )?;
-                        let accepted = match (key_index.finite_index_form(), &axis_form) {
+                hir::expr::IndexArg::Var(local) => {
+                    let Some(var_type) = self.locals.get(local.value) else {
+                        return Err(GraphcalError::UnknownLocalRef {
+                            name: format!("#{}", local.value.index()),
+                            src: self.env.src.clone(),
+                            span: local.span.into(),
+                        });
+                    };
+                    match var_type {
+                        // Loop variables are keys of their axes: accept on axis
+                        // identity, with Fin widening (`N <= M`).
+                        InferredType::Key(key_index) => {
+                            let axis_form = finite_axis_form(
+                                &index,
+                                super::index_def_for_inferred(&index, self.env.tir).as_deref(),
+                                self.env.src,
+                                local.span,
+                            )?;
+                            let accepted = match (key_index.finite_index_form(), &axis_form) {
+                                (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
+                                _ => key_index == &index,
+                            };
+                            if !accepted {
+                                return Err(GraphcalError::IndexMismatch {
+                                    expected: index.display_name(),
+                                    found: key_index.display_name(),
+                                    src: self.env.src.clone(),
+                                    span: local.span.into(),
+                                });
+                            }
+                        }
+                        InferredType::Quantity(_) => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
+                                ),
+                                src: self.env.src.clone(),
+                                span: local.span.into(),
+                            });
+                        }
+                        _ => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "`#{}` is not a valid index variable",
+                                    local.value.index()
+                                ),
+                                src: self.env.src.clone(),
+                                span: local.span.into(),
+                            });
+                        }
+                    }
+                }
+                hir::expr::IndexArg::Expr(index_expr) => {
+                    let expr_type = self.infer_hir_type(index_expr)?;
+                    let index_form = finite_axis_form(
+                        &index,
+                        super::index_def_for_inferred(&index, self.env.tir).as_deref(),
+                        self.env.src,
+                        index_expr.span,
+                    )?;
+                    // A key-typed expression selects by axis identity: exact for
+                    // named and coordinate axes, widening (`N <= M`) for Fin.
+                    if let InferredType::Key(key_index) = &expr_type {
+                        let accepted = match (key_index.finite_index_form(), &index_form) {
                             (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
-                            _ => key_index == &index,
+                            _ => *key_index == index,
                         };
                         if !accepted {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.display_name(),
                                 found: key_index.display_name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                    }
-                    InferredType::Quantity(_) => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
-                            ),
-                            src: src.clone(),
-                            span: local.span.into(),
-                        });
-                    }
-                    _ => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "`#{}` is not a valid index variable",
-                                local.value.index()
-                            ),
-                            src: src.clone(),
-                            span: local.span.into(),
-                        });
-                    }
-                }
-            }
-            hir::expr::IndexArg::Expr(index_expr) => {
-                let expr_type = infer_hir_type(
-                    index_expr,
-                    owner_decl_name,
-                    declared_types,
-                    local_types,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?;
-                let index_form = finite_axis_form(
-                    &index,
-                    super::index_def_for_inferred(&index, tir).as_deref(),
-                    src,
-                    index_expr.span,
-                )?;
-                // A key-typed expression selects by axis identity: exact for
-                // named and coordinate axes, widening (`N <= M`) for Fin.
-                if let InferredType::Key(key_index) = &expr_type {
-                    let accepted = match (key_index.finite_index_form(), &index_form) {
-                        (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
-                        _ => *key_index == index,
-                    };
-                    if !accepted {
-                        return Err(GraphcalError::IndexMismatch {
-                            expected: index.display_name(),
-                            found: key_index.display_name(),
-                            src: src.clone(),
-                            span: index_expr.span.into(),
-                        });
-                    }
-                    current = *element;
-                    continue;
-                }
-                let Some(index_form) = index_form else {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "integer expression cannot index into non-finite-index index `{index}`"
-                        ),
-                        src: src.clone(),
-                        span: index_expr.span.into(),
-                    });
-                };
-                match expr_type {
-                    InferredType::Int => {
-                        // Runtime-checked Int indexing was removed: only a
-                        // statically discharged constant selects implicitly;
-                        // a runtime Int goes through the explicit fin_key().
-                        if try_const_int(index_expr).is_none() {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "a runtime Int cannot index `{index}` implicitly; write \
-                                     `fin_key({index}, ...)` to make the range check explicit",
-                                ),
-                                src: src.clone(),
+                                src: self.env.src.clone(),
                                 span: index_expr.span.into(),
                             });
                         }
-                        let position =
-                            check_constant_finite_index_index(index_expr, &index_form, src)?;
-                        local_types.retain_static_index(
-                            expr,
-                            index_expr,
-                            &index,
-                            position,
-                            crate::tir::expression_facts::StaticIndexUse::Selection,
-                        );
+                        current = *element;
+                        continue;
                     }
-                    _ => {
+                    let Some(index_form) = index_form else {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "index expression must be an integer type, got {}",
-                                format_inferred_type(&expr_type, registry)
+                                "integer expression cannot index into non-finite-index index `{index}`"
                             ),
-                            src: src.clone(),
+                            src: self.env.src.clone(),
                             span: index_expr.span.into(),
                         });
+                    };
+                    match expr_type {
+                        InferredType::Int => {
+                            // Runtime-checked Int indexing was removed: only a
+                            // statically discharged constant selects implicitly;
+                            // a runtime Int goes through the explicit fin_key().
+                            if try_const_int(index_expr).is_none() {
+                                return Err(GraphcalError::EvalError {
+                                    message: format!(
+                                        "a runtime Int cannot index `{index}` implicitly; write \
+                                     `fin_key({index}, ...)` to make the range check explicit",
+                                    ),
+                                    src: self.env.src.clone(),
+                                    span: index_expr.span.into(),
+                                });
+                            }
+                            let position = check_constant_finite_index_index(
+                                index_expr,
+                                &index_form,
+                                self.env.src,
+                            )?;
+                            self.control.retain_static_index(
+                                expr,
+                                index_expr,
+                                &index,
+                                position,
+                                crate::tir::expression_facts::StaticIndexUse::Selection,
+                            );
+                        }
+                        _ => {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "index expression must be an integer type, got {}",
+                                    format_inferred_type(&expr_type, self.env.registry)
+                                ),
+                                src: self.env.src.clone(),
+                                span: index_expr.span.into(),
+                            });
+                        }
                     }
                 }
             }
+            current = *element;
         }
-        current = *element;
+        Ok(current)
     }
-    Ok(current)
 }
 
 fn check_constant_finite_index_index(
@@ -3045,96 +2455,66 @@ fn reject_nested_conversion(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments, reason = "conversion expression context")]
-fn infer_hir_convert(
-    inner: &hir::Expr,
-    target: &hir::ResolvedUnitExpr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    reject_nested_conversion(inner, src)?;
-    let inner_type = infer_hir_type(
-        inner,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    // `->` distributes element-wise over indexed values (#648 U1): the quantity
-    // element dimension must match the target. Multi-axis values unwrap
-    // through each nested Indexed layer.
-    let mut element = &inner_type;
-    while let InferredType::Indexed {
-        element: nested, ..
-    } = element
-    {
-        element = nested;
-    }
-    let expr_dim = match element.complex_dimension() {
-        Some(dimension) => dimension.clone(),
-        None => expect_quantity(element, registry, src, inner.span)?,
-    };
-    let target_dim = rules::resolve_unit_dimension_or_diagnose(target, tir, src)?;
+impl Infer<'_> {
+    fn infer_hir_convert(
+        &self,
+        inner: &hir::Expr,
+        target: &hir::ResolvedUnitExpr,
+    ) -> Result<InferredType, GraphcalError> {
+        reject_nested_conversion(inner, self.env.src)?;
+        let inner_type = self.infer_hir_type(inner)?;
+        // `->` distributes element-wise over indexed values (#648 U1): the quantity
+        // element dimension must match the target. Multi-axis values unwrap
+        // through each nested Indexed layer.
+        let mut element = &inner_type;
+        while let InferredType::Indexed {
+            element: nested, ..
+        } = element
+        {
+            element = nested;
+        }
+        let expr_dim = match element.complex_dimension() {
+            Some(dimension) => dimension.clone(),
+            None => expect_quantity(element, self.env.registry, self.env.src, inner.span)?,
+        };
+        let target_dim =
+            rules::resolve_unit_dimension_or_diagnose(target, self.env.tir, self.env.src)?;
 
-    if expr_dim != target_dim {
-        return Err(GraphcalError::ConversionDimensionMismatch {
-            target: registry.dimensions.format_dimension(&target_dim),
-            expr_dim: registry.dimensions.format_dimension(&expr_dim),
-            src: src.clone(),
-            span: target.span.into(),
-        });
+        if expr_dim != target_dim {
+            return Err(GraphcalError::ConversionDimensionMismatch {
+                target: self.env.registry.dimensions.format_dimension(&target_dim),
+                expr_dim: self.env.registry.dimensions.format_dimension(&expr_dim),
+                src: self.env.src.clone(),
+                span: target.span.into(),
+            });
+        }
+
+        Ok(inner_type)
     }
 
-    Ok(inner_type)
+    fn infer_hir_display_timezone(
+        &self,
+        inner: &hir::Expr,
+        timezone: &crate::registry::time_zone::IanaTimeZoneId,
+    ) -> Result<InferredType, GraphcalError> {
+        reject_nested_conversion(inner, self.env.src)?;
+        let inner_type = self.infer_hir_type(inner)?;
+        if !matches!(&inner_type, InferredType::Datetime(_)) {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: "Datetime".to_string(),
+                found: format_inferred_type(&inner_type, self.env.registry),
+                help: format!(
+                    "timezone display `-> \"{timezone}\"` requires a Datetime expression"
+                ),
+                src: self.env.src.clone(),
+                span: inner.span.into(),
+            });
+        }
+        Ok(inner_type)
+    }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "display timezone expression context"
-)]
-fn infer_hir_display_timezone(
-    inner: &hir::Expr,
-    timezone: &crate::registry::time_zone::IanaTimeZoneId,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    reject_nested_conversion(inner, src)?;
-    let inner_type = infer_hir_type(
-        inner,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if !matches!(&inner_type, InferredType::Datetime(_)) {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: "Datetime".to_string(),
-            found: format_inferred_type(&inner_type, registry),
-            help: format!("timezone display `-> \"{timezone}\"` requires a Datetime expression"),
-            src: src.clone(),
-            span: inner.span.into(),
-        });
-    }
-    Ok(inner_type)
-}
-
-fn resolved_type_field_key(
+pub(in crate::tir::dim_check) fn resolved_type_field_key(
     owning_type: &ResolvedStructTypeName,
     constructor: &NominalConstructor,
     field: &FieldName,
@@ -3375,26 +2755,21 @@ fn substitute_resolved_generic_arg_with_type_params(
 }
 
 pub(in crate::tir::dim_check) fn resolved_field_type(
-    owning_type: &ResolvedStructTypeName,
-    constructor: &NominalConstructor,
-    field: &FieldName,
+    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
     type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
-    _registry: &FormattingRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<InferredType, GraphcalError> {
-    let key = resolved_type_field_key(owning_type, constructor, field);
     let resolved =
         dag.semantic
             .type_defs
-            .field_type(&key)
+            .field_type(key)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!(
                     "semantic type metadata missing field type for `{}.{}`",
-                    constructor.name(),
-                    field
+                    key.constructor, key.field
                 ),
                 src: src.clone(),
                 span: span.into(),
@@ -3411,185 +2786,160 @@ fn record_member(type_def: &NominalTypeDef) -> Option<&NominalConstructor> {
     (only.name().as_str() == type_def.name().as_str()).then_some(only)
 }
 
-#[expect(clippy::too_many_arguments, reason = "field-access expression context")]
-fn infer_hir_field_access(
-    inner: &hir::Expr,
-    field: &crate::syntax::span::Spanned<FieldName>,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let inner_type = infer_hir_type(
-        inner,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    let InferredType::Struct(type_name, type_args) = &inner_type else {
-        return Err(GraphcalError::NotAStruct {
-            name: format_inferred_type(&inner_type, registry),
-            src: src.clone(),
-            span: inner.span.into(),
-        });
-    };
-    check_type_override_dependency(
-        local_types,
-        dag,
-        owner_decl_name,
-        type_name.resolved(),
-        TypeNominalUse::Field {
-            field: &field.value,
-            span: field.span,
-        },
-    )?;
-    let type_def =
-        struct_type_def_for_inferred(type_name, Some(dag), registry).ok_or_else(|| {
-            GraphcalError::UnknownStructType {
-                name: type_name.to_string(),
-                src: src.clone(),
+impl Infer<'_> {
+    fn infer_hir_field_access(
+        &self,
+        inner: &hir::Expr,
+        field: &crate::syntax::span::Spanned<FieldName>,
+    ) -> Result<InferredType, GraphcalError> {
+        let inner_type = self.infer_hir_type(inner)?;
+        let InferredType::Struct(type_name, type_args) = &inner_type else {
+            return Err(GraphcalError::NotAStruct {
+                name: format_inferred_type(&inner_type, self.env.registry),
+                src: self.env.src.clone(),
+                span: inner.span.into(),
+            });
+        };
+        self.check_type_override_dependency(
+            type_name.resolved(),
+            TypeNominalUse::Field {
+                field: &field.value,
+                span: field.span,
+            },
+        )?;
+        let type_def =
+            struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
+                .ok_or_else(|| GraphcalError::UnknownStructType {
+                    name: type_name.to_string(),
+                    src: self.env.src.clone(),
+                    span: inner.span.into(),
+                })?;
+        let member = record_member(type_def).ok_or_else(|| {
+            let detail = if type_def.is_required() {
+                format!("required type `{}` has no fields", type_name.name())
+            } else {
+                format!(
+                    "union type `{}` (use `match` to access fields)",
+                    type_name.name()
+                )
+            };
+            GraphcalError::NotAStruct {
+                name: detail,
+                src: self.env.src.clone(),
                 span: inner.span.into(),
             }
         })?;
-    let member = record_member(type_def).ok_or_else(|| {
-        let detail = if type_def.is_required() {
-            format!("required type `{}` has no fields", type_name.name())
-        } else {
-            format!(
-                "union type `{}` (use `match` to access fields)",
-                type_name.name()
-            )
-        };
-        GraphcalError::NotAStruct {
-            name: detail,
-            src: src.clone(),
-            span: inner.span.into(),
+        if !member
+            .fields()
+            .iter()
+            .any(|field_def| field_def.name() == &field.value)
+        {
+            return Err(GraphcalError::UnknownField {
+                type_name: type_name.name().clone(),
+                field_name: field.value.clone(),
+                src: self.env.src.clone(),
+                span: field.span.into(),
+            });
         }
-    })?;
-    if !member
-        .fields()
-        .iter()
-        .any(|field_def| field_def.name() == &field.value)
-    {
-        return Err(GraphcalError::UnknownField {
-            type_name: type_name.name().clone(),
-            field_name: field.value.clone(),
-            src: src.clone(),
-            span: field.span.into(),
-        });
+        resolved_field_type(
+            &resolved_type_field_key(type_name.resolved(), member, &field.value),
+            type_def,
+            type_args,
+            self.env.dag,
+            self.env.src,
+            field.span,
+        )
     }
-    resolved_field_type(
-        type_name.resolved(),
-        member,
-        &field.value,
-        type_def,
-        type_args,
-        dag,
-        registry,
-        src,
-        field.span,
-    )
 }
 
-fn infer_hir_generic_type_arg(
-    value_type: &hir::ValueType,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    match &value_type.kind {
-        hir::ValueTypeKind::Builtin(hir::BuiltinType::Dimensionless) => {
-            Ok(InferredType::Quantity(Dimension::dimensionless()))
-        }
-        hir::ValueTypeKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
-        hir::ValueTypeKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
-        hir::ValueTypeKind::Builtin(hir::BuiltinType::Datetime(scale)) => {
-            Ok(InferredType::Datetime(*scale))
-        }
-        hir::ValueTypeKind::DimExpr(dim_expr) => {
-            infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Quantity)
-        }
-        hir::ValueTypeKind::Complex(dimension) => match dimension {
-            hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
-            hir::DimArg::Expr(dim_expr) => {
-                infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredType::Complex)
+impl InferEnv<'_> {
+    fn infer_hir_generic_type_arg(
+        &self,
+        value_type: &hir::ValueType,
+    ) -> Result<InferredType, GraphcalError> {
+        match &value_type.kind {
+            hir::ValueTypeKind::Builtin(hir::BuiltinType::Dimensionless) => {
+                Ok(InferredType::Quantity(Dimension::dimensionless()))
             }
-        },
-        hir::ValueTypeKind::Key(index) => {
-            Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
-        }
-        hir::ValueTypeKind::Struct(name) => Ok(InferredType::Struct(
-            StructTypeRef::from_resolved(name.value.clone()),
-            vec![],
-        )),
-        hir::ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic type parameter `{}` is not concretely bound",
-                param.value.name
-            ),
-            src: src.clone(),
-            span: param.span.into(),
-        }),
-        hir::ValueTypeKind::TypeApplication { name, generic_args } => {
-            let type_def = dag
-                .semantic
-                .type_defs
-                .struct_types
-                .get(&name.value)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "semantic type metadata missing generic type `{}`",
-                        name.value
-                    ),
-                    src: src.clone(),
-                    span: name.span.into(),
-                })?;
-            Ok(InferredType::Struct(
+            hir::ValueTypeKind::Builtin(hir::BuiltinType::Bool) => Ok(InferredType::Bool),
+            hir::ValueTypeKind::Builtin(hir::BuiltinType::Int) => Ok(InferredType::Int),
+            hir::ValueTypeKind::Builtin(hir::BuiltinType::Datetime(scale)) => {
+                Ok(InferredType::Datetime(*scale))
+            }
+            hir::ValueTypeKind::DimExpr(dim_expr) => {
+                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredType::Quantity)
+            }
+            hir::ValueTypeKind::Complex(dimension) => match dimension {
+                hir::DimArg::Dimensionless(_) => {
+                    Ok(InferredType::Complex(Dimension::dimensionless()))
+                }
+                hir::DimArg::Expr(dim_expr) => {
+                    infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredType::Complex)
+                }
+            },
+            hir::ValueTypeKind::Key(index) => Ok(InferredType::Key(inferred_index_from_type_arg(
+                index, self.src,
+            )?)),
+            hir::ValueTypeKind::Struct(name) => Ok(InferredType::Struct(
                 StructTypeRef::from_resolved(name.value.clone()),
-                resolve_applied_generic_args(
-                    &name.value,
-                    type_def,
-                    generic_args,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                    name.span,
-                )?,
-            ))
+                vec![],
+            )),
+            hir::ValueTypeKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
+                message: format!(
+                    "generic type parameter `{}` is not concretely bound",
+                    param.value.name
+                ),
+                src: self.src.clone(),
+                span: param.span.into(),
+            }),
+            hir::ValueTypeKind::TypeApplication { name, generic_args } => {
+                let type_def = self
+                    .dag
+                    .semantic
+                    .type_defs
+                    .struct_types
+                    .get(&name.value)
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "semantic type metadata missing generic type `{}`",
+                            name.value
+                        ),
+                        src: self.src.clone(),
+                        span: name.span.into(),
+                    })?;
+                Ok(InferredType::Struct(
+                    StructTypeRef::from_resolved(name.value.clone()),
+                    self.resolve_applied_generic_args(
+                        &name.value,
+                        type_def,
+                        generic_args,
+                        name.span,
+                    )?,
+                ))
+            }
         }
     }
-}
 
-fn infer_hir_sorted_generic_arg(
-    arg: &hir::GenericArg,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredGenericArg, GraphcalError> {
-    match arg {
-        hir::GenericArg::Dim(hir::DimArg::Dimensionless(_)) => {
-            Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
-        }
-        hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
-            infer_hir_dim_expr_arg(dim_expr, tir, src).map(InferredGenericArg::Dim)
-        }
-        hir::GenericArg::Index(index) => {
-            inferred_index_from_type_arg(index, src).map(InferredGenericArg::Index)
-        }
-        hir::GenericArg::Nat(nat) => resolve_hir_nat_form(nat, src).map(InferredGenericArg::Nat),
-        hir::GenericArg::Type(value_type) => {
-            infer_hir_generic_type_arg(value_type, dag, tir, registry, src)
-                .map(InferredGenericArg::Type)
+    fn infer_hir_sorted_generic_arg(
+        &self,
+        arg: &hir::GenericArg,
+    ) -> Result<InferredGenericArg, GraphcalError> {
+        match arg {
+            hir::GenericArg::Dim(hir::DimArg::Dimensionless(_)) => {
+                Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
+            }
+            hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
+                infer_hir_dim_expr_arg(dim_expr, self.tir, self.src).map(InferredGenericArg::Dim)
+            }
+            hir::GenericArg::Index(index) => {
+                inferred_index_from_type_arg(index, self.src).map(InferredGenericArg::Index)
+            }
+            hir::GenericArg::Nat(nat) => {
+                resolve_hir_nat_form(nat, self.src).map(InferredGenericArg::Nat)
+            }
+            hir::GenericArg::Type(value_type) => self
+                .infer_hir_generic_type_arg(value_type)
+                .map(InferredGenericArg::Type),
         }
     }
 }
@@ -3672,250 +3022,227 @@ fn infer_hir_dim_expr_arg(
         })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "constructor-call expression context"
-)]
-fn infer_hir_constructor_call(
-    expr: &hir::Expr,
-    callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
-    constructor_generic_args: &[hir::GenericArg],
-    fields: &[hir::expr::FieldInit],
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let target = dag
-        .semantic
-        .constructor_refs
-        .constructor_defs
-        .get(&callee.value)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "semantic TIR missing constructor call target for `{}`",
-                callee.value
-            ),
-            src: src.clone(),
-            span: callee.span.into(),
-        })?;
-    check_type_override_dependency(
-        local_types,
-        dag,
-        owner_decl_name,
-        &target.owning_type,
-        TypeNominalUse::Constructor {
-            constructor: &callee.value,
-            span: callee.span,
-        },
-    )?;
-    constructor_generic_args.iter().try_for_each(|arg| {
-        check_hir_generic_arg_override_dependencies(arg, local_types, dag, owner_decl_name)
-    })?;
-    let type_def = &target.type_def;
-    let variant = &target.variant;
-    let owning_type_identity = StructTypeRef::from_resolved(target.owning_type.clone());
-    let owning_type_name = type_def.name();
-
-    let resolved_type_args = resolve_applied_generic_args(
-        &target.owning_type,
-        type_def,
-        constructor_generic_args,
-        dag,
-        tir,
-        registry,
-        src,
-        callee.span,
-    )?;
-
-    let def_field_names: std::collections::HashSet<&str> = variant
-        .fields()
-        .iter()
-        .map(|field| field.name().as_str())
-        .collect();
-    let provided_names: Vec<&str> = fields
-        .iter()
-        .map(|field| field.name.value.as_str())
-        .collect();
-    let mut seen_fields = std::collections::HashSet::new();
-    for field in fields {
-        if !seen_fields.insert(field.name.value.clone()) {
-            return Err(GraphcalError::EvalError {
+impl Infer<'_> {
+    fn infer_hir_constructor_call(
+        &self,
+        expr: &hir::Expr,
+        callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
+        constructor_generic_args: &[hir::GenericArg],
+        fields: &[hir::expr::FieldInit],
+    ) -> Result<InferredType, GraphcalError> {
+        let target = self
+            .env
+            .dag
+            .semantic
+            .constructor_refs
+            .constructor_defs
+            .get(&callee.value)
+            .ok_or_else(|| GraphcalError::InternalError {
                 message: format!(
-                    "duplicate field `{}` in constructor `{}`",
-                    field.name.value,
-                    variant.name()
+                    "semantic TIR missing constructor call target for `{}`",
+                    callee.value
                 ),
-                src: src.clone(),
-                span: field.name.span.into(),
-            });
-        }
-    }
-    let extra: Vec<FieldName> = provided_names
-        .iter()
-        .filter(|name| !def_field_names.contains(**name))
-        .map(|name| FieldName::expect_valid(*name))
-        .collect();
-    if !extra.is_empty() {
-        return Err(GraphcalError::ExtraFields {
-            type_name: owning_type_name,
-            extra,
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
+                src: self.env.src.clone(),
+                span: callee.span.into(),
+            })?;
+        self.check_type_override_dependency(
+            &target.owning_type,
+            TypeNominalUse::Constructor {
+                constructor: &callee.value,
+                span: callee.span,
+            },
+        )?;
+        constructor_generic_args
+            .iter()
+            .try_for_each(|arg| self.check_hir_generic_arg_override_dependencies(arg))?;
+        let type_def = &target.type_def;
+        let variant = &target.variant;
+        let owning_type_identity = StructTypeRef::from_resolved(target.owning_type.clone());
+        let owning_type_name = type_def.name();
 
-    let provided_set: std::collections::HashSet<&str> = provided_names.iter().copied().collect();
-    let missing: Vec<FieldName> = variant
-        .fields()
-        .iter()
-        .filter(|field| !provided_set.contains(field.name().as_str()))
-        .map(|field| field.name().clone())
-        .collect();
-    if !missing.is_empty() {
-        return Err(GraphcalError::MissingFields {
-            type_name: owning_type_name,
-            missing,
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
+        let resolved_type_args = self.env.resolve_applied_generic_args(
+            &target.owning_type,
+            type_def,
+            constructor_generic_args,
+            callee.span,
+        )?;
 
-    for field_init in fields {
-        let field_def = variant
+        let def_field_names: std::collections::HashSet<&str> = variant
             .fields()
             .iter()
-            .find(|field| field.name() == &field_init.name.value)
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "internal: unknown field `{}` in constructor `{}`",
-                    field_init.name.value,
-                    variant.name()
-                ),
-                src: src.clone(),
-                span: field_init.name.span.into(),
-            })?;
-        let value_type = infer_hir_type(
-            &field_init.value,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?;
-        let expected = resolved_field_type(
-            &target.owning_type,
-            variant,
-            field_def.name(),
-            type_def,
-            &resolved_type_args,
-            dag,
-            registry,
-            src,
-            field_init.name.span,
-        )?;
-        if value_type != expected {
-            let (expected, found) =
-                format_distinct_inferred_types(&expected, &value_type, registry);
-            return Err(GraphcalError::FieldDimensionMismatch {
+            .map(|field| field.name().as_str())
+            .collect();
+        let provided_names: Vec<&str> = fields
+            .iter()
+            .map(|field| field.name.value.as_str())
+            .collect();
+        let mut seen_fields = std::collections::HashSet::new();
+        for field in fields {
+            if !seen_fields.insert(field.name.value.clone()) {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "duplicate field `{}` in constructor `{}`",
+                        field.name.value,
+                        variant.name()
+                    ),
+                    src: self.env.src.clone(),
+                    span: field.name.span.into(),
+                });
+            }
+        }
+        let extra: Vec<FieldName> = provided_names
+            .iter()
+            .filter(|name| !def_field_names.contains(**name))
+            .map(|name| FieldName::expect_valid(*name))
+            .collect();
+        if !extra.is_empty() {
+            return Err(GraphcalError::ExtraFields {
                 type_name: owning_type_name,
-                field_name: field_init.name.value.clone(),
-                expected,
-                found,
-                src: src.clone(),
-                span: field_init.name.span.into(),
+                extra,
+                src: self.env.src.clone(),
+                span: expr.span.into(),
             });
         }
-    }
 
-    Ok(InferredType::Struct(
-        owning_type_identity,
-        resolved_type_args,
-    ))
+        let provided_set: std::collections::HashSet<&str> =
+            provided_names.iter().copied().collect();
+        let missing: Vec<FieldName> = variant
+            .fields()
+            .iter()
+            .filter(|field| !provided_set.contains(field.name().as_str()))
+            .map(|field| field.name().clone())
+            .collect();
+        if !missing.is_empty() {
+            return Err(GraphcalError::MissingFields {
+                type_name: owning_type_name,
+                missing,
+                src: self.env.src.clone(),
+                span: expr.span.into(),
+            });
+        }
+
+        for field_init in fields {
+            let field_def = variant
+                .fields()
+                .iter()
+                .find(|field| field.name() == &field_init.name.value)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!(
+                        "internal: unknown field `{}` in constructor `{}`",
+                        field_init.name.value,
+                        variant.name()
+                    ),
+                    src: self.env.src.clone(),
+                    span: field_init.name.span.into(),
+                })?;
+            let value_type = self.infer_hir_type(&field_init.value)?;
+            let expected = resolved_field_type(
+                &resolved_type_field_key(&target.owning_type, variant, field_def.name()),
+                type_def,
+                &resolved_type_args,
+                self.env.dag,
+                self.env.src,
+                field_init.name.span,
+            )?;
+            if value_type != expected {
+                let (expected, found) =
+                    format_distinct_inferred_types(&expected, &value_type, self.env.registry);
+                return Err(GraphcalError::FieldDimensionMismatch {
+                    type_name: owning_type_name,
+                    field_name: field_init.name.value.clone(),
+                    expected,
+                    found,
+                    src: self.env.src.clone(),
+                    span: field_init.name.span.into(),
+                });
+            }
+        }
+
+        Ok(InferredType::Struct(
+            owning_type_identity,
+            resolved_type_args,
+        ))
+    }
 }
 
-fn resolve_applied_generic_args(
-    owning_type: &ResolvedStructTypeName,
-    type_def: &NominalTypeDef,
-    applied_generic_args: &[hir::GenericArg],
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<Vec<InferredGenericArg>, GraphcalError> {
-    if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
-        return Ok(Vec::new());
-    }
-    let total_params = type_def.generic_params().len();
-    let required_count = type_def
-        .generic_params()
-        .iter()
-        .rposition(|param| param.default().is_none())
-        .map_or(0, |index| index.saturating_add(1));
-    if applied_generic_args.len() < required_count || applied_generic_args.len() > total_params {
-        let hint = if required_count == total_params {
-            format!("{total_params}")
-        } else {
-            format!("{required_count}..{total_params}")
-        };
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `{}` expects {hint} generic argument(s), got {}",
-                type_def.name(),
-                applied_generic_args.len()
-            ),
-            src: src.clone(),
-            span: span.into(),
-        });
-    }
-    let mut args = Vec::with_capacity(total_params);
-    for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
-        let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src)?;
-        let matches_sort = matches!(
-            (param.constraint(), &inferred),
-            (GenericConstraint::Dim, InferredGenericArg::Dim(_))
-                | (GenericConstraint::Index, InferredGenericArg::Index(_))
-                | (GenericConstraint::Nat, InferredGenericArg::Nat(_))
-                | (GenericConstraint::Type, InferredGenericArg::Type(_))
-        );
-        if !matches_sort {
-            return Err(generic_arg_internal_sort_error(param, src, arg.span()));
+impl InferEnv<'_> {
+    fn resolve_applied_generic_args(
+        &self,
+        owning_type: &ResolvedStructTypeName,
+        type_def: &NominalTypeDef,
+        applied_generic_args: &[hir::GenericArg],
+        span: Span,
+    ) -> Result<Vec<InferredGenericArg>, GraphcalError> {
+        if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
+            return Ok(Vec::new());
         }
-        args.push(inferred);
-    }
-    for param in type_def
-        .generic_params()
-        .iter()
-        .skip(applied_generic_args.len())
-    {
-        let resolved_default = &dag
-            .semantic
-            .type_defs
-            .generic_defaults
-            .get(&(owning_type.clone(), param.name().clone()))
-            .ok_or_else(|| GraphcalError::EvalError {
+        let total_params = type_def.generic_params().len();
+        let required_count = type_def
+            .generic_params()
+            .iter()
+            .rposition(|param| param.default().is_none())
+            .map_or(0, |index| index.saturating_add(1));
+        if applied_generic_args.len() < required_count || applied_generic_args.len() > total_params
+        {
+            let hint = if required_count == total_params {
+                format!("{total_params}")
+            } else {
+                format!("{required_count}..{total_params}")
+            };
+            return Err(GraphcalError::EvalError {
                 message: format!(
-                    "internal: generic parameter `{}` has no default",
-                    param.name()
+                    "type `{}` expects {hint} generic argument(s), got {}",
+                    type_def.name(),
+                    applied_generic_args.len()
                 ),
-                src: src.clone(),
+                src: self.src.clone(),
                 span: span.into(),
-            })?
-            .resolved;
-        let subs = generic_substitution_prefix(type_def, &args, src, span)?;
-        args.push(substitute_resolved_generic_arg_with_type_params(
-            resolved_default,
-            &subs,
-            src,
-        )?);
+            });
+        }
+        let mut args = Vec::with_capacity(total_params);
+        for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
+            let inferred = self.infer_hir_sorted_generic_arg(arg)?;
+            let matches_sort = matches!(
+                (param.constraint(), &inferred),
+                (GenericConstraint::Dim, InferredGenericArg::Dim(_))
+                    | (GenericConstraint::Index, InferredGenericArg::Index(_))
+                    | (GenericConstraint::Nat, InferredGenericArg::Nat(_))
+                    | (GenericConstraint::Type, InferredGenericArg::Type(_))
+            );
+            if !matches_sort {
+                return Err(generic_arg_internal_sort_error(param, self.src, arg.span()));
+            }
+            args.push(inferred);
+        }
+        for param in type_def
+            .generic_params()
+            .iter()
+            .skip(applied_generic_args.len())
+        {
+            let resolved_default = &self
+                .dag
+                .semantic
+                .type_defs
+                .generic_defaults
+                .get(&(owning_type.clone(), param.name().clone()))
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!(
+                        "internal: generic parameter `{}` has no default",
+                        param.name()
+                    ),
+                    src: self.src.clone(),
+                    span: span.into(),
+                })?
+                .resolved;
+            let subs = generic_substitution_prefix(type_def, &args, self.src, span)?;
+            args.push(substitute_resolved_generic_arg_with_type_params(
+                resolved_default,
+                &subs,
+                self.src,
+            )?);
+        }
+        Ok(args)
     }
-    Ok(args)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -4062,716 +3389,593 @@ fn hir_map_entry_key(key: &hir::expr::MapEntryKey) -> IndexEntryKey {
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "map literal expression context")]
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive validation of map literal entries"
-)]
-fn infer_hir_map_literal(
-    expr: &hir::Expr,
-    entries: &[hir::expr::MapEntry],
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    for entry in entries {
-        for key in &entry.keys {
-            if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
-                check_index_override_dependency(
-                    local_types,
-                    dag,
-                    owner_decl_name,
-                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
-                    IndexNominalUse::Label(variant.variant.variant()),
-                )?;
+impl Infer<'_> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "exhaustive validation of map literal entries"
+    )]
+    fn infer_hir_map_literal(
+        &self,
+        expr: &hir::Expr,
+        entries: &[hir::expr::MapEntry],
+    ) -> Result<InferredType, GraphcalError> {
+        for entry in entries {
+            for key in &entry.keys {
+                if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
+                    self.check_index_override_dependency(
+                        &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                        IndexNominalUse::Label(variant.variant.variant()),
+                    )?;
+                }
             }
         }
-    }
-    let Some(first_entry) = entries.first() else {
-        return Err(GraphcalError::EvalError {
-            message: "empty map literal".to_string(),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    };
-    let arity = first_entry.keys.len();
-    for entry in entries.iter().skip(1) {
-        if entry.keys.len() != arity {
+        let Some(first_entry) = entries.first() else {
             return Err(GraphcalError::EvalError {
-                message: format!(
-                    "map literal entries have inconsistent key arity: expected {arity}, found {}",
-                    entry.keys.len()
-                ),
-                src: src.clone(),
+                message: "empty map literal".to_string(),
+                src: self.env.src.clone(),
                 span: expr.span.into(),
             });
-        }
-    }
-
-    let mut axes = Vec::with_capacity(arity);
-    for key in &first_entry.keys {
-        let index = inferred_index_for_hir_map_key(key, src)?;
-        let idx_def = super::index_def_for_inferred(&index, tir).ok_or_else(|| {
-            GraphcalError::UnknownIndex {
-                name: index.display_name(),
-                src: src.clone(),
-                span: expr.span.into(),
-            }
-        })?;
-        if idx_def.is_coordinate() {
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "coordinate index `{index}` cannot be used as a map/table literal key; use a `for` comprehension instead"
-                ),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        axes.push(MapLiteralAxis {
-            index,
-            entry_keys: idx_def.entry_keys(),
-        });
-    }
-    for entry in entries.iter().skip(1) {
-        for (i, key) in entry.keys.iter().enumerate() {
-            let key_index = inferred_index_for_hir_map_key(key, src)?;
-            if key_index != axes[i].index {
-                return Err(GraphcalError::IndexMismatch {
-                    expected: axes[i].index.display_name(),
-                    found: key_index.display_name(),
-                    src: src.clone(),
+        };
+        let arity = first_entry.keys.len();
+        for entry in entries.iter().skip(1) {
+            if entry.keys.len() != arity {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "map literal entries have inconsistent key arity: expected {arity}, found {}",
+                        entry.keys.len()
+                    ),
+                    src: self.env.src.clone(),
                     span: expr.span.into(),
                 });
             }
         }
-    }
 
-    let incompatible_key_error = |key: IndexEntryKey| GraphcalError::EvalError {
-        message: format!("map entry key `{key}` does not match its index category"),
-        src: src.clone(),
-        span: expr.span.into(),
-    };
-    let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
-        .iter()
-        .map(|axis| {
-            axis.entry_keys
-                .iter()
-                .cloned()
-                .map(|key| axis.variant_key(key).map_err(&incompatible_key_error))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let expected_cardinality =
-        MapCoverageCardinality::checked_from_axes(&axes_variant_keys, src, expr.span)?;
-    let mut provided_tuples = std::collections::HashSet::new();
-    for entry in entries {
-        local_types.checkpoint()?;
-        let tuple: Vec<MapLiteralVariantKey> = entry
-            .keys
-            .iter()
-            .enumerate()
-            .map(|(i, key)| {
-                let entry_key = hir_map_entry_key(key);
-                if !axes[i].entry_keys.contains(&entry_key) {
-                    return match (arity, entry_key) {
-                        (1, extra) => Err(GraphcalError::ExtraVariants {
-                            index_name: axes[0].index.display_name(),
-                            extra: vec![extra],
-                            src: src.clone(),
-                            span: expr.span.into(),
-                        }),
-                        (_, IndexEntryKey::Named(variant_name)) => {
-                            Err(GraphcalError::UnknownVariant {
-                                index_name: axes[i].index.display_name(),
-                                variant_name,
-                                src: src.clone(),
-                                span: expr.span.into(),
-                            })
-                        }
-                        (_, IndexEntryKey::Position(position)) => Err(GraphcalError::EvalError {
-                            message: format!(
-                                "position #{position} is outside index `{}`",
-                                axes[i].index
-                            ),
-                            src: src.clone(),
-                            span: expr.span.into(),
-                        }),
-                    };
+        let mut axes = Vec::with_capacity(arity);
+        for key in &first_entry.keys {
+            let index = inferred_index_for_hir_map_key(key, self.env.src)?;
+            let idx_def = super::index_def_for_inferred(&index, self.env.tir).ok_or_else(|| {
+                GraphcalError::UnknownIndex {
+                    name: index.display_name(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
                 }
-                axes[i]
-                    .variant_key(entry_key)
-                    .map_err(&incompatible_key_error)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if !provided_tuples.insert(tuple) {
-            return Err(GraphcalError::EvalError {
-                message: "duplicate map literal entry".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-    }
-
-    if provided_tuples.len() < expected_cardinality.get() {
-        if arity == 1 {
-            let missing = axes_variant_keys[0]
-                .iter()
-                .filter(|key| !provided_tuples.contains(&vec![(*key).clone()]))
-                .map(MapLiteralVariantKey::entry_key)
-                .collect();
-            return Err(GraphcalError::MissingVariants {
-                index_name: axes[0].index.display_name(),
-                missing,
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: "map coverage count and tuple membership disagree".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
             })?;
-        let witness = first_missing
-            .iter()
-            .map(MapLiteralVariantKey::display)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let missing_count = expected_cardinality
-            .get()
-            .checked_sub(provided_tuples.len())
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: "map coverage cardinality underflow".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            })?;
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
-            ),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
-
-    let first_type = infer_hir_type(
-        &first_entry.value,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if let InferredType::Indexed { index, .. } = &first_type {
-        let inner_is_label =
-            super::index_def_for_inferred(index, tir).is_some_and(|def| !def.is_coordinate());
-        if inner_is_label {
-            return Err(GraphcalError::EvalError {
-                message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
-                src: src.clone(),
-                span: first_entry.value.span.into(),
-            });
-        }
-    }
-    for entry in entries.iter().skip(1) {
-        let entry_type = infer_hir_type(
-            &entry.value,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?;
-        if entry_type != first_type {
-            return Err(GraphcalError::DimensionMismatchInAnnotation {
-                declared: format_inferred_type(&first_type, registry),
-                inferred: format_inferred_type(&entry_type, registry),
-                src: src.clone(),
-                span: entry.value.span.into(),
-            });
-        }
-    }
-    let mut result = first_type;
-    for axis in axes.iter().rev() {
-        result = InferredType::Indexed {
-            element: Box::new(result),
-            index: axis.index.clone(),
-        };
-    }
-    Ok(result)
-}
-
-#[expect(clippy::too_many_arguments, reason = "scan expression context")]
-fn infer_hir_scan(
-    source: &hir::Expr,
-    init: &hir::Expr,
-    acc: &hir::LocalDef,
-    val: &hir::LocalDef,
-    body: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let source_type = infer_hir_type(
-        source,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    let source_rank = source_type.indexed_rank();
-    let InferredType::Indexed { element, index } = source_type else {
-        return Err(GraphcalError::EvalError {
-            message: "scan source must be an indexed value".to_string(),
-            src: src.clone(),
-            span: source.span.into(),
-        });
-    };
-    if source_rank > 1 {
-        return Err(GraphcalError::MultiAxisScanSource {
-            rank: source_rank,
-            src: src.clone(),
-            span: source.span.into(),
-        });
-    }
-    let accumulator_type = infer_hir_type(
-        init,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    let scan_locals =
-        local_types.child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
-    let body_type = infer_hir_type(
-        body,
-        owner_decl_name,
-        declared_types,
-        &scan_locals,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if body_type != accumulator_type {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&accumulator_type, registry),
-            found: format_inferred_type(&body_type, registry),
-            help: "scan body must return the same type as the accumulator".to_string(),
-            src: src.clone(),
-            span: body.span.into(),
-        });
-    }
-    Ok(InferredType::Indexed {
-        element: Box::new(accumulator_type),
-        index,
-    })
-}
-
-#[expect(clippy::too_many_arguments, reason = "unfold expression context")]
-fn infer_hir_unfold(
-    axis: &crate::syntax::span::Spanned<crate::resolved_name::ResolvedIndexName>,
-    init: &hir::Expr,
-    prev_state: &hir::LocalDef,
-    prev_index: &hir::LocalDef,
-    current_index: &hir::LocalDef,
-    body: &hir::Expr,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let init_type = infer_hir_type(
-        init,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    let index = IndexTypeRef::from_resolved(axis.value.clone());
-    let idx_def =
-        tir.declared_index_def(&axis.value)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("missing resolved unfold axis `{}`", axis.value),
-                src: src.clone(),
-                span: axis.span.into(),
-            })?;
-    if !idx_def.is_coordinate() {
-        return Err(GraphcalError::EvalError {
-            message: format!("unfold requires a coordinate index, got `{index}`"),
-            src: src.clone(),
-            span: axis.span.into(),
-        });
-    }
-    // The recurrence coordinate binders are keys of the axis; the coordinate
-    // quantity is extracted with coord().
-    let coordinate_type = InferredType::Key(index.clone());
-    let unfold_locals = local_types.child(vec![
-        (prev_state.id, init_type.clone()),
-        (prev_index.id, coordinate_type.clone()),
-        (current_index.id, coordinate_type),
-    ]);
-    let body_type = infer_hir_type(
-        body,
-        owner_decl_name,
-        declared_types,
-        &unfold_locals,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    if body_type != init_type {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_inferred_type(&init_type, registry),
-            found: format_inferred_type(&body_type, registry),
-            help: "unfold body must return the same type as the previous state".to_string(),
-            src: src.clone(),
-            span: body.span.into(),
-        });
-    }
-    Ok(InferredType::Indexed {
-        element: Box::new(init_type),
-        index,
-    })
-}
-
-fn constructor_field_type(
-    field: &crate::syntax::span::Spanned<FieldName>,
-    variant: &NominalConstructor,
-    owning_type: &ResolvedStructTypeName,
-    type_def: &NominalTypeDef,
-    scrutinee_type_args: &[InferredGenericArg],
-    dag: &crate::tir::typed::DagTIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    if !variant
-        .fields()
-        .iter()
-        .any(|field_def| field_def.name() == &field.value)
-    {
-        return Err(GraphcalError::UnknownField {
-            type_name: type_def.name(),
-            field_name: field.value.clone(),
-            src: src.clone(),
-            span: field.span.into(),
-        });
-    }
-    resolved_field_type(
-        owning_type,
-        variant,
-        &field.value,
-        type_def,
-        scrutinee_type_args,
-        dag,
-        registry,
-        src,
-        field.span,
-    )
-}
-
-#[expect(clippy::too_many_arguments, reason = "match expression context")]
-#[expect(clippy::too_many_lines, reason = "exhaustive handling of match arms")]
-fn infer_hir_match(
-    expr: &hir::Expr,
-    scrutinee: &hir::Expr,
-    arms: &[hir::expr::MatchArm],
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let scrutinee_type = infer_hir_type(
-        scrutinee,
-        owner_decl_name,
-        declared_types,
-        local_types,
-        dag,
-        tir,
-        registry,
-        src,
-    )?;
-    match &scrutinee_type {
-        InferredType::Key(index_identity) => {
-            if index_identity.finite_index_form().is_some() {
+            if idx_def.is_coordinate() {
                 return Err(GraphcalError::EvalError {
                     message: format!(
-                        "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
+                        "coordinate index `{index}` cannot be used as a map/table literal key; use a `for` comprehension instead"
                     ),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
                 });
             }
-            let index_def =
-                super::index_def_for_inferred(index_identity, tir).ok_or_else(|| {
-                    GraphcalError::UnknownIndex {
-                        name: index_identity.display_name(),
-                        src: src.clone(),
-                        span: scrutinee.span.into(),
-                    }
-                })?;
-            let variants = match &index_def.kind {
-                crate::registry::types::IndexKind::Concrete(
-                    crate::registry::types::ConcreteIndexKind::Named { variants },
-                ) => variants.as_slice().to_vec(),
-                crate::registry::types::IndexKind::Required(
-                    crate::registry::types::RequiredIndexKind::Named,
-                ) => vec![],
-                _ => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
-                        ),
-                        src: src.clone(),
-                        span: scrutinee.span.into(),
-                    });
-                }
-            };
-            let mut covered = std::collections::HashSet::new();
-            let mut arm_types = Vec::new();
-            for arm in arms {
-                let hir::expr::MatchPattern::IndexLabel { variant, span } = &arm.pattern else {
-                    return Err(GraphcalError::EvalError {
-                        message: "label match arms must use index-label patterns".to_string(),
-                        src: src.clone(),
-                        span: arm.span.into(),
-                    });
-                };
-                check_index_override_dependency(
-                    local_types,
-                    dag,
-                    owner_decl_name,
-                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
-                    IndexNominalUse::Label(variant.variant.variant()),
-                )?;
-                if index_identity.declared_resolved() != Some(variant.variant.index()) {
+            axes.push(MapLiteralAxis {
+                index,
+                entry_keys: idx_def.entry_keys(),
+            });
+        }
+        for entry in entries.iter().skip(1) {
+            for (i, key) in entry.keys.iter().enumerate() {
+                let key_index = inferred_index_for_hir_map_key(key, self.env.src)?;
+                if key_index != axes[i].index {
                     return Err(GraphcalError::IndexMismatch {
-                        expected: index_identity.display_name(),
-                        found: variant.variant.index().to_unowned_def_name().into(),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    });
-                }
-                let variant_name = variant.variant.variant();
-                if !variants.iter().any(|v| v == variant_name) {
-                    return Err(GraphcalError::UnknownVariant {
-                        index_name: index_identity.display_name(),
-                        variant_name: variant_name.clone(),
-                        src: src.clone(),
-                        span: variant.path_span().into(),
-                    });
-                }
-                if !covered.insert(variant_name.clone()) {
-                    return Err(GraphcalError::EvalError {
-                        message: format!("duplicate match arm for variant `{variant_name}`"),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    });
-                }
-                arm_types.push(infer_hir_type(
-                    &arm.body,
-                    owner_decl_name,
-                    declared_types,
-                    local_types,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?);
-            }
-            for variant in variants {
-                if !covered.contains(&variant) {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
-                        ),
-                        src: src.clone(),
+                        expected: axes[i].index.display_name(),
+                        found: key_index.display_name(),
+                        src: self.env.src.clone(),
                         span: expr.span.into(),
                     });
                 }
             }
-            hir_arm_types_match(&arm_types, arms, registry, src, expr)
         }
-        InferredType::Struct(type_name, scrutinee_type_args) => {
-            let type_def = struct_type_def_for_inferred(type_name, Some(dag), registry)
-                .ok_or_else(|| GraphcalError::UnknownStructType {
-                    name: type_name.to_string(),
-                    src: src.clone(),
-                    span: scrutinee.span.into(),
+
+        let incompatible_key_error = |key: IndexEntryKey| GraphcalError::EvalError {
+            message: format!("map entry key `{key}` does not match its index category"),
+            src: self.env.src.clone(),
+            span: expr.span.into(),
+        };
+        let axes_variant_keys: Vec<Vec<MapLiteralVariantKey>> = axes
+            .iter()
+            .map(|axis| {
+                axis.entry_keys
+                    .iter()
+                    .cloned()
+                    .map(|key| axis.variant_key(key).map_err(&incompatible_key_error))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected_cardinality =
+            MapCoverageCardinality::checked_from_axes(&axes_variant_keys, self.env.src, expr.span)?;
+        let mut provided_tuples = std::collections::HashSet::new();
+        for entry in entries {
+            self.control.checkpoint()?;
+            let tuple: Vec<MapLiteralVariantKey> = entry
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(i, key)| {
+                    let entry_key = hir_map_entry_key(key);
+                    if !axes[i].entry_keys.contains(&entry_key) {
+                        return match (arity, entry_key) {
+                            (1, extra) => Err(GraphcalError::ExtraVariants {
+                                index_name: axes[0].index.display_name(),
+                                extra: vec![extra],
+                                src: self.env.src.clone(),
+                                span: expr.span.into(),
+                            }),
+                            (_, IndexEntryKey::Named(variant_name)) => {
+                                Err(GraphcalError::UnknownVariant {
+                                    index_name: axes[i].index.display_name(),
+                                    variant_name,
+                                    src: self.env.src.clone(),
+                                    span: expr.span.into(),
+                                })
+                            }
+                            (_, IndexEntryKey::Position(position)) => {
+                                Err(GraphcalError::EvalError {
+                                    message: format!(
+                                        "position #{position} is outside index `{}`",
+                                        axes[i].index
+                                    ),
+                                    src: self.env.src.clone(),
+                                    span: expr.span.into(),
+                                })
+                            }
+                        };
+                    }
+                    axes[i]
+                        .variant_key(entry_key)
+                        .map_err(&incompatible_key_error)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if !provided_tuples.insert(tuple) {
+                return Err(GraphcalError::EvalError {
+                    message: "duplicate map literal entry".to_string(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+        }
+
+        if provided_tuples.len() < expected_cardinality.get() {
+            if arity == 1 {
+                let missing = axes_variant_keys[0]
+                    .iter()
+                    .filter(|key| !provided_tuples.contains(&vec![(*key).clone()]))
+                    .map(MapLiteralVariantKey::entry_key)
+                    .collect();
+                return Err(GraphcalError::MissingVariants {
+                    index_name: axes[0].index.display_name(),
+                    missing,
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
+                });
+            }
+            let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: "map coverage count and tuple membership disagree".to_string(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
                 })?;
-            let mut covered = std::collections::HashSet::new();
-            let mut arm_types = Vec::new();
-            for arm in arms {
-                let hir::expr::MatchPattern::Constructor {
-                    constructor,
-                    bindings,
-                    span,
-                } = &arm.pattern
-                else {
+            let witness = first_missing
+                .iter()
+                .map(MapLiteralVariantKey::display)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let missing_count = expected_cardinality
+                .get()
+                .checked_sub(provided_tuples.len())
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: "map coverage cardinality underflow".to_string(),
+                    src: self.env.src.clone(),
+                    span: expr.span.into(),
+                })?;
+            return Err(GraphcalError::EvalError {
+                message: format!(
+                    "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
+                ),
+                src: self.env.src.clone(),
+                span: expr.span.into(),
+            });
+        }
+
+        let first_type = self.infer_hir_type(&first_entry.value)?;
+        if let InferredType::Indexed { index, .. } = &first_type {
+            let inner_is_label = super::index_def_for_inferred(index, self.env.tir)
+                .is_some_and(|def| !def.is_coordinate());
+            if inner_is_label {
+                return Err(GraphcalError::EvalError {
+                message: "map literal element type must be a value type, not an indexed type; use tuple keys for multi-axis map literals".to_string(),
+                src: self.env.src.clone(),
+                span: first_entry.value.span.into(),
+            });
+            }
+        }
+        for entry in entries.iter().skip(1) {
+            let entry_type = self.infer_hir_type(&entry.value)?;
+            if entry_type != first_type {
+                return Err(GraphcalError::DimensionMismatchInAnnotation {
+                    declared: format_inferred_type(&first_type, self.env.registry),
+                    inferred: format_inferred_type(&entry_type, self.env.registry),
+                    src: self.env.src.clone(),
+                    span: entry.value.span.into(),
+                });
+            }
+        }
+        let mut result = first_type;
+        for axis in axes.iter().rev() {
+            result = InferredType::Indexed {
+                element: Box::new(result),
+                index: axis.index.clone(),
+            };
+        }
+        Ok(result)
+    }
+
+    fn infer_hir_scan(
+        &self,
+        source: &hir::Expr,
+        init: &hir::Expr,
+        acc: &hir::LocalDef,
+        val: &hir::LocalDef,
+        body: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        let source_type = self.infer_hir_type(source)?;
+        let source_rank = source_type.indexed_rank();
+        let InferredType::Indexed { element, index } = source_type else {
+            return Err(GraphcalError::EvalError {
+                message: "scan source must be an indexed value".to_string(),
+                src: self.env.src.clone(),
+                span: source.span.into(),
+            });
+        };
+        if source_rank > 1 {
+            return Err(GraphcalError::MultiAxisScanSource {
+                rank: source_rank,
+                src: self.env.src.clone(),
+                span: source.span.into(),
+            });
+        }
+        let accumulator_type = self.infer_hir_type(init)?;
+        let scan_locals = self
+            .locals
+            .child(vec![(acc.id, accumulator_type.clone()), (val.id, *element)]);
+        let body_type = self.with_locals(&scan_locals).infer_hir_type(body)?;
+        if body_type != accumulator_type {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: format_inferred_type(&accumulator_type, self.env.registry),
+                found: format_inferred_type(&body_type, self.env.registry),
+                help: "scan body must return the same type as the accumulator".to_string(),
+                src: self.env.src.clone(),
+                span: body.span.into(),
+            });
+        }
+        Ok(InferredType::Indexed {
+            element: Box::new(accumulator_type),
+            index,
+        })
+    }
+
+    fn infer_hir_unfold(
+        &self,
+        axis: &crate::syntax::span::Spanned<crate::resolved_name::ResolvedIndexName>,
+        init: &hir::Expr,
+        prev_state: &hir::LocalDef,
+        prev_index: &hir::LocalDef,
+        current_index: &hir::LocalDef,
+        body: &hir::Expr,
+    ) -> Result<InferredType, GraphcalError> {
+        let init_type = self.infer_hir_type(init)?;
+        let index = IndexTypeRef::from_resolved(axis.value.clone());
+        let idx_def = self
+            .env
+            .tir
+            .declared_index_def(&axis.value)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("missing resolved unfold axis `{}`", axis.value),
+                src: self.env.src.clone(),
+                span: axis.span.into(),
+            })?;
+        if !idx_def.is_coordinate() {
+            return Err(GraphcalError::EvalError {
+                message: format!("unfold requires a coordinate index, got `{index}`"),
+                src: self.env.src.clone(),
+                span: axis.span.into(),
+            });
+        }
+        // The recurrence coordinate binders are keys of the axis; the coordinate
+        // quantity is extracted with coord().
+        let coordinate_type = InferredType::Key(index.clone());
+        let unfold_locals = self.locals.child(vec![
+            (prev_state.id, init_type.clone()),
+            (prev_index.id, coordinate_type.clone()),
+            (current_index.id, coordinate_type),
+        ]);
+        let body_type = self.with_locals(&unfold_locals).infer_hir_type(body)?;
+        if body_type != init_type {
+            return Err(GraphcalError::DimensionMismatch {
+                expected: format_inferred_type(&init_type, self.env.registry),
+                found: format_inferred_type(&body_type, self.env.registry),
+                help: "unfold body must return the same type as the previous state".to_string(),
+                src: self.env.src.clone(),
+                span: body.span.into(),
+            });
+        }
+        Ok(InferredType::Indexed {
+            element: Box::new(init_type),
+            index,
+        })
+    }
+}
+
+impl InferEnv<'_> {
+    fn constructor_field_type(
+        &self,
+        field: &crate::syntax::span::Spanned<FieldName>,
+        variant: &NominalConstructor,
+        owning_type: &ResolvedStructTypeName,
+        type_def: &NominalTypeDef,
+        scrutinee_type_args: &[InferredGenericArg],
+    ) -> Result<InferredType, GraphcalError> {
+        if !variant
+            .fields()
+            .iter()
+            .any(|field_def| field_def.name() == &field.value)
+        {
+            return Err(GraphcalError::UnknownField {
+                type_name: type_def.name(),
+                field_name: field.value.clone(),
+                src: self.src.clone(),
+                span: field.span.into(),
+            });
+        }
+        resolved_field_type(
+            &resolved_type_field_key(owning_type, variant, &field.value),
+            type_def,
+            scrutinee_type_args,
+            self.dag,
+            self.src,
+            field.span,
+        )
+    }
+}
+
+impl Infer<'_> {
+    #[expect(clippy::too_many_lines, reason = "exhaustive handling of match arms")]
+    fn infer_hir_match(
+        &self,
+        expr: &hir::Expr,
+        scrutinee: &hir::Expr,
+        arms: &[hir::expr::MatchArm],
+    ) -> Result<InferredType, GraphcalError> {
+        let scrutinee_type = self.infer_hir_type(scrutinee)?;
+        match &scrutinee_type {
+            InferredType::Key(index_identity) => {
+                if index_identity.finite_index_form().is_some() {
                     return Err(GraphcalError::EvalError {
-                        message: "union match arms must use constructor patterns".to_string(),
-                        src: src.clone(),
-                        span: arm.span.into(),
-                    });
-                };
-                let target = dag
-                    .semantic
-                    .constructor_refs
-                    .constructor_defs
-                    .get(&constructor.value)
-                    .ok_or_else(|| GraphcalError::InternalError {
                         message: format!(
-                            "semantic TIR missing constructor match target for `{}`",
-                            constructor.value
+                            "cannot match on `Key<{index_identity}>`; only named-axis keys support label matching"
                         ),
-                        src: src.clone(),
-                        span: constructor.span.into(),
+                        src: self.env.src.clone(),
+                        span: scrutinee.span.into(),
+                    });
+                }
+                let index_def = super::index_def_for_inferred(index_identity, self.env.tir)
+                    .ok_or_else(|| GraphcalError::UnknownIndex {
+                        name: index_identity.display_name(),
+                        src: self.env.src.clone(),
+                        span: scrutinee.span.into(),
                     })?;
-                check_type_override_dependency(
-                    local_types,
-                    dag,
-                    owner_decl_name,
-                    &target.owning_type,
-                    TypeNominalUse::Constructor {
-                        constructor: &constructor.value,
-                        span: constructor.span,
-                    },
-                )?;
-                if bindings.is_explicit_empty() && target.variant.fields().is_empty() {
-                    return Err(GraphcalError::EmptyParenthesizedConstructor {
-                        constructor: target.variant.name(),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    });
-                }
-                if type_name.resolved() != &target.owning_type {
-                    return Err(GraphcalError::UnknownField {
-                        type_name: type_name.name().clone(),
-                        field_name: FieldName::expect_valid(target.variant.name().as_str()),
-                        src: src.clone(),
-                        span: constructor.span.into(),
-                    });
-                }
-                if !covered.insert(target.variant.name().clone()) {
-                    return Err(GraphcalError::EvalError {
-                        message: format!("duplicate match arm for `{}`", target.variant.name()),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    });
-                }
-                let mut arm_locals = local_types.child(Vec::new());
-                let mut seen_pattern_fields = std::collections::HashSet::new();
-                for binding in bindings {
-                    let field = match binding {
-                        hir::expr::PatternBinding::Bind { field, .. }
-                        | hir::expr::PatternBinding::Wildcard { field, .. } => field,
-                    };
-                    if !seen_pattern_fields.insert(field.value.clone()) {
+                let variants = match &index_def.kind {
+                    crate::registry::types::IndexKind::Concrete(
+                        crate::registry::types::ConcreteIndexKind::Named { variants },
+                    ) => variants.as_slice().to_vec(),
+                    crate::registry::types::IndexKind::Required(
+                        crate::registry::types::RequiredIndexKind::Named,
+                    ) => vec![],
+                    _ => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "duplicate pattern binding for field `{}` in `{}`",
-                                field.value,
-                                target.variant.name()
+                                "cannot match on coordinate index `{index_identity}`; only named indexes can be matched"
                             ),
-                            src: src.clone(),
-                            span: field.span.into(),
+                            src: self.env.src.clone(),
+                            span: scrutinee.span.into(),
                         });
                     }
-                    let field_type = constructor_field_type(
-                        field,
-                        &target.variant,
-                        &target.owning_type,
-                        &target.type_def,
-                        scrutinee_type_args,
-                        dag,
-                        registry,
-                        src,
+                };
+                let mut covered = std::collections::HashSet::new();
+                let mut arm_types = Vec::new();
+                for arm in arms {
+                    let hir::expr::MatchPattern::IndexLabel { variant, span } = &arm.pattern else {
+                        return Err(GraphcalError::EvalError {
+                            message: "label match arms must use index-label patterns".to_string(),
+                            src: self.env.src.clone(),
+                            span: arm.span.into(),
+                        });
+                    };
+                    self.check_index_override_dependency(
+                        &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                        IndexNominalUse::Label(variant.variant.variant()),
                     )?;
-                    match binding {
-                        hir::expr::PatternBinding::Bind { local, .. } => {
-                            arm_locals.bind(local.id, field_type);
-                        }
-                        hir::expr::PatternBinding::Wildcard { .. } => {}
+                    if index_identity.declared_resolved() != Some(variant.variant.index()) {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index_identity.display_name(),
+                            found: variant.variant.index().to_unowned_def_name().into(),
+                            src: self.env.src.clone(),
+                            span: (*span).into(),
+                        });
                     }
+                    let variant_name = variant.variant.variant();
+                    if !variants.iter().any(|v| v == variant_name) {
+                        return Err(GraphcalError::UnknownVariant {
+                            index_name: index_identity.display_name(),
+                            variant_name: variant_name.clone(),
+                            src: self.env.src.clone(),
+                            span: variant.path_span().into(),
+                        });
+                    }
+                    if !covered.insert(variant_name.clone()) {
+                        return Err(GraphcalError::EvalError {
+                            message: format!("duplicate match arm for variant `{variant_name}`"),
+                            src: self.env.src.clone(),
+                            span: (*span).into(),
+                        });
+                    }
+                    arm_types.push(self.infer_hir_type(&arm.body)?);
                 }
-                let missing = target
-                    .variant
-                    .fields()
-                    .iter()
-                    .filter(|field| !seen_pattern_fields.contains(field.name()))
-                    .map(|field| field.name().clone())
-                    .collect::<Vec<_>>();
-                if !missing.is_empty() {
-                    return Err(GraphcalError::MissingPatternFields {
-                        constructor: target.variant.name(),
-                        missing,
-                        src: src.clone(),
-                        span: (*span).into(),
-                    });
-                }
-                arm_types.push(infer_hir_type(
-                    &arm.body,
-                    owner_decl_name,
-                    declared_types,
-                    &arm_locals,
-                    dag,
-                    tir,
-                    registry,
-                    src,
-                )?);
-            }
-            if let Some(members) = type_def.union_members() {
-                for member in members {
-                    if !covered.contains(&member.name()) {
+                for variant in variants {
+                    if !covered.contains(&variant) {
                         return Err(GraphcalError::EvalError {
                             message: format!(
-                                "non-exhaustive match: member `{}` not covered",
-                                member.name()
+                                "non-exhaustive match: variant `{index_identity}#{variant}` not covered"
                             ),
-                            src: src.clone(),
+                            src: self.env.src.clone(),
                             span: expr.span.into(),
                         });
                     }
                 }
+                hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
             }
-            hir_arm_types_match(&arm_types, arms, registry, src, expr)
+            InferredType::Struct(type_name, scrutinee_type_args) => {
+                let type_def =
+                    struct_type_def_for_inferred(type_name, Some(self.env.dag), self.env.registry)
+                        .ok_or_else(|| GraphcalError::UnknownStructType {
+                            name: type_name.to_string(),
+                            src: self.env.src.clone(),
+                            span: scrutinee.span.into(),
+                        })?;
+                let mut covered = std::collections::HashSet::new();
+                let mut arm_types = Vec::new();
+                for arm in arms {
+                    let hir::expr::MatchPattern::Constructor {
+                        constructor,
+                        bindings,
+                        span,
+                    } = &arm.pattern
+                    else {
+                        return Err(GraphcalError::EvalError {
+                            message: "union match arms must use constructor patterns".to_string(),
+                            src: self.env.src.clone(),
+                            span: arm.span.into(),
+                        });
+                    };
+                    let target = self
+                        .env
+                        .dag
+                        .semantic
+                        .constructor_refs
+                        .constructor_defs
+                        .get(&constructor.value)
+                        .ok_or_else(|| GraphcalError::InternalError {
+                            message: format!(
+                                "semantic TIR missing constructor match target for `{}`",
+                                constructor.value
+                            ),
+                            src: self.env.src.clone(),
+                            span: constructor.span.into(),
+                        })?;
+                    self.check_type_override_dependency(
+                        &target.owning_type,
+                        TypeNominalUse::Constructor {
+                            constructor: &constructor.value,
+                            span: constructor.span,
+                        },
+                    )?;
+                    if bindings.is_explicit_empty() && target.variant.fields().is_empty() {
+                        return Err(GraphcalError::EmptyParenthesizedConstructor {
+                            constructor: target.variant.name(),
+                            src: self.env.src.clone(),
+                            span: (*span).into(),
+                        });
+                    }
+                    if type_name.resolved() != &target.owning_type {
+                        return Err(GraphcalError::UnknownField {
+                            type_name: type_name.name().clone(),
+                            field_name: FieldName::expect_valid(target.variant.name().as_str()),
+                            src: self.env.src.clone(),
+                            span: constructor.span.into(),
+                        });
+                    }
+                    if !covered.insert(target.variant.name().clone()) {
+                        return Err(GraphcalError::EvalError {
+                            message: format!("duplicate match arm for `{}`", target.variant.name()),
+                            src: self.env.src.clone(),
+                            span: (*span).into(),
+                        });
+                    }
+                    let mut arm_locals = self.locals.child(Vec::new());
+                    let mut seen_pattern_fields = std::collections::HashSet::new();
+                    for binding in bindings {
+                        let field = match binding {
+                            hir::expr::PatternBinding::Bind { field, .. }
+                            | hir::expr::PatternBinding::Wildcard { field, .. } => field,
+                        };
+                        if !seen_pattern_fields.insert(field.value.clone()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "duplicate pattern binding for field `{}` in `{}`",
+                                    field.value,
+                                    target.variant.name()
+                                ),
+                                src: self.env.src.clone(),
+                                span: field.span.into(),
+                            });
+                        }
+                        let field_type = self.env.constructor_field_type(
+                            field,
+                            &target.variant,
+                            &target.owning_type,
+                            &target.type_def,
+                            scrutinee_type_args,
+                        )?;
+                        match binding {
+                            hir::expr::PatternBinding::Bind { local, .. } => {
+                                arm_locals.bind(local.id, field_type);
+                            }
+                            hir::expr::PatternBinding::Wildcard { .. } => {}
+                        }
+                    }
+                    let missing = target
+                        .variant
+                        .fields()
+                        .iter()
+                        .filter(|field| !seen_pattern_fields.contains(field.name()))
+                        .map(|field| field.name().clone())
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        return Err(GraphcalError::MissingPatternFields {
+                            constructor: target.variant.name(),
+                            missing,
+                            src: self.env.src.clone(),
+                            span: (*span).into(),
+                        });
+                    }
+                    arm_types.push(self.with_locals(&arm_locals).infer_hir_type(&arm.body)?);
+                }
+                if let Some(members) = type_def.union_members() {
+                    for member in members {
+                        if !covered.contains(&member.name()) {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "non-exhaustive match: member `{}` not covered",
+                                    member.name()
+                                ),
+                                src: self.env.src.clone(),
+                                span: expr.span.into(),
+                            });
+                        }
+                    }
+                }
+                hir_arm_types_match(&arm_types, arms, self.env.registry, self.env.src, expr)
+            }
+            _ => Err(GraphcalError::EvalError {
+                message: format!(
+                    "cannot match on type `{}`; expected a tagged union or label value",
+                    format_inferred_type(&scrutinee_type, self.env.registry)
+                ),
+                src: self.env.src.clone(),
+                span: scrutinee.span.into(),
+            }),
         }
-        _ => Err(GraphcalError::EvalError {
-            message: format!(
-                "cannot match on type `{}`; expected a tagged union or label value",
-                format_inferred_type(&scrutinee_type, registry)
-            ),
-            src: src.clone(),
-            span: scrutinee.span.into(),
-        }),
     }
 }
 
@@ -4986,34 +4190,32 @@ fn specialize_dag_call_type(
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "DAG-call expression context")]
-fn infer_hir_dag_call(
-    expr: &hir::Expr,
-    target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
-    args: &[hir::expr::ParamBinding],
-    static_bindings: &hir::expr::DagCallStaticBindings,
-    output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    owner_decl_name: Option<&ResolvedDeclName>,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    local_types: &HirLocalTypes<'_>,
-    dag: &crate::tir::typed::DagTIR,
-    tir: &crate::tir::typed::TIR,
-    registry: &FormattingRegistry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<InferredType, GraphcalError> {
-    let display_path = target.value.to_string();
-    let dag_tir = tir
-        .dags
-        .get(&target.value)
-        .ok_or_else(|| GraphcalError::UnknownDag {
-            name: display_path.clone(),
-            src: src.clone(),
-            span: target.span.into(),
-        })?;
+impl Infer<'_> {
+    fn infer_hir_dag_call(
+        &self,
+        expr: &hir::Expr,
+        target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
+        args: &[hir::expr::ParamBinding],
+        static_bindings: &hir::expr::DagCallStaticBindings,
+        output: &crate::syntax::span::Spanned<ResolvedDeclName>,
+    ) -> Result<InferredType, GraphcalError> {
+        let display_path = target.value.to_string();
+        let dag_tir =
+            self.env
+                .tir
+                .dags
+                .get(&target.value)
+                .ok_or_else(|| GraphcalError::UnknownDag {
+                    name: display_path.clone(),
+                    src: self.env.src.clone(),
+                    span: target.span.into(),
+                })?;
 
-    let mut required_param_keys = std::collections::HashSet::new();
-    let param_decl_types_by_key: HashMap<ResolvedDeclName, &crate::tir::typed::ResolvedTypeExpr> =
-        dag_tir
+        let mut required_param_keys = std::collections::HashSet::new();
+        let param_decl_types_by_key: HashMap<
+            ResolvedDeclName,
+            &crate::tir::typed::ResolvedTypeExpr,
+        > = dag_tir
             .params
             .iter()
             .map(|param| {
@@ -5029,14 +4231,16 @@ fn infer_hir_dag_call(
                             "semantic type missing for DAG-call param `{}`",
                             param.name
                         ),
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: param.type_ann.span.into(),
                     })?;
                 Ok((key, resolved))
             })
             .collect::<Result<_, GraphcalError>>()?;
-    let node_decl_types_by_key: HashMap<ResolvedDeclName, &crate::tir::typed::ResolvedTypeExpr> =
-        dag_tir
+        let node_decl_types_by_key: HashMap<
+            ResolvedDeclName,
+            &crate::tir::typed::ResolvedTypeExpr,
+        > = dag_tir
             .nodes
             .iter()
             .map(|node| {
@@ -5044,7 +4248,7 @@ fn infer_hir_dag_call(
                 let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
                     GraphcalError::InternalError {
                         message: format!("semantic type missing for DAG-call node `{}`", node.name),
-                        src: src.clone(),
+                        src: self.env.src.clone(),
                         span: node.type_ann.span.into(),
                     }
                 })?;
@@ -5052,80 +4256,86 @@ fn infer_hir_dag_call(
             })
             .collect::<Result<_, GraphcalError>>()?;
 
-    let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclName> =
-        std::collections::HashSet::with_capacity(args.len());
-    for binding in args {
-        let target_key = &binding.target.value;
-        bound_resolved_names.insert(target_key.clone());
-        let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
-            GraphcalError::UnknownDagParam {
-                name: target_key.as_str().to_string(),
-                dag_name: display_path.clone(),
-                src: src.clone(),
-                span: binding.target.span.into(),
+        let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclName> =
+            std::collections::HashSet::with_capacity(args.len());
+        for binding in args {
+            let target_key = &binding.target.value;
+            bound_resolved_names.insert(target_key.clone());
+            let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
+                GraphcalError::UnknownDagParam {
+                    name: target_key.as_str().to_string(),
+                    dag_name: display_path.clone(),
+                    src: self.env.src.clone(),
+                    span: binding.target.span.into(),
+                }
+            })?;
+            let found = self.infer_hir_type(&binding.value)?;
+            let expected = specialize_dag_call_type(
+                expected,
+                static_bindings,
+                self.env.tir,
+                self.env.src,
+                binding.target.span,
+            )?;
+            if !resolved_type_matches_inferred(&expected, &found) {
+                return Err(GraphcalError::DagArgTypeMismatch {
+                    param_name: target_key.as_str().to_string(),
+                    expected: expected.format(self.env.registry),
+                    found: format_inferred_type(&found, self.env.registry),
+                    src: self.env.src.clone(),
+                    span: binding.value.span.into(),
+                });
             }
-        })?;
-        let found = infer_hir_type(
-            &binding.value,
-            owner_decl_name,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            src,
-        )?;
-        let expected =
-            specialize_dag_call_type(expected, static_bindings, tir, src, binding.target.span)?;
-        if !resolved_type_matches_inferred(&expected, &found) {
-            return Err(GraphcalError::DagArgTypeMismatch {
-                param_name: target_key.as_str().to_string(),
-                expected: expected.format(registry),
-                found: format_inferred_type(&found, registry),
-                src: src.clone(),
-                span: binding.value.span.into(),
+        }
+
+        let mut missing: Vec<String> = required_param_keys
+            .iter()
+            .filter(|param| !bound_resolved_names.contains(*param))
+            .map(|param| param.as_str().to_string())
+            .collect();
+        if !missing.is_empty() {
+            missing.sort();
+            return Err(GraphcalError::MissingDagBindings {
+                missing,
+                dag_name: display_path.clone(),
+                src: self.env.src.clone(),
+                span: expr.span.into(),
             });
         }
-    }
 
-    let mut missing: Vec<String> = required_param_keys
-        .iter()
-        .filter(|param| !bound_resolved_names.contains(*param))
-        .map(|param| param.as_str().to_string())
-        .collect();
-    if !missing.is_empty() {
-        missing.sort();
-        return Err(GraphcalError::MissingDagBindings {
-            missing,
-            dag_name: display_path.clone(),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
+        let output_key = &output.value;
+        let output_decl = node_decl_types_by_key
+            .get(output_key)
+            .or_else(|| param_decl_types_by_key.get(output_key))
+            .ok_or_else(|| GraphcalError::UnknownDagOutput {
+                name: output_key.as_str().to_string(),
+                dag_name: display_path.clone(),
+                src: self.env.src.clone(),
+                span: output.span.into(),
+            })?;
+        let output_name = output_key.as_str();
+        if !dag_tir
+            .projectable_outputs
+            .contains(&output_key.to_unowned_def_name())
+        {
+            return Err(GraphcalError::ImportPrivateItem {
+                name: output_name.to_string(),
+                file_path: display_path,
+                src: self.env.src.clone(),
+                span: output.span.into(),
+            });
+        }
+        let output_decl = specialize_dag_call_type(
+            output_decl,
+            static_bindings,
+            self.env.tir,
+            self.env.src,
+            output.span,
+        )?;
+        substitute_resolved_type_with_type_params(
+            &output_decl,
+            &GenericSubstitutions::default(),
+            self.env.src,
+        )
     }
-
-    let output_key = &output.value;
-    let output_decl = node_decl_types_by_key
-        .get(output_key)
-        .or_else(|| param_decl_types_by_key.get(output_key))
-        .ok_or_else(|| GraphcalError::UnknownDagOutput {
-            name: output_key.as_str().to_string(),
-            dag_name: display_path.clone(),
-            src: src.clone(),
-            span: output.span.into(),
-        })?;
-    let output_name = output_key.as_str();
-    if !dag_tir
-        .projectable_outputs
-        .contains(&output_key.to_unowned_def_name())
-    {
-        return Err(GraphcalError::ImportPrivateItem {
-            name: output_name.to_string(),
-            file_path: display_path,
-            src: src.clone(),
-            span: output.span.into(),
-        });
-    }
-    let output_decl =
-        specialize_dag_call_type(output_decl, static_bindings, tir, src, output.span)?;
-    substitute_resolved_type_with_type_params(&output_decl, &GenericSubstitutions::default(), src)
 }
