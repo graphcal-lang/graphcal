@@ -176,44 +176,35 @@ impl Infer<'_> {
                     };
                     let target = self
                         .env
-                        .dag
-                        .semantic
-                        .constructor_refs
-                        .constructor_defs
-                        .get(&constructor.value)
-                        .ok_or_else(|| GraphcalError::InternalError {
-                            message: format!(
-                                "semantic TIR missing constructor match target for `{}`",
-                                constructor.value
-                            ),
-                            src: self.env.src.clone(),
-                            span: constructor.span.into(),
-                        })?;
+                        .resolved_constructor(&constructor.value, constructor.span)?;
                     self.check_type_override_dependency(
-                        &target.owning_type,
+                        target.owning_type(),
                         TypeNominalUse::Constructor {
                             constructor: &constructor.value,
                             span: constructor.span,
                         },
                     )?;
-                    if bindings.is_explicit_empty() && target.variant.fields().is_empty() {
+                    if bindings.is_explicit_empty() && target.variant().fields().is_empty() {
                         return Err(GraphcalError::EmptyParenthesizedConstructor {
-                            constructor: target.variant.name(),
+                            constructor: target.variant().name(),
                             src: self.env.src.clone(),
                             span: (*span).into(),
                         });
                     }
-                    if type_name.resolved() != &target.owning_type {
+                    if type_name.resolved() != target.owning_type() {
                         return Err(GraphcalError::UnknownField {
                             type_name: type_name.name().clone(),
-                            field_name: FieldName::expect_valid(target.variant.name().as_str()),
+                            field_name: FieldName::expect_valid(target.variant().name().as_str()),
                             src: self.env.src.clone(),
                             span: constructor.span.into(),
                         });
                     }
-                    if !covered.insert(target.variant.name().clone()) {
+                    if !covered.insert(target.variant().name().clone()) {
                         return Err(GraphcalError::EvalError {
-                            message: format!("duplicate match arm for `{}`", target.variant.name()),
+                            message: format!(
+                                "duplicate match arm for `{}`",
+                                target.variant().name()
+                            ),
                             src: self.env.src.clone(),
                             span: (*span).into(),
                         });
@@ -230,7 +221,7 @@ impl Infer<'_> {
                                 message: format!(
                                     "duplicate pattern binding for field `{}` in `{}`",
                                     field.value,
-                                    target.variant.name()
+                                    target.variant().name()
                                 ),
                                 src: self.env.src.clone(),
                                 span: field.span.into(),
@@ -238,9 +229,9 @@ impl Infer<'_> {
                         }
                         let field_type = self.env.constructor_field_type(
                             field,
-                            &target.variant,
-                            &target.owning_type,
-                            &target.type_def,
+                            target.variant(),
+                            target.owning_type(),
+                            target.definition(),
                             scrutinee_type_args,
                         )?;
                         match binding {
@@ -251,7 +242,7 @@ impl Infer<'_> {
                         }
                     }
                     let missing = target
-                        .variant
+                        .variant()
                         .fields()
                         .iter()
                         .filter(|field| !seen_pattern_fields.contains(field.name()))
@@ -259,7 +250,7 @@ impl Infer<'_> {
                         .collect::<Vec<_>>();
                     if !missing.is_empty() {
                         return Err(GraphcalError::MissingPatternFields {
-                            constructor: target.variant.name(),
+                            constructor: target.variant().name(),
                             missing,
                             src: self.env.src.clone(),
                             span: (*span).into(),

@@ -551,7 +551,7 @@ fn collect_field_constraint_applications(
             } = &record.fact
             {
                 applications.insert(ConcreteNominalApplication {
-                    identity: StructTypeRef::from_resolved(application.definition.clone()),
+                    identity: StructTypeRef::from_resolved(application.definition().clone()),
                     generic_args: application.generic_args.clone(),
                 });
             }

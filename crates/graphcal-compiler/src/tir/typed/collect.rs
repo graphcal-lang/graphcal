@@ -1,16 +1,15 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::hir;
 use crate::registry::error::GraphcalError;
-use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
+use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
 
 use super::{
-    DagTIR, ModuleTypeContext, ResolvedConstructorRefs, ResolvedConstructorTarget,
-    ResolvedDagDependencies, internal_error, module_resolve_error,
+    DagTIR, ModuleTypeContext, ResolvedDagDependencies, internal_error, module_resolve_error,
 };
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
@@ -170,39 +169,30 @@ pub(super) fn collect_resolved_dag_dependencies(
     Ok(resolved)
 }
 
-fn record_resolved_constructor_target(
+fn record_constructed_type(
     constructor: &ResolvedConstructorName,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
     span: Span,
-    refs: &mut ResolvedConstructorRefs,
-) -> Result<ResolvedConstructorTarget, GraphcalError> {
-    if let Some(target) = refs.constructor_defs.get(constructor) {
-        return Ok(target.clone());
-    }
-
-    let def = ctx.types.lookup_constructor(constructor).ok_or_else(|| {
+    constructed_types: &mut HashSet<ResolvedStructTypeName>,
+) -> Result<(), GraphcalError> {
+    let resolved = ctx.types.lookup_constructor(constructor).ok_or_else(|| {
         internal_error(
             format!("semantic constructor metadata references unknown constructor `{constructor}`"),
             src,
             span,
         )
     })?;
-    let target = ResolvedConstructorTarget {
-        owning_type: def.owning_type.clone(),
-        type_def: def.type_def.clone(),
-        variant: def.variant.clone(),
-    };
-    refs.constructor_defs
-        .insert(constructor.clone(), target.clone());
-    Ok(target)
+    constructed_types.insert(resolved.owning_type().clone());
+    Ok(())
 }
 
-pub(super) fn collect_resolved_constructor_refs_from_expr(
+/// Collect the owning types of every constructor a body calls, names, or matches.
+pub(super) fn collect_constructed_types_from_expr(
     expr: &hir::Expr,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
-    refs: &mut ResolvedConstructorRefs,
+    constructed_types: &mut HashSet<ResolvedStructTypeName>,
 ) -> Result<(), GraphcalError> {
     let mut result = Ok(());
     hir::visit_expr(expr, &mut |node| {
@@ -212,16 +202,22 @@ pub(super) fn collect_resolved_constructor_refs_from_expr(
         result = (|| {
             match node.kind() {
                 hir::ExprKind::ConstructorCall { callee, .. } => {
-                    record_resolved_constructor_target(&callee.value, ctx, src, callee.span, refs)?;
+                    record_constructed_type(
+                        &callee.value,
+                        ctx,
+                        src,
+                        callee.span,
+                        constructed_types,
+                    )?;
                 }
                 hir::ExprKind::ConstRef(target) => {
                     if let hir::ConstRef::Constructor(constructor) = &target.value {
-                        record_resolved_constructor_target(
+                        record_constructed_type(
                             constructor,
                             ctx,
                             src,
                             target.span,
-                            refs,
+                            constructed_types,
                         )?;
                     }
                 }
@@ -230,12 +226,12 @@ pub(super) fn collect_resolved_constructor_refs_from_expr(
                         if let hir::expr::MatchPattern::Constructor { constructor, .. } =
                             &arm.pattern
                         {
-                            record_resolved_constructor_target(
+                            record_constructed_type(
                                 &constructor.value,
                                 ctx,
                                 src,
                                 constructor.span,
-                                refs,
+                                constructed_types,
                             )?;
                         }
                     }

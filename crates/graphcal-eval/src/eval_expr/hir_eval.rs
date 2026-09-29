@@ -448,7 +448,7 @@ fn eval_hir_nullary_constructor(
     let application = checked_constructor(expr, ctx)?;
     Ok(RuntimeValue::Struct {
         type_name: application.runtime_type.clone(),
-        constructor: application.constructor.clone(),
+        constructor: application.constructor.name(),
         generic_args: application.generic_args.clone(),
         fields: IndexMap::new(),
     })
@@ -1755,8 +1755,8 @@ fn eval_hir_constructor_call(
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let application = checked_constructor(expr, ctx)?;
-    let constructor_name = &application.constructor;
-    let owning_type = StructTypeRef::from_resolved(application.definition.clone());
+    let constructor_name = application.constructor.name();
+    let owning_type = StructTypeRef::from_resolved(application.definition().clone());
     let mut field_map = IndexMap::new();
     let mut field_presentations = HashMap::new();
     for field_init in fields {
@@ -1768,9 +1768,7 @@ fn eval_hir_constructor_call(
             ctx,
         )?;
         let (val, presentation) = evaluated.into_parts();
-        if application
-            .required_constraints
-            .contains(&field_init.name.value)
+        if application.constructor.constrains(&field_init.name.value)
             && let Some(field_constraints) = ctx.struct_field_constraints()
         {
             let key =
@@ -1807,7 +1805,7 @@ fn eval_hir_constructor_call(
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Struct {
             type_name: application.runtime_type.clone(),
-            constructor: constructor_name.clone(),
+            constructor: constructor_name,
             generic_args: application.generic_args.clone(),
             fields: field_map,
         },

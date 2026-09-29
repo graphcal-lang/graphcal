@@ -9,7 +9,7 @@ use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::hir;
-use crate::hir::{NominalConstructor, NominalTypeDef};
+use crate::hir::NominalTypeDef;
 use crate::nat::NatPolyForm;
 use crate::registry::declared_type::{DeclaredType, IndexDisplayName, IndexTypeRef};
 use crate::registry::error::GraphcalError;
@@ -325,14 +325,6 @@ impl std::fmt::Display for ResolvedIndex {
     }
 }
 
-/// Canonical constructor metadata retained with its owning nominal definition.
-#[derive(Debug, Clone)]
-pub struct ProjectConstructorDef {
-    pub(crate) owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: Arc<NominalTypeDef>,
-    pub(crate) variant: NominalConstructor,
-}
-
 /// Authoritative project type-system definitions keyed by
 /// [`ResolvedName`](crate::resolved_name::ResolvedName) identities.
 ///
@@ -349,7 +341,7 @@ pub struct ProjectTypeStore {
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
     struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
-    constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
+    constructors: HashMap<ResolvedConstructorName, crate::hir::nominal::ResolvedConstructor>,
 }
 
 /// Failure to transfer one module's definitions into the semantic project type store.
@@ -507,12 +499,11 @@ impl ProjectTypeStore {
             if let Some(members) = definition.union_members() {
                 for member in members {
                     if let Some(existing) = self.constructors.get(member.identity())
-                        && (existing.owning_type != *definition.identity()
-                            || !Arc::ptr_eq(&existing.type_def, definition))
+                        && !Arc::ptr_eq(existing.definition(), definition)
                     {
                         return Err(ProjectTypeStoreInsertError::CompetingConstructorOwner {
                             constructor: member.identity().clone(),
-                            first_owner: existing.owning_type.clone(),
+                            first_owner: existing.owning_type().clone(),
                         });
                     }
                 }
@@ -526,16 +517,10 @@ impl ProjectTypeStore {
                     .entry(identity.clone())
                     .or_insert_with(|| Arc::clone(definition)),
             );
-            if let Some(members) = definition.union_members() {
-                for member in members {
-                    self.constructors
-                        .entry(member.identity().clone())
-                        .or_insert_with(|| ProjectConstructorDef {
-                            owning_type: identity.clone(),
-                            type_def: Arc::clone(&handle),
-                            variant: member.clone(),
-                        });
-                }
+            for constructor in crate::hir::nominal::ResolvedConstructor::members_of(&handle) {
+                self.constructors
+                    .entry(constructor.identity().clone())
+                    .or_insert(constructor);
             }
         }
         Ok(())
@@ -590,7 +575,7 @@ impl ProjectTypeStore {
     pub(crate) fn lookup_constructor(
         &self,
         constructor: &ResolvedConstructorName,
-    ) -> Option<&ProjectConstructorDef> {
+    ) -> Option<&crate::hir::nominal::ResolvedConstructor> {
         self.constructors.get(constructor)
     }
 }
@@ -948,15 +933,6 @@ pub struct ResolvedDagDependencies {
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
-/// Canonical HIR-derived constructor references used by constructor and match inference.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedConstructorRefs {
-    /// Canonical constructor definitions observed while collecting constructor
-    /// calls, const-like constructor refs, and match patterns. HIR carries the
-    /// resolved constructor name inline; this map supplies the rich target.
-    pub constructor_defs: HashMap<ResolvedConstructorName, ResolvedConstructorTarget>,
-}
-
 /// Canonical field type identity inside a resolved struct/tagged-union type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedStructFieldTypeKey {
@@ -1180,8 +1156,6 @@ pub struct DagSemanticBody {
     pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::lower::DynamicUnitScaleEntry>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
-    /// Canonical HIR-derived constructor calls and match patterns.
-    pub constructor_refs: ResolvedConstructorRefs,
     /// Include override obligations keyed by the canonical param whose default
     /// must remain independent of the replaced nominal declarations.
     pub(crate) override_reconciliations: HashMap<ResolvedDeclName, Vec<OverrideReconciliation>>,
@@ -1197,14 +1171,6 @@ pub struct DagSemanticBody {
     pub(crate) expression_facts: Option<crate::tir::expression_facts::CheckedExpressionFacts>,
     /// Checked structured display and plot-channel presentation facts.
     pub presentation: crate::tir::presentation::DagPresentationFacts,
-}
-
-/// A resolved constructor and the tagged-union member it constructs.
-#[derive(Debug, Clone)]
-pub struct ResolvedConstructorTarget {
-    pub owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: Arc<NominalTypeDef>,
-    pub variant: NominalConstructor,
 }
 
 // ---------------------------------------------------------------------------
@@ -1410,6 +1376,7 @@ impl TIR {
         self.dags.root()
     }
 
+    #[cfg(test)]
     pub(crate) const fn root_mut(&mut self) -> &mut DagTIR {
         self.dags.root_mut()
     }

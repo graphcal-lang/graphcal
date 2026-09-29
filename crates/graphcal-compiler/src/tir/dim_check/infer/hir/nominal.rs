@@ -98,23 +98,9 @@ impl Infer<'_> {
         constructor_generic_args: &[GenericArg],
         fields: &[FieldInit],
     ) -> Result<InferredType, GraphcalError> {
-        let target = self
-            .env
-            .dag
-            .semantic
-            .constructor_refs
-            .constructor_defs
-            .get(&callee.value)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "semantic TIR missing constructor call target for `{}`",
-                    callee.value
-                ),
-                src: self.env.src.clone(),
-                span: callee.span.into(),
-            })?;
+        let target = self.env.resolved_constructor(&callee.value, callee.span)?;
         self.check_type_override_dependency(
-            &target.owning_type,
+            target.owning_type(),
             TypeNominalUse::Constructor {
                 constructor: &callee.value,
                 span: callee.span,
@@ -123,13 +109,13 @@ impl Infer<'_> {
         constructor_generic_args
             .iter()
             .try_for_each(|arg| self.check_hir_generic_arg_override_dependencies(arg))?;
-        let type_def = &target.type_def;
-        let variant = &target.variant;
-        let owning_type_identity = StructTypeRef::from_resolved(target.owning_type.clone());
+        let type_def = target.definition();
+        let variant = target.variant();
+        let owning_type_identity = StructTypeRef::from_resolved(target.owning_type().clone());
         let owning_type_name = type_def.name();
 
         let resolved_type_args = self.env.resolve_applied_generic_args(
-            &target.owning_type,
+            target.owning_type(),
             type_def,
             constructor_generic_args,
             callee.span,
@@ -205,7 +191,7 @@ impl Infer<'_> {
                 })?;
             let value_type = self.infer_hir_type(&field_init.value)?;
             let expected = resolved_field_type(
-                &resolved_type_field_key(&target.owning_type, variant, field_def.name()),
+                &resolved_type_field_key(target.owning_type(), variant, field_def.name()),
                 type_def,
                 &resolved_type_args,
                 self.env.dag,

@@ -219,6 +219,17 @@ impl ExpressionFactCollector {
             src,
             expr.span,
         )?;
+        let resolved_constructor = |name| {
+            tir.project_type_store()
+                .lookup_constructor(name)
+                .ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!("checked constructor `{name}` has no definition"),
+                        src,
+                        DiagnosticAnchor::Source(expr.span),
+                    )
+                })
+        };
         let constructor = match expr.kind() {
             ExprKind::ConstructorCall { callee, .. } => Some(&callee.value),
             ExprKind::ConstRef(target) => match &target.value {
@@ -228,18 +239,7 @@ impl ExpressionFactCollector {
             _ => None,
         }
         .map(|name| {
-            let target = dag
-                .semantic
-                .constructor_refs
-                .constructor_defs
-                .get(name)
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!("checked constructor `{name}` has no definition"),
-                        src,
-                        DiagnosticAnchor::Source(expr.span),
-                    )
-                })?;
+            let target = resolved_constructor(name)?;
             let DeclaredType::Struct(_, args) = &checked_type else {
                 return Err(GraphcalError::internal_error(
                     "constructor inferred a non-nominal type",
@@ -248,17 +248,9 @@ impl ExpressionFactCollector {
                 ));
             };
             Ok(ConstructorApplication {
-                definition: target.owning_type.clone(),
-                runtime_type: dag.runtime_struct_type_identity(&target.owning_type),
-                constructor: target.variant.name(),
+                runtime_type: dag.runtime_struct_type_identity(target.owning_type()),
+                constructor: target.clone(),
                 generic_args: args.clone(),
-                required_constraints: target
-                    .variant
-                    .fields()
-                    .iter()
-                    .filter(|field| !field.type_annotation().domain_bounds.is_empty())
-                    .map(|field| field.name().clone())
-                    .collect(),
             })
         })
         .transpose()?;
@@ -270,24 +262,13 @@ impl ExpressionFactCollector {
                     MatchPattern::IndexLabel { .. } => None,
                 })
                 .map(|name| {
-                    let target = dag
-                        .semantic
-                        .constructor_refs
-                        .constructor_defs
-                        .get(name)
-                        .ok_or_else(|| {
-                            GraphcalError::internal_error(
-                                format!("checked match constructor `{name}` has no definition"),
-                                src,
-                                DiagnosticAnchor::Source(expr.span),
-                            )
-                        })?;
+                    let target = resolved_constructor(name)?;
                     Ok((
                         name.clone(),
                         crate::tir::expression_facts::ConstructorMatch {
-                            definition: target.owning_type.clone(),
-                            runtime_type: dag.runtime_struct_type_identity(&target.owning_type),
-                            constructor: target.variant.name(),
+                            definition: target.owning_type().clone(),
+                            runtime_type: dag.runtime_struct_type_identity(target.owning_type()),
+                            constructor: target.name(),
                         },
                     ))
                 })

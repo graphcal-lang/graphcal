@@ -408,11 +408,9 @@ fn specialize_record(
                         ));
                     };
                     Ok(Box::new(ConstructorApplication {
-                        definition: application.definition.clone(),
-                        runtime_type: dag.runtime_struct_type_identity(&application.definition),
+                        runtime_type: dag.runtime_struct_type_identity(application.definition()),
                         constructor: application.constructor.clone(),
                         generic_args: args.clone(),
-                        required_constraints: application.required_constraints.clone(),
                     }))
                 })
                 .transpose()?;
