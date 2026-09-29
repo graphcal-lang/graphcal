@@ -18,6 +18,19 @@ fn scoped_name(name: &str) -> ScopedName {
     ScopedName::local(graphcal_compiler::syntax::decl_name::DeclName::expect_valid(name))
 }
 
+/// The checked type of the root declaration written as `name`.
+fn root_decl_type<'a>(
+    tir: &'a graphcal_compiler::tir::typed::TIR,
+    name: &str,
+) -> &'a graphcal_compiler::tir::typed::CheckedDeclType {
+    let identity = tir
+        .root()
+        .bound_decl_identity(&scoped_name(name))
+        .unwrap_or_else(|| panic!("`{name}` is not declared in the root"));
+    tir.decl_type(identity)
+        .unwrap_or_else(|| panic!("`{name}` has no checked type"))
+}
+
 fn member_name(owner: &[&str], leaf: &str) -> ScopedName {
     let owner = owner
         .iter()
@@ -6317,12 +6330,10 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.root_file().named_source();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
-    let declared = tir.root().build_declared_types(src).unwrap();
 
     let graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } =
-        &declared[&scoped_name("series")]
+        root_decl_type(&tir, "series").declared()
     else {
         panic!("expected indexed declared type for `series`");
     };
@@ -6345,18 +6356,16 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.root_file().named_source();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
-    let declared = tir.root().build_declared_types(src).unwrap();
 
     let graphcal_compiler::registry::declared_type::DeclaredType::Struct(item, _) =
-        &declared[&scoped_name("item")]
+        root_decl_type(&tir, "item").declared()
     else {
         panic!("expected struct declared type for `item`");
     };
     let graphcal_compiler::registry::declared_type::DeclaredType::Struct(other, _) =
-        &declared[&scoped_name("other")]
+        root_decl_type(&tir, "other").declared()
     else {
         panic!("expected struct declared type for `other`");
     };
@@ -6716,12 +6725,11 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
     let marker_owner = |decl: &str| {
-        let key = scoped_name(decl);
         let graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct {
             name: wrap,
             generic_args,
             ..
-        } = &tir.root().resolved_decl_types()[&key]
+        } = root_decl_type(&tir, decl).resolved()
         else {
             panic!("expected generic struct annotation for `{decl}`");
         };

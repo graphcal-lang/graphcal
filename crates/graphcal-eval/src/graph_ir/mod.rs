@@ -354,9 +354,8 @@ fn project_dag_nodes(
                     .get(id.owner())
                     .is_some_and(|names| names.contains(&id.to_unowned_def_name()));
             let type_label = dag
-                .resolved_decl_types()
-                .get(&entry.name)
-                .map(|ty| ty.format(tir.registry()));
+                .value_decl_type(&id)
+                .map(|ty| ty.resolved().format(tir.registry()));
             GraphNode {
                 is_unfinished: dag.todo(&id).is_some(),
                 id,

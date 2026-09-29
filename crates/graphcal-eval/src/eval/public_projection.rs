@@ -561,10 +561,13 @@ mod tests {
                       node sample: Measurement = Reading(value: 1.0 m);";
         let tir = crate::eval::compile_to_tir(source, "projection.gcl").unwrap();
         let src = NamedSource::new("projection.gcl", Arc::new(source.to_string()));
-        let declared_types = tir.build_declared_types(&src).unwrap();
-        let declared = &declared_types[&graphcal_compiler::syntax::module_name::ScopedName::local(
-            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("sample"),
-        )];
+        let sample = tir
+            .root()
+            .bound_decl_identity(&graphcal_compiler::syntax::module_name::ScopedName::local(
+                graphcal_compiler::syntax::decl_name::DeclName::expect_valid("sample"),
+            ))
+            .unwrap();
+        let declared = tir.decl_type(sample).unwrap().declared();
         let DeclaredType::Struct(identity, generic_args) = declared else {
             panic!("sample must have a concrete nominal type");
         };

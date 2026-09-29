@@ -9,7 +9,6 @@ use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::index_name::IndexEntryKey;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::span::Span;
 
 use crate::registry::error::GraphcalError;
@@ -158,17 +157,15 @@ impl DimCheckContext<'_> {
 
 fn validate_declared_shape(
     ctx: &DimCheckContext<'_>,
-    name: &ScopedName,
-    span: Span,
+    annotation: &crate::tir::typed::CheckedTypeAnnotation,
 ) -> Result<(), GraphcalError> {
-    let ty = ctx.env.declared_types.get(name).ok_or_else(|| {
-        GraphcalError::internal_error(
-            "declaration has no checked type",
-            ctx.env.src,
-            DiagnosticAnchor::Source(span),
-        )
-    })?;
-    expression_axes::checked_expression_shape(ty, ctx.env.tir, ctx.env.src, span).map(|_| ())
+    expression_axes::checked_expression_shape(
+        annotation.checked().declared(),
+        ctx.env.tir,
+        ctx.env.src,
+        annotation.span,
+    )
+    .map(|_| ())
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -176,17 +173,10 @@ fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
     name: &crate::syntax::module_name::ScopedName,
     identity: &ResolvedDeclName,
-    type_ann_span: &crate::syntax::span::Span,
+    annotation: &crate::tir::typed::CheckedTypeAnnotation,
 ) -> Result<(), GraphcalError> {
-    let declared =
-        ctx.env
-            .declared_types
-            .get(name)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("no declared type recorded for `{name}`"),
-                src: ctx.env.src.clone(),
-                span: (*type_ann_span).into(),
-            })?;
+    let type_ann_span = &annotation.span;
+    let declared = annotation.checked().declared();
     if ctx.env.dag.todo(identity).is_some() {
         // The explicit declaration type is the entire contract; there is no
         // formula to infer or expression fact to fabricate.
@@ -218,11 +208,7 @@ fn check_decl_expr_type(
         );
     }
     let inferred = ctx.infer_hir(hir_expr, Some(identity))?;
-    let matches = ctx.env.dag.resolved_decl_types.get(name).map_or_else(
-        || types_match(declared, &inferred),
-        |resolved| resolved_type_matches_inferred(resolved, &inferred),
-    );
-    if !matches {
+    if !resolved_type_matches_inferred(annotation.checked().resolved(), &inferred) {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, ctx.env.registry),
             inferred: format_inferred_type(&inferred, ctx.env.registry),
@@ -721,9 +707,7 @@ fn install_presentation_facts(
 /// Check dimensions for all declarations in a file.
 ///
 /// For each const/param/node, infers the dimension of the RHS expression
-/// and verifies it matches the declared type annotation. Uses
-/// `tir.build_declared_types()` (derived from `resolved_decl_types`) to validate
-/// that every RHS expression matches its declared type annotation.
+/// and verifies it matches the checked type carried by its declaration record.
 ///
 /// Starts a new semantic checking revision and retains its derived shape and
 /// presentation facts. Returns `()` only after validation succeeds.
@@ -992,20 +976,14 @@ fn is_bindable_nominal(
 ///
 /// Returns a [`GraphcalError`] when the expression is not well typed in the
 /// root module or does not exactly match `expected`.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "the inference core uses the compiler's canonical HashMap type"
-)]
 pub fn check_external_value_expr_type(
     tir: &crate::tir::typed::TIR,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     expr: &crate::hir::Expr,
     expected: &DeclaredType,
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
     let collector = infer::hir::ExpressionFactCollector::new(tir.root());
     let inferred = infer::hir::InferEnv {
-        declared_types,
         dag: tir.root(),
         tir,
         registry: &tir.registry,
@@ -1054,11 +1032,11 @@ pub fn check_external_value_expr_type(
 fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
     for entry in &ctx.env.dag.params {
         ctx.checkpoint()?;
-        validate_declared_shape(ctx, &entry.name, entry.type_ann.span)?;
+        validate_declared_shape(ctx, &entry.type_ann)?;
         if entry.default.is_none() {
             continue;
         }
-        check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
+        check_decl_expr_type(ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
     }
     Ok(())
 }
@@ -1074,10 +1052,8 @@ fn check_dimensions_dag(
     expression_facts: &infer::hir::ExpressionFactCollector,
 ) -> Result<plot::CheckedPlotChannelShapes, GraphcalError> {
     cancellation.checkpoint()?;
-    let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
         env: infer::hir::InferEnv {
-            declared_types: &declared_types,
             dag,
             tir,
             registry,
@@ -1089,13 +1065,13 @@ fn check_dimensions_dag(
 
     for entry in &dag.consts {
         ctx.checkpoint()?;
-        validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
+        validate_declared_shape(&ctx, &entry.type_ann)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
     }
     for entry in &dag.nodes {
         ctx.checkpoint()?;
-        validate_declared_shape(&ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann.span)?;
+        validate_declared_shape(&ctx, &entry.type_ann)?;
+        check_decl_expr_type(&ctx, &entry.name, &entry.identity(), &entry.type_ann)?;
     }
     check_param_defaults(&ctx)?;
 
@@ -1170,29 +1146,33 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| (&e.name, e.identity()))
-        .chain(dag.params.iter().map(|e| (&e.name, e.identity())))
-        .chain(dag.nodes.iter().map(|e| (&e.name, e.identity())));
+        .map(|e| (&e.name, e.identity(), &e.type_ann))
+        .chain(
+            dag.params
+                .iter()
+                .map(|e| (&e.name, e.identity(), &e.type_ann)),
+        )
+        .chain(
+            dag.nodes
+                .iter()
+                .map(|e| (&e.name, e.identity(), &e.type_ann)),
+        );
 
-    for (name, key) in decl_iter {
+    for (name, key, annotation) in decl_iter {
         let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
         };
 
-        let resolved = dag.resolved_decl_types.get(name);
-        let base_resolved = resolved.map(strip_indexed);
-        let expected = match base_resolved {
-            Some(crate::tir::typed::ResolvedTypeExpr::Quantity(dim)) => {
+        let expected = match strip_indexed(annotation.checked().resolved()) {
+            crate::tir::typed::ResolvedTypeExpr::Quantity(dim) => {
                 ExpectedBound::Quantity(dim.clone())
             }
-            Some(crate::tir::typed::ResolvedTypeExpr::Dimensionless) => {
+            crate::tir::typed::ResolvedTypeExpr::Dimensionless => {
                 ExpectedBound::Quantity(Dimension::dimensionless())
             }
-            Some(crate::tir::typed::ResolvedTypeExpr::Int) => ExpectedBound::Int,
-            Some(crate::tir::typed::ResolvedTypeExpr::Datetime(scale)) => {
-                ExpectedBound::Datetime(*scale)
-            }
+            crate::tir::typed::ResolvedTypeExpr::Int => ExpectedBound::Int,
+            crate::tir::typed::ResolvedTypeExpr::Datetime(scale) => ExpectedBound::Datetime(*scale),
             _ => continue,
         };
 
@@ -1236,26 +1216,23 @@ fn check_domain_constraint_targets_dag(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|entry| (&entry.name, entry.identity(), entry.span))
+        .map(|entry| (entry.identity(), &entry.type_ann, entry.span))
         .chain(
             dag.params
                 .iter()
-                .map(|entry| (&entry.name, entry.identity(), entry.span)),
+                .map(|entry| (entry.identity(), &entry.type_ann, entry.span)),
         )
         .chain(
             dag.nodes
                 .iter()
-                .map(|entry| (&entry.name, entry.identity(), entry.span)),
+                .map(|entry| (entry.identity(), &entry.type_ann, entry.span)),
         );
 
-    for (name, key, decl_span) in decl_iter {
+    for (key, annotation, decl_span) in decl_iter {
         if !dag.semantic.domain_bounds.contains_key(&key) {
             continue;
         }
-        let Some(resolved) = dag.resolved_decl_types.get(name) else {
-            continue;
-        };
-        if let Some(type_kind) = invalid_domain_target_kind(resolved) {
+        if let Some(type_kind) = invalid_domain_target_kind(annotation.checked().resolved()) {
             return Err(GraphcalError::InvalidDomainTarget {
                 type_kind,
                 src: src.clone(),
@@ -1463,9 +1440,7 @@ fn check_field_domain_constraint_dimensions(
                 continue;
             };
             for bound in field_semantics.domain_bounds() {
-                let definition_types = definition_dag.build_declared_types(&bound.src)?;
                 let inferred = infer::hir::InferEnv {
-                    declared_types: &definition_types,
                     dag: definition_dag,
                     tir,
                     registry,

@@ -227,6 +227,23 @@ pub(super) fn run_eval_loop_with_bindings(
     })
 }
 
+/// The checked declared type of a runtime declaration.
+fn checked_declared_type<'a>(
+    tir: &'a graphcal_compiler::tir::typed::TIR,
+    declaration: &ResolvedDeclName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a DeclaredType, GraphcalError> {
+    tir.decl_type(declaration)
+        .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("runtime declaration `{declaration}` is absent from checked TIR"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })
+}
+
 /// Evaluate using immutable TIR plus one plan and validated runtime bindings.
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
@@ -241,7 +258,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::execution_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -276,17 +292,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .collect::<Result<PresentationInstanceMap, _>>()?;
     let presentation_diagnostics = std::cell::RefCell::new(Vec::new());
 
-    let make_value = |name: &ScopedName,
-                      declaration: &ResolvedDeclName,
+    let make_value = |declaration: &ResolvedDeclName,
                       runtime: &RuntimeValue|
      -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
-        let declared_type = declared_types.get(name).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked declared type is missing for public declaration `{declaration}`"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
+        let declared_type = checked_declared_type(tir, declaration, src)?;
         project_runtime_value(
             runtime,
             declared_type,
@@ -296,25 +305,24 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         )
     };
 
-    let make_result = |name: &ScopedName,
-                       key: &ResolvedDeclName|
-     -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
-        errors.get(key).map_or_else(
-            || {
-                values.get(key).map_or_else(
-                    || {
-                        Err(GraphcalError::internal_error(
-                            format!("successful declaration `{key}` has no runtime value"),
-                            src,
-                            DiagnosticAnchor::WholeFile,
-                        ))
-                    },
-                    |runtime| make_value(name, key, runtime),
-                )
-            },
-            |error| Ok(Err(error.clone())),
-        )
-    };
+    let make_result =
+        |key: &ResolvedDeclName| -> Result<Result<Value, NodeUnavailable>, GraphcalError> {
+            errors.get(key).map_or_else(
+                || {
+                    values.get(key).map_or_else(
+                        || {
+                            Err(GraphcalError::internal_error(
+                                format!("successful declaration `{key}` has no runtime value"),
+                                src,
+                                DiagnosticAnchor::WholeFile,
+                            ))
+                        },
+                        |runtime| make_value(key, runtime),
+                    )
+                },
+                |error| Ok(Err(error.clone())),
+            )
+        };
 
     let mut result_values = RuntimeResultValueAssembly::default();
     for entry in tir.root().source_order() {
@@ -336,9 +344,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         DiagnosticAnchor::WholeFile,
                     ))
                 },
-                |runtime| make_value(name, &key, runtime),
+                |runtime| make_value(&key, runtime),
             )?,
-            ValueDeclCategory::Param | ValueDeclCategory::Node => make_result(name, &key)?,
+            ValueDeclCategory::Param | ValueDeclCategory::Node => make_result(&key)?,
         };
         result_values.insert(
             key,
@@ -423,10 +431,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         DiagnosticAnchor::WholeFile,
                     )
                 })?;
-                let declared_type = tir.runtime_declared_type(&declaration, src)?;
+                let declared_type = checked_declared_type(tir, &declaration, src)?;
                 project_runtime_value(
                     runtime,
-                    &declared_type,
+                    declared_type,
                     presentation_instances.get(&key),
                     &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
                     &presentation_diagnostics,
@@ -462,10 +470,10 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         DiagnosticAnchor::WholeFile,
                     )
                 })?;
-                let declared_type = tir.runtime_declared_type(&declaration, src)?;
+                let declared_type = checked_declared_type(tir, &declaration, src)?;
                 project_runtime_value(
                     runtime,
-                    &declared_type,
+                    declared_type,
                     presentation_instances.get(&key),
                     &ctx.for_checked_decl(instance_dag, instance_src, &declaration)?,
                     &presentation_diagnostics,
@@ -1024,7 +1032,7 @@ impl From<String> for PlotEvaluationError {
 /// cancellation and structural checked/runtime invariant failures abort the
 /// enclosing evaluation.
 fn evaluate_plot(
-    entry: &graphcal_compiler::ir::lower::PlotEntry,
+    entry: &graphcal_compiler::tir::typed::TypedPlotEntry,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,

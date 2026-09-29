@@ -46,7 +46,7 @@ pub(super) fn check_plot_properties_dag(
 
 pub(super) fn check_plot_entry(
     ctx: &DimCheckContext<'_>,
-    entry: &crate::ir::lower::PlotEntry,
+    entry: &crate::tir::typed::TypedPlotEntry,
 ) -> Result<
     (
         crate::resolved_name::ResolvedDeclName,
@@ -84,7 +84,7 @@ pub(super) fn check_plot_entry(
 
 pub(super) fn check_figure_entry(
     ctx: &DimCheckContext<'_>,
-    entry: &crate::ir::lower::FigureEntry,
+    entry: &crate::tir::typed::TypedFigureEntry,
 ) -> Result<(), GraphcalError> {
     let owner = entry.identity();
     for field in &entry.fields {
@@ -129,7 +129,7 @@ pub(super) fn check_figure_entry(
 
 pub(super) fn check_layer_entry(
     ctx: &DimCheckContext<'_>,
-    entry: &crate::ir::lower::LayerEntry,
+    entry: &crate::tir::typed::TypedLayerEntry,
 ) -> Result<(), GraphcalError> {
     let owner = entry.identity();
     for field in &entry.fields {

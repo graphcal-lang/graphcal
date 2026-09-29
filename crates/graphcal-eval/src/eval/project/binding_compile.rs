@@ -186,7 +186,6 @@ impl PreparedProject {
             .map_err(|message| structured_error(path, message.to_string()))?;
         graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             &self.tir,
-            &self.declared_types,
             &hir,
             &expected.declared_type(),
             &self.source,
@@ -500,7 +499,6 @@ impl PreparedProject {
             })?;
         let facts = graphcal_compiler::tir::dim_check::check_external_value_expr_type(
             &self.tir,
-            &self.declared_types,
             &hir,
             &port.declared_type,
             &self.source,

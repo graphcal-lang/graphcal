@@ -648,19 +648,20 @@ fn specialize_instance_semantics(
 ) -> Result<(), GraphcalError> {
     let owner = edge.instance.id().owner();
     let specialization = edge.instance.specialization();
-    instance.resolved_decl_types = instance
-        .resolved_decl_types
-        .iter()
-        .map(|(name, resolved)| {
+    let specialized = instance
+        .value_decl_types()
+        .map(|(identity, annotation)| {
             specialize_type(
-                resolved,
+                annotation.checked().resolved(),
                 &specialization.substitution,
                 tir.project_type_store(),
                 src,
             )
-            .map(|resolved| (name.clone(), resolved))
+            .and_then(|resolved| super::CheckedDeclType::new(resolved, src))
+            .map(|checked| (identity, checked))
         })
         .collect::<Result<_, _>>()?;
+    instance.replace_value_decl_types(specialized);
     instance.semantic.decl_bindings = instance
         .semantic
         .decl_bindings

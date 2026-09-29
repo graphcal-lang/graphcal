@@ -255,38 +255,17 @@ impl Infer<'_> {
                 if param.default.is_none() {
                     required_param_keys.insert(key.clone());
                 }
-                let resolved = dag_tir
-                    .resolved_decl_types
-                    .get(&param.name)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "semantic type missing for DAG-call param `{}`",
-                            param.name
-                        ),
-                        src: self.env.src.clone(),
-                        span: param.type_ann.span.into(),
-                    })?;
-                Ok((key, resolved))
+                (key, param.type_ann.checked().resolved())
             })
-            .collect::<Result<_, GraphcalError>>()?;
+            .collect();
         let node_decl_types_by_key: HashMap<
             ResolvedDeclName,
             &crate::tir::typed::ResolvedTypeExpr,
         > = dag_tir
             .nodes
             .iter()
-            .map(|node| {
-                let key = node.identity();
-                let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
-                    GraphcalError::InternalError {
-                        message: format!("semantic type missing for DAG-call node `{}`", node.name),
-                        src: self.env.src.clone(),
-                        span: node.type_ann.span.into(),
-                    }
-                })?;
-                Ok((key, resolved))
-            })
-            .collect::<Result<_, GraphcalError>>()?;
+            .map(|node| (node.identity(), node.type_ann.checked().resolved()))
+            .collect();
 
         let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclName> =
             std::collections::HashSet::with_capacity(args.len());

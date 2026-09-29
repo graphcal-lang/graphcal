@@ -2529,13 +2529,12 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
 
     if let Some(dag) = tir.dag_registry().get(dag_id) {
         // Enrich param/node/const declarations with resolved types + constraints.
-        for (name, resolved_type) in dag.resolved_decl_types() {
-            let Some(identity) = dag.bound_decl_identity(name) else {
-                continue;
-            };
-            let key = SymbolKey::Declaration(identity.clone());
+        for (identity, annotation) in dag.value_decl_types() {
+            let resolved_type = annotation.checked().resolved();
+            let type_desc = dag.semantic().domain_bounds.get(&identity);
+            let key = SymbolKey::Declaration(identity);
             if let Some(def) = table.definitions.get_mut(&key) {
-                let type_desc = dag.semantic().domain_bounds.get(identity).map_or_else(
+                let type_desc = type_desc.map_or_else(
                     || resolved_type.format(registry),
                     |constraints| {
                         format_type_with_constraints(resolved_type, constraints, registry)

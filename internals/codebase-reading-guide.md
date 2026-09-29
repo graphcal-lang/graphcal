@@ -1134,14 +1134,15 @@ DagStore  // published by consuming local assembly, never by cloning its closure
 
 DagTIR
   dag_id: DagId
-  consts, params, nodes, asserts, plots, figures, layers
+  consts, params, nodes, asserts, plots, figures, layers  // Entry<Typed>
+    value records carry CheckedTypeAnnotation { decl_type, span, checked }
+    TIR::decl_type(&ResolvedDeclName) finds any value declaration's type
   semantic: DagSemanticBody
   source_order: Vec<SourceOrderEntry>  // spelling + (runtime) identity + category
   assert_names
   assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>
   expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>
     canonical keys + authored diagnostic source; instances rekey to runtime identities
-  resolved_decl_types
   semantic.domain_bounds  // checked, unevaluated HIR bound expressions
   semantic_instances: Vec<HirInstanceRecord>  // typed include edges
   semantic_specialization: Option<StaticSpecializationId>

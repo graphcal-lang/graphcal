@@ -57,30 +57,15 @@ pub(super) fn validate_project(
     cancellation: &CancellationToken,
 ) -> Result<(), GraphcalError> {
     for (_, dag) in tir.local_dags() {
-        let types = dag.build_declared_types(src)?;
-        for (name, span) in dag
-            .consts
-            .iter()
-            .map(|entry| (&entry.name, entry.type_ann.span))
-            .chain(
-                dag.params
-                    .iter()
-                    .map(|entry| (&entry.name, entry.type_ann.span)),
-            )
-            .chain(
-                dag.nodes
-                    .iter()
-                    .map(|entry| (&entry.name, entry.type_ann.span)),
-            )
-        {
-            let declared = types.get(name).ok_or_else(|| {
-                GraphcalError::internal_error(
-                    "declaration has no checked type",
-                    src,
-                    DiagnosticAnchor::Source(span),
-                )
-            })?;
-            validate_concrete_type_obligations(declared, dag, tir, src, span, cancellation)?;
+        for (_, annotation) in dag.value_decl_types() {
+            validate_concrete_type_obligations(
+                annotation.checked().declared(),
+                dag,
+                tir,
+                src,
+                annotation.span,
+                cancellation,
+            )?;
         }
         let facts = dag.expression_facts().map_err(|error| {
             GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)

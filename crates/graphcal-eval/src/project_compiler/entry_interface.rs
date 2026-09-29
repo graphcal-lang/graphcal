@@ -1,6 +1,5 @@
 //! Checked runtime interface of one directly authored entry DAG.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -144,7 +143,6 @@ fn checked_runtime_key(
 pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
     tir: &TIR,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     external_surface: &ExternalDeclSurface,
     source: &NamedSource<Arc<String>>,
 ) -> Result<CheckedEntryInterface, CompileError> {
@@ -168,16 +166,9 @@ pub(super) fn build_checked_entry_interface(
                             *span,
                         )
                     })?;
-                let declared_type = declared_types.get(&scoped).cloned().ok_or_else(|| {
-                    missing_interface_fact(
-                        format!("declared type missing for entry parameter `{name}`"),
-                        source,
-                        *span,
-                    )
-                })?;
                 parameters.push(CheckedEntryParameter {
                     name: name.clone(),
-                    declared_type,
+                    declared_type: entry.type_ann.checked().declared().clone(),
                     has_default: entry.default.is_some(),
                     runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
                     span: *span,
@@ -185,23 +176,21 @@ pub(super) fn build_checked_entry_interface(
             }
             SourceDeclaration::Node { name, span } => {
                 let scoped = ScopedName::local(name.clone());
-                if !tir.root().nodes().iter().any(|entry| entry.name == scoped) {
-                    return Err(missing_interface_fact(
-                        format!("HIR entry node `{name}` is absent from checked TIR"),
-                        source,
-                        *span,
-                    ));
-                }
-                let declared_type = declared_types.get(&scoped).cloned().ok_or_else(|| {
-                    missing_interface_fact(
-                        format!("declared type missing for entry node `{name}`"),
-                        source,
-                        *span,
-                    )
-                })?;
+                let entry = tir
+                    .root()
+                    .nodes()
+                    .iter()
+                    .find(|entry| entry.name == scoped)
+                    .ok_or_else(|| {
+                        missing_interface_fact(
+                            format!("HIR entry node `{name}` is absent from checked TIR"),
+                            source,
+                            *span,
+                        )
+                    })?;
                 outputs.push(CheckedEntryOutput {
                     name: name.clone(),
-                    declared_type,
+                    declared_type: entry.type_ann.checked().declared().clone(),
                     visibility: if external_surface.is_explicit_export(name) {
                         Visibility::Public
                     } else {

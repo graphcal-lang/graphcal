@@ -98,9 +98,9 @@ fn collect_unit_names_from_hir(
 }
 
 pub(super) fn collect_resolved_dag_dependencies(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
+    consts: &[super::TypedConstEntry],
+    params: &[super::TypedParamEntry],
+    nodes: &[super::TypedNodeEntry],
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDagDependencies, GraphcalError> {
