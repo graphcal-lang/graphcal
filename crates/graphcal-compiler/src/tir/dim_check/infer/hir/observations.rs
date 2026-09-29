@@ -316,7 +316,7 @@ impl BodyObservations {
                 ));
             };
             Ok(ConstructorApplication {
-                runtime_type: dag.runtime_struct_type_identity(target.owning_type()),
+                runtime_type: dag.frame().struct_type(target.owning_type()),
                 constructor: target.clone(),
                 generic_args: args.clone(),
             })
@@ -335,7 +335,7 @@ impl BodyObservations {
                         name.clone(),
                         crate::tir::expression_facts::ConstructorMatch {
                             definition: target.owning_type().clone(),
-                            runtime_type: dag.runtime_struct_type_identity(target.owning_type()),
+                            runtime_type: dag.frame().struct_type(target.owning_type()),
                             constructor: target.name(),
                         },
                     ))

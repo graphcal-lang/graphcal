@@ -11,6 +11,8 @@ use crate::hir::expr::{
 };
 
 use super::error::ExprLowerError;
+use crate::hir::expr::LocalDecl;
+use crate::resolved_name::ResolvedDeclName;
 
 /// Tolerant HIR: an unresolved reference becomes an error node that records
 /// its diagnostic and keeps every independently lowerable child.
@@ -22,6 +24,7 @@ impl CompletenessSealed for Tolerant {}
 impl Completeness for Tolerant {
     type Id = ();
     type Error = LoweringFailure;
+    type DeclRef = crate::resolved_name::ResolvedDeclName;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         &error.children
@@ -83,6 +86,10 @@ impl Refinement<Tolerant, Draft> for RejectErrorNodes {
 
     fn error_node(&mut self, error: LoweringFailure) -> Result<NoErrorNode, ExprLowerError> {
         Err(error.error)
+    }
+
+    fn decl_ref(&mut self, definition: ResolvedDeclName) -> LocalDecl {
+        LocalDecl::new(definition)
     }
 }
 

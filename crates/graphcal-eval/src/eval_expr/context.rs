@@ -264,7 +264,7 @@ impl<'a> EvalContext<'a> {
             .flat_map(|expression| {
                 graphcal_compiler::hir::expr::collect_expr_dependencies(expression).graph_refs
             })
-            .map(|identity| self.current_dag.runtime_decl_identity(&identity))
+            .map(|reference| self.resolve(&reference))
             .filter_map(|key| {
                 self.unavailable
                     .and_then(|unavailable| unavailable.get(&key))
@@ -287,6 +287,23 @@ impl<'a> EvalContext<'a> {
                 dependencies.iter().map(|(name, reason)| (name, reason)),
             ),
         )
+    }
+
+    /// The declaration `reference` denotes in the DAG this context runs.
+    ///
+    /// The frame is the selected DAG's own; evaluation code cannot pick one.
+    #[must_use]
+    pub fn resolve(&self, reference: &graphcal_compiler::hir::expr::LocalDecl) -> ResolvedDeclName {
+        self.current_dag.frame().resolve(reference)
+    }
+
+    /// The unit whose scale `unit` has in the DAG this context runs.
+    #[must_use]
+    pub fn resolve_unit(
+        &self,
+        unit: &graphcal_compiler::hir::expr::ResolvedUnitRef,
+    ) -> graphcal_compiler::resolved_name::ResolvedUnitName {
+        self.current_dag.frame().resolve_unit(unit)
     }
 
     pub fn check_dependencies(

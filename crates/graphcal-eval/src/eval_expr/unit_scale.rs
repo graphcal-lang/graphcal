@@ -116,13 +116,7 @@ pub fn resolve_unit_scale(
     try_fold_unit_scale(
         &unit.terms,
         |item| {
-            let source_unit = item.name.value.resolved();
-            let instance_unit = ctx.current_dag.runtime_unit_identity(source_unit);
-            let resolved_unit = if ctx.tir.unit_info(&instance_unit).is_some() {
-                instance_unit
-            } else {
-                source_unit.clone()
-            };
+            let resolved_unit = ctx.resolve_unit(&item.name.value);
             let info = ctx.tir.unit_info(&resolved_unit).ok_or_else(|| {
                 ctx.internal_error(
                     format!("unknown checked unit `{}`", item.name.value.spelling()),

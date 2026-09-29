@@ -6,7 +6,7 @@ use std::sync::Arc;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
-    template_declaration,
+    template_declaration, template_reference,
 };
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_dependencies::{ModuleDeclarations, StaticScope};
@@ -888,7 +888,7 @@ fn semantic_output_projections(
                 })
                 .unwrap_or_else(|| exposed_name.leaf().clone());
             InstanceValueProjection {
-                target: template_declaration(instance, source_name),
+                target: template_reference(instance, source_name),
                 exposed_name: exposed_name.clone(),
             }
         })
@@ -909,7 +909,7 @@ fn semantic_assertion_projections(
             .iter()
             .map(|(source, exposed)| {
                 Ok(InstanceAssertionProjection {
-                    target: template_declaration(instance, source.clone()),
+                    target: template_reference(instance, source.clone()),
                     exposed_name: ScopedName::local(exposed.clone()),
                     expected_fail: resolve_projection_expected_fail(
                         request,
@@ -925,7 +925,7 @@ fn semantic_assertion_projections(
             .assertion_names()
             .into_iter()
             .map(|name| InstanceAssertionProjection {
-                target: template_declaration(instance, name.clone()),
+                target: template_reference(instance, name.clone()),
                 exposed_name: ScopedName::in_scope(request.instance_scope.clone(), name),
                 expected_fail: None,
             })

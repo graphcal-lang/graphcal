@@ -23,7 +23,7 @@ use crate::hir::nominal::ResolvedConstructor;
 use crate::registry::checked_type::{
     CheckedGenericArg, CheckedType, Concrete, Concreteness, IndexTypeRef, Symbolic,
 };
-use crate::resolved_name::{ResolvedDeclName, ResolvedStructTypeName};
+use crate::resolved_name::ResolvedStructTypeName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName};
 /// The cardinality of an axis, or `None` while it awaits a Static or generic binding.
@@ -162,7 +162,7 @@ impl ExpressionFact {
 pub enum ExpressionOperation {
     Literal,
     Contextual(ContextualOperand),
-    GraphReference(ResolvedDeclName),
+    GraphReference(crate::hir::expr::LocalDecl),
     Constant(ConstRef),
     Local(crate::hir::expr::LocalId),
     Binary(crate::syntax::ast::BinOp),

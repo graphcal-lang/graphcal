@@ -180,7 +180,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         value: f64,
         unit: ResolvedUnitExpr,
     },
-    GraphRef(ResolvedDeclName),
+    GraphRef(crate::hir::expr::LocalDecl),
     Const(TConstRef<V>),
     Local(LocalId),
     Binary {
@@ -264,7 +264,7 @@ pub enum TExprKind<V: Concreteness = Concrete> {
 /// A checked constant-like reference.
 #[derive(Debug, Clone)]
 pub enum TConstRef<V: Concreteness = Concrete> {
-    Decl(ResolvedDeclName),
+    Decl(crate::hir::expr::LocalDecl),
     Builtin(BuiltinConst),
     /// A field-less constructor used as a value, with its checked application.
     Constructor(ConstructorApplication<V>),

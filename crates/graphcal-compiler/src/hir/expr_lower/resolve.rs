@@ -285,7 +285,7 @@ impl<'a> ExprLowerer<'a> {
         &self,
         path: &NamePath,
         span: Span,
-    ) -> Result<ConstRef, ExprLowerError> {
+    ) -> Result<ConstRef<ResolvedDeclName>, ExprLowerError> {
         let name = ScopedName::classify_path(path);
         if let Some(resolved) = self.bound_decl(&name) {
             let lookup = self

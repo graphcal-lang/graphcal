@@ -5484,6 +5484,48 @@ fn requested_plot_keeps_instance_owned_dynamic_unit_presentation() {
 }
 
 #[test]
+fn requested_instance_plot_reports_its_failed_instance_dependency() {
+    // The plot body is the template's; the failed dependency is keyed by the
+    // instance's own declaration, so the report must resolve the body's
+    // reference through the instance frame (#842 inside an include).
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/demo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("div.gcl"),
+        "pub index Step = { A, B };\n\
+         param values: Dimensionless[Step] = { Step#A: 1.0, Step#B: 0.0 };\n\
+         node inv: Dimensionless[Step] = for s: Step { 1.0 / @values[s] };\n\
+         pub plot chart = {\n\
+             mark: line,\n\
+             encode: { x: for s: Step { @values[s] }, y: for s: Step { @inv[s] } },\n\
+         };\n",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    std::fs::write(&root, "include demo.div()::{ chart };\n").unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!(result.plots.is_empty());
+    let [error] = result.plot_errors.as_slice() else {
+        panic!("expected one plot error, got {:?}", result.plot_errors);
+    };
+    assert_eq!(error.name.to_string(), "chart");
+    let NodeUnavailable::EvalFailed { message } = &error.reason else {
+        panic!("expected an evaluation failure, got {:?}", error.reason);
+    };
+    assert!(
+        message.starts_with("dependency failed: inv (") && message.contains("division by zero"),
+        "expected the failed instance dependency with its root cause: {message}"
+    );
+}
+
+#[test]
 fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.upper(x: -1.0) as upper;\n\

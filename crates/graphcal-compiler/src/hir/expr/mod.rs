@@ -17,6 +17,7 @@
 
 mod checked;
 mod completeness;
+mod local_decl;
 mod local_env;
 mod model;
 mod refine;
@@ -25,6 +26,7 @@ mod visit;
 pub use checked::{CheckedAssertBody, CheckedExpr};
 pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
 pub use completeness::{Completeness, Draft, NoErrorNode, Strict};
+pub use local_decl::LocalDecl;
 pub use local_env::LocalEnv;
 pub use model::{
     AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,

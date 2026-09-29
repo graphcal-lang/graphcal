@@ -7,8 +7,9 @@
 
 use super::completeness::Completeness;
 use super::model::{
-    AssertBody, Expr, ExprKind, FieldInit, IndexArg, MapEntry, MatchArm, ParamBinding,
+    AssertBody, ConstRef, Expr, ExprKind, FieldInit, IndexArg, MapEntry, MatchArm, ParamBinding,
 };
+use crate::syntax::span::Spanned;
 
 /// Node-level policy for [`refine_expr`].
 pub trait Refinement<A: Completeness, B: Completeness> {
@@ -20,6 +21,9 @@ pub trait Refinement<A: Completeness, B: Completeness> {
     /// Translate an error node. This is where a refinement to a tree without
     /// error nodes rejects the input.
     fn error_node(&mut self, error: A::Error) -> Result<B::Error, Self::Failure>;
+
+    /// Translate how a declaration reference names its target.
+    fn decl_ref(&mut self, reference: A::DeclRef) -> B::DeclRef;
 }
 
 /// Rebuild one expression tree under completeness `B`.
@@ -108,8 +112,17 @@ where
         ExprKind::ZonedDateTimeLiteral(value) => ExprKind::ZonedDateTimeLiteral(value),
         ExprKind::IanaTimeZoneLiteral(value) => ExprKind::IanaTimeZoneLiteral(value),
         ExprKind::TypeSystemRef(value) => ExprKind::TypeSystemRef(value),
-        ExprKind::GraphRef(value) => ExprKind::GraphRef(value),
-        ExprKind::ConstRef(value) => ExprKind::ConstRef(value),
+        ExprKind::GraphRef(Spanned { value, span }) => {
+            ExprKind::GraphRef(Spanned::new(refinement.decl_ref(value), span))
+        }
+        ExprKind::ConstRef(Spanned { value, span }) => ExprKind::ConstRef(Spanned::new(
+            match value {
+                ConstRef::Decl(reference) => ConstRef::Decl(refinement.decl_ref(reference)),
+                ConstRef::Constructor(constructor) => ConstRef::Constructor(constructor),
+                ConstRef::Builtin(builtin) => ConstRef::Builtin(builtin),
+            },
+            span,
+        )),
         ExprKind::LocalRef(value) => ExprKind::LocalRef(value),
         ExprKind::VariantLiteral(value) => ExprKind::VariantLiteral(value),
         ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral { value, unit },

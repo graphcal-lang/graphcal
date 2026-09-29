@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::{DagId, InstanceId};
+use crate::hir::expr::LocalDecl;
 use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitName;
@@ -10,10 +11,11 @@ use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 
 use super::static_substitution::{StaticSpecializationId, StaticSubstitution};
 
+pub mod frame;
 pub mod identity;
 pub(crate) mod mint;
 
-pub use self::identity::{instance_declaration, template_declaration};
+pub use self::identity::{instance_declaration, template_declaration, template_reference};
 
 /// One edge in the explicit module-template/instance graph.
 ///
@@ -85,6 +87,28 @@ impl InstanceRecord {
             .map(|leaf| instance_declaration(&self.id, leaf.clone()))
     }
 
+    /// The frame the instance runs its template's bodies in, inside the DAG
+    /// that runs in `parent`: the only way to build an instance frame.
+    ///
+    /// `template_edges` are the instances the template itself includes, as
+    /// the template records them; `runtime_units` are the runtime units this
+    /// instance materializes.
+    #[must_use]
+    pub(crate) fn frame<'a>(
+        &self,
+        parent: &frame::InstanceFrame,
+        template_edges: impl IntoIterator<Item = &'a InstanceId>,
+        runtime_units: impl IntoIterator<Item = UnitName>,
+    ) -> frame::InstanceFrame {
+        frame::InstanceFrame::instance(
+            parent,
+            &self.id,
+            &self.specialization,
+            template_edges,
+            runtime_units,
+        )
+    }
+
     /// Re-parent this instance under `parent`, the concrete owner of the
     /// enclosing specialized template, and compose its Static substitution
     /// with the enclosing one through `compose`.
@@ -97,8 +121,9 @@ impl InstanceRecord {
 /// One instance value exposed through the including DAG's source interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceValueProjection {
-    /// Template declaration materialized by the instance.
-    pub target: ResolvedDeclName,
+    /// Template declaration materialized by the instance, as the template
+    /// names it; the instance's frame resolves it.
+    pub target: LocalDecl,
     /// Source-visible name introduced in the including DAG.
     pub exposed_name: ScopedName,
 }
@@ -106,7 +131,8 @@ pub struct InstanceValueProjection {
 /// One instance assertion exposed through the including DAG.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceAssertionProjection {
-    pub target: ResolvedDeclName,
+    /// Template assertion, as the template names it.
+    pub target: LocalDecl,
     pub exposed_name: ScopedName,
     /// Include-site override resolved in the including DAG's lexical context.
     pub expected_fail: Option<crate::assertion_expectation::ExpectedFail>,
@@ -115,7 +141,9 @@ pub struct InstanceAssertionProjection {
 /// One plot requested from an instance include site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstancePlotProjection {
-    pub target: ResolvedDeclName,
+    /// Template plot (or plot the template forwards from one of its own
+    /// instances), as the template names it.
+    pub target: LocalDecl,
     pub exposed_name: ScopedName,
     pub visibility: crate::plot_visibility::PlotVisibility,
 }
@@ -137,8 +165,6 @@ pub struct HirInstanceRecord {
     pub assertion_projections: Vec<InstanceAssertionProjection>,
     /// Plot declarations explicitly requested by this include site.
     pub plot_projections: Vec<InstancePlotProjection>,
-    /// Ancestor template owners rebased by enclosing semantic instances.
-    pub owner_rebases: HashMap<DagId, DagId>,
     /// V005 obligations retained only for unrebound parameter defaults.
     pub(crate) override_reconciliations:
         HashMap<ResolvedDeclName, Vec<crate::ir::override_reconciliation::OverrideReconciliation>>,

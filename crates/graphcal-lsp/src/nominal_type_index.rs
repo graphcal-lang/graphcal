@@ -37,9 +37,12 @@ impl NominalTypeIndex {
 
     /// Resolve the record constructor produced by an expression when its
     /// nominal type follows directly from HIR and declared types.
-    pub fn expression_constructor<C: hir::Completeness>(
+    ///
+    /// IDE trees name their references' source definitions, which is what
+    /// the declared types are keyed by.
+    pub fn expression_constructor(
         &self,
-        expr: &hir::Expr<C>,
+        expr: &hir::Expr<hir::Tolerant>,
     ) -> Option<ResolvedConstructorName> {
         match expr.kind() {
             hir::ExprKind::GraphRef(target) => self.declaration_types.get(&target.value).cloned(),

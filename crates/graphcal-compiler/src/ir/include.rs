@@ -8,6 +8,7 @@ use miette::NamedSource;
 use crate::declaration_category::DeclCategory;
 use crate::desugar::desugared_ast::{Expr, ExprKind, TypeExpr};
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::hir::expr::LocalDecl;
 use crate::ir::instance::identity::{instance_declaration, projection_alias};
 use crate::ir::instance::{
     InstanceAssertionProjection, InstancePlotProjection, InstanceRecord, InstanceValueProjection,
@@ -63,11 +64,11 @@ impl UnfrozenIR {
 
     /// Resolve an exposed plot alias to its canonical template declaration.
     #[must_use]
-    pub fn plot_projection_target(&self, name: &DeclName) -> Option<ResolvedDeclName> {
+    pub fn plot_projection_target(&self, name: &DeclName) -> Option<LocalDecl> {
         self.decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Plot(entry) if entry.name() == name => Some(entry.identity()),
+                Decl::Plot(entry) if entry.name() == name => Some(LocalDecl::new(entry.identity())),
                 _ => None,
             })
             .or_else(|| {
@@ -77,10 +78,10 @@ impl UnfrozenIR {
                         .iter()
                         .find(|projection| projection.exposed_name.leaf() == name)
                         .map(|projection| {
-                            instance_declaration(
+                            LocalDecl::new(instance_declaration(
                                 instance.instance.id(),
-                                projection.target.to_unowned_def_name(),
-                            )
+                                projection.target.leaf().clone(),
+                            ))
                         })
                 })
             })
@@ -539,7 +540,7 @@ impl UnfrozenIR {
                             .map(|projection| {
                                 instance_declaration(
                                     record.instance.id(),
-                                    projection.target.to_unowned_def_name(),
+                                    projection.target.leaf().clone(),
                                 )
                             })
                     })
@@ -595,7 +596,6 @@ impl UnfrozenIR {
                     output_projections: record.output_projections.clone(),
                     assertion_projections: record.assertion_projections.clone(),
                     plot_projections: record.plot_projections.clone(),
-                    owner_rebases: HashMap::new(),
                     override_reconciliations: record.override_reconciliations.clone(),
                 })
             })

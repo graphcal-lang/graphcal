@@ -1,32 +1,46 @@
 //! Structural traversal of HIR expression trees and queries built on it.
 
-use crate::resolved_name::ResolvedDeclName;
 use std::collections::BTreeSet;
 
 use crate::dag_id::DagId;
 use crate::syntax::span::{Span, Spanned};
 
 use super::completeness::Completeness;
+use super::local_decl::LocalDecl;
 use super::model::{ConstRef, Expr, ExprKind, ExternFnRef, FunctionRef, IndexArg};
 
-/// Canonical declaration dependencies observed in one HIR expression tree.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ExprDependencies {
+/// Declaration dependencies observed in one HIR expression tree, named as
+/// the tree's declaration references name them (`D`, per
+/// [`Completeness::DeclRef`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprDependencies<D = LocalDecl> {
     /// Runtime graph dependencies reached through `@name` references.
-    pub graph_refs: BTreeSet<ResolvedDeclName>,
+    pub graph_refs: BTreeSet<D>,
     /// Compile-time const dependencies reached through const-like value refs.
-    pub(crate) const_refs: BTreeSet<ResolvedDeclName>,
+    pub(crate) const_refs: BTreeSet<D>,
 }
 
-/// Collect canonical declaration dependencies from an already-lowered HIR expression.
+impl<D> Default for ExprDependencies<D> {
+    fn default() -> Self {
+        Self {
+            graph_refs: BTreeSet::new(),
+            const_refs: BTreeSet::new(),
+        }
+    }
+}
+
+/// Collect declaration dependencies from an already-lowered HIR expression.
 #[must_use]
-pub fn collect_expr_dependencies<C: Completeness>(expr: &Expr<C>) -> ExprDependencies {
+pub fn collect_expr_dependencies<C: Completeness>(expr: &Expr<C>) -> ExprDependencies<C::DeclRef> {
     let mut deps = ExprDependencies::default();
     collect_expr_dependencies_into(expr, &mut deps);
     deps
 }
 
-fn collect_expr_dependencies_into<C: Completeness>(expr: &Expr<C>, deps: &mut ExprDependencies) {
+fn collect_expr_dependencies_into<C: Completeness>(
+    expr: &Expr<C>,
+    deps: &mut ExprDependencies<C::DeclRef>,
+) {
     visit_expr(expr, &mut |node| match node.kind() {
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());

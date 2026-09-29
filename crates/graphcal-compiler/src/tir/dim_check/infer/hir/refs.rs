@@ -1,7 +1,7 @@
 //! Inference of unit literals and of declaration, constant, and constructor references.
 
+use crate::hir::expr::LocalDecl;
 use crate::hir::expr::{ConstRef, ResolvedUnitExpr};
-use crate::resolved_name::ResolvedDeclName;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -30,13 +30,12 @@ pub(super) fn infer_hir_quantity_literal(
 impl InferEnv<'_> {
     pub(super) fn infer_resolved_decl_ref_type(
         &self,
-        target: &ResolvedDeclName,
+        target: &LocalDecl,
         span: Span,
     ) -> Result<CheckedType<Symbolic>, GraphcalError> {
-        // HIR references preserve their definition-time owner. A concrete semantic
-        // instance is the authoritative boundary that maps those references to the
-        // corresponding runtime declaration before any type lookup.
-        let runtime_target = self.dag.runtime_decl_identity(target);
+        // The body is shared with its template; the frame of the DAG checked
+        // here names the declaration the reference reads.
+        let runtime_target = self.dag.frame().resolve(target);
         let checked =
             self.tir
                 .decl_type(&runtime_target)

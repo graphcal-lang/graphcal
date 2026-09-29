@@ -1485,9 +1485,8 @@ pub struct DagTIR {
     pub(crate) expected_fail: HashMap<ResolvedDeclName, ResolvedExpectedFailMetadata>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
-    pub(crate) semantic_specialization:
-        Option<crate::ir::static_substitution::StaticSpecializationId>,
-    pub(crate) runtime_owner_rebases: HashMap<crate::dag_id::DagId, crate::dag_id::DagId>,
+    /// How this DAG's bodies name its declarations; built with the DAG.
+    pub(crate) frame: crate::ir::instance::frame::InstanceFrame,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }
 
@@ -1554,71 +1553,15 @@ impl DagTIR {
         &self.semantic_instances
     }
 
-    /// Map a template-owned body reference into this concrete instance.
+    /// The frame this DAG runs its bodies in.
     #[must_use]
-    pub fn runtime_decl_identity(&self, target: &ResolvedDeclName) -> ResolvedDeclName {
-        self.runtime_owner_rebases.get(target.owner()).map_or_else(
-            || match &self.semantic_specialization {
-                Some(specialization) if target.owner() == &specialization.template => {
-                    crate::ir::instance::identity::rebased_declaration(target, &self.dag_id)
-                }
-                Some(_) | None => target.clone(),
-            },
-            |owner| crate::ir::instance::identity::rebased_declaration(target, owner),
-        )
-    }
-
-    /// Map a template-owned unit reference into this concrete instance.
-    #[must_use]
-    pub fn runtime_unit_identity(
-        &self,
-        target: &crate::resolved_name::ResolvedUnitName,
-    ) -> crate::resolved_name::ResolvedUnitName {
-        self.runtime_owner_rebases.get(target.owner()).map_or_else(
-            || match &self.semantic_specialization {
-                Some(specialization) if target.owner() == &specialization.template => {
-                    crate::ir::instance::identity::rebased_declaration(target, &self.dag_id)
-                }
-                Some(_) | None => target.clone(),
-            },
-            |owner| crate::ir::instance::identity::rebased_declaration(target, owner),
-        )
-    }
-
-    /// Apply this instance's Static nominal-type substitution.
-    #[must_use]
-    pub fn runtime_struct_type_identity(
-        &self,
-        source: &ResolvedStructTypeName,
-    ) -> ResolvedStructTypeName {
-        self.semantic_specialization
-            .as_ref()
-            .and_then(|specialization| specialization.substitution.types.get(source))
-            .cloned()
-            .unwrap_or_else(|| source.clone())
-    }
-
-    /// Apply this instance's Static index substitution to a runtime axis.
-    #[must_use]
-    pub fn runtime_index_type_ref(&self, source: &ResolvedIndexName) -> IndexTypeRef {
-        let target = self
-            .semantic_specialization
-            .as_ref()
-            .and_then(|specialization| specialization.substitution.indexes.get(source));
-        match target {
-            Some(crate::ir::static_substitution::InstanceIndexBindingTarget::Declared(target)) => {
-                IndexTypeRef::from_resolved(target.clone())
-            }
-            Some(crate::ir::static_substitution::InstanceIndexBindingTarget::Finite(target)) => {
-                IndexTypeRef::from_finite_index(*target)
-            }
-            None => IndexTypeRef::from_resolved(source.clone()),
-        }
+    pub const fn frame(&self) -> &crate::ir::instance::frame::InstanceFrame {
+        &self.frame
     }
 
     #[must_use]
     pub const fn is_semantic_instance(&self) -> bool {
-        self.semantic_specialization.is_some()
+        self.frame.is_instance()
     }
 
     /// Typed Static interface authored directly in this reusable DAG.
@@ -1793,13 +1736,7 @@ impl DagTIR {
     }
 
     fn field_bound_scope(&self, key: &ResolvedStructFieldTypeKey) -> ExpressionRootScope {
-        let owner = key.owning_type.owner();
-        if self.runtime_owner_rebases.get(owner).unwrap_or(owner) == self.dag_id()
-            || self
-                .semantic_specialization
-                .as_ref()
-                .is_some_and(|specialization| &specialization.template == owner)
-        {
+        if self.frame.owner(key.owning_type.owner()) == self.dag_id() {
             ExpressionRootScope::ThisBody
         } else {
             ExpressionRootScope::ReferencedBody
@@ -1883,5 +1820,28 @@ impl DagTIR {
         &self,
     ) -> &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding> {
         &self.imported_bindings
+    }
+
+    /// Every imported binding with the declaration this DAG's bodies read it
+    /// as: the imported declaration, re-owned by this DAG's frame when an
+    /// enclosing template owns it.
+    pub fn imported_binding_destinations(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &crate::ir::imported_binding::ImportedBinding,
+            ResolvedDeclName,
+        ),
+    > {
+        self.imported_bindings
+            .values()
+            .map(|binding| (binding, self.frame.rebase(binding.target())))
+    }
+
+    /// The runtime destination of an imported value: its target re-keyed
+    /// through this DAG's frame (identity for canonical DAGs).
+    #[must_use]
+    pub fn imported_destination(&self, target: &ResolvedDeclName) -> ResolvedDeclName {
+        self.frame.rebase(target)
     }
 }

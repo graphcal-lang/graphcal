@@ -4,6 +4,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::hir;
+use crate::ir::instance::frame::InstanceFrame;
 use crate::registry::error::GraphcalError;
 use crate::resolved_name::{ResolvedConstructorName, ResolvedDeclName, ResolvedStructTypeName};
 use crate::syntax::span::Span;
@@ -23,7 +24,11 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
             .map(|(name, entry)| {
                 (
                     name.clone(),
-                    hir::collect_expr_dependencies(&entry.expr).graph_refs,
+                    hir::collect_expr_dependencies(&entry.expr)
+                        .graph_refs
+                        .iter()
+                        .map(|reference| dag.frame.resolve(reference))
+                        .collect(),
                 )
             })
             .collect();
@@ -96,8 +101,20 @@ fn collect_unit_names_from_hir(
     });
 }
 
+/// The declarations `references` name in `frame`.
+fn resolve_all<'a>(
+    frame: &InstanceFrame,
+    references: impl IntoIterator<Item = &'a hir::LocalDecl>,
+) -> BTreeSet<ResolvedDeclName> {
+    references
+        .into_iter()
+        .map(|reference| frame.resolve(reference))
+        .collect()
+}
+
 pub(super) fn collect_resolved_dag_dependencies(
     decls: &crate::ir::decl_table::DeclTable<super::Typed>,
+    frame: &InstanceFrame,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDagDependencies, GraphcalError> {
@@ -105,8 +122,9 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.consts() {
         let key = entry.identity();
-        let mut deps = hir::collect_expr_dependencies(&entry.expr);
-        for graph_ref in &deps.graph_refs {
+        let deps = hir::collect_expr_dependencies(&entry.expr);
+        let mut const_refs = resolve_all(frame, &deps.const_refs);
+        for graph_ref in &resolve_all(frame, &deps.graph_refs) {
             // `@const_name` in a const body is a const dependency. Non-const
             // `@` targets are rejected with a spanned diagnostic by
             // `check_hir_body_policies`.
@@ -128,10 +146,10 @@ pub(super) fn collect_resolved_dag_dependencies(
                     )
                 })?;
             if kind.is_const() {
-                deps.const_refs.insert(graph_ref.clone());
+                const_refs.insert(graph_ref.clone());
             }
         }
-        resolved.const_deps.insert(key, deps.const_refs);
+        resolved.const_deps.insert(key, const_refs);
     }
 
     for entry in decls.params() {
@@ -142,15 +160,18 @@ pub(super) fn collect_resolved_dag_dependencies(
             .map_or_else(hir::ExprDependencies::default, |default| {
                 hir::collect_expr_dependencies(default)
             });
-        resolved.runtime_deps.insert(key, deps.graph_refs);
+        resolved
+            .runtime_deps
+            .insert(key, resolve_all(frame, &deps.graph_refs));
     }
 
     for entry in decls.nodes() {
         let key = entry.identity();
         let dependencies = match &entry.definition {
-            crate::node_definition::NodeDefinition::Formula(expression) => {
-                hir::collect_expr_dependencies(expression).graph_refs
-            }
+            crate::node_definition::NodeDefinition::Formula(expression) => resolve_all(
+                frame,
+                &hir::collect_expr_dependencies(expression).graph_refs,
+            ),
             crate::node_definition::NodeDefinition::Todo(dependencies) => dependencies
                 .value
                 .iter()

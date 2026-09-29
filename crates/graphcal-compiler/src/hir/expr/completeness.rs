@@ -6,11 +6,11 @@
 //! [`Expr<C>`](super::Expr) makes both distinctions types, mirroring the AST
 //! [`Phase`](crate::syntax::phase::Phase) technique:
 //!
-//! | Completeness | error node               | node identity |
-//! |--------------|--------------------------|---------------|
-//! | `Tolerant`   | diagnostic + children    | none          |
-//! | [`Draft`]    | [`NoErrorNode`]          | none          |
-//! | [`Strict`]   | [`NoErrorNode`]          | `ExprId`      |
+//! | Completeness | error node               | node identity | declaration reference |
+//! |--------------|--------------------------|---------------|-----------------------|
+//! | `Tolerant`   | diagnostic + children    | none          | source definition     |
+//! | [`Draft`]    | [`NoErrorNode`]          | none          | [`LocalDecl`]         |
+//! | [`Strict`]   | [`NoErrorNode`]          | `ExprId`      | [`LocalDecl`]         |
 //!
 //! `Tolerant` is defined beside the lowerer, because its error node carries
 //! a lowering diagnostic. Strict lowering refines `Tolerant` into [`Draft`];
@@ -20,7 +20,9 @@
 //! without a fallible lookup.
 
 use core::fmt::Debug;
+use core::hash::Hash;
 
+use super::local_decl::LocalDecl;
 use super::model::Expr;
 use crate::expression_id::ExprId;
 
@@ -37,6 +39,10 @@ pub trait Completeness: 'static + Debug + Clone + Copy + sealed::Sealed + Sized 
 
     /// Payload of [`ExprKind::Error`](super::ExprKind::Error).
     type Error: Debug + Clone;
+
+    /// How a declaration reference names its target: the source definition
+    /// in an IDE tree, a frame-relative [`LocalDecl`] in a complete tree.
+    type DeclRef: Debug + Clone + PartialEq + Eq + Hash + Ord;
 
     /// Expression children retained under an error node, in source order.
     fn error_children(error: &Self::Error) -> &[Expr<Self>];
@@ -69,6 +75,7 @@ impl sealed::Sealed for Draft {}
 impl Completeness for Draft {
     type Id = ();
     type Error = NoErrorNode;
+    type DeclRef = LocalDecl;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         error.absurd()
@@ -91,6 +98,7 @@ impl sealed::Sealed for Strict {}
 impl Completeness for Strict {
     type Id = ExprId;
     type Error = NoErrorNode;
+    type DeclRef = LocalDecl;
 
     fn error_children(error: &Self::Error) -> &[Expr<Self>] {
         error.absurd()

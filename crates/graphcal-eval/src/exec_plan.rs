@@ -205,7 +205,7 @@ fn prepare_imports(
                 dag.imported_constants()
                     .iter()
                     .map(|constant| PreparedConstantImport {
-                        destination: dag.dag().runtime_decl_identity(constant.value().key()),
+                        destination: dag.dag().imported_destination(constant.value().key()),
                         value: constant.value().clone(),
                     }),
             );

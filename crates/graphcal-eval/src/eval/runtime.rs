@@ -389,7 +389,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             {
                 continue;
             }
-            let declaration = instance_dag.runtime_decl_identity(&projection.target);
+            let declaration = instance_dag.frame().resolve(&projection.target);
             let key = declaration.clone();
             let decl_type = instance_dag
                 .decls()
@@ -540,7 +540,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 )
             })?;
         for projection in &record.plot_projections {
-            let owner = outer_instance.runtime_decl_identity(&projection.target);
+            let owner = outer_instance.frame().resolve(&projection.target);
             let entry = tir.dag_registry().get(owner.owner()).and_then(|plot_dag| {
                 plot_dag
                     .plots()
@@ -797,7 +797,7 @@ pub(super) fn evaluate_assertions(
         for record in parent_dag.semantic_instances() {
             let instance_dag = semantic_instance_dag(tir, record, src)?;
             for projection in &record.assertion_projections {
-                let owner = instance_dag.runtime_decl_identity(&projection.target);
+                let owner = instance_dag.frame().resolve(&projection.target);
                 let entry = instance_dag
                     .asserts()
                     .find(|entry| entry.identity() == owner)
@@ -863,10 +863,7 @@ pub(super) fn root_source_names(
                     .map(|projection| (&projection.target, &projection.exposed_name)),
             );
         names.extend(projections.map(|(target, exposed_name)| {
-            (
-                instance_dag.runtime_decl_identity(target),
-                exposed_name.clone(),
-            )
+            (instance_dag.frame().resolve(target), exposed_name.clone())
         }));
     }
     Ok(names)
@@ -899,7 +896,7 @@ fn assert_dependency_failure(
         Err(error) => Some(AssertResult::Error {
             message: error.to_string(),
         }),
-        _ => dependency_failure_message(body_exprs, errors)
+        _ => dependency_failure_message(body_exprs, errors, ctx)
             .map(|message| AssertResult::Error { message }),
     }
 }
@@ -914,6 +911,7 @@ fn assert_dependency_failure(
 fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = &'a graphcal_compiler::hir::Expr>,
     errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
+    ctx: &EvalContext<'_>,
 ) -> Option<String> {
     if errors.is_empty() {
         return None;
@@ -925,6 +923,7 @@ fn dependency_failure_message<'a>(
                 .graph_refs
                 .into_iter()
         })
+        .map(|reference| ctx.resolve(&reference))
         .collect();
     let failed: Vec<String> =
         deps.iter()
@@ -1284,7 +1283,7 @@ fn check_plot_expression_dependencies(
     {
         return Err(PlotEvaluationError::Unavailable(reason));
     }
-    dependency_failure_message(expressions.iter().copied(), errors)
+    dependency_failure_message(expressions.iter().copied(), errors, ctx)
         .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))
 }
 

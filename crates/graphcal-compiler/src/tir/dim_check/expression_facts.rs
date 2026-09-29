@@ -311,7 +311,7 @@ fn specialize_record(
                         ));
                     };
                     Ok(Box::new(ConstructorApplication {
-                        runtime_type: dag.runtime_struct_type_identity(application.definition()),
+                        runtime_type: dag.frame().struct_type(application.definition()),
                         constructor: application.constructor.clone(),
                         generic_args: args.clone(),
                     }))
@@ -343,7 +343,7 @@ fn specialize_record(
                 id.clone(),
                 ConstructorMatch {
                     definition: target.definition.clone(),
-                    runtime_type: dag.runtime_struct_type_identity(&target.definition),
+                    runtime_type: dag.frame().struct_type(&target.definition),
                     constructor: target.constructor.clone(),
                 },
             )
@@ -386,8 +386,8 @@ pub(super) fn instance_expression_facts(
     let mut port_generic_plot_channels = HashMap::new();
     let mut published = Vec::new();
     let instances = tir.local_dags().filter_map(|(owner, dag)| {
-        dag.semantic_specialization
-            .as_ref()
+        dag.frame()
+            .specialization()
             .map(|specialization| (owner, dag, specialization))
     });
     for (owner, dag, specialization) in instances {
