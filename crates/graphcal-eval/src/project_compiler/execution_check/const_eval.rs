@@ -10,7 +10,7 @@ use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
 use crate::constant_pools::ConstPoolBuildError;
-use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_hir_expr_with_presentation};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, eval_texpr_with_presentation};
 use crate::presentation_evidence::PresentationInstanceMap;
 
 /// Evaluate the constants of `tir` with the interpreter, together with the
@@ -38,8 +38,8 @@ pub(super) fn eval_const_pool(
         .with_roots(step.visible, None)
         .for_decl(step.key);
         reject_constant_call(step.expression, src)?;
-        let (value, presentation) = eval_hir_expr_with_presentation(
-            step.expression,
+        let (value, presentation) = eval_texpr_with_presentation(
+            ctx.executable(step.expression)?,
             step.visible,
             &presentations,
             &empty_hir_locals,

@@ -142,6 +142,16 @@ fn count_contextual(facts: &crate::tir::expression_facts::CheckedExpressionFacts
         .count()
 }
 
+fn count_contextual_nodes(tree: &crate::tir::texpr::TExpr) -> usize {
+    let mut count = 0_usize;
+    crate::tir::texpr::visit_tnodes(crate::tir::texpr::TNodeRef::Value(tree), &mut |node| {
+        if matches!(node, crate::tir::texpr::TNodeRef::Contextual(_)) {
+            count = count.saturating_add(1);
+        }
+    });
+    count
+}
+
 #[test]
 fn one_checking_pass_records_every_expression_once() {
     for depth in [0, 8, 16, 32] {
@@ -170,7 +180,7 @@ fn consuming_rules_record_contextual_literals() {
         &src,
     )
     .unwrap();
-    assert_eq!(count_contextual(&independent), 1);
+    assert_eq!(count_contextual_nodes(&independent), 1);
 
     let (tir, src) = module_aware_tir(
         "node zoned: Datetime<UTC> = datetime(\"2026-01-01T09:00:00\", \"Asia/Tokyo\");\n\

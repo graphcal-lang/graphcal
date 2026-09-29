@@ -3,7 +3,7 @@
 //! A semantic instance's trees are its template's, with the instance's Static
 //! substitution applied to every type they carry; a generic field bound's
 //! tree is specialized with one application's `Nat` arguments. Both rewrite
-//! only types ([`TypeMap`]) and then classify the result.
+//! only types (see `TypeMap`) and then classify the result.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -217,6 +217,31 @@ pub(super) fn instance_bodies(
     }
     CheckedBodies::discharge(roots, &|index| checked_index_cardinality(tir, index))
         .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
+}
+
+/// The executable tree of one generic field bound under one application's
+/// `Nat` arguments, specialized from the tree checked in `dag`, its owner.
+///
+/// This discharges the bound's retained `Nat`, type, and shape obligations in
+/// its canonical environment; it does not infer the source body.
+///
+/// # Errors
+///
+/// Returns an evaluation error when a static position falls outside its
+/// now-bound axis, and an internal error when the tree is unknown or still
+/// awaits bindings after specialization.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "canonical binding services retain this exact map type"
+)]
+pub fn specialize_bound_expression(
+    tir: &crate::tir::typed::CheckedTir,
+    dag: &crate::tir::typed::CheckedDag,
+    root: &Expr,
+    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
+    specialize_bound_body(tir, dag, dag.bodies(), root, bindings, src)
 }
 
 /// The executable tree of one generic field bound under one application's

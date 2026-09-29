@@ -19,7 +19,7 @@ pub(crate) use helpers::{expect_quantity, format_checked_type};
 
 use helpers::is_bool_type;
 
-mod body_specialization;
+pub mod body_specialization;
 mod builtins;
 mod concrete_obligations;
 mod expression_axes;
@@ -844,13 +844,14 @@ fn is_bindable_nominal(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] when the expression is not well typed in the
-/// root module or does not exactly match `expected`.
+/// root module or does not exactly match `expected`, or when its tree is not
+/// executable.
 pub fn check_external_value_expr_type(
     tir: &crate::tir::typed::CheckedTir,
     expr: &crate::hir::Expr,
     expected: &CheckedType,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::tir::expression_facts::CheckedExpressionFacts, GraphcalError> {
+) -> Result<crate::tir::texpr::TExpr, GraphcalError> {
     let observations = infer::hir::BodyObservations::new(tir.root());
     let inferred = infer::hir::InferEnv {
         dag: tir.root(),
@@ -873,8 +874,7 @@ pub fn check_external_value_expr_type(
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if expected.to_symbolic() == inferred {
-        // The independent binding's typed tree is checked against its facts;
-        // only the facts are retained until the evaluator reads typed trees.
+        // The independent binding's typed tree is checked against its facts.
         observations
             .finish()
             .publish(
@@ -883,13 +883,15 @@ pub fn check_external_value_expr_type(
                 &[expr],
                 &|index| expression_axes::checked_index_cardinality(tir, index),
             )
-            .map(|(facts, _)| facts)
-            .map_err(|error| {
-                GraphcalError::internal_error(
-                    error.to_string(),
-                    src,
-                    DiagnosticAnchor::Source(expr.span),
-                )
+            .map_err(|error| error.to_string())
+            .and_then(|(_, bodies)| {
+                bodies
+                    .executable_value(expr.id())
+                    .cloned()
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(|message| {
+                GraphcalError::internal_error(message, src, DiagnosticAnchor::Source(expr.span))
             })
     } else {
         Err(GraphcalError::DimensionMismatchInAnnotation {

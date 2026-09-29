@@ -474,28 +474,21 @@ fn generic_nat_services_cannot_cross_type_owners_with_the_same_parameter_name() 
     let foreign = std::collections::HashMap::from([(b, 3)]);
     let values = crate::constant_pools::RuntimeValueMap::new();
     let locals = crate::eval_expr::HirLocalValueMap::root();
-    let facts =
-        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
-            &tir,
-            tir.root(),
-            bound,
-            &own,
-            &src,
-        )
-        .unwrap();
-    let value = crate::eval_expr::eval_hir_expr(
+    let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
+        &tir,
+        tir.root(),
         bound,
-        &values,
-        &locals,
-        &context.clone().with_expression_facts(&facts).unwrap(),
+        &own,
+        &src,
     )
     .unwrap();
+    let value = crate::eval_expr::eval_texpr(&tree, &values, &locals, &context).unwrap();
     let graphcal_compiler::registry::runtime_value::RuntimeValue::Quantity(value) = value else {
         panic!("expected a quantity bound, got {value:?}");
     };
     assert_eq!(value.get().to_bits(), 3.0_f64.to_bits());
     assert!(
-        graphcal_compiler::tir::dim_check::expression_facts::specialize_bound_expression_facts(
+        graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
             &tir,
             tir.root(),
             bound,
@@ -542,8 +535,8 @@ fn checked_runtime_shape_lookup_uses_identity_not_diagnostic_coordinates() {
     shifted.span = graphcal_compiler::syntax::span::Span::new(0, 1);
     assert_ne!(shifted.span, original.span);
     assert_eq!(shifted.id(), original.id());
-    let value = crate::eval_expr::eval_hir_expr(
-        &shifted,
+    let value = crate::eval_expr::eval_texpr(
+        context.executable(&shifted).unwrap(),
         &crate::constant_pools::RuntimeValueMap::new(),
         &crate::eval_expr::HirLocalValueMap::root(),
         &context,
@@ -6416,7 +6409,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err =
+        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
+            .unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for variant"), "{message}");
@@ -6477,7 +6472,9 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err =
+        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
+            .unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no field `distance`"), "{message}");
@@ -7349,7 +7346,9 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err = crate::eval_expr::eval_hir_expr(expr, &values, &empty_locals, &ctx).unwrap_err();
+    let err =
+        crate::eval_expr::eval_texpr(ctx.executable(expr).unwrap(), &values, &empty_locals, &ctx)
+            .unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("index argument belongs to"), "{message}");
@@ -7378,8 +7377,9 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         .unwrap()
         .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
-    let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = expr.kind() else {
-        panic!("expected `code` to be a for-comprehension, got {expr:?}");
+    let tree = tir.root().bodies().executable_value(expr.id()).unwrap();
+    let graphcal_compiler::tir::texpr::TExprKind::For { bindings, body } = tree.kind() else {
+        panic!("expected `code` to be a for-comprehension, got {tree:?}");
     };
     let [binding] = bindings.as_slice() else {
         panic!("expected one for-comprehension binding, got {bindings:?}");
@@ -7414,8 +7414,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     .with_roots(&values, None)
     .for_decl(&expr_key);
 
-    let err =
-        crate::eval_expr::eval_hir_expr(match_expr, &values, &local_values, &ctx).unwrap_err();
+    let err = crate::eval_expr::eval_texpr(match_expr, &values, &local_values, &ctx).unwrap_err();
     match err {
         GraphcalError::EvalError { message, .. } => {
             assert!(message.contains("no match arm for label"), "{message}");

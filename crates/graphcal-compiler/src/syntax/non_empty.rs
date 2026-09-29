@@ -226,6 +226,12 @@ impl<T> NonEmpty<T> {
         &self.items[0]
     }
 
+    /// The first element and the rest, in source order.
+    #[must_use]
+    pub fn split_first(&self) -> (&T, &[T]) {
+        (&self.items[0], &self.items[1..])
+    }
+
     /// Last element in source order.
     #[must_use]
     pub fn last(&self) -> &T {
@@ -445,6 +451,14 @@ mod tests {
         assert_eq!(items.iter().copied().collect::<Vec<_>>(), vec![3, 1, 2]);
         assert_eq!((&items).into_iter().count(), 3);
         assert_eq!(items.len().get(), 3);
+    }
+
+    #[test]
+    fn non_empty_split_first_separates_the_head_from_the_rest() {
+        let items = NonEmpty::new(3, vec![1, 2]);
+        assert_eq!(items.split_first(), (&3, &[1, 2][..]));
+        let single = NonEmpty::singleton('a');
+        assert_eq!(single.split_first(), (&'a', &[][..]));
     }
 
     #[test]

@@ -18,23 +18,7 @@ use crate::tir::typed::specialization::specialize_expression_type;
 use super::expression_axes::{check_materializable, checked_index_cardinality};
 use super::{DimCheckContext, check_decl_expr_type, infer};
 
-/// Discharge one bound's retained Nat/type/shape obligations in its canonical
-/// environment. This does not infer the source body and grants no capabilities.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "canonical binding services retain this exact map type"
-)]
-pub fn specialize_bound_expression_facts(
-    tir: &crate::tir::typed::CheckedTir,
-    dag: &crate::tir::typed::CheckedDag,
-    root: &crate::hir::expr::Expr,
-    bindings: &HashMap<crate::hir::types::GenericParamId, u64>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<CheckedExpressionFacts, GraphcalError> {
-    specialize_bound_facts(tir, dag, root, bindings, src)
-}
-
-/// [`specialize_bound_expression_facts`] while the project is being checked.
+/// Specialize one bound's facts while the project is being checked.
 pub(super) fn specialize_bound_facts(
     tir: &dyn TirRead,
     dag: &crate::tir::typed::model::DagTIR,
