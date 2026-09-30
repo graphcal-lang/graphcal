@@ -23,9 +23,12 @@ use super::types::{EvalResult, NodeUnavailable};
 
 mod assertions;
 mod plots;
+mod root_names;
+mod root_outcome;
 mod value_entries;
 
-pub(super) use assertions::{evaluate_assertions, root_source_names};
+use assertions::evaluate_assertions;
+pub(super) use root_outcome::{RootFailure, RootOutcome};
 
 /// Result of running the core eval loop: successfully evaluated values and per-node errors.
 pub(super) struct EvalLoopResult {
@@ -143,28 +146,20 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeEvaluation, GraphcalError> {
     cancellation.checkpoint()?;
-    let EvalLoopResult {
-        unfinished_calls,
-        values,
-        presentation_instances,
-        errors,
-    } = run_eval_loop_with_bindings(plan, bindings, src, host_fns, cancellation)?;
-
+    let outcome = RootOutcome::evaluate(plan, bindings, src, host_fns, cancellation)?;
     cancellation.checkpoint()?;
-    let ctx = EvalSession::checked(plan, src, host_fns, cancellation.clone())
-        .with_roots(&values, Some(&presentation_instances))
-        .with_unavailable(&errors)
-        .with_unfinished_calls(&unfinished_calls);
-    let presentation_instances = presentation_instances
+    let ctx = outcome.session(plan, src, host_fns, cancellation);
+    let presentation_instances = outcome
+        .presentation_instances()
         .iter()
         .map(|(key, evidence)| {
-            crate::eval_expr::presentation::resolve(evidence.clone(), &values, &ctx)
+            crate::eval_expr::presentation::resolve(evidence.clone(), outcome.values(), &ctx)
                 .map(|evidence| (key.clone(), evidence))
         })
         .collect::<Result<PresentationInstanceMap, _>>()?;
     let evaluated = EvaluatedRoot {
-        values: &values,
-        errors: &errors,
+        values: outcome.values(),
+        errors: outcome.errors(),
         presentations: &presentation_instances,
     };
 
@@ -173,9 +168,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         output_surface,
         mut presentation_diagnostics,
     } = value_entries::assemble_value_entries(plan, evaluated, &ctx)?;
-    cancellation.checkpoint()?;
-
-    let assertions = evaluate_assertions(plan.tir(), src, &ctx, &values, &errors)?;
     cancellation.checkpoint()?;
 
     let plots::PlotOutputs {
@@ -190,9 +182,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .iter()
             .flat_map(|plot| plot.presentation_diagnostics.iter().cloned()),
     );
+    let assumes_map = assertions::root_assumes_map(plan, src)?;
 
+    let root_outcome::RootOutcomeParts {
+        unfinished_calls,
+        values,
+        errors,
+        assertions,
+    } = outcome.into_parts();
     let result = EvalResult {
-        unfinished_calls: unfinished_calls.into_inner().into_iter().collect(),
+        unfinished_calls: unfinished_calls.into_iter().collect(),
         entries,
         output_surface,
         assertions,
@@ -201,7 +200,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         presentation_diagnostics,
         figures,
         layers,
-        assumes_map: assertions::root_assumes_map(plan, src)?,
+        assumes_map,
         render: super::types::RenderContext::new(
             plan.tir().registry().dimensions.base_unit_symbols(),
             plan.tir().registry().time_zones.clone(),

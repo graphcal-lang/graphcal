@@ -153,9 +153,6 @@
         "chained_product": {
           "si_value": 720.0
         },
-        "generic_product::result": {
-          "si_value": 24.0
-        },
         "position": {
           "fields": {
             "x": {
@@ -264,20 +261,6 @@
             }
           },
           "index": "Fin(2)"
-        },
-        "generic_product::values": {
-          "entries": {
-            "Depth": {
-              "si_value": 4.0
-            },
-            "Height": {
-              "si_value": 3.0
-            },
-            "Width": {
-              "si_value": 2.0
-            }
-          },
-          "index": "Factor"
         },
         "means": {
           "entries": {

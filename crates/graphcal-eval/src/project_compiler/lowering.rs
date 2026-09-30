@@ -996,7 +996,6 @@ fn record_semantic_instance(
                 substitution,
                 template_value_ports(template),
             ),
-            debug_scope: request.debug_scope.clone(),
             value_bindings,
             runtime_unit_names: request.runtime_unit_names.clone(),
             output_projections,

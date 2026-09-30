@@ -17,10 +17,10 @@ pub use crate::project_compiler::{CheckedProject, HirProject, ProjectCompiler, c
 pub(crate) use crate::project_compiler::{compile_to_tir, compile_to_tir_project};
 pub use graphcal_compiler::registry::format::format_number;
 pub use project::{
-    InclusiveBounds, ModelAlgebraicTypeSchema, ModelConstructorSchema, ModelDefinitionError,
-    ModelExecutionError, ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort,
-    ModelQuantitySchema, ModelRowFailure, ModelRowOutcome, ModelSchemaGraph, ModelTypeId,
-    ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
+    InclusiveBounds, InclusiveBoundsError, ModelAlgebraicTypeSchema, ModelConstructorSchema,
+    ModelDefinitionError, ModelExecutionError, ModelFieldSchema, ModelIndexKind, ModelIndexSchema,
+    ModelOutputPort, ModelQuantitySchema, ModelRowFailure, ModelRowOutcome, ModelSchemaGraph,
+    ModelTypeId, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
     ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
     PreparedProject, StructuredBindingError, StructuredBindingPathSegment, StructuredValueExpr,
     TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,

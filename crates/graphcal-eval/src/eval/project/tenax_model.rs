@@ -1,23 +1,56 @@
 //! Transport-independent model and strict Tenax-v2 projections.
 
-use std::collections::HashMap;
-
-use crate::eval::runtime::{evaluate_assertions, root_source_names};
-use crate::eval::types::NodeUnavailable;
+use crate::eval::runtime::{RootFailure, RootOutcome};
 
 use super::{
-    Arc, AssertResult, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error,
-    EvalLoopResult, EvalSession, GraphcalError, HashSet, IndexKind, IndexVariantName,
-    ModelSchemaGraph, ModelValueSchema, ParameterBindingRow, ParameterPosition, PreparedProject,
-    ResolvedDeclName, Span, TimeScale, Value, index_def_for_ref, remap_include_debug_name,
-    run_eval_loop_with_bindings,
+    Arc, CheckedType, CompileError, ConcreteIndexKind, DeclName, Error, GraphcalError, HashSet,
+    IndexKind, IndexVariantName, ModelSchemaGraph, ModelValueSchema, ParameterBindingRow,
+    ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale, Value,
+    index_def_for_ref, remap_include_debug_name,
 };
 
 /// Inclusive lower and upper bounds for one external input family.
+///
+/// Every declared bound is ordered (comparable with itself, so never NaN),
+/// and a lower bound never exceeds an upper bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InclusiveBounds<T> {
-    pub(super) lower: Option<T>,
-    pub(super) upper: Option<T>,
+    lower: Option<T>,
+    upper: Option<T>,
+}
+
+/// Why bounds do not form an inclusive interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum InclusiveBoundsError {
+    #[error("a domain bound is unordered")]
+    Unordered,
+    #[error("the lower domain bound exceeds the upper bound")]
+    Inverted,
+}
+
+impl<T: PartialOrd> InclusiveBounds<T> {
+    /// Bounds from `lower` to `upper`, each inclusive when declared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InclusiveBoundsError`] when a bound is unordered or the
+    /// lower bound exceeds the upper bound.
+    pub fn try_new(lower: Option<T>, upper: Option<T>) -> Result<Self, InclusiveBoundsError> {
+        let ordered = |bound: &Option<T>| {
+            bound
+                .as_ref()
+                .is_none_or(|bound| bound.partial_cmp(bound).is_some())
+        };
+        if !(ordered(&lower) && ordered(&upper)) {
+            return Err(InclusiveBoundsError::Unordered);
+        }
+        if let (Some(lower), Some(upper)) = (&lower, &upper)
+            && lower > upper
+        {
+            return Err(InclusiveBoundsError::Inverted);
+        }
+        Ok(Self { lower, upper })
+    }
 }
 
 impl<T> InclusiveBounds<T> {
@@ -273,58 +306,41 @@ impl PreparedProject {
         }
 
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let EvalLoopResult {
-            values,
-            errors,
-            unfinished_calls,
-            ..
-        } = run_eval_loop_with_bindings(
+        let outcome = RootOutcome::evaluate(
             self.plan(),
             &row.bindings,
             &self.source,
             &self.host_fns,
             &cancellation,
         )?;
-
-        if let Some(failure) = self.runtime_error_failure(&errors)? {
-            return Ok(ModelRowOutcome::Failure(failure));
+        if let Some(failure) = outcome.first_failure(self.plan(), &self.source)? {
+            return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
-
-        let ctx = EvalSession::checked(self.plan(), &self.source, &self.host_fns, cancellation)
-            .with_roots(&values, None)
-            .with_unavailable(&errors)
-            .with_unfinished_calls(&unfinished_calls);
-        let first_failed_assertion =
-            evaluate_assertions(self.tir(), &self.source, &ctx, &values, &errors)?
-                .into_iter()
-                .find_map(|(name, result, _)| match result {
-                    AssertResult::Pass => None,
-                    AssertResult::Blocked { reason } => Some((name, reason.to_string())),
-                    AssertResult::Fail { message } | AssertResult::Error { message } => {
-                        Some((name, message))
-                    }
-                });
-        if let Some((name, message)) = first_failed_assertion {
-            let name = remap_include_debug_name(&name, &self.output_assembly.include_debug_names);
-            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                message: format!("assertion `{name}`: {message}"),
-            }));
-        }
-
-        if !unfinished_calls.borrow().is_empty() {
-            let names = unfinished_calls
-                .borrow()
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                message: format!("unfinished formulas in invoked DAGs: {names}"),
-            }));
-        }
-
-        self.project_model_outputs(model, &values)
+        self.project_model_outputs(model, outcome.values())
             .map(ModelRowOutcome::Success)
+    }
+
+    /// The diagnostic a model row reports for the first failure of its
+    /// evaluation, naming private include scopes as the project displays them.
+    fn row_failure(&self, failure: RootFailure<'_>) -> ModelRowFailure {
+        let display = |name: &graphcal_compiler::syntax::module_name::ScopedName| {
+            remap_include_debug_name(name, &self.output_assembly.include_debug_names)
+        };
+        let message = match failure {
+            RootFailure::Declaration { name, reason } => format!("{}: {reason}", display(&name)),
+            RootFailure::Assertion { name, message } => {
+                format!("assertion `{}`: {message}", display(name))
+            }
+            RootFailure::UnfinishedCalls(calls) => format!(
+                "unfinished formulas in invoked DAGs: {}",
+                calls
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        };
+        ModelRowFailure { message }
     }
 
     fn project_model_outputs(
@@ -347,35 +363,6 @@ impl PreparedProject {
                     .map_err(ModelExecutionError::from)
             })
             .collect()
-    }
-
-    /// Row failure for the first runtime error, or `None` when evaluation
-    /// produced no runtime error.
-    ///
-    /// Errors on declarations the root exposes (root declarations and
-    /// semantic-instance projections) are reported under their source name in
-    /// root-exposure order. An error confined to a declaration private to an
-    /// included DAG falls back to the smallest failed runtime identity.
-    fn runtime_error_failure(
-        &self,
-        errors: &HashMap<ResolvedDeclName, NodeUnavailable>,
-    ) -> Result<Option<ModelRowFailure>, ModelExecutionError> {
-        let exposed = root_source_names(self.tir(), &self.source)?
-            .into_iter()
-            .find_map(|(key, name)| {
-                errors.get(&key).map(|error| {
-                    let name =
-                        remap_include_debug_name(&name, &self.output_assembly.include_debug_names);
-                    format!("{name}: {error}")
-                })
-            });
-        let message = exposed.or_else(|| {
-            errors
-                .iter()
-                .min_by(|(left, _), (right, _)| left.cmp(right))
-                .map(|(key, error)| format!("{key}: {error}"))
-        });
-        Ok(message.map(|message| ModelRowFailure { message }))
     }
 
     /// Evaluate one strict v2 row and enforce Boolean output representation.
@@ -413,16 +400,13 @@ impl PreparedProject {
         }
         let kind = match (&port.declared_type, &port.domain) {
             (CheckedType::Quantity(dimension), Some(ParameterDomain::Quantity(bounds))) => {
-                let (Some(lower), Some(upper)) = (bounds.lower, bounds.upper) else {
+                let (Some(&lower), Some(&upper)) = (bounds.lower(), bounds.upper()) else {
                     return Err(ModelDefinitionError::MissingClosedDomain {
                         name: port.name.clone(),
                     });
                 };
-                if !(lower.is_finite()
-                    && upper.is_finite()
-                    && (upper - lower).is_finite()
-                    && lower <= upper)
-                {
+                // The bounds are ordered; Tenax additionally needs a finite span.
+                if !(lower.is_finite() && upper.is_finite() && (upper - lower).is_finite()) {
                     return Err(ModelDefinitionError::InvalidContinuousDomain {
                         name: port.name.clone(),
                     });
@@ -450,7 +434,7 @@ impl PreparedProject {
                 }
             }
             (CheckedType::Int, Some(ParameterDomain::Integer(bounds))) => {
-                let (Some(lower), Some(upper)) = (bounds.lower, bounds.upper) else {
+                let (Some(&lower), Some(&upper)) = (bounds.lower(), bounds.upper()) else {
                     return Err(ModelDefinitionError::MissingClosedDomain {
                         name: port.name.clone(),
                     });

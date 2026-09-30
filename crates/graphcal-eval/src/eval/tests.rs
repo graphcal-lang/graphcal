@@ -4953,6 +4953,96 @@ fn model_row_reports_runtime_errors_inside_included_dags_as_row_failures() {
     }
 }
 
+/// A project whose root includes `pipeline.leaf` under `include`, where
+/// `leaf` fails in its private `reciprocal` when `x` is zero.
+fn write_private_failure_project(include: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    write_pipeline_project(
+        &[
+            (
+                "leaf.gcl",
+                "param input: Dimensionless;\n\
+                 node reciprocal: Dimensionless = 1.0 / @input;\n\
+                 pub node output: Dimensionless = @input;",
+            ),
+            (
+                "main.gcl",
+                &format!(
+                    "param x: Dimensionless(min: -10.0, max: 10.0);\n\
+                     {include}\n\
+                     pub node ok: Bool = @x < 100.0;"
+                ),
+            ),
+        ],
+        "main.gcl",
+    )
+}
+
+#[test]
+fn private_include_failures_are_labelled_by_the_include_scope() {
+    // B2: a failure private to an included DAG is named by the scope the
+    // root gives the include (its alias, or the module name of an anonymous
+    // include), in both the model-row and the full evaluation result,
+    // never by the internal identity or by the module name behind an alias.
+    for (include, label) in [
+        ("include pipeline.leaf(input: @x) as l2;", "l2::reciprocal"),
+        (
+            "include pipeline.leaf(input: @x)::{ output as o };",
+            "leaf::reciprocal",
+        ),
+    ] {
+        let (_directory, root) = write_private_failure_project(include);
+        let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+        let prepared = prepare_from_project(&project).unwrap();
+        let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
+        let mut bindings = prepared.binding_builder();
+        bindings
+            .bind_expression(&DeclName::expect_valid("x"), &parse_expr("0.0"))
+            .unwrap();
+        let row = bindings.finish().unwrap();
+        match prepared.evaluate_model_row(&row, &model).unwrap() {
+            ModelRowOutcome::Failure(failure) => assert!(
+                failure
+                    .message()
+                    .starts_with(&format!("{label}: division by zero")),
+                "unexpected failure for `{include}`: {failure}"
+            ),
+            ModelRowOutcome::Success(values) => {
+                panic!("expected a runtime failure for `{include}`, got {values:?}")
+            }
+        }
+
+        let result = prepared.evaluate(&row).unwrap();
+        let failed = result
+            .entries
+            .iter()
+            .filter(|(_, value, _)| value.is_err())
+            .map(|(name, _, _)| name.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(failed, [label], "for `{include}`");
+    }
+}
+
+#[test]
+fn inclusive_bounds_are_ordered_intervals() {
+    assert!(InclusiveBounds::try_new(Some(1.0), Some(2.0)).is_ok());
+    assert!(InclusiveBounds::try_new(Some(2.0), Some(2.0)).is_ok());
+    assert!(InclusiveBounds::<f64>::try_new(None, None).is_ok());
+    let lower_only = InclusiveBounds::try_new(Some(3_i64), None).unwrap();
+    assert_eq!((lower_only.lower(), lower_only.upper()), (Some(&3), None));
+    assert_eq!(
+        InclusiveBounds::try_new(Some(2.0), Some(1.0)),
+        Err(InclusiveBoundsError::Inverted)
+    );
+    assert_eq!(
+        InclusiveBounds::try_new(Some(f64::NAN), Some(1.0)),
+        Err(InclusiveBoundsError::Unordered)
+    );
+    assert_eq!(
+        InclusiveBounds::try_new(None, Some(f64::NAN)),
+        Err(InclusiveBoundsError::Unordered)
+    );
+}
+
 #[test]
 fn required_param_without_override_errors() {
     let source = "param x: Dimensionless;\nnode y: Dimensionless = @x + 1.0;";

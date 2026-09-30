@@ -1,0 +1,160 @@
+//! Source-level names of the runtime identities of the root DAG's closure,
+//! as the root reports them.
+//!
+//! A declaration the root exposes (its own, or a projection of an include
+//! site) has the name the root's source gives it. Any other declaration of
+//! the closure belongs to a semantic instance and is named by the instance
+//! scopes below the root, then its own leaf (`l2::reciprocal`,
+//! `outer::inner::x`); anonymous include scopes are given display names at
+//! the project boundary.
+
+use std::sync::Arc;
+
+use miette::NamedSource;
+
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
+
+use crate::execution_plan::ExecPlan;
+
+/// `name`, written in `dag`, as the root `root` names it: qualified by the
+/// scopes of `dag` below the root.
+///
+/// Returns `None` when `dag` is neither the root nor a module below it.
+pub(super) fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> Option<ScopedName> {
+    let path = dag.scopes_below(root)?;
+    let qualifier = path
+        .into_iter()
+        .chain(name.qualifier().iter().cloned())
+        .collect::<Vec<_>>();
+    Some(ScopedName::from_parts(
+        NonEmpty::try_from_vec(qualifier).ok(),
+        name.leaf().clone(),
+    ))
+}
+
+/// The name of `declaration`, a declaration of a semantic instance in the
+/// root's closure, qualified by the instance scopes below the root.
+///
+/// # Errors
+///
+/// Returns an internal error when the declaration's owner is not below the
+/// root: every declaration the root evaluates is its own or an instance's.
+pub(in crate::eval) fn instance_member_name(
+    root: &DagId,
+    declaration: &ResolvedDeclName,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ScopedName, GraphcalError> {
+    member_name(root, declaration).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("declaration `{declaration}` is not a member of an instance below the root"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })
+}
+
+fn member_name(root: &DagId, declaration: &ResolvedDeclName) -> Option<ScopedName> {
+    let owner = declaration.owner();
+    (owner != root)
+        .then(|| qualified_below(root, owner, &ScopedName::local(declaration.leaf().clone())))
+        .flatten()
+}
+
+/// Source-level names of the runtime declarations the root DAG exposes, in
+/// deterministic order: root declarations in source order, then the output
+/// and assertion projections of each root semantic instance in record order.
+///
+/// Declarations private to a semantic instance have no root source name and
+/// are absent; [`instance_member_name`] names them.
+pub(in crate::eval) fn root_source_names(
+    plan: &ExecPlan<'_>,
+) -> Vec<(ResolvedDeclName, ScopedName)> {
+    let root = plan.root();
+    let own = root
+        .scope()
+        .dag()
+        .decls()
+        .iter()
+        .map(|entry| (entry.identity(), ScopedName::local(entry.name().clone())));
+    let projected = root.semantic_instances().iter().flat_map(|planned| {
+        let instance = planned.instance();
+        let record = &instance.record().instance;
+        instance
+            .output_projections()
+            .map(|resolved| (resolved.target, record.exposed_name(resolved.projection)))
+            .chain(
+                instance
+                    .assertion_projections()
+                    .map(|resolved| (resolved.target, record.exposed_name(resolved.projection))),
+            )
+    });
+    own.chain(projected).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use graphcal_compiler::syntax::decl_name::DeclName;
+    use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
+
+    use super::*;
+
+    fn named(alias: &str) -> ScopeSegment {
+        ScopeSegment::Named(ModuleAliasName::expect_valid(alias))
+    }
+
+    fn leaf(name: &str) -> DeclName {
+        DeclName::expect_valid(name)
+    }
+
+    #[test]
+    fn instance_members_are_qualified_by_every_instance_scope_below_the_root() {
+        let root = DagId::root_in_package("test", "main");
+        let outer = root.instance_child(named("outer"));
+        let inner = outer.instance_child(named("inner"));
+        let member = |owner: &DagId| {
+            member_name(&root, &ResolvedDeclName::for_test(owner.clone(), leaf("x")))
+        };
+        assert_eq!(
+            member(&outer),
+            Some(ScopedName::in_scope(named("outer"), leaf("x")))
+        );
+        assert_eq!(
+            member(&inner),
+            Some(ScopedName::qualified(
+                NonEmpty::new(named("outer"), vec![named("inner")]),
+                leaf("x")
+            ))
+        );
+        // The root's own declarations and modules outside the root are not
+        // instance members.
+        assert_eq!(member(&root), None);
+        assert_eq!(member(&DagId::root_in_package("test", "other")), None);
+    }
+
+    #[test]
+    fn names_written_in_a_module_keep_their_own_qualifier() {
+        let root = DagId::root_in_package("test", "main");
+        let outer = root.instance_child(named("outer"));
+        let exposed = ScopedName::in_scope(named("inst"), leaf("ok"));
+        assert_eq!(
+            qualified_below(&root, &outer, &exposed),
+            Some(ScopedName::qualified(
+                NonEmpty::new(named("outer"), vec![named("inst")]),
+                leaf("ok")
+            ))
+        );
+        assert_eq!(
+            qualified_below(&root, &root, &exposed),
+            Some(exposed.clone())
+        );
+        assert_eq!(
+            qualified_below(&root, &DagId::root_in_package("test", "other"), &exposed),
+            None
+        );
+    }
+}

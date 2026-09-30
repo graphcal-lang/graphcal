@@ -783,7 +783,17 @@ pub(super) fn build_parameter_ports(
                 .value_schema(&declared_type)
                 .map_err(CompileError::Eval)?;
             let runtime_key = parameter.runtime_key().clone();
-            let domain = plan.domain_constraint(&runtime_key).map(parameter_domain);
+            let domain = plan
+                .domain_constraint(&runtime_key)
+                .map(parameter_domain)
+                .transpose()
+                .map_err(|error| {
+                    CompileError::Eval(GraphcalError::internal_error(
+                        format!("domain of parameter `{}`: {error}", parameter.name()),
+                        plan.root().scope().source(),
+                        DiagnosticAnchor::Source(parameter.span()),
+                    ))
+                })?;
             Ok(ParameterPort {
                 name: parameter.name().clone(),
                 position: ParameterPosition { plan_id, index },

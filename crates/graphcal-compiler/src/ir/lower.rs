@@ -917,7 +917,6 @@ pub struct UnfrozenIR {
 #[derive(Debug, Clone)]
 pub struct UnfrozenSemanticInstance {
     pub(crate) instance: InstanceRecord,
-    pub(crate) debug_scope: crate::syntax::module_name::ModuleAliasName,
     pub(crate) value_bindings: HashMap<ResolvedDeclName, Expr>,
     pub(crate) runtime_unit_names: HashSet<UnitName>,
     pub(crate) output_projections: Vec<crate::ir::instance::InstanceValueProjection>,
