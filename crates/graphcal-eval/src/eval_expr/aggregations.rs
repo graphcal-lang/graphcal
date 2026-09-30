@@ -1,3 +1,4 @@
+use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue, RuntimeValueError};
 use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
@@ -8,12 +9,6 @@ use super::numeric;
 /// Error produced by pure aggregation evaluation.
 #[derive(Debug, Error)]
 pub(super) enum AggregationError {
-    /// Rank checking should prevent `count()` from seeing nested indexed entries.
-    #[error("count() received a multi-axis Indexed value after rank-one type checking")]
-    MultiAxisCount,
-    /// A runtime cardinality could not be represented by Graphcal's `Int` type.
-    #[error("count() cardinality {count} cannot be represented as Int")]
-    CountOutOfRange { count: usize },
     /// An indexed entry was not quantity-like.
     #[error(transparent)]
     ElementType(#[from] RuntimeValueError),
@@ -22,21 +17,13 @@ pub(super) enum AggregationError {
     Quantity(#[from] numeric::QuantityValidationError),
 }
 
-impl AggregationError {
-    /// Whether this error represents a violation of an invariant enforced before evaluation.
-    #[must_use]
-    pub(super) const fn is_internal_invariant(&self) -> bool {
-        matches!(self, Self::MultiAxisCount | Self::CountOutOfRange { .. })
-    }
-}
-
 /// Evaluate an aggregation function over indexed entries.
 pub(super) fn aggregate_indexed_values(
     kind: ValueAggregation,
     indexed: &IndexedValue<RuntimeValue>,
-) -> Result<RuntimeValue, AggregationError> {
+) -> Result<RuntimeValue, Failure<AggregationError>> {
     let entries = indexed.values().as_slice();
-    match kind {
+    let value = match kind {
         ValueAggregation::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
         ValueAggregation::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
         ValueAggregation::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
@@ -45,8 +32,9 @@ pub(super) fn aggregate_indexed_values(
         ValueAggregation::RootSumSquare => {
             aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
         }
-        ValueAggregation::Count => aggregate_count(entries).map(RuntimeValue::Int),
-    }
+        ValueAggregation::Count => return Ok(RuntimeValue::Int(aggregate_count(entries)?)),
+    };
+    value.map_err(Failure::Error)
 }
 
 /// Key of the extremum element, resolving ties to the first entry in index
@@ -145,18 +133,26 @@ fn aggregate_mean(entries: &[RuntimeValue]) -> Result<FiniteQuantity, Aggregatio
     numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
 }
 
-fn aggregate_count(entries: &[RuntimeValue]) -> Result<i64, AggregationError> {
+/// Rank checking prevents `count()` from seeing nested indexed entries, and
+/// no in-memory axis has more entries than `Int` can count.
+fn aggregate_count(entries: &[RuntimeValue]) -> Result<i64, Invariant> {
     if entries
         .iter()
         .any(|value| matches!(value, RuntimeValue::Indexed(_)))
     {
-        return Err(AggregationError::MultiAxisCount);
+        return Err(Invariant::violated(
+            "count() received a multi-axis Indexed value after rank-one type checking",
+        ));
     }
     checked_count(entries.len())
 }
 
-fn checked_count(count: usize) -> Result<i64, AggregationError> {
-    i64::try_from(count).map_err(|_| AggregationError::CountOutOfRange { count })
+fn checked_count(count: usize) -> Result<i64, Invariant> {
+    i64::try_from(count).map_err(|_| {
+        Invariant::violated(format_args!(
+            "count() cardinality {count} cannot be represented as Int"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -241,9 +237,9 @@ mod tests {
         ]);
         assert!(matches!(
             aggregate_indexed_values(ValueAggregation::Product, &overflowing_product),
-            Err(AggregationError::Quantity(
+            Err(Failure::Error(AggregationError::Quantity(
                 numeric::QuantityValidationError::InfiniteResult { .. }
-            ))
+            )))
         ));
     }
 
@@ -280,17 +276,20 @@ mod tests {
         ]));
         let entries = IndexedValue::finite_for_test(vec![inner]);
         let error = aggregate_indexed_values(ValueAggregation::Count, &entries).unwrap_err();
-        assert!(matches!(&error, AggregationError::MultiAxisCount));
-        assert!(error.is_internal_invariant());
+        assert!(matches!(
+            &error,
+            Failure::Invariant(invariant) if invariant.to_string()
+                == "count() received a multi-axis Indexed value after rank-one type checking"
+        ));
     }
 
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn count_checks_conversion_to_int() {
         let too_large = usize::try_from(i64::MAX).unwrap() + 1;
-        assert!(matches!(
-            checked_count(too_large),
-            Err(AggregationError::CountOutOfRange { count }) if count == too_large
-        ));
+        assert_eq!(
+            checked_count(too_large).unwrap_err().to_string(),
+            format!("count() cardinality {too_large} cannot be represented as Int")
+        );
     }
 }

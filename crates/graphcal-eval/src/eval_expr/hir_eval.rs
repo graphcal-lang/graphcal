@@ -6,7 +6,7 @@ use crate::runtime_value::{
 };
 use graphcal_compiler::builtin::{
     AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
-    DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn, ValueAggregation,
+    DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn,
 };
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::{self, FunctionRef};
@@ -630,13 +630,8 @@ fn eval_binop(
                 _ => {}
             }
             if matches!(l, RuntimeValue::Complex(_)) || matches!(r, RuntimeValue::Complex(_)) {
-                return super::complex::evaluate_binary(op, &l, &r).map_err(|error| {
-                    if error.is_internal_invariant() {
-                        ctx.internal_error(error.to_string(), span)
-                    } else {
-                        ctx.eval_error(error.to_string(), span)
-                    }
-                });
+                return super::complex::evaluate_binary(op, &l, &r)
+                    .map_err(|failure| ctx.failure_error(failure, span));
             }
             let lv = l
                 .expect_quantity("binary operand")
@@ -782,13 +777,8 @@ fn eval_fn_call(
                 .iter()
                 .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            super::complex::evaluate_builtin(function, &arguments).map_err(|error| {
-                if error.is_internal_invariant() {
-                    ctx.internal_error(error.to_string(), span)
-                } else {
-                    ctx.eval_error(error.to_string(), span)
-                }
-            })
+            super::complex::evaluate_builtin(function, &arguments)
+                .map_err(|failure| ctx.failure_error(failure, span))
         }
         BuiltinFn::Aggregation(kind) => {
             let arg_val = eval_value(value_arg(&args[0], ctx)?, values, local_values, ctx)?;
@@ -801,7 +791,8 @@ fn eval_fn_call(
             match kind {
                 AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
                 AggregationFn::Value(function) => {
-                    eval_aggregation_fn(function, &indexed, span, ctx.src)
+                    super::aggregations::aggregate_indexed_values(function, &indexed)
+                        .map_err(|failure| ctx.failure_error(failure, span))
                 }
             }
         }
@@ -810,18 +801,8 @@ fn eval_fn_call(
                 .iter()
                 .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            super::linear_algebra::evaluate(function, arguments, ctx).map_err(|error| {
-                error.cancellation().map_or_else(
-                    || {
-                        if error.is_internal_invariant() {
-                            ctx.internal_error(error.to_string(), span)
-                        } else {
-                            ctx.eval_error(error.to_string(), span)
-                        }
-                    },
-                    GraphcalError::from,
-                )
-            })
+            super::linear_algebra::evaluate(function, arguments, ctx)
+                .map_err(|outcome| ctx.outcome_error(outcome, span))
         }
         BuiltinFn::Conversion(kind) => {
             eval_conversion_fn(kind, span, args, values, local_values, ctx)
@@ -1033,14 +1014,7 @@ fn eval_extremum_key(
 ) -> Result<RuntimeValue, GraphcalError> {
     super::aggregations::extremum_key(kind, indexed)
         .map(RuntimeValue::Key)
-        .map_err(|error| {
-            let message = error.to_string();
-            if error.is_internal_invariant() {
-                ctx.internal_error(message, span)
-            } else {
-                ctx.eval_error(message, span)
-            }
-        })
+        .map_err(|error| ctx.eval_error(error.to_string(), span))
 }
 
 /// The constant key a qualified label denotes (`Maneuver#Departure`).
@@ -1064,30 +1038,6 @@ fn named_key(
                 span,
             )
         })
-}
-
-fn eval_aggregation_fn(
-    kind: ValueAggregation,
-    indexed: &IndexedValue<RuntimeValue>,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<RuntimeValue, GraphcalError> {
-    super::aggregations::aggregate_indexed_values(kind, indexed).map_err(|error| {
-        let message = error.to_string();
-        if error.is_internal_invariant() {
-            GraphcalError::InternalError {
-                message,
-                src: src.clone(),
-                span: span.into(),
-            }
-        } else {
-            GraphcalError::EvalError {
-                message,
-                src: src.clone(),
-                span: span.into(),
-            }
-        }
-    })
 }
 
 fn eval_conversion_fn(

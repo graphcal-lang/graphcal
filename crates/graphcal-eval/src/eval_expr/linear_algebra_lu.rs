@@ -9,12 +9,13 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use thiserror::Error;
 
+use graphcal_compiler::outcome::Outcome;
+
 use super::work_budget::KernelCheckpoint;
+use crate::invariant::{Failure, Invariant};
 
 #[derive(Debug, Error)]
 pub(super) enum LuError {
-    #[error("linear-algebra runtime shape invariant failed: {0}")]
-    ShapeInvariant(String),
     #[error("matrix is singular and cannot be {operation}")]
     Singular { operation: &'static str },
     #[error(
@@ -36,26 +37,22 @@ pub(super) enum LuError {
         residual: f64,
         tolerance: f64,
     },
-    #[error(transparent)]
-    Cancelled(#[from] graphcal_compiler::cancellation::Cancelled),
 }
 
-impl LuError {
-    pub(super) const fn is_internal_invariant(&self) -> bool {
-        matches!(self, Self::ShapeInvariant(_))
-    }
+/// Why an LU operation did not produce a value.
+pub(super) type LuFailure = Outcome<Failure<LuError>>;
 
-    pub(super) const fn cancellation(&self) -> Option<graphcal_compiler::cancellation::Cancelled> {
-        match self {
-            Self::Cancelled(cancelled) => Some(*cancelled),
-            Self::ShapeInvariant(_)
-            | Self::Singular { .. }
-            | Self::IllConditioned { .. }
-            | Self::NonFinite { .. }
-            | Self::DeterminantUnderflow
-            | Self::ResidualTooLarge { .. } => None,
-        }
+impl From<LuError> for LuFailure {
+    fn from(error: LuError) -> Self {
+        Self::Failed(Failure::Error(error))
     }
+}
+
+/// A dense buffer that does not have the shape its caller established.
+fn shape_invariant(description: impl std::fmt::Display) -> Invariant {
+    Invariant::violated(format_args!(
+        "linear-algebra runtime shape invariant failed: {description}"
+    ))
 }
 
 #[derive(Debug)]
@@ -73,28 +70,29 @@ struct LuDecomposition {
     minimum_scaled_pivot: f64,
 }
 
-fn matrix_len(order: usize) -> Result<usize, LuError> {
-    order.checked_mul(order).ok_or_else(|| {
-        LuError::ShapeInvariant("square matrix cardinality overflowed usize".to_string())
-    })
+fn matrix_len(order: usize) -> Result<usize, Invariant> {
+    order
+        .checked_mul(order)
+        .ok_or_else(|| shape_invariant("square matrix cardinality overflowed usize"))
 }
 
-fn dense_position(order: usize, row: usize, column: usize) -> Result<usize, LuError> {
+fn dense_position(order: usize, row: usize, column: usize) -> Result<usize, Invariant> {
     if row >= order || column >= order {
-        return Err(LuError::ShapeInvariant(format!(
+        return Err(shape_invariant(format!(
             "matrix position ({row}, {column}) is outside order {order}"
         )));
     }
     row.checked_mul(order)
         .and_then(|offset| offset.checked_add(column))
-        .ok_or_else(|| LuError::ShapeInvariant("matrix position overflowed usize".to_string()))
+        .ok_or_else(|| shape_invariant("matrix position overflowed usize"))
 }
 
-fn dense_value(values: &[f64], order: usize, row: usize, column: usize) -> Result<f64, LuError> {
+fn dense_value(values: &[f64], order: usize, row: usize, column: usize) -> Result<f64, Invariant> {
     let position = dense_position(order, row, column)?;
-    values.get(position).copied().ok_or_else(|| {
-        LuError::ShapeInvariant("matrix position is outside its dense buffer".to_string())
-    })
+    values
+        .get(position)
+        .copied()
+        .ok_or_else(|| shape_invariant("matrix position is outside its dense buffer"))
 }
 
 fn set_dense_value(
@@ -103,11 +101,11 @@ fn set_dense_value(
     row: usize,
     column: usize,
     value: f64,
-) -> Result<(), LuError> {
+) -> Result<(), Invariant> {
     let position = dense_position(order, row, column)?;
-    let target = values.get_mut(position).ok_or_else(|| {
-        LuError::ShapeInvariant("matrix position is outside its dense buffer".to_string())
-    })?;
+    let target = values
+        .get_mut(position)
+        .ok_or_else(|| shape_invariant("matrix position is outside its dense buffer"))?;
     *target = value;
     Ok(())
 }
@@ -133,24 +131,24 @@ impl LuDecomposition {
         matrix: &[f64],
         order: usize,
         control: &mut KernelCheckpoint<'_>,
-    ) -> Result<Factorization, LuError> {
+    ) -> Result<Factorization, LuFailure> {
         control.boundary()?;
         if order == 0 {
-            return Err(LuError::ShapeInvariant(
-                "LU requires a nonempty square matrix".to_string(),
-            ));
+            return Err(shape_invariant("LU requires a nonempty square matrix").into());
         }
         let expected = matrix_len(order)?;
         if matrix.len() != expected {
-            return Err(LuError::ShapeInvariant(format!(
+            return Err(shape_invariant(format!(
                 "LU received {} values for an order-{order} matrix",
                 matrix.len()
-            )));
+            ))
+            .into());
         }
         if matrix.iter().any(|value| !value.is_finite()) {
             return Err(LuError::NonFinite {
                 operation: "LU factorization",
-            });
+            }
+            .into());
         }
 
         let mut factors = matrix.to_vec();
@@ -181,9 +179,8 @@ impl LuDecomposition {
                     Some(_) | None => best = Some((row, ratio)),
                 }
             }
-            let (pivot_row, _) = best.ok_or_else(|| {
-                LuError::ShapeInvariant("LU could not select a pivot row".to_string())
-            })?;
+            let (pivot_row, _) =
+                best.ok_or_else(|| shape_invariant("LU could not select a pivot row"))?;
             if dense_value(&factors, order, pivot_row, pivot_column)? == 0.0 {
                 return Ok(Factorization::Singular);
             }
@@ -245,17 +242,18 @@ impl LuDecomposition {
         rhs: &[f64],
         operation: &'static str,
         control: &mut KernelCheckpoint<'_>,
-    ) -> Result<Vec<f64>, LuError> {
+    ) -> Result<Vec<f64>, LuFailure> {
         self.ensure_conditioned(operation)?;
         if rhs.len() != self.order {
-            return Err(LuError::ShapeInvariant(format!(
+            return Err(shape_invariant(format!(
                 "{operation} received a right-hand side of length {} for order {}",
                 rhs.len(),
                 self.order
-            )));
+            ))
+            .into());
         }
         if rhs.iter().any(|value| !value.is_finite()) {
-            return Err(LuError::NonFinite { operation });
+            return Err(LuError::NonFinite { operation }.into());
         }
 
         let mut solution = self
@@ -263,9 +261,7 @@ impl LuDecomposition {
             .iter()
             .map(|position| {
                 rhs.get(*position).copied().ok_or_else(|| {
-                    LuError::ShapeInvariant(
-                        "LU permutation points outside the right-hand side".to_string(),
-                    )
+                    shape_invariant("LU permutation points outside the right-hand side")
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -305,7 +301,7 @@ impl LuDecomposition {
         clippy::arithmetic_side_effects,
         reason = "multiplication of arbitrary-precision rationals cannot overflow"
     )]
-    fn determinant(&self, control: &mut KernelCheckpoint<'_>) -> Result<f64, LuError> {
+    fn determinant(&self, control: &mut KernelCheckpoint<'_>) -> Result<f64, LuFailure> {
         // LU itself is binary64. Accumulate its finite pivots exactly so an
         // intermediate product cannot erase or overflow a representable result.
         let initial = BigRational::from_float(self.parity)
@@ -315,7 +311,7 @@ impl LuDecomposition {
             let pivot = dense_value(&self.factors, self.order, diagonal, diagonal)?;
             let pivot =
                 BigRational::from_float(pivot).ok_or(LuError::NonFinite { operation: "det()" })?;
-            Ok::<_, LuError>(product * pivot)
+            Ok::<_, LuFailure>(product * pivot)
         })?;
         let result = product
             .to_f64()
@@ -323,7 +319,7 @@ impl LuDecomposition {
         let result = finite(result, "det()")?;
         if result == 0.0 {
             // Singular matrices take the distinct Factorization::Singular path.
-            Err(LuError::DeterminantUnderflow)
+            Err(LuError::DeterminantUnderflow.into())
         } else {
             Ok(result)
         }
@@ -337,7 +333,7 @@ fn checked_residual(
     solution: &[f64],
     operation: &'static str,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<(), LuError> {
+) -> Result<(), LuFailure> {
     let mut matrix_norm = 0.0_f64;
     let mut residual_norm = 0.0_f64;
     for row in 0..order {
@@ -347,15 +343,17 @@ fn checked_residual(
             control.step()?;
             let coefficient = dense_value(matrix, order, row, column)?;
             row_norm = finite(row_norm + coefficient.abs(), operation)?;
-            let value = solution.get(column).copied().ok_or_else(|| {
-                LuError::ShapeInvariant("solution is shorter than the matrix order".to_string())
-            })?;
+            let value = solution
+                .get(column)
+                .copied()
+                .ok_or_else(|| shape_invariant("solution is shorter than the matrix order"))?;
             product = finite(coefficient.mul_add(value, product), operation)?;
         }
         matrix_norm = matrix_norm.max(row_norm);
-        let expected = rhs.get(row).copied().ok_or_else(|| {
-            LuError::ShapeInvariant("right-hand side is shorter than the matrix order".to_string())
-        })?;
+        let expected = rhs
+            .get(row)
+            .copied()
+            .ok_or_else(|| shape_invariant("right-hand side is shorter than the matrix order"))?;
         residual_norm = residual_norm.max((product - expected).abs());
     }
     let solution_norm = solution
@@ -373,7 +371,8 @@ fn checked_residual(
             operation,
             residual: residual_norm,
             tolerance,
-        })
+        }
+        .into())
     }
 }
 
@@ -382,9 +381,9 @@ fn require_nonsingular(
     order: usize,
     operation: &'static str,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<LuDecomposition, LuError> {
+) -> Result<LuDecomposition, LuFailure> {
     match LuDecomposition::factor(matrix, order, control)? {
-        Factorization::Singular => Err(LuError::Singular { operation }),
+        Factorization::Singular => Err(LuError::Singular { operation }.into()),
         Factorization::Nonsingular(decomposition) => Ok(decomposition),
     }
 }
@@ -394,7 +393,7 @@ pub(super) fn solve_with_control(
     order: usize,
     rhs: &[f64],
     control: &mut KernelCheckpoint<'_>,
-) -> Result<Vec<f64>, LuError> {
+) -> Result<Vec<f64>, LuFailure> {
     let operation = "solved";
     let decomposition = require_nonsingular(matrix, order, operation, control)?;
     let solution = decomposition.solve_raw(rhs, operation, control)?;
@@ -406,7 +405,7 @@ pub(super) fn inverse_with_control(
     matrix: &[f64],
     order: usize,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<Vec<f64>, LuError> {
+) -> Result<Vec<f64>, LuFailure> {
     let operation = "inverted";
     let decomposition = require_nonsingular(matrix, order, operation, control)?;
     decomposition.ensure_conditioned(operation)?;
@@ -431,7 +430,7 @@ pub(super) fn determinant_with_control(
     matrix: &[f64],
     order: usize,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<f64, LuError> {
+) -> Result<f64, LuFailure> {
     match LuDecomposition::factor(matrix, order, control)? {
         Factorization::Singular => Ok(0.0),
         Factorization::Nonsingular(decomposition) => decomposition.determinant(control),
@@ -442,7 +441,7 @@ pub(super) fn determinant_with_control(
 mod tests {
     use super::*;
 
-    fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuError> {
+    fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         solve_with_control(
             matrix,
@@ -452,12 +451,12 @@ mod tests {
         )
     }
 
-    fn inverse(matrix: &[f64], order: usize) -> Result<Vec<f64>, LuError> {
+    fn inverse(matrix: &[f64], order: usize) -> Result<Vec<f64>, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         inverse_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
     }
 
-    fn determinant(matrix: &[f64], order: usize) -> Result<f64, LuError> {
+    fn determinant(matrix: &[f64], order: usize) -> Result<f64, LuFailure> {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         determinant_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
     }
@@ -506,7 +505,7 @@ mod tests {
         let ill_conditioned = [1.0, 1.0, 1.0, 1.0 + 1.0e-14];
         assert!(matches!(
             solve(&ill_conditioned, 2, &[2.0, 2.0 + 1.0e-14]).unwrap_err(),
-            LuError::IllConditioned { .. }
+            Outcome::Failed(Failure::Error(LuError::IllConditioned { .. }))
         ));
     }
 
@@ -515,11 +514,11 @@ mod tests {
         let singular = [1.0, 2.0, 2.0, 4.0];
         assert!(matches!(
             solve(&singular, 2, &[1.0, 2.0]).unwrap_err(),
-            LuError::Singular { .. }
+            Outcome::Failed(Failure::Error(LuError::Singular { .. }))
         ));
         assert!(matches!(
             inverse(&singular, 2).unwrap_err(),
-            LuError::Singular { .. }
+            Outcome::Failed(Failure::Error(LuError::Singular { .. }))
         ));
         assert!(determinant(&singular, 2).unwrap().abs() < f64::EPSILON);
     }
@@ -547,11 +546,13 @@ mod tests {
         );
         assert!(matches!(
             determinant(&[tiny, 0.0, 0.0, 0.25], 2),
-            Err(LuError::DeterminantUnderflow)
+            Err(Outcome::Failed(Failure::Error(
+                LuError::DeterminantUnderflow
+            )))
         ));
         assert!(matches!(
             determinant(&[f64::MAX, 0.0, 0.0, 2.0], 2),
-            Err(LuError::NonFinite { .. })
+            Err(Outcome::Failed(Failure::Error(LuError::NonFinite { .. })))
         ));
     }
 
@@ -559,11 +560,22 @@ mod tests {
     fn malformed_dense_shapes_are_errors() {
         assert!(matches!(
             solve(&[1.0], 2, &[1.0, 2.0]).unwrap_err(),
-            LuError::ShapeInvariant(_)
+            Outcome::Failed(Failure::Invariant(_))
         ));
         assert!(matches!(
             solve(MATRIX, 2, &[1.0]).unwrap_err(),
-            LuError::ShapeInvariant(_)
+            Outcome::Failed(Failure::Invariant(_))
+        ));
+    }
+
+    #[test]
+    fn cancellation_is_an_outcome_not_an_error() {
+        let cancellation = graphcal_compiler::cancellation::CancellationSource::new();
+        cancellation.cancel();
+        let token = cancellation.token();
+        assert!(matches!(
+            determinant_with_control(MATRIX, 2, &mut KernelCheckpoint::new(&token)),
+            Err(Outcome::Cancelled)
         ));
     }
 }
