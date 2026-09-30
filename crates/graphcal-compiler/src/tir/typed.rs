@@ -14,14 +14,14 @@ use std::sync::Arc;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::generic_param::GenericParamId;
 use crate::hir;
-pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
+pub use crate::ir::model::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
 use miette::NamedSource;
 
 use crate::graphcal_error::GraphcalError;
-use crate::ir::lower::HirDag;
+use crate::ir::model::HirDag;
 use crate::ir::resolve::collected::ExternalDeclSurface;
 use crate::resolve::ModuleResolver;
 use crate::resolve::symbols::SymbolRef;
@@ -596,7 +596,7 @@ type DomainBounds = HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>;
 /// Attach each value declaration's checked type to its record, moving its
 /// domain bounds into a table keyed by canonical identity.
 fn attach_checked_types(
-    decls: crate::ir::decl_table::DeclTable<crate::ir::lower::Lowered>,
+    decls: crate::ir::decl_table::DeclTable<crate::ir::model::Lowered>,
     mut decl_types: HashMap<ResolvedDeclName, CheckedDeclType>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), GraphcalError> {
@@ -1616,11 +1616,11 @@ use collect::{
 
 /// The HIR DAG fields beyond the resolved value declarations.
 struct HirBody {
-    included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
+    included_plots: Vec<crate::ir::model::IncludedPlotEntry>,
     static_ports: Vec<crate::hir::StaticPort>,
     assumes_map: HashMap<ResolvedDeclName, Vec<ResolvedDeclName>>,
-    expected_fail: HashMap<ResolvedDeclName, crate::ir::lower::ResolvedExpectedFailMetadata>,
-    dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
+    expected_fail: HashMap<ResolvedDeclName, crate::ir::model::ResolvedExpectedFailMetadata>,
+    dynamic_unit_scales: Vec<crate::ir::model::DynamicUnitScaleEntry>,
     semantic_instances: Vec<crate::ir::instance::HirInstanceRecord>,
 }
 

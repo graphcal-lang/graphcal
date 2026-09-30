@@ -264,11 +264,11 @@ impl From<GraphcalError> for PlotEvaluationError {
 }
 
 impl PlotEvaluationError {
-    fn with_property(self, property: &graphcal_compiler::ir::lower::LoweredPlotProperty) -> Self {
+    fn with_property(self, property: &graphcal_compiler::ir::model::LoweredPlotProperty) -> Self {
         match self {
             Self::Unavailable(NodeUnavailable::EvalFailed { message }) => {
                 Self::from(match property {
-                    graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(_) => {
+                    graphcal_compiler::ir::model::LoweredPlotProperty::Mark(_) => {
                         format!("mark property `{}`: {message}", property.name())
                     }
                     property => format!("property `{}`: {message}", property.name()),
@@ -418,7 +418,7 @@ fn evaluate_plot(
     let mut properties = Vec::new();
     for scoped_field in plot_fields.iter() {
         let field = scoped_field.get();
-        let graphcal_compiler::ir::lower::LoweredPlotProperty::Plot(plot_prop) = &field.property
+        let graphcal_compiler::ir::model::LoweredPlotProperty::Plot(plot_prop) = &field.property
         else {
             return Err(PlotEvaluationError::Fatal(ctx.internal_error(
                 format!(
@@ -445,7 +445,7 @@ fn evaluate_plot(
 }
 
 fn evaluate_mark_properties(
-    fields: Scoped<'_, [graphcal_compiler::ir::lower::LoweredPlotField]>,
+    fields: Scoped<'_, [graphcal_compiler::ir::model::LoweredPlotField]>,
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<Vec<(graphcal_compiler::plot_props::MarkProperty, PlotFieldValue)>, PlotEvaluationError>
@@ -454,7 +454,7 @@ fn evaluate_mark_properties(
         .iter()
         .map(|scoped_field| {
             let field = scoped_field.get();
-            let graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(mark_prop) =
+            let graphcal_compiler::ir::model::LoweredPlotProperty::Mark(mark_prop) =
                 &field.property
             else {
                 return Err(PlotEvaluationError::Fatal(ctx.internal_error(
@@ -632,7 +632,7 @@ fn eval_composition_fields(
     let mut properties = Vec::new();
     for scoped_field in fields.iter() {
         let field = scoped_field.get();
-        let graphcal_compiler::ir::lower::LoweredPlotProperty::Composition(comp_prop) =
+        let graphcal_compiler::ir::model::LoweredPlotProperty::Composition(comp_prop) =
             &field.property
         else {
             return Err(PlotEvaluationError::Fatal(ctx.internal_error(

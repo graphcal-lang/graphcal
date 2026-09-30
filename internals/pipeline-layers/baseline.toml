@@ -18,35 +18,11 @@ reason = "Observed compiler::hir::nominal -> compiler::hir (production) at ./cra
 
 [[exception]]
 from_package = "compiler"
-from_path = ["ir", "include"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::ir::include -> compiler::hir (production) at ./crates/graphcal-compiler/src/ir/include.rs:61 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
 from_path = ["ir", "instance"]
 to_package = "compiler"
 to_path = ["hir"]
 test_only = false
 reason = "Observed compiler::ir::instance -> compiler::hir (production) at ./crates/graphcal-compiler/src/ir/instance.rs:113 (qualified path); roles are contracts -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["ir", "lower"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = false
-reason = "Observed compiler::ir::lower -> compiler::hir (production) at ./crates/graphcal-compiler/src/ir/lower.rs:54 (qualified path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["ir", "lower", "tests"]
-to_package = "compiler"
-to_path = ["hir"]
-test_only = true
-reason = "Observed compiler::ir::lower::tests -> compiler::hir (test-only) at ./crates/graphcal-compiler/src/ir/lower.rs:1260 (macro token path); roles are checking -> facade. Planned deletion seam: replace facade reach-through with an owned checking interface."
 
 [[exception]]
 from_package = "compiler"
@@ -135,14 +111,6 @@ to_package = "compiler"
 to_path = ["ir", "extern_fns"]
 test_only = false
 reason = "Observed compiler::tir::typed::model -> compiler::ir::extern_fns (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:1323 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "compiler"
-from_path = ["tir", "typed", "model"]
-to_package = "compiler"
-to_path = ["ir", "lower"]
-test_only = false
-reason = "Observed compiler::tir::typed::model -> compiler::ir::lower (production) at ./crates/graphcal-compiler/src/tir/typed/model.rs:568 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "compiler"
@@ -380,33 +348,9 @@ reason = "Observed eval::project_compiler::lowering -> eval::loader (production)
 from_package = "eval"
 from_path = ["project_compiler", "model"]
 to_package = "compiler"
-to_path = ["ir", "extern_fns"]
-test_only = false
-reason = "Observed eval::project_compiler::model -> compiler::ir::extern_fns (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:111 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "model"]
-to_package = "compiler"
-to_path = ["ir", "lower"]
-test_only = false
-reason = "Observed eval::project_compiler::model -> compiler::ir::lower (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:91 (qualified path); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "model"]
-to_package = "compiler"
 to_path = ["ir", "resolve"]
 test_only = false
 reason = "Observed eval::project_compiler::model -> compiler::ir::resolve (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:10 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
-
-[[exception]]
-from_package = "eval"
-from_path = ["project_compiler", "model"]
-to_package = "compiler"
-to_path = ["ir", "resolve", "collected"]
-test_only = false
-reason = "Observed eval::project_compiler::model -> compiler::ir::resolve::collected (production) at ./crates/graphcal-eval/src/project_compiler/model.rs:10 (use import); roles are contracts -> checking. Planned deletion seam: separate shared data/error definitions from their checking/building producers (Phases B-C)."
 
 [[exception]]
 from_package = "eval"

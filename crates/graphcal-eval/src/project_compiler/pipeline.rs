@@ -380,7 +380,7 @@ fn verify_wasm_plugin(
         graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::PluginFileEntry,
     >,
-    function: &graphcal_compiler::ir::lower::ExternFunctionEntry,
+    function: &graphcal_compiler::ir::extern_function::ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
 ) -> Result<(), CompileError> {

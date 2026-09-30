@@ -3,10 +3,13 @@
 pub mod decl_table;
 pub mod entry;
 pub(crate) mod extern_fns;
+pub mod extern_function;
+mod freeze;
 pub mod imported_binding;
-pub(crate) mod include;
+pub mod include;
 pub mod instance;
 pub mod lower;
+pub mod model;
 pub mod module_definitions;
 pub mod module_interface;
 mod node_definition;

@@ -10,15 +10,14 @@
 //! of the DAG running the body resolves. `super::expr_lower` produces these
 //! trees from the desugared syntax AST.
 //!
-//! - `completeness`: the [`Strict`] / tolerant parameter of every tree.
-//! - `model`: the node shapes and reference payloads.
+//! - `model`: the [`Strict`] / tolerant completeness parameter, the node
+//!   shapes, and the reference payloads.
 //! - `refine`: rebuilding a tree under another completeness.
 //! - `visit`: structural traversal and the queries built on it.
 //! - `checked`: finished bodies that carry occurrence identities.
 //! - `local_env`: the evaluation-time environment keyed by [`LocalId`].
 
 mod checked;
-mod completeness;
 mod local_decl;
 mod local_env;
 mod local_unit;
@@ -27,17 +26,17 @@ mod refine;
 mod visit;
 
 pub use checked::{CheckedAssertBody, CheckedExpr};
-pub(crate) use completeness::sealed::Sealed as CompletenessSealed;
-pub use completeness::{Completeness, Draft, NoErrorNode, Strict};
 pub use local_decl::LocalDecl;
 pub use local_env::LocalEnv;
 pub use local_unit::LocalUnit;
+pub(crate) use model::sealed::Sealed as CompletenessSealed;
 pub use model::{
     AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,
     FunctionRef, IndexArg, IndexVariantRef, LocalDef, LocalId, MapEntry, MapEntryKey, MatchArm,
     MatchPattern, ParamBinding, PatternBinding, ResolvedUnitExpr, ResolvedUnitExprItem,
     ResolvedUnitRef, TypeSystemRef, UnappliedFunctionRef, UnfoldRecurrence,
 };
+pub use model::{Completeness, Draft, NoErrorNode, Strict};
 pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};
 pub(crate) use visit::find_extern_call;
 pub use visit::{

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::graphcal_error::GraphcalError;
 use crate::hir::ExprKind;
-use crate::ir::lower::{LoweredPlotField, LoweredPlotProperty};
+use crate::ir::model::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 
@@ -203,7 +203,7 @@ fn check_plot_references(
 fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
     owner: &crate::resolved_name::ResolvedDeclName,
-    body: &crate::ir::lower::LoweredPlotBody,
+    body: &crate::ir::model::LoweredPlotBody,
 ) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, GraphcalError> {
     let shapes = body
         .encodings
@@ -272,7 +272,7 @@ fn plot_leaf_kind(
 }
 
 fn describe_channel_axes(
-    body: &crate::ir::lower::LoweredPlotBody,
+    body: &crate::ir::model::LoweredPlotBody,
     shapes: &[PlotChannelShape],
 ) -> String {
     body.encodings

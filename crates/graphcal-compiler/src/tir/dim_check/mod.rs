@@ -182,7 +182,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
 
 fn check_dynamic_unit_scale_type(
     ctx: &DimCheckContext<'_>,
-    entry: &crate::ir::lower::DynamicUnitScaleEntry,
+    entry: &crate::ir::model::DynamicUnitScaleEntry,
 ) -> Result<(), GraphcalError> {
     ctx.checkpoint()?;
     if entry.declared_dimension != entry.base_unit_dimension {

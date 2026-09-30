@@ -652,7 +652,7 @@ fn publication_rejects_runtime_units_without_a_defining_body() {
     );
 }
 
-fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
+fn lower_store_hir(source: &str) -> crate::ir::model::HirDag {
     let raw = Parser::new(source).parse_file().unwrap();
     let file = crate::desugar::desugared_ast::File::from(raw);
     let src = NamedSource::new("same.gcl", Arc::new(source.to_string()));

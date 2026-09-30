@@ -33,7 +33,7 @@ fn declared_type_for_target(
 }
 
 fn resolve_imported_bindings(
-    hir: &graphcal_compiler::ir::lower::HirDag,
+    hir: &graphcal_compiler::ir::model::HirDag,
     local_interfaces: &LocalInterfaces,
     module_artifacts: &ModuleArtifactStore,
     module_resolver: &ModuleResolver,
@@ -80,8 +80,8 @@ struct ResolvedFileSignatures {
 
 /// Resolve every local declaration signature before any body is consumed.
 fn resolve_file_signatures(
-    root: graphcal_compiler::ir::lower::HirDag,
-    inline: Vec<graphcal_compiler::ir::lower::HirDag>,
+    root: graphcal_compiler::ir::model::HirDag,
+    inline: Vec<graphcal_compiler::ir::model::HirDag>,
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,

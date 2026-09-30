@@ -52,10 +52,10 @@ pub(super) struct ImportAlias {
 #[derive(Debug)]
 pub(super) struct HirFile {
     pub(super) source: NamedSource<Arc<String>>,
-    pub(super) root: graphcal_compiler::ir::lower::HirDag,
+    pub(super) root: graphcal_compiler::ir::model::HirDag,
     /// Inline DAG bodies carry their own canonical keys; no parallel tuple key
     /// can disagree with the body identity.
-    pub(super) inline_dags: Vec<graphcal_compiler::ir::lower::HirDag>,
+    pub(super) inline_dags: Vec<graphcal_compiler::ir::model::HirDag>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) output_surface: HashSet<ScopedName>,
     pub(super) include_debug_names: IncludeDebugNameMap,
@@ -71,7 +71,7 @@ pub(super) struct ModuleArtifact {
     pub(super) dag_store: Arc<graphcal_compiler::tir::typed::DagStore>,
     pub(super) extern_functions: HashMap<
         graphcal_compiler::plugin_identity::ExternFnKey,
-        graphcal_compiler::ir::lower::ExternFunctionEntry,
+        graphcal_compiler::ir::extern_function::ExternFunctionEntry,
     >,
 }
 
@@ -159,7 +159,7 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) runtime_unit_names: HashSet<UnitName>,
     pub(super) assertion_aliases: HashMap<DeclName, DeclName>,
     pub(super) surface_outputs: Vec<ScopedName>,
-    pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
+    pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot>,
     pub(super) include_span: Span,
     pub(super) import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,

@@ -377,12 +377,7 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["hir", "expr", "completeness"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["hir", "expr", "completeness", "sealed"]
+path = ["hir", "expr", "model", "sealed"]
 role = "contracts"
 
 [[module]]
@@ -868,7 +863,7 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["ir", "resolve", "collected"]
-role = "checking"
+role = "contracts"
 
 [[module]]
 package = "compiler"
@@ -2503,4 +2498,19 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["syntax", "parser", "nesting_limit"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "model"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["ir", "freeze"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["ir", "extern_function"]
 role = "contracts"

@@ -4,7 +4,8 @@ use miette::NamedSource;
 
 use crate::function_signature::FunctionSignature;
 use crate::graphcal_error::GraphcalError;
-use crate::ir::lower::{HirDag, LoweredTestFile, lower_file_with_inline_dags_for_test};
+use crate::ir::lower::{LoweredTestFile, lower_file_with_inline_dags_for_test};
+use crate::ir::model::HirDag;
 
 use super::ExternStructResult;
 
