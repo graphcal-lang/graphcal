@@ -69,9 +69,9 @@ impl<T> DenseArray<T> {
     ///
     /// Returns [`DenseArrayError::Ragged`] when sibling entries disagree on
     /// their axes, or the first error `element` reports.
-    pub fn try_from_indexed<E>(
-        value: &IndexedValue<RuntimeValue>,
-        mut element: impl FnMut(&RuntimeValue) -> Result<T, E>,
+    pub fn try_from_indexed<'v, E>(
+        value: &'v IndexedValue<RuntimeValue>,
+        mut element: impl FnMut(&'v RuntimeValue) -> Result<T, E>,
     ) -> Result<Self, DenseArrayError<E>> {
         let axes = shape_of(value);
         let mut data = Vec::new();
@@ -80,6 +80,35 @@ impl<T> DenseArray<T> {
             fill(entry, inner_axes, &mut element, &mut data)?;
         }
         Ok(Self { axes, data })
+    }
+
+    /// The axes, outermost first.
+    #[must_use]
+    pub const fn axes(&self) -> &NonEmpty<IndexAxis> {
+        &self.axes
+    }
+
+    /// The elements in row-major order (the last axis varies fastest).
+    #[must_use]
+    pub fn data(&self) -> &[T] {
+        &self.data
+    }
+
+    /// Convert every element with `element`, keeping the axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `element` reports.
+    pub fn try_map<U, E>(self, element: impl FnMut(T) -> Result<U, E>) -> Result<DenseArray<U>, E> {
+        let data = self
+            .data
+            .into_iter()
+            .map(element)
+            .collect::<Result<_, _>>()?;
+        Ok(DenseArray {
+            axes: self.axes,
+            data,
+        })
     }
 
     /// Split into the axes and the row-major elements.
@@ -114,10 +143,10 @@ fn shape_of(value: &IndexedValue<RuntimeValue>) -> NonEmpty<IndexAxis> {
 }
 
 /// Append the leaves of `value`, which must be indexed by exactly `axes`.
-fn fill<T, E>(
-    value: &RuntimeValue,
+fn fill<'v, T, E>(
+    value: &'v RuntimeValue,
     axes: &[IndexAxis],
-    element: &mut impl FnMut(&RuntimeValue) -> Result<T, E>,
+    element: &mut impl FnMut(&'v RuntimeValue) -> Result<T, E>,
     data: &mut Vec<T>,
 ) -> Result<(), DenseArrayError<E>> {
     match (axes.split_first(), value) {
@@ -197,6 +226,21 @@ mod tests {
     fn flattens_row_major_and_rebuilds_the_same_value() {
         let matrix = IndexedValue::for_test(rows(), vec![row([1, 2, 3]), row([4, 5, 6])]);
         let dense = DenseArray::try_from_indexed(&matrix, leaf).unwrap();
+        assert_eq!(dense.axes().len(), 2);
+        assert_eq!(dense.data(), [1, 2, 3, 4, 5, 6]);
+        let doubled = dense
+            .clone()
+            .try_map(|value| Ok::<_, ()>(value * 2))
+            .unwrap();
+        assert!(doubled.axes().last().matches(&columns()));
+        assert_eq!(doubled.data(), [2, 4, 6, 8, 10, 12]);
+        assert_eq!(
+            dense
+                .clone()
+                .try_map(|_| Err::<i64, _>("stop"))
+                .unwrap_err(),
+            "stop"
+        );
         let (axes, data) = dense.clone().into_parts();
         assert_eq!(axes.len(), 2);
         assert!(axes.first().matches(&rows()));

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::TypeExpr;
+pub use crate::extern_struct_result::ExternStructResult;
 use crate::registry::error::GraphcalError;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
@@ -59,30 +60,6 @@ impl ExternFunctionEntry {
     /// identity, so independently compiled copies may differ in those fields.
     pub(crate) fn has_same_callable_definition(&self, other: &Self) -> bool {
         self.plugin == other.plugin && self.name == other.name && self.signature == other.signature
-    }
-}
-
-/// The record type a struct-returning extern function was declared with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternStructResult {
-    /// Canonical identity of the record type named at the declaration site.
-    pub resolved: crate::resolved_name::ResolvedStructTypeName,
-    /// Checked record constructor; invocation need not recover it from a type spelling.
-    pub constructor: crate::syntax::type_name::ConstructorName,
-    /// The record's flattened field shape, as the plugin manifest sees it.
-    pub shape: crate::function_signature::StructShape,
-}
-
-impl ExternStructResult {
-    /// Whether two struct results name the same record type.
-    fn same_record(&self, other: &Self) -> bool {
-        self.resolved == other.resolved && self.constructor == other.constructor
-    }
-}
-
-impl crate::function_signature::StructResult for ExternStructResult {
-    fn shape(&self) -> &crate::function_signature::StructShape {
-        &self.shape
     }
 }
 

@@ -312,6 +312,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["extern_struct_result"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["function_signature", "tests"]
 role = "contracts"
 
@@ -2161,6 +2166,26 @@ role = "interpreter"
 package = "eval"
 path = ["host_abi", "tests"]
 role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "marshal"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "marshal", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["invariant"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["invariant", "tests"]
+role = "contracts"
 
 [[module]]
 package = "eval"

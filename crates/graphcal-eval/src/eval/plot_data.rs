@@ -19,11 +19,10 @@
 //!   numbers and labels in one channel) is an error — variant names are
 //!   never substituted for data.
 
-use crate::runtime_value::{KeyElement, RuntimeValue};
+use crate::runtime_value::dense_array::{DenseArray, DenseArrayError};
+use crate::runtime_value::{IndexAxis, IndexedValue, KeyElement, RuntimeValue};
 use graphcal_compiler::plot_shape::align_plot_channel_axes;
-use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::syntax::ast::EncodingChannel;
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
 use super::types::{
     DisplayUnit, KeyRendering, PlotFieldValue, Value, epoch_to_rfc3339, quantity_display_value,
@@ -31,58 +30,57 @@ use super::types::{
 
 /// One leaf datum of an encoding channel.
 #[derive(Debug, Clone, PartialEq)]
-enum PlotDatum {
+pub(super) enum PlotDatum {
     Number(f64),
     Label(String),
     Datetime(String),
 }
 
-/// One index axis of an encoding channel's data.
+/// An encoding channel's evaluated data.
 #[derive(Debug, Clone)]
-struct PlotAxis {
-    index: IndexTypeRef,
-    entry_keys: Vec<IndexEntryKey>,
-}
-
-impl PlotAxis {
-    /// Two axes are the same when they are the same index with the same
-    /// entry-key sequence.
-    fn matches(&self, other: &Self) -> bool {
-        self.index.matches_ref(&other.index) && self.entry_keys == other.entry_keys
-    }
-}
-
-/// An encoding channel's evaluated data with its index axes.
-#[derive(Debug, Clone)]
-pub(super) struct ChannelData {
-    /// Axes from outermost to innermost comprehension variable.
-    axes: Vec<PlotAxis>,
-    /// Leaf values in row-major order over `axes` (one value when `axes`
-    /// is empty).
-    values: Vec<PlotDatum>,
+pub(super) enum ChannelData {
+    /// A single value with no axes.
+    Unindexed(PlotDatum),
+    /// Leaf values over the channel's axes, outermost comprehension variable
+    /// first.
+    Indexed(DenseArray<PlotDatum>),
 }
 
 impl ChannelData {
     /// A single string value with no axes (from a string-literal channel).
-    pub(super) fn unindexed_label(label: String) -> Self {
-        Self {
-            axes: Vec::new(),
-            values: vec![PlotDatum::Label(label)],
+    pub(super) const fn unindexed_label(label: String) -> Self {
+        Self::Unindexed(PlotDatum::Label(label))
+    }
+
+    /// Axes from outermost to innermost (none for an unindexed channel).
+    fn axes(&self) -> &[IndexAxis] {
+        match self {
+            Self::Unindexed(_) => &[],
+            Self::Indexed(data) => data.axes().as_slice(),
+        }
+    }
+
+    /// Leaf values in row-major order over [`Self::axes`].
+    fn values(&self) -> &[PlotDatum] {
+        match self {
+            Self::Unindexed(datum) => std::slice::from_ref(datum),
+            Self::Indexed(data) => data.data(),
         }
     }
 
     /// Format this channel's axes for error messages: `P × T`, or
     /// `no index` for an unindexed channel.
     fn describe_axes(&self) -> String {
-        if self.axes.is_empty() {
+        if self.axes().is_empty() {
             return "no index".to_string();
         }
-        self.axes
+        self.axes()
             .iter()
             .map(|axis| {
-                axis.index
+                let index = axis.index();
+                index
                     .declared_resolved()
-                    .map_or_else(|| axis.index.to_string(), ToString::to_string)
+                    .map_or_else(|| index.to_string(), ToString::to_string)
             })
             .collect::<Vec<_>>()
             .join(" × ")
@@ -151,42 +149,21 @@ pub(super) fn channel_data_from_runtime_with_display_unit(
     display_unit: Option<&DisplayUnit>,
 ) -> Result<ChannelData, String> {
     let RuntimeValue::Indexed(entries) = rv else {
-        return Ok(ChannelData {
-            axes: Vec::new(),
-            values: vec![plot_datum_from_leaf(rv, display_unit)?],
-        });
+        return plot_datum_from_leaf(rv, display_unit).map(ChannelData::Unindexed);
     };
+    DenseArray::try_from_indexed(entries, |leaf| plot_datum_from_leaf(leaf, display_unit))
+        .map(ChannelData::Indexed)
+        .map_err(|error| match error {
+            DenseArrayError::Ragged => inconsistent_axes_message(entries),
+            DenseArrayError::Element(error) => error,
+        })
+}
 
-    let index_name = entries.index();
-    let entry_keys: Vec<IndexEntryKey> = entries.axis().keys().iter().cloned().collect();
-    let mut inner_axes: Option<Vec<PlotAxis>> = None;
-    let mut values = Vec::new();
-    for entry in entries.values() {
-        let entry_data = channel_data_from_runtime_with_display_unit(entry, display_unit)?;
-        match &inner_axes {
-            None => inner_axes = Some(entry_data.axes),
-            Some(expected) => {
-                if expected.len() != entry_data.axes.len()
-                    || !expected
-                        .iter()
-                        .zip(&entry_data.axes)
-                        .all(|(a, b)| a.matches(b))
-                {
-                    return Err(format!(
-                        "entries of `{index_name}` have inconsistent index axes"
-                    ));
-                }
-            }
-        }
-        values.extend(entry_data.values);
-    }
-
-    let mut axes = vec![PlotAxis {
-        index: index_name.clone(),
-        entry_keys,
-    }];
-    axes.extend(inner_axes.into_iter().flatten());
-    Ok(ChannelData { axes, values })
+fn inconsistent_axes_message(entries: &IndexedValue<RuntimeValue>) -> String {
+    format!(
+        "entries of `{}` have inconsistent index axes",
+        entries.index()
+    )
 }
 
 /// Flatten runtime data using per-leaf display metadata from its checked public projection.
@@ -195,63 +172,66 @@ pub(super) fn channel_data_from_presented_value(
     presented: &Value,
 ) -> Result<ChannelData, String> {
     let RuntimeValue::Indexed(entries) = runtime else {
-        let display_unit = match (runtime, presented) {
-            (RuntimeValue::Quantity(_), Value::Quantity { display_unit, .. })
-            | (RuntimeValue::Complex(_), Value::Complex { display_unit, .. }) => {
-                display_unit.as_ref()
-            }
-            _ => None,
-        };
-        return Ok(ChannelData {
-            axes: Vec::new(),
-            values: vec![plot_datum_from_leaf(runtime, display_unit)?],
-        });
+        return plot_datum_from_leaf(runtime, presented_display_unit(runtime, presented))
+            .map(ChannelData::Unindexed);
+    };
+    let leaves = DenseArray::try_from_indexed(entries, Ok::<_, std::convert::Infallible>)
+        .map_err(|_| inconsistent_axes_message(entries))?;
+    let mut presented_leaves = Vec::with_capacity(leaves.data().len());
+    collect_presented_leaves(presented, leaves.axes().as_slice(), &mut presented_leaves)?;
+    let mut presented_leaves = presented_leaves.into_iter();
+    leaves
+        .try_map(|leaf| {
+            let presented = presented_leaves.next().ok_or_else(|| {
+                "checked plot presentation does not mirror indexed runtime data".to_string()
+            })?;
+            plot_datum_from_leaf(leaf, presented_display_unit(leaf, presented))
+        })
+        .map(ChannelData::Indexed)
+}
+
+/// The display unit a presented leaf requests for its runtime leaf.
+const fn presented_display_unit<'p>(
+    runtime: &RuntimeValue,
+    presented: &'p Value,
+) -> Option<&'p DisplayUnit> {
+    match (runtime, presented) {
+        (RuntimeValue::Quantity(_), Value::Quantity { display_unit, .. })
+        | (RuntimeValue::Complex(_), Value::Complex { display_unit, .. }) => display_unit.as_ref(),
+        _ => None,
+    }
+}
+
+/// Append the leaves of `presented` along `axes` in row-major order.
+fn collect_presented_leaves<'p>(
+    presented: &'p Value,
+    axes: &[IndexAxis],
+    leaves: &mut Vec<&'p Value>,
+) -> Result<(), String> {
+    let Some((outer, inner_axes)) = axes.split_first() else {
+        leaves.push(presented);
+        return Ok(());
     };
     let Value::Indexed {
         index_name: presented_index,
-        entries: presented_entries,
+        entries,
         ..
     } = presented
     else {
         return Err("checked plot presentation does not mirror indexed runtime data".to_string());
     };
-    let index_name = entries.index();
+    let index_name = outer.index();
     if !index_name.matches_ref(presented_index) {
         return Err(format!(
             "checked plot presentation index `{presented_index}` does not match runtime index `{index_name}`"
         ));
     }
-
-    let entry_keys = entries.axis().keys().iter().cloned().collect::<Vec<_>>();
-    let mut inner_axes: Option<Vec<PlotAxis>> = None;
-    let mut values = Vec::new();
-    for (key, entry) in entries.iter() {
-        let presented_entry = presented_entries
+    outer.keys().iter().try_for_each(|key| {
+        let entry = entries
             .get(key)
             .ok_or_else(|| format!("checked plot presentation is missing indexed entry `{key}`"))?;
-        let entry_data = channel_data_from_presented_value(entry, presented_entry)?;
-        match &inner_axes {
-            None => inner_axes = Some(entry_data.axes),
-            Some(expected)
-                if expected.len() == entry_data.axes.len()
-                    && expected
-                        .iter()
-                        .zip(&entry_data.axes)
-                        .all(|(left, right)| left.matches(right)) => {}
-            Some(_) => {
-                return Err(format!(
-                    "entries of `{index_name}` have inconsistent index axes"
-                ));
-            }
-        }
-        values.extend(entry_data.values);
-    }
-    let mut axes = vec![PlotAxis {
-        index: index_name.clone(),
-        entry_keys,
-    }];
-    axes.extend(inner_axes.into_iter().flatten());
-    Ok(ChannelData { axes, values })
+        collect_presented_leaves(entry, inner_axes, leaves)
+    })
 }
 
 /// Return one unit label shared by every quantity leaf in a presented channel.
@@ -324,7 +304,7 @@ fn plot_field_value_from_data(values: &[PlotDatum]) -> Result<PlotFieldValue, St
 /// alignment, for property contexts (mark/plot/composition properties).
 pub(super) fn flatten_to_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     let data = channel_data_from_runtime(rv)?;
-    plot_field_value_from_data(&data.values)
+    plot_field_value_from_data(data.values())
 }
 
 /// Align evaluated encoding channels onto one shared row set.
@@ -337,9 +317,9 @@ pub(super) fn align_encoding_channels(
     let channel_axis_refs = channels
         .iter()
         .map(|(_, data)| {
-            data.axes
+            data.axes()
                 .iter()
-                .map(|axis| axis.index.clone())
+                .map(|axis| axis.index().clone())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -352,7 +332,7 @@ pub(super) fn align_encoding_channels(
     let Some(row_channel) = alignment.row_channel() else {
         return Ok(Vec::new());
     };
-    let row_axes = &channels[row_channel].1.axes;
+    let row_axes = channels[row_channel].1.axes();
 
     // Static alignment matches canonical identities. Retain entry-key equality
     // as malformed-runtime-value defense in depth.
@@ -361,10 +341,10 @@ pub(super) fn align_encoding_channels(
         .zip(alignment.channel_positions())
         .map(|((channel, data), positions)| {
             let keys_match = data
-                .axes
+                .axes()
                 .iter()
                 .zip(positions)
-                .all(|(axis, position)| axis.entry_keys == row_axes[*position].entry_keys);
+                .all(|(axis, position)| axis.keys() == row_axes[*position].keys());
             if keys_match {
                 Ok((*channel, data, positions))
             } else {
@@ -376,7 +356,7 @@ pub(super) fn align_encoding_channels(
     // Cross product of the row axes, row-major (last axis fastest).
     let row_count = row_axes.iter().try_fold(1usize, |count, axis| {
         count
-            .checked_mul(axis.entry_keys.len())
+            .checked_mul(axis.len())
             .ok_or_else(|| "plot row count overflowed usize".to_string())
     })?;
     let mut result = Vec::with_capacity(mapped.len());
@@ -387,7 +367,7 @@ pub(super) fn align_encoding_channels(
             let mut digits = vec![0usize; row_axes.len()];
             let mut rest = row;
             for (i, axis) in row_axes.iter().enumerate().rev() {
-                let axis_len = axis.entry_keys.len();
+                let axis_len = axis.len();
                 digits[i] = rest
                     .checked_rem(axis_len)
                     .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
@@ -397,14 +377,14 @@ pub(super) fn align_encoding_channels(
             }
             // Project the row onto this channel's own axes.
             let mut idx = 0usize;
-            for (axis, pos) in data.axes.iter().zip(positions) {
+            for (axis, pos) in data.axes().iter().zip(positions) {
                 idx = idx
-                    .checked_mul(axis.entry_keys.len())
+                    .checked_mul(axis.len())
                     .and_then(|base| base.checked_add(digits[*pos]))
                     .ok_or_else(|| "plot row index overflowed usize".to_string())?;
             }
             values.push(
-                data.values
+                data.values()
                     .get(idx)
                     .ok_or_else(|| "plot channel shape does not match its values".to_string())?
                     .clone(),
@@ -481,10 +461,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(scalar.values, vec![PlotDatum::Number(3.0)]);
+        assert_eq!(scalar.values(), [PlotDatum::Number(3.0)]);
         assert_eq!(
-            indexed.values,
-            vec![PlotDatum::Number(1.0), PlotDatum::Number(2.0)]
+            indexed.values(),
+            [PlotDatum::Number(1.0), PlotDatum::Number(2.0)]
         );
     }
 
