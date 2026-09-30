@@ -16,11 +16,12 @@ use graphcal_compiler::function_signature::{
 use graphcal_compiler::ratio::ExponentStyle;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_eval::eval::format_number;
+use graphcal_eval::host_abi::argument::{HostArgument, HostArgumentArray, HostArrayElements};
 use graphcal_eval::host_abi::{
-    ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult, decode_result,
-    encode_bool, encode_int, validate_quantity,
+    HostInt, HostScalar, ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult,
+    decode_result, validate_quantity,
 };
-use graphcal_eval::host_fns::{HostArray, HostFnValue};
+use graphcal_eval::host_fns::HostFnValue;
 use graphcal_plugin_host::PluginModule;
 use thiserror::Error;
 
@@ -706,33 +707,13 @@ fn parse_dense_array(
     text: &str,
     rank: usize,
     element: &ScalarValueKind,
-) -> Result<HostArray, String> {
+) -> Result<HostArgumentArray, String> {
+    /// The row-major extents and leaves of `value`, `rank` levels deep.
     fn flatten(
         value: &serde_json::Value,
         rank: usize,
-        element: &ScalarValueKind,
-    ) -> Result<(Vec<usize>, Vec<f64>), String> {
+    ) -> Result<(Vec<usize>, Vec<&serde_json::Value>), String> {
         if rank == 0 {
-            let value = match element {
-                ScalarValueKind::Quantity(_) => {
-                    let value = value
-                        .as_f64()
-                        .ok_or_else(|| "quantity array leaves must be JSON numbers".to_string())?;
-                    validate_quantity(value)
-                        .map(graphcal_compiler::finite_value::FiniteQuantity::get)
-                        .map_err(|error| error.to_string())?
-                }
-                ScalarValueKind::Bool => value
-                    .as_bool()
-                    .map(encode_bool)
-                    .ok_or_else(|| "Bool array leaves must be JSON booleans".to_string())?,
-                ScalarValueKind::Int => {
-                    let value = value
-                        .as_i64()
-                        .ok_or_else(|| "Int array leaves must be JSON integers".to_string())?;
-                    encode_int(value).map_err(|error| error.to_string())?
-                }
-            };
             return Ok((Vec::new(), vec![value]));
         }
         let items = value
@@ -743,7 +724,7 @@ fn parse_dense_array(
         }
         let children = items
             .iter()
-            .map(|item| flatten(item, rank - 1, element))
+            .map(|item| flatten(item, rank - 1))
             .collect::<Result<Vec<_>, _>>()?;
         let first_shape = children
             .first()
@@ -755,17 +736,50 @@ fn parse_dense_array(
         let mut shape = Vec::with_capacity(rank);
         shape.push(items.len());
         shape.extend(first_shape.iter().copied());
-        let values = children
+        let leaves = children
             .into_iter()
-            .flat_map(|(_, values)| values)
+            .flat_map(|(_, leaves)| leaves)
             .collect();
-        Ok((shape, values))
+        Ok((shape, leaves))
     }
 
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("invalid JSON array: {error}"))?;
-    let (shape, values) = flatten(&value, rank, element)?;
-    HostArray::try_new(shape, values).map_err(|error| error.to_string())
+    let (shape, leaves) = flatten(&value, rank)?;
+    let elements = match element {
+        ScalarValueKind::Quantity(_) => HostArrayElements::Quantity(
+            leaves
+                .into_iter()
+                .map(|leaf| {
+                    let value = leaf
+                        .as_f64()
+                        .ok_or_else(|| "quantity array leaves must be JSON numbers".to_string())?;
+                    validate_quantity(value).map_err(|error| error.to_string())
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        ScalarValueKind::Bool => HostArrayElements::Bool(
+            leaves
+                .into_iter()
+                .map(|leaf| {
+                    leaf.as_bool()
+                        .ok_or_else(|| "Bool array leaves must be JSON booleans".to_string())
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        ScalarValueKind::Int => HostArrayElements::Int(
+            leaves
+                .into_iter()
+                .map(|leaf| {
+                    let value = leaf
+                        .as_i64()
+                        .ok_or_else(|| "Int array leaves must be JSON integers".to_string())?;
+                    HostInt::try_new(value).map_err(|error| error.to_string())
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+    };
+    HostArgumentArray::try_new(shape, elements).map_err(|error| error.to_string())
 }
 
 fn render_dense_array<T>(
@@ -809,7 +823,7 @@ pub fn parse_call_args(
     function: &str,
     signature: &FunctionSignature,
     raw: &[String],
-) -> Result<Vec<HostFnValue>, CallArgError> {
+) -> Result<Vec<HostArgument>, CallArgError> {
     if raw.len() != signature.arity() {
         return Err(CallArgError::ArityMismatch {
             function: function.to_string(),
@@ -829,14 +843,14 @@ pub fn parse_call_args(
             };
             match &param.kind {
                 ParamKind::Scalar(ScalarValueKind::Bool) => match text.as_str() {
-                    "true" => Ok(HostFnValue::F64(encode_bool(true))),
-                    "false" => Ok(HostFnValue::F64(encode_bool(false))),
+                    "true" => Ok(HostArgument::Scalar(HostScalar::Bool(true))),
+                    "false" => Ok(HostArgument::Scalar(HostScalar::Bool(false))),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
                 ParamKind::Scalar(ScalarValueKind::Int) => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
-                    encode_int(value)
-                        .map(HostFnValue::F64)
+                    HostInt::try_new(value)
+                        .map(|value| HostArgument::Scalar(HostScalar::Int(value)))
                         .map_err(|error| invalid(&error.to_string()))
                 }
                 ParamKind::Scalar(ScalarValueKind::Quantity(_)) => {
@@ -844,12 +858,12 @@ pub fn parse_call_args(
                         .parse::<f64>()
                         .map_err(|_| invalid("expected a number (in SI base units)"))?;
                     validate_quantity(value)
-                        .map(|value| HostFnValue::F64(value.get()))
+                        .map(|value| HostArgument::Scalar(HostScalar::Quantity(value)))
                         .map_err(|error| invalid(&error.to_string()))
                 }
                 ParamKind::Indexed { element, indexes } => {
                     parse_dense_array(text, indexes.len(), element)
-                        .map(HostFnValue::Array)
+                        .map(HostArgument::Array)
                         .map_err(|error| invalid(&error))
                 }
             }
@@ -930,6 +944,7 @@ mod tests {
     use graphcal_compiler::syntax::type_name::FieldName;
 
     use super::*;
+    use graphcal_eval::host_fns::HostArray;
 
     fn lerp_signature() -> FunctionSignature {
         let var = || DimVarName::expect_valid("D");
@@ -1225,6 +1240,11 @@ mod tests {
         );
     }
 
+    /// The raw ABI wire form of parsed arguments.
+    fn raw(args: &[HostArgument]) -> Vec<HostFnValue> {
+        args.iter().map(HostFnValue::from_argument).collect()
+    }
+
     #[test]
     fn call_args_parse_per_kind() {
         let args = parse_call_args(
@@ -1234,7 +1254,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            args,
+            raw(&args),
             [
                 HostFnValue::F64(1.0),
                 HostFnValue::F64(3.0),
@@ -1244,7 +1264,7 @@ mod tests {
 
         let args =
             parse_call_args("step", &step_signature(), &["5".into(), "true".into()]).unwrap();
-        assert_eq!(args, [HostFnValue::F64(5.0), HostFnValue::F64(1.0)]);
+        assert_eq!(raw(&args), [HostFnValue::F64(5.0), HostFnValue::F64(1.0)]);
 
         assert!(matches!(
             parse_call_args("step", &step_signature(), &["5".into()]).unwrap_err(),
@@ -1309,7 +1329,7 @@ mod tests {
     fn bool_and_int_call_arrays_parse_and_render_semantically() {
         let bool_signature = array_signature(ScalarValueKind::Bool);
         assert_eq!(
-            parse_call_args("invert", &bool_signature, &["[true,false]".into()]).unwrap(),
+            raw(&parse_call_args("invert", &bool_signature, &["[true,false]".into()]).unwrap()),
             [HostFnValue::Array(
                 HostArray::vector(vec![1.0, 0.0]).unwrap()
             )]
@@ -1326,7 +1346,7 @@ mod tests {
 
         let int_signature = array_signature(ScalarValueKind::Int);
         assert_eq!(
-            parse_call_args("increment", &int_signature, &["[1,-2,3]".into()]).unwrap(),
+            raw(&parse_call_args("increment", &int_signature, &["[1,-2,3]".into()]).unwrap()),
             [HostFnValue::Array(
                 HostArray::vector(vec![1.0, -2.0, 3.0]).unwrap()
             )]
@@ -1350,10 +1370,10 @@ mod tests {
         let element = ScalarValueKind::Quantity(DimMonomial::fixed(Dimension::dimensionless()));
         let array = parse_dense_array("[[1, 2, 3], [4, 5, 6]]", 2, &element).unwrap();
         assert_eq!(array.shape(), [2, 3]);
-        assert_eq!(array.values(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let slots = array.elements().abi_slots();
+        assert_eq!(slots, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(
-            render_dense_array(array.shape(), array.values(), |value| format_number(*value))
-                .unwrap(),
+            render_dense_array(array.shape(), &slots, |value| format_number(*value)).unwrap(),
             "[[1, 2, 3], [4, 5, 6]]"
         );
         assert!(parse_dense_array("[1, 2, 3]", 2, &element).is_err());

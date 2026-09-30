@@ -231,7 +231,7 @@ extern 関数は実行時に失敗することがあります（プラグイン�
 
 ## ホスト関数レジストリ { #the-host-function-registry }
 
-埋め込み側は `HostFunctionRegistry` を注入することでネイティブ実装を提供します。これは `(plugin path, function name)` から、`fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>` という形の関数へのマップです。`HostFnValue` は、単一の `f64`、形状を持つ行優先の `HostArray`、または固定レイアウトのレコードスロットです。WASM プラグインも同じインターフェースを通じて登録されます（`graphcal-plugin-host` クレートが、プロジェクトにベンダリングされたモジュールをレジストリに読み込みます）。そのため、評価器自体は WASM に依存しません。
+埋め込み側は `HostFunctionRegistry` を注入することでネイティブ実装を提供します。これは `(plugin path, function name)` から、`fn(&[HostArgument]) -> Result<HostFnValue, HostFnError>` という形の関数へのマップです。`HostArgument` は検証済みのスカラー（有限の量、`Bool`、`f64` で正確に表せる `Int`）か、それらの形状を持つ行優先の配列です。戻り値の `HostFnValue` は、単一の `f64`、形状を持つ行優先の `HostArray`、または固定レイアウトのレコードスロットで、評価器が宣言に照らして検証します。WASM プラグインも同じインターフェースを通じて登録されます（`graphcal-plugin-host` クレートが、プロジェクトにベンダリングされたモジュールをレジストリに読み込みます）。そのため、評価器自体は WASM に依存しません。
 
 ```rust
 use graphcal_eval::host_fns::demo_registry;

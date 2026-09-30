@@ -552,9 +552,9 @@ fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
         graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:pure-plan-test"),
         graphcal_compiler::syntax::function_name::FnName::expect_valid("twice"),
         |args| match &args[0] {
-            graphcal_eval::host_fns::HostFnValue::F64(value) => {
-                Ok(graphcal_eval::host_fns::HostFnValue::F64(value * 2.0))
-            }
+            graphcal_eval::host_abi::argument::HostArgument::Scalar(
+                graphcal_eval::host_abi::HostScalar::Quantity(value),
+            ) => Ok(graphcal_eval::host_fns::HostFnValue::F64(value.get() * 2.0)),
             other => panic!("expected checked scalar argument, got {other:?}"),
         },
     );
@@ -2910,7 +2910,9 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
         graphcal_compiler::syntax::function_name::FnName::expect_valid("count"),
         move |arguments| {
             observed_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(arguments[0].clone())
+            Ok(graphcal_eval::host_fns::HostFnValue::from_argument(
+                &arguments[0],
+            ))
         },
     );
 

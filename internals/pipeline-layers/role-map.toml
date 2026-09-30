@@ -2609,3 +2609,23 @@ role = "facade"
 package = "eval"
 path = ["eval", "runtime", "root_loop"]
 role = "facade"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "argument"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "argument", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "scalar"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["host_abi", "scalar", "tests"]
+role = "interpreter"

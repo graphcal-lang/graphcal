@@ -11,7 +11,14 @@
 
 #![cfg(test)]
 
+use graphcal_compiler::finite_value::FiniteQuantity;
+use graphcal_eval::host_abi::argument::{HostArgument, HostArgumentArray, HostArrayElements};
+use graphcal_eval::host_abi::{HostInt, HostScalar};
 use graphcal_eval::host_fns::HostFnValue;
+
+fn quantity(value: f64) -> FiniteQuantity {
+    FiniteQuantity::try_new(value).unwrap()
+}
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -494,8 +501,16 @@ panic = "abort"
         .load(&bytes)
         .expect("the accepted maximum-width SDK artifact must load under strict limits");
     let name = graphcal_compiler::syntax::function_name::FnName::expect_valid("maximum_width");
+    // `a0` takes Bools, `a1` Ints, and the rest quantities, each one `1`.
     let args = (0..16)
-        .map(|_| HostFnValue::Array(graphcal_eval::host_fns::HostArray::vector(vec![1.0]).unwrap()))
+        .map(|position| {
+            let elements = match position {
+                0 => HostArrayElements::Bool(vec![true]),
+                1 => HostArrayElements::Int(vec![HostInt::try_new(1).unwrap()]),
+                _ => HostArrayElements::Quantity(vec![quantity(1.0)]),
+            };
+            HostArgument::Array(HostArgumentArray::try_new(vec![1], elements).unwrap())
+        })
         .collect::<Vec<_>>();
     assert_eq!(module.call(&name, &args).unwrap(), HostFnValue::F64(1.0));
 }
@@ -555,7 +570,10 @@ panic = "abort"
 
     let name = graphcal_compiler::syntax::function_name::FnName::expect_valid("probe");
     let ok = module
-        .call(&name, &[HostFnValue::F64(9.0)])
+        .call(
+            &name,
+            &[HostArgument::Scalar(HostScalar::Quantity(quantity(9.0)))],
+        )
         .expect("probe(9) succeeds");
     let graphcal_eval::host_fns::HostFnValue::F64(ok) = ok else {
         panic!("expected an f64 ABI result, got {ok:?}");
@@ -563,7 +581,10 @@ panic = "abort"
     assert!((ok - 3.0).abs() < 1e-12);
 
     let err = module
-        .call(&name, &[HostFnValue::F64(-1.0)])
+        .call(
+            &name,
+            &[HostArgument::Scalar(HostScalar::Quantity(quantity(-1.0)))],
+        )
         .expect_err("probe(-1) fails");
     let graphcal_plugin_host::PluginCallError::Failed { message } = &err else {
         panic!("expected a Failed error with the panic message, got {err:?}");

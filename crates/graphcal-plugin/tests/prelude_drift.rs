@@ -19,7 +19,7 @@ use std::path::Path;
 use graphcal_compiler::dimension::PreludeBaseDimension;
 use graphcal_compiler::graphcal_error::GraphcalError;
 use graphcal_compiler::syntax::plugin::PluginPath;
-use graphcal_eval::host_fns::HostFunctionRegistry;
+use graphcal_eval::host_fns::{HostFnValue, HostFunctionRegistry};
 use graphcal_io::RealFileSystem;
 use graphcal_plugin_abi::PluginManifest;
 use graphcal_project::compile_error::CompileError;
@@ -90,8 +90,9 @@ fn registry_from_embedded_manifest() -> HostFunctionRegistry {
     ));
     let mut registry = HostFunctionRegistry::new();
     for (name, signature) in functions {
-        registry
-            .register_with_signature(plugin.clone(), name, signature, |args| Ok(args[0].clone()));
+        registry.register_with_signature(plugin.clone(), name, signature, |args| {
+            Ok(HostFnValue::from_argument(&args[0]))
+        });
     }
     registry
 }

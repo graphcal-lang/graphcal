@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_eval::host_abi::HostScalar;
+use graphcal_eval::host_abi::argument::{HostArgument, HostArgumentArray, HostArrayElements};
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ManifestArrayElementKind, ManifestDecodeError, ManifestFromWasmError, ManifestFunction,
@@ -13,8 +16,8 @@ use graphcal_plugin_abi::{
     ManifestVarPower, PluginManifest, SectionError, embed_manifest,
 };
 use graphcal_plugin_host::{
-    ConvertErrorKind, PluginArgumentLocation, PluginCacheLimits, PluginCallError, PluginHost,
-    PluginLimits, PluginLoadError, PluginModuleLimitError,
+    ConvertErrorKind, PluginCacheLimits, PluginCallError, PluginHost, PluginLimits,
+    PluginLoadError, PluginModuleLimitError,
 };
 
 fn quantity_var(var: &str) -> ManifestParamKind {
@@ -70,8 +73,27 @@ fn fn_name(name: &str) -> FnName {
 }
 
 /// Wrap raw floats as single-slot host values for a call.
-fn f64_values(values: &[f64]) -> Vec<HostFnValue> {
-    values.iter().map(|v| HostFnValue::F64(*v)).collect()
+fn quantity(value: f64) -> HostArgument {
+    HostArgument::Scalar(HostScalar::Quantity(
+        FiniteQuantity::try_new(value).unwrap(),
+    ))
+}
+
+fn f64_values(values: &[f64]) -> Vec<HostArgument> {
+    values.iter().copied().map(quantity).collect()
+}
+
+fn quantities(values: &[f64]) -> HostArrayElements {
+    HostArrayElements::Quantity(
+        values
+            .iter()
+            .map(|value| FiniteQuantity::try_new(*value).unwrap())
+            .collect(),
+    )
+}
+
+fn vector_arg(values: &[f64]) -> HostArgument {
+    HostArgument::Array(HostArgumentArray::try_new(vec![values.len()], quantities(values)).unwrap())
 }
 
 fn vector(values: Vec<f64>) -> HostFnValue {
@@ -937,26 +959,20 @@ fn semantic_array_manifest(element: ManifestArrayElementKind) -> PluginManifest 
 }
 
 #[test]
-fn strict_host_rejects_malformed_typed_array_elements_before_the_call() {
-    for (element, invalid) in [
-        (ManifestArrayElementKind::Bool, 0.5),
-        (ManifestArrayElementKind::Int, 1.5),
+fn strict_host_rejects_array_arguments_of_another_element_kind() {
+    for element in [
+        ManifestArrayElementKind::Bool,
+        ManifestArrayElementKind::Int,
     ] {
         let module = PluginHost::new()
             .load(&plugin(ARRAY_WAT, &semantic_array_manifest(element)))
             .unwrap();
         let error = module
-            .call(
-                &fn_name("scale"),
-                &[vector(vec![1.0, invalid]), HostFnValue::F64(1.0)],
-            )
+            .call(&fn_name("scale"), &[vector_arg(&[1.0, 2.0]), quantity(1.0)])
             .unwrap_err();
         assert!(matches!(
             error,
-            PluginCallError::InvalidArgument {
-                location: PluginArgumentLocation::ArrayElement(1),
-                ..
-            }
+            PluginCallError::MismatchedArgument { parameter } if parameter.as_str() == "values"
         ));
     }
 }
@@ -968,17 +984,14 @@ fn calls_an_array_kernel_with_an_array_result() {
     let result = module
         .call(
             &fn_name("scale"),
-            &[vector(vec![1.0, 2.5, -4.0]), HostFnValue::F64(2.0)],
+            &[vector_arg(&[1.0, 2.5, -4.0]), quantity(2.0)],
         )
         .unwrap();
     assert_eq!(result, vector(vec![2.0, 5.0, -8.0]));
 
     // The second call gets a fresh instance and must see only its own inputs.
     let result = module
-        .call(
-            &fn_name("scale"),
-            &[vector(vec![10.0]), HostFnValue::F64(0.5)],
-        )
+        .call(&fn_name("scale"), &[vector_arg(&[10.0]), quantity(0.5)])
         .unwrap();
     assert_eq!(result, vector(vec![5.0]));
 }
@@ -1060,9 +1073,10 @@ fn matrix_manifest() -> PluginManifest {
 fn calls_a_multi_axis_kernel_and_reorders_result_shape() {
     let host = PluginHost::new();
     let module = host.load(&plugin(MATRIX_WAT, &matrix_manifest())).unwrap();
-    let input = HostArray::try_new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let input = HostArgumentArray::try_new(vec![2, 3], quantities(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]))
+        .unwrap();
     let result = module
-        .call(&fn_name("transpose"), &[HostFnValue::Array(input)])
+        .call(&fn_name("transpose"), &[HostArgument::Array(input)])
         .unwrap();
     assert_eq!(
         result,
@@ -1077,7 +1091,7 @@ fn calls_an_array_kernel_with_a_quantity_result() {
     let host = PluginHost::new();
     let module = host.load(&plugin(ARRAY_WAT, &array_manifest())).unwrap();
     let result = module
-        .call(&fn_name("total"), &[vector(vec![1.0, 2.0, 3.5])])
+        .call(&fn_name("total"), &[vector_arg(&[1.0, 2.0, 3.5])])
         .unwrap();
     assert!((f64_value(&result) - 6.5).abs() < f64::EPSILON);
 }
@@ -1144,7 +1158,7 @@ fn denied_allocator_growth_reports_allocation_failure_before_invoking_the_kernel
 
     assert_eq!(
         module
-            .call(&fn_name("total"), &[vector(vec![1.0, 2.0, 3.0])])
+            .call(&fn_name("total"), &[vector_arg(&[1.0, 2.0, 3.0])])
             .unwrap_err(),
         PluginCallError::AllocationFailed { bytes: 24 }
     );
@@ -1169,7 +1183,7 @@ fn misaligned_allocator_pointer_is_rejected_before_invoking_the_kernel() {
 
     assert_eq!(
         module
-            .call(&fn_name("total"), &[vector(vec![1.0])])
+            .call(&fn_name("total"), &[vector_arg(&[1.0])])
             .unwrap_err(),
         PluginCallError::MisalignedAllocatorPointer {
             pointer: 12,
@@ -1197,7 +1211,7 @@ fn out_of_bounds_allocator_range_is_rejected_before_invoking_the_kernel() {
 
     assert_eq!(
         module
-            .call(&fn_name("total"), &[vector(vec![1.0, 2.0])])
+            .call(&fn_name("total"), &[vector_arg(&[1.0, 2.0])])
             .unwrap_err(),
         PluginCallError::AllocatorBufferOutOfBounds {
             pointer: 0xFFF8,
@@ -1311,7 +1325,7 @@ fn calls_a_struct_returning_kernel() {
     let host = PluginHost::new();
     let module = host.load(&plugin(STRUCT_WAT, &struct_manifest())).unwrap();
     let result = module
-        .call(&fn_name("span"), &[vector(vec![3.0, -1.5, 2.0])])
+        .call(&fn_name("span"), &[vector_arg(&[3.0, -1.5, 2.0])])
         .unwrap();
     assert_eq!(result, HostFnValue::Record(vec![-1.5, 3.0]));
 }
