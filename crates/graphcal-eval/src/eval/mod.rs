@@ -6,6 +6,7 @@ mod bindings;
 mod display;
 mod plot_data;
 mod plot_unavailable;
+mod presented_projection;
 mod project;
 mod public_projection;
 pub(crate) mod runtime;

@@ -215,32 +215,6 @@ impl<V> StructValue<V> {
     }
 }
 
-impl<A, B> StructValue<(A, B)> {
-    /// Split paired fields into two values of the same application.
-    #[must_use]
-    pub fn unzip(self) -> (StructValue<A>, StructValue<B>) {
-        let (left, right) = self
-            .fields
-            .into_iter()
-            .map(|(name, (left, right))| ((name.clone(), left), (name, right)))
-            .unzip();
-        (
-            StructValue {
-                type_name: self.type_name.clone(),
-                constructor: self.constructor.clone(),
-                generic_args: self.generic_args.clone(),
-                fields: left,
-            },
-            StructValue {
-                type_name: self.type_name,
-                constructor: self.constructor,
-                generic_args: self.generic_args,
-                fields: right,
-            },
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use graphcal_compiler::dag_id::DagId;
@@ -349,22 +323,20 @@ mod tests {
     }
 
     #[test]
-    fn owned_maps_selection_and_unzip_keep_the_application() {
+    fn owned_maps_and_selection_keep_the_application() {
         let value = build(vec![("left", 1), ("right", 2)]).unwrap();
         let mut seen = Vec::new();
         let mapped = value
             .clone()
             .try_map(|name, value| {
                 seen.push(name.clone());
-                Ok::<_, ()>((value, -value))
+                Ok::<_, ()>(-value)
             })
             .unwrap();
         assert_eq!(seen, vec![field("left"), field("right")]);
-        let (left, right) = mapped.unzip();
-        assert_eq!(left, value);
-        assert_eq!(right.constructor(), value.constructor());
-        assert_eq!(left.field(&field("right")), Some(&2));
-        assert_eq!(right.field(&field("left")), Some(&-1));
+        assert_eq!(mapped.constructor(), value.constructor());
+        assert_eq!(mapped.type_name(), value.type_name());
+        assert_eq!(mapped.field(&field("left")), Some(&-1));
         assert_eq!(
             value.clone().map(|value| value * 3).field(&field("right")),
             Some(&6)

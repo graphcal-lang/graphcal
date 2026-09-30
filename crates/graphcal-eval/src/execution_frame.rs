@@ -5,8 +5,8 @@ use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
 use crate::execution_plan::{CallablePlan, ExecPlan, PlannedBody};
-use crate::presentation_evidence::PendingPresentationMap;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
+use crate::runtime_presentation::PendingPresentedMap;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -27,9 +27,9 @@ pub enum FailurePolicy {
 /// The values of one callable's declarations while its plan runs.
 ///
 /// The fields are private so the frame keeps its invariants by construction:
-/// every bound value passed its domain check, a presentation is kept only for
-/// a bound value, and a declaration holds a value or an unavailability, never
-/// both. Callers supply arguments and runtime imports through the operations
+/// every bound value passed its domain check, a presented value is kept only
+/// for a bound value with a presentation (and holds that same value), and a
+/// declaration holds a value or an unavailability, never both. Callers supply arguments and runtime imports through the operations
 /// below, read the frame while it runs, and take the outcome with
 /// [`ExecutionFrame::finish`].
 pub struct ExecutionFrame<'a> {
@@ -37,14 +37,15 @@ pub struct ExecutionFrame<'a> {
     callable: &'a CallablePlan<'a>,
     policy: FailurePolicy,
     values: RuntimeValueMap,
-    presentations: PendingPresentationMap,
+    presented: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
 /// What a finished frame computed.
 pub struct FrameOutcome {
     pub values: RuntimeValueMap,
-    pub presentations: PendingPresentationMap,
+    /// The presented value of every value with a presentation.
+    pub presented: PendingPresentedMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
@@ -117,19 +118,19 @@ impl<'a> ExecutionFrame<'a> {
                 .flat_map(|scope| scope.const_values().iter())
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
-        let presentations = plan
+        let presented = plan
             .program()
             .facts()
             .const_presentations()
             .filter(|(key, _)| values.contains_key(*key))
-            .map(|(key, evidence)| (key.clone(), evidence.clone()))
+            .map(|(key, presented)| (key.clone(), presented.clone()))
             .collect();
         Self {
             plan,
             callable,
             policy,
             values,
-            presentations,
+            presented,
             errors: HashMap::new(),
         }
     }
@@ -140,10 +141,10 @@ impl<'a> ExecutionFrame<'a> {
         &self.values
     }
 
-    /// Presentations of the values bound so far.
+    /// Presented values of the values bound so far that have a presentation.
     #[must_use]
-    pub const fn presentations(&self) -> &PendingPresentationMap {
-        &self.presentations
+    pub const fn presentations(&self) -> &PendingPresentedMap {
+        &self.presented
     }
 
     /// Declarations found unavailable so far.
@@ -157,7 +158,7 @@ impl<'a> ExecutionFrame<'a> {
     pub fn finish(self) -> FrameOutcome {
         FrameOutcome {
             values: self.values,
-            presentations: self.presentations,
+            presented: self.presented,
             errors: self.errors,
         }
     }
@@ -195,11 +196,11 @@ impl<'a> ExecutionFrame<'a> {
         source: &NamedSource<Arc<String>>,
         span: Span,
     ) -> Result<(), GraphcalError> {
-        let (value, presentation) = value.into_parts();
         if let Some(constraint) = domain
-            && let Err(violation) = check_domain_constraint(&value, constraint)
+            && let Err(violation) = check_domain_constraint(&value.value(), constraint)
         {
             self.values.remove(key);
+            self.presented.remove(key);
             return self.failure(
                 key,
                 GraphcalError::EvalError {
@@ -209,11 +210,19 @@ impl<'a> ExecutionFrame<'a> {
                 },
             );
         }
-        self.values.insert(key.clone(), value);
-        if !presentation.is_plain() {
-            self.presentations.insert(key.clone(), presentation);
-        }
+        self.store(key, value);
         Ok(())
+    }
+
+    /// Record `value` as the value of `key`.
+    fn store(&mut self, key: &ResolvedDeclName, value: EvaluatedRuntimeValue) {
+        if value.is_plain() {
+            self.values.insert(key.clone(), value.into_value());
+            self.presented.remove(key);
+        } else {
+            self.values.insert(key.clone(), value.value().into_owned());
+            self.presented.insert(key.clone(), value);
+        }
     }
 
     /// Bind a value the caller supplies for `key` (a runtime parameter
@@ -244,11 +253,7 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             if let Some(imported) = lookup(key) {
-                let (value, presentation) = imported.into_parts();
-                self.values.insert(key.clone(), value);
-                if !presentation.is_plain() {
-                    self.presentations.insert(key.clone(), presentation);
-                }
+                self.store(key, imported);
             }
         }
     }

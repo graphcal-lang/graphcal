@@ -17,7 +17,7 @@ use graphcal_compiler::tir::typed::{DeclarationBody, Scoped};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval_expr::{EvalSession, RuntimeValueMap, eval_root_with_presentation};
 use crate::execution_plan::ExecPlan;
-use crate::presentation_evidence::{PendingPresentationMap, ResolvedPresentationMap};
+use crate::runtime_presentation::{PendingPresentedMap, ResolvedPresentedMap};
 
 use super::types::{EvalResult, NodeUnavailable};
 
@@ -34,7 +34,7 @@ pub(super) use root_outcome::{RootFailure, RootOutcome};
 pub(super) struct EvalLoopResult {
     pub unfinished_calls: std::cell::RefCell<BTreeSet<ResolvedDeclName>>,
     pub values: RuntimeValueMap,
-    pub presentations: PendingPresentationMap,
+    pub presentations: PendingPresentedMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
@@ -45,7 +45,7 @@ pub(super) struct EvalLoopResult {
 /// consumers without running the evaluator a second time.
 pub struct RuntimeEvaluation {
     pub(super) result: EvalResult,
-    pub(super) presentations: ResolvedPresentationMap,
+    pub(super) presentations: ResolvedPresentedMap,
     pub(super) values: RuntimeValueMap,
     pub(super) errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
@@ -89,15 +89,7 @@ pub(super) fn run_eval_loop_with_bindings(
     let unfinished_calls = std::cell::RefCell::new(BTreeSet::new());
     let mut frame = ExecutionFrame::new(plan, plan.root(), FailurePolicy::Contain);
     for (key, binding) in bindings {
-        frame.bind_argument(
-            key,
-            crate::runtime_presentation::EvaluatedRuntimeValue::new(
-                binding.value.clone(),
-                binding.presentation.clone(),
-            ),
-            src,
-            Span::new(0, 0),
-        )?;
+        frame.bind_argument(key, binding.clone(), src, Span::new(0, 0))?;
     }
     frame.run(cancellation, |entry, frame| {
         // Root declarations keep their existing work allowance; nested calls
@@ -118,7 +110,7 @@ pub(super) fn run_eval_loop_with_bindings(
     Ok(EvalLoopResult {
         unfinished_calls,
         values: outcome.values,
-        presentations: outcome.presentations,
+        presentations: outcome.presented,
         errors: outcome.errors,
     })
 }
@@ -129,13 +121,13 @@ pub(super) fn run_eval_loop_with_bindings(
 struct EvaluatedRoot<'a> {
     values: &'a RuntimeValueMap,
     errors: &'a HashMap<ResolvedDeclName, NodeUnavailable>,
-    /// The presentations of the declarations, resolved against the complete
-    /// root frame.
-    presentations: &'a ResolvedPresentationMap,
-    /// The same presentations as the root frame holds them, still pending,
-    /// for an expression evaluated over the root frame (a plot channel),
-    /// whose own presentation is then resolved against `values`.
-    frame_presentations: &'a PendingPresentationMap,
+    /// The presented values of the declarations with a presentation,
+    /// resolved against the complete root frame.
+    presentations: &'a ResolvedPresentedMap,
+    /// The same presented values as the root frame holds them, still
+    /// pending, for an expression evaluated over the root frame (a plot
+    /// channel), whose own presentation is then resolved against `values`.
+    frame_presentations: &'a PendingPresentedMap,
 }
 
 /// Evaluate a plan with one row of runtime parameter bindings, then assemble
@@ -162,7 +154,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             crate::eval_expr::presentation::resolve(presentation.clone(), outcome.values(), &ctx)
                 .map(|presentation| (key.clone(), presentation))
         })
-        .collect::<Result<ResolvedPresentationMap, _>>()?;
+        .collect::<Result<ResolvedPresentedMap, _>>()?;
     let evaluated = EvaluatedRoot {
         values: outcome.values(),
         errors: outcome.errors(),

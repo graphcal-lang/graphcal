@@ -27,7 +27,7 @@ use crate::constant_pools::{
     ConstPool, ConstPoolBuildError, ConstStep, ConstantReference, RuntimeValueMap,
 };
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::presentation_evidence::{PendingPresentation, PendingPresentationMap};
+use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap};
 
 /// Resolved domain constraints of one DAG's declarations.
 pub type DomainConstraints = HashMap<ResolvedDeclName, ResolvedDomainConstraint>;
@@ -86,7 +86,7 @@ impl ImportedConstant {
 struct DagExecutionFacts {
     source: NamedSource<Arc<String>>,
     /// Compile-time selections only; dynamic display requests have no invocation state.
-    const_presentations: PendingPresentationMap,
+    const_presentations: PendingPresentedMap,
     domain_constraints: Arc<DomainConstraints>,
     imported_constants: Vec<ImportedConstant>,
 }
@@ -107,10 +107,11 @@ impl ExecutionFacts {
         self.by_dag.get(dag_id).map(|facts| &facts.source)
     }
 
-    /// The compile-time presentation of every constant.
+    /// The compile-time presented value of every constant with a
+    /// presentation.
     pub fn const_presentations(
         &self,
-    ) -> impl Iterator<Item = (&ResolvedDeclName, &PendingPresentation)> {
+    ) -> impl Iterator<Item = (&ResolvedDeclName, &EvaluatedRuntimeValue)> {
         self.by_dag
             .values()
             .flat_map(|facts| facts.const_presentations.iter())
@@ -128,7 +129,7 @@ pub struct ScheduledChecks {
     /// The checked file's source, the diagnostic source of every scheduled DAG.
     pub source: NamedSource<Arc<String>>,
     /// Compile-time presentations of the evaluated constants.
-    pub const_presentations: PendingPresentationMap,
+    pub const_presentations: PendingPresentedMap,
     /// Domain constraints of every scheduled DAG.
     pub domain_constraints: HashMap<DagId, DomainConstraints>,
     /// Struct-field constraints resolved by this check.

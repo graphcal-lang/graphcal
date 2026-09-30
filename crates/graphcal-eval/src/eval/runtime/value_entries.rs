@@ -16,7 +16,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{CheckedDag, ResolvedProjection};
 
-use crate::eval::display::attach_presentation;
+use crate::eval::presented_projection::project_presented;
 use crate::eval::public_projection::EvaluatedValue;
 use crate::eval::types::{NodeUnavailable, Value};
 use crate::eval_expr::{EvalSession, RuntimeValue};
@@ -255,7 +255,8 @@ fn evaluated_value(
 }
 
 /// Project `runtime`, the value of the successfully evaluated `declaration`,
-/// to its public value and attach its resolved presentation.
+/// to its public value, displayed as its resolved presented value (which
+/// holds the same value) says, when it has one.
 fn project_value(
     declaration: &ResolvedDeclName,
     runtime: Option<&RuntimeValue>,
@@ -272,8 +273,13 @@ fn project_value(
             DiagnosticAnchor::WholeFile,
         )
     })?;
-    let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
-    let notices = attach_presentation(&mut value, evaluated.presentations.get(declaration));
+    let (value, notices) = match evaluated.presentations.get(declaration) {
+        Some(presented) => project_presented(presented, declared_type, ctx.tir, ctx.src)?,
+        None => (
+            EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?,
+            Vec::new(),
+        ),
+    };
     let diagnostics = notices
         .into_iter()
         .map(|detail| PresentationDiagnostic {

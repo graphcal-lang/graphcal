@@ -20,7 +20,7 @@ use crate::eval::types::{AssertResult, NodeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
-use crate::presentation_evidence::PendingPresentationMap;
+use crate::runtime_presentation::PendingPresentedMap;
 
 use super::root_names::{instance_member_name, root_source_names};
 use super::{EvalLoopResult, evaluate_assertions, run_eval_loop_with_bindings};
@@ -29,7 +29,7 @@ use super::{EvalLoopResult, evaluate_assertions, run_eval_loop_with_bindings};
 pub(in crate::eval) struct RootOutcome {
     unfinished_calls: RefCell<BTreeSet<ResolvedDeclName>>,
     values: RuntimeValueMap,
-    presentations: PendingPresentationMap,
+    presentations: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, NodeUnavailable>,
     assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
@@ -118,7 +118,7 @@ impl RootOutcome {
 
     /// The presentations of the evaluated declarations, still pending: the
     /// result assembly resolves them against the complete root frame.
-    pub(in crate::eval) const fn presentations(&self) -> &PendingPresentationMap {
+    pub(in crate::eval) const fn presentations(&self) -> &PendingPresentedMap {
         &self.presentations
     }
 

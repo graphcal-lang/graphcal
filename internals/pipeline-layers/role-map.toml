@@ -1814,6 +1814,11 @@ role = "facade"
 
 [[module]]
 package = "eval"
+path = ["eval", "presented_projection"]
+role = "facade"
+
+[[module]]
+package = "eval"
 path = ["eval", "project"]
 role = "facade"
 
@@ -2418,4 +2423,9 @@ role = "checking"
 [[module]]
 package = "eval"
 path = ["runtime_presentation"]
-role = "interpreter"
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["runtime_presentation", "tests"]
+role = "contracts"

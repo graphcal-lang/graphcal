@@ -90,13 +90,6 @@ impl<V> IndexedValue<V> {
         Ok(IndexedValue { axis, entries })
     }
 
-    /// The owned entry for `key`, when `key` belongs to the axis.
-    #[must_use]
-    pub fn into_entry(self, key: &IndexEntryKey) -> Option<V> {
-        let position = self.axis.position(key)?;
-        self.entries.into_iter().nth(position)
-    }
-
     /// The axis this value is indexed by.
     #[must_use]
     pub const fn axis(&self) -> &IndexAxis {
@@ -137,24 +130,6 @@ impl<V> IndexedValue<V> {
     #[must_use]
     pub const fn values(&self) -> &NonEmpty<V> {
         &self.entries
-    }
-}
-
-impl<A, B> IndexedValue<(A, B)> {
-    /// Split paired entries into two values over the same axis.
-    #[must_use]
-    pub fn unzip(self) -> (IndexedValue<A>, IndexedValue<B>) {
-        let (left, right) = self.entries.unzip();
-        (
-            IndexedValue {
-                axis: self.axis.clone(),
-                entries: left,
-            },
-            IndexedValue {
-                axis: self.axis,
-                entries: right,
-            },
-        )
     }
 }
 
@@ -231,27 +206,22 @@ mod tests {
     }
 
     #[test]
-    fn owned_maps_selection_and_unzip_keep_the_axis() {
+    fn owned_maps_keep_the_axis() {
         let indexed = IndexedValue::for_test(axis(), vec![1_i64, 2, 3]);
         let mut seen = Vec::new();
         let mapped = indexed
             .clone()
             .try_map(|entry_key, value| {
                 seen.push(entry_key.clone());
-                Ok::<_, ()>((value, value * 10))
+                Ok::<_, ()>(value * 10)
             })
             .unwrap();
         assert_eq!(seen, vec![key("A"), key("B"), key("C")]);
-        let (left, right) = mapped.unzip();
-        assert_eq!(left.values().as_slice(), &[1, 2, 3]);
-        assert_eq!(right.values().as_slice(), &[10, 20, 30]);
-        assert!(left.axis().matches(&axis()) && right.axis().matches(&axis()));
-        assert_eq!(
-            indexed.clone().map(|value| -value).values().as_slice(),
-            &[-1, -2, -3]
-        );
-        assert_eq!(indexed.clone().into_entry(&key("C")), Some(3));
-        assert_eq!(indexed.into_entry(&key("D")), None);
+        assert_eq!(mapped.values().as_slice(), &[10, 20, 30]);
+        assert!(mapped.axis().matches(&axis()));
+        let negated = indexed.map(|value| -value);
+        assert_eq!(negated.values().as_slice(), &[-1, -2, -3]);
+        assert!(negated.axis().matches(&axis()));
         let failed =
             IndexedValue::for_test(axis(), vec![1_i64, 2, 3]).try_map(|entry_key, value| {
                 if *entry_key == key("B") {

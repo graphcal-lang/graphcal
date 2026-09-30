@@ -34,8 +34,8 @@ fn plot_properties_preserve_cancellation_classification() {
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let values = RuntimeValueMap::new();
-    let presentations = crate::presentation_evidence::ResolvedPresentationMap::new();
-    let frame_presentations = PendingPresentationMap::new();
+    let presentations = crate::runtime_presentation::ResolvedPresentedMap::new();
+    let frame_presentations = PendingPresentedMap::new();
     let errors = HashMap::new();
     let evaluated = EvaluatedRoot {
         values: &values,
