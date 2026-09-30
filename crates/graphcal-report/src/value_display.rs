@@ -6,10 +6,9 @@
 //! entries as `name[Variant]` / `name.field`, and two-axis indexed values
 //! as grids.
 
-use std::collections::BTreeMap;
-
-use graphcal_compiler::dimension::BaseDimId;
-use graphcal_eval::eval::{DisplayProjectionError, Value, format_number, quantity_display_value};
+use graphcal_eval::eval::{
+    DisplayProjectionError, RenderContext, UnitLabel, Value, format_number, quantity_display_value,
+};
 
 /// Display body of one evaluated value.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -44,7 +43,7 @@ pub struct GridTable {
 /// display conversions.
 pub fn scalar_display(
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
 ) -> Result<String, DisplayProjectionError> {
     match value {
         Value::Quantity {
@@ -54,13 +53,13 @@ pub fn scalar_display(
         } => {
             let displayed = quantity_display_value(*si_value, display_unit.as_ref())?;
             let mut out = format_number(displayed);
-            if let Some(label) = value.display_label(symbols) {
+            if let Some(label) = value.display_label(render) {
                 out.push(' ');
                 out.push_str(&label);
             }
             Ok(out)
         }
-        _ => value.format_display(Some(symbols)),
+        _ => value.format_display(render, UnitLabel::Inline),
     }
 }
 
@@ -79,33 +78,33 @@ fn index_depth(value: &Value) -> usize {
 /// Returns the first display-unit projection error encountered in any leaf.
 pub fn project_value_body(
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
 ) -> Result<ValueBody, DisplayProjectionError> {
     match index_depth(value) {
         0 => match value {
             Value::Struct { fields, .. } if !fields.is_empty() => {
                 let mut entries = Vec::new();
-                flatten_entries(String::new(), value, symbols, &mut entries)?;
+                flatten_entries(String::new(), value, render, &mut entries)?;
                 Ok(ValueBody::Entries(entries))
             }
-            _ => Ok(ValueBody::Scalar(scalar_display(value, symbols)?)),
+            _ => Ok(ValueBody::Scalar(scalar_display(value, render)?)),
         },
         1 => {
             let mut entries = Vec::new();
-            flatten_entries(String::new(), value, symbols, &mut entries)?;
+            flatten_entries(String::new(), value, render, &mut entries)?;
             Ok(ValueBody::Entries(entries))
         }
-        2 => Ok(ValueBody::Grid(project_grid(value, symbols)?)),
+        2 => Ok(ValueBody::Grid(project_grid(value, render)?)),
         _ => {
             let Value::Indexed { entries, .. } = value else {
                 // index_depth >= 3 implies an Indexed value.
-                return Ok(ValueBody::Scalar(scalar_display(value, symbols)?));
+                return Ok(ValueBody::Scalar(scalar_display(value, render)?));
             };
             let mut slices = Vec::new();
             for key in entries.keys() {
                 let label = value.indexed_entry_display_name(key);
                 let inner = &entries[key];
-                match project_value_body(inner, symbols)? {
+                match project_value_body(inner, render)? {
                     ValueBody::Grid(grid) => slices.push((label, grid)),
                     ValueBody::Slices(nested) => {
                         for (nested_label, grid) in nested {
@@ -128,7 +127,7 @@ pub fn project_value_body(
 fn flatten_entries(
     prefix: String,
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
     out: &mut Vec<(String, String)>,
 ) -> Result<(), DisplayProjectionError> {
     match value {
@@ -139,7 +138,7 @@ fn flatten_entries(
                 } else {
                     format!("{prefix}.{field}")
                 };
-                flatten_entries(label, inner, symbols, out)?;
+                flatten_entries(label, inner, render, out)?;
             }
             Ok(())
         }
@@ -147,12 +146,12 @@ fn flatten_entries(
             for key in entries.keys() {
                 let display_key = value.indexed_entry_display_name(key);
                 let label = format!("{prefix}[{display_key}]");
-                flatten_entries(label, &entries[key], symbols, out)?;
+                flatten_entries(label, &entries[key], render, out)?;
             }
             Ok(())
         }
         _ => {
-            out.push((prefix, scalar_display(value, symbols)?));
+            out.push((prefix, scalar_display(value, render)?));
             Ok(())
         }
     }
@@ -162,7 +161,7 @@ fn flatten_entries(
 /// inner keys in first-seen order; missing cells stay empty.
 fn project_grid(
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
 ) -> Result<GridTable, DisplayProjectionError> {
     let Value::Indexed { entries, .. } = value else {
         return Ok(GridTable {
@@ -183,7 +182,7 @@ fn project_grid(
         {
             for inner_key in inner_entries.keys() {
                 let column = inner.indexed_entry_display_name(inner_key);
-                let cell = scalar_display(&inner_entries[inner_key], symbols)?;
+                let cell = scalar_display(&inner_entries[inner_key], render)?;
                 if let Some(index) = columns.iter().position(|c| *c == column) {
                     if let Some(slot) = cells.get_mut(index) {
                         *slot = Some(cell);
@@ -226,7 +225,7 @@ mod tests {
             .output_values(graphcal_eval::eval::EvalOutputView::Surface)
             .find(|(n, _, _)| n.to_string() == name)
             .unwrap();
-        project_value_body(value.as_ref().unwrap(), &result.base_dim_symbols).unwrap()
+        project_value_body(value.as_ref().unwrap(), &result.render).unwrap()
     }
 
     #[test]

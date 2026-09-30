@@ -1089,9 +1089,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                 ) {
                                     Ok(displayed) => {
                                         let formatted = format_number(displayed);
-                                        if let Some(label) =
-                                            value.display_label(&result.base_dim_symbols)
-                                        {
+                                        if let Some(label) = value.display_label(&result.render) {
                                             println!("{name:width$} = {formatted} {label}");
                                         } else {
                                             println!("{name:width$} = {formatted}");
@@ -1102,7 +1100,10 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                     }
                                 }
                             } else {
-                                match value.format_display(Some(&result.base_dim_symbols)) {
+                                match value.format_display(
+                                    &result.render,
+                                    graphcal_eval::eval::UnitLabel::Inline,
+                                ) {
                                     Ok(formatted) => println!("{name:width$} = {formatted}"),
                                     Err(error) => eprintln!("{name:width$} = ERROR: {error}"),
                                 }
@@ -1113,10 +1114,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
             }
             OutputBlock::Table(name, value) => {
                 println!();
-                println!(
-                    "{}",
-                    format_indexed_table(name, value, &result.base_dim_symbols)
-                );
+                println!("{}", format_indexed_table(name, value, &result.render));
             }
         }
     }
@@ -1198,7 +1196,7 @@ fn print_json(
 
     fn value_to_json(
         v: &Value,
-        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+        render: &graphcal_eval::eval::RenderContext,
     ) -> Result<serde_json::Value, DisplayProjectionError> {
         match v {
             Value::Quantity {
@@ -1213,7 +1211,7 @@ fn print_json(
                         graphcal_eval::eval::quantity_display_value(*si_value, Some(du))?;
                     map.insert("display_value".to_string(), serde_json::json!(displayed));
                     map.insert("unit".to_string(), serde_json::json!(du.label));
-                } else if let Some(si_unit) = v.display_label(symbols) {
+                } else if let Some(si_unit) = v.display_label(render) {
                     map.insert("unit".to_string(), serde_json::json!(si_unit));
                 } else {
                     // Dimensionless: no unit field
@@ -1242,7 +1240,7 @@ fn print_json(
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 }
                 if display_unit.is_none()
-                    && let Some(si_unit) = v.display_label(symbols)
+                    && let Some(si_unit) = v.display_label(render)
                 {
                     map.insert("unit".to_string(), serde_json::json!(si_unit));
                 }
@@ -1267,8 +1265,7 @@ fn print_json(
                 let fields_map = fields
                     .iter()
                     .map(|(name, value)| {
-                        value_to_json(value, symbols)
-                            .map(|value| (name.as_str().to_string(), value))
+                        value_to_json(value, render).map(|value| (name.as_str().to_string(), value))
                     })
                     .collect::<Result<serde_json::Map<_, _>, _>>()?;
                 map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
@@ -1287,7 +1284,7 @@ fn print_json(
                 let entries_map = entries
                     .iter()
                     .map(|(name, value)| {
-                        value_to_json(value, symbols)
+                        value_to_json(value, render)
                             .map(|value| (v.indexed_entry_display_name(name), value))
                     })
                     .collect::<Result<serde_json::Map<_, _>, _>>()?;
@@ -1301,14 +1298,9 @@ fn print_json(
                 epoch,
                 time_scale,
                 display_tz,
-                time_zones,
             } => {
                 let mut map = serde_json::Map::new();
-                let formatted = graphcal_eval::eval::format_epoch_with_tz(
-                    epoch,
-                    display_tz.as_ref(),
-                    time_zones,
-                );
+                let formatted = render.format_datetime(epoch, display_tz.as_ref());
                 map.insert("datetime".to_string(), serde_json::json!(formatted));
                 map.insert(
                     "time_scale".to_string(),
@@ -1360,15 +1352,15 @@ fn print_json(
 
     fn result_to_json(
         result: &Result<Value, NodeUnavailable>,
-        symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
+        render: &graphcal_eval::eval::RenderContext,
     ) -> Result<serde_json::Value, DisplayProjectionError> {
         match result {
-            Ok(value) => value_to_json(value, symbols),
+            Ok(value) => value_to_json(value, render),
             Err(error) => Ok(node_error_to_json(error)),
         }
     }
 
-    let symbols = &result.base_dim_symbols;
+    let render = &result.render;
     let mut output = serde_json::Map::new();
     output.insert(
         "incomplete".to_string(),
@@ -1387,15 +1379,15 @@ fn print_json(
 
     let consts = result
         .output_consts(output_view)
-        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
     let params = result
         .output_params(output_view)
-        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
     let nodes = result
         .output_nodes(output_view)
-        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
 
     output.insert("const".to_string(), serde_json::Value::Object(consts));

@@ -19,10 +19,8 @@
 //! * [`format_indexed_table`] renders an N-dimensional indexed value (N >= 2).
 //! * [`FlatEntry`] / [`OutputBlock`] are the data types the renderer walks.
 
-use std::collections::BTreeMap;
-
-use graphcal_compiler::dimension::{BaseDimId, Dimension};
-use graphcal_eval::eval::{NodeUnavailable, Value};
+use graphcal_compiler::dimension::Dimension;
+use graphcal_eval::eval::{NodeUnavailable, RenderContext, UnitLabel, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -111,8 +109,8 @@ enum TableUnitPolicy {
 }
 
 impl TableUnitPolicy {
-    fn for_value(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Self {
-        match table_leaf_presentation(value, symbols) {
+    fn for_value(value: &Value, render: &RenderContext) -> Self {
+        match table_leaf_presentation(value, render) {
             TableLeafPresentation::Empty | TableLeafPresentation::NonQuantity => Self::NoQuantity,
             TableLeafPresentation::Quantity(QuantityPresentation {
                 label: Some(label), ..
@@ -124,25 +122,21 @@ impl TableUnitPolicy {
         }
     }
 
-    const fn cell_symbols<'a>(
-        &self,
-        symbols: &'a BTreeMap<BaseDimId, String>,
-    ) -> Option<&'a BTreeMap<BaseDimId, String>> {
+    const fn cell_unit_label(&self) -> UnitLabel {
         match self {
-            Self::PerCell => Some(symbols),
-            Self::NoQuantity | Self::UniformUnlabelled | Self::UniformLabelled(_) => None,
+            Self::PerCell => UnitLabel::Inline,
+            Self::NoQuantity | Self::UniformUnlabelled | Self::UniformLabelled(_) => {
+                UnitLabel::Omitted
+            }
         }
     }
 }
 
-fn table_leaf_presentation(
-    value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
-) -> TableLeafPresentation {
+fn table_leaf_presentation(value: &Value, render: &RenderContext) -> TableLeafPresentation {
     match value {
         Value::Indexed { entries, .. } => entries
             .values()
-            .map(|entry| table_leaf_presentation(entry, symbols))
+            .map(|entry| table_leaf_presentation(entry, render))
             .fold(TableLeafPresentation::Empty, TableLeafPresentation::combine),
         Value::Quantity {
             dimension,
@@ -155,7 +149,7 @@ fn table_leaf_presentation(
             ..
         } => TableLeafPresentation::Quantity(QuantityPresentation {
             dimension: dimension.clone(),
-            label: value.display_label(symbols),
+            label: value.display_label(render),
             scale: display_unit.as_ref().map_or(1.0, |unit| unit.scale.get()),
         }),
         Value::Bool(_)
@@ -272,7 +266,7 @@ pub fn max_flat_name_len(blocks: &[OutputBlock<'_>]) -> usize {
 /// cells carry their own labels.
 fn format_table_grid_with_policy(
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
     policy: &TableUnitPolicy,
 ) -> String {
     use tabled::builder::Builder;
@@ -324,7 +318,7 @@ fn format_table_grid_with_policy(
             for (col_variant, _) in &columns {
                 let cell_val = cells.get(col_variant).map_or_else(String::new, |value| {
                     value
-                        .format_display(policy.cell_symbols(symbols))
+                        .format_display(render, policy.cell_unit_label())
                         .unwrap_or_else(|error| format!("ERROR: {error}"))
                 });
                 row.push(cell_val);
@@ -347,7 +341,7 @@ fn format_table_grid_with_policy(
 /// value cannot accidentally acquire a caption from one locally uniform slice.
 fn format_table_slices(
     value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
+    render: &RenderContext,
     policy: &TableUnitPolicy,
     depth: usize,
     parts: &mut Vec<String>,
@@ -362,7 +356,7 @@ fn format_table_slices(
     };
 
     if depth == 2 {
-        let grid = format_table_grid_with_policy(value, symbols, policy);
+        let grid = format_table_grid_with_policy(value, render, policy);
         parts.push(grid);
         return;
     }
@@ -374,7 +368,7 @@ fn format_table_slices(
             index_name,
             value.indexed_entry_display_name(variant)
         ));
-        format_table_slices(inner_val, symbols, policy, depth - 1, parts);
+        format_table_slices(inner_val, render, policy, depth - 1, parts);
     }
 }
 
@@ -387,12 +381,8 @@ fn format_table_slices(
 /// omitted. If leaves have different semantic presentations, the shared caption
 /// is omitted and each quantity/complex cell carries its own unit label.
 #[must_use]
-pub fn format_indexed_table(
-    name: &str,
-    value: &Value,
-    symbols: &BTreeMap<BaseDimId, String>,
-) -> String {
-    let policy = TableUnitPolicy::for_value(value, symbols);
+pub fn format_indexed_table(name: &str, value: &Value, render: &RenderContext) -> String {
+    let policy = TableUnitPolicy::for_value(value, render);
     let header = match &policy {
         TableUnitPolicy::UniformLabelled(label) => format!("{name} ({label}):"),
         TableUnitPolicy::NoQuantity
@@ -402,13 +392,13 @@ pub fn format_indexed_table(
 
     let depth = index_depth(value);
     if depth == 2 {
-        let grid = format_table_grid_with_policy(value, symbols, &policy);
+        let grid = format_table_grid_with_policy(value, render, &policy);
         return format!("{header}\n{grid}");
     }
 
     // depth >= 3: peel off outermost index levels until we reach 2D slices
     let mut parts = vec![header];
-    format_table_slices(value, symbols, &policy, depth, &mut parts);
+    format_table_slices(value, render, &policy, depth, &mut parts);
     parts.join("\n")
 }
 
@@ -423,6 +413,13 @@ mod tests {
     use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
     use graphcal_eval::eval::DisplayUnit;
     use indexmap::IndexMap;
+
+    fn empty_render_context() -> RenderContext {
+        RenderContext::new(
+            std::collections::BTreeMap::new(),
+            graphcal_compiler::registry::time_zone::TimeZoneRegistry::bundled(),
+        )
+    }
 
     fn quantity(si: f64) -> Value {
         Value::Quantity {
@@ -628,9 +625,9 @@ mod tests {
         let inner_r1 = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let inner_r2 = indexed_1d("Col", &[("X", quantity(3.0)), ("Y", quantity(4.0))]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
-        let symbols = BTreeMap::new();
-        let policy = TableUnitPolicy::for_value(&v, &symbols);
-        let grid = format_table_grid_with_policy(&v, &symbols, &policy);
+        let render = empty_render_context();
+        let policy = TableUnitPolicy::for_value(&v, &render);
+        let grid = format_table_grid_with_policy(&v, &render, &policy);
         assert!(grid.contains("R1"), "grid missing R1 row: {grid}");
         assert!(grid.contains("R2"), "grid missing R2 row: {grid}");
         assert!(grid.contains('X'), "grid missing X col: {grid}");
@@ -643,9 +640,9 @@ mod tests {
         let inner_r2 =
             indexed_1d_with_display("Col", &[("Y", quantity(2.0))], &[("Y", "second-Y")]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
-        let symbols = BTreeMap::new();
-        let policy = TableUnitPolicy::for_value(&v, &symbols);
-        let grid = format_table_grid_with_policy(&v, &symbols, &policy);
+        let render = empty_render_context();
+        let policy = TableUnitPolicy::for_value(&v, &render);
+        let grid = format_table_grid_with_policy(&v, &render, &policy);
         assert!(grid.contains("first-X"), "grid missing X display: {grid}");
         assert!(grid.contains("second-Y"), "grid missing Y display: {grid}");
     }
@@ -658,7 +655,7 @@ mod tests {
             &[("X", displayed_complex_length(2000.0, 3.0, "m", 1.0))],
         );
         let value = indexed_1d("Row", &[("A", kilometre), ("B", metre)]);
-        let output = format_indexed_table("grid", &value, &BTreeMap::new());
+        let output = format_indexed_table("grid", &value, &empty_render_context());
 
         assert!(output.starts_with("grid:\n"), "{output}");
         assert!(!output.contains("grid (km):"), "{output}");
@@ -671,7 +668,7 @@ mod tests {
         let first = indexed_1d("Col", &[("X", displayed_length(1000.0, "km", 1000.0))]);
         let second = indexed_1d("Col", &[("X", displayed_length(2000.0, "km", 1000.0))]);
         let value = indexed_1d("Row", &[("A", first), ("B", second)]);
-        let output = format_indexed_table("grid", &value, &BTreeMap::new());
+        let output = format_indexed_table("grid", &value, &empty_render_context());
 
         assert!(output.starts_with("grid (km):\n"), "{output}");
         assert!(!output.contains("[km]"), "{output}");
@@ -684,7 +681,7 @@ mod tests {
         let km_slice = indexed_1d("Row", &[("A", km_cell)]);
         let m_slice = indexed_1d("Row", &[("A", m_cell)]);
         let value = indexed_1d("Slab", &[("One", km_slice), ("Two", m_slice)]);
-        let output = format_indexed_table("cube", &value, &BTreeMap::new());
+        let output = format_indexed_table("cube", &value, &empty_render_context());
 
         assert!(output.starts_with("cube:\n"), "{output}");
         assert!(output.contains("1 [km]"), "{output}");
@@ -695,8 +692,8 @@ mod tests {
     fn format_indexed_table_depth_2_has_name_header() {
         let inner = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let v = indexed_1d("Row", &[("R1", inner)]);
-        let symbols = BTreeMap::new();
-        let out = format_indexed_table("mymatrix", &v, &symbols);
+        let render = empty_render_context();
+        let out = format_indexed_table("mymatrix", &v, &render);
         assert!(
             out.starts_with("mymatrix:"),
             "expected 'mymatrix:' header, got: {out}"
@@ -708,8 +705,8 @@ mod tests {
         let leaf = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let mid = indexed_1d("Row", &[("R1", leaf)]);
         let outer = indexed_1d("Slab", &[("S1", mid.clone()), ("S2", mid)]);
-        let symbols = BTreeMap::new();
-        let out = format_indexed_table("cube", &outer, &symbols);
+        let render = empty_render_context();
+        let out = format_indexed_table("cube", &outer, &render);
         assert!(out.contains("cube:"), "missing top header: {out}");
         assert!(
             out.contains("[Slab#S1]"),

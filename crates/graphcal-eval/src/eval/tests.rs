@@ -421,7 +421,7 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
             value
                 .as_ref()
                 .unwrap()
-                .format_display(Some(&result.base_dim_symbols))
+                .format_display(&result.render, UnitLabel::Inline)
                 .unwrap(),
             "1 [km]"
         );
@@ -3634,7 +3634,7 @@ fn eval_orbital_milestone() {
         .unwrap();
     let speed_kmh_val = speed_kmh.1.as_ref().unwrap();
     assert_eq!(
-        speed_kmh_val.display_label(&result.base_dim_symbols),
+        speed_kmh_val.display_label(&result.render),
         Some("km/h".to_string())
     );
     let display_kmh = speed_kmh_val.display_value().unwrap();
