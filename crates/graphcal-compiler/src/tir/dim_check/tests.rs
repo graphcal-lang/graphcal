@@ -185,7 +185,8 @@ fn consuming_rules_record_contextual_literals() {
     let (tir, src) =
         module_aware_tir("node value: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");");
     let tir = check_draft(tir, &src).unwrap();
-    assert_eq!(count_contextual(tir.root().bodies()), 1);
+    // The literal argument is parsed into the typed datetime it builds.
+    assert_eq!(count_contextual(tir.root().bodies()), 0);
     let node = tir.root().nodes().next().unwrap();
     let independent = check_external_value_expr_type(
         &tir,
@@ -194,7 +195,13 @@ fn consuming_rules_record_contextual_literals() {
         &src,
     )
     .unwrap();
-    assert_eq!(count_contextual_nodes(independent.tree()), 1);
+    assert!(matches!(
+        independent.tree().kind(),
+        crate::tir::texpr::TExprKind::DatetimeLiteral(crate::tir::texpr::DatetimeLiteral::Offset(
+            _
+        ))
+    ));
+    assert_eq!(count_contextual_nodes(independent.tree()), 0);
 
     let (tir, src) = module_aware_tir(
         "node zoned: Datetime<UTC> = datetime(\"2026-01-01T09:00:00\", \"Asia/Tokyo\");\n\
@@ -208,9 +215,9 @@ fn consuming_rules_record_contextual_literals() {
          };",
     );
     let tir = check_draft(tir, &src).unwrap();
-    // Two zoned-datetime arguments, one civil literal, the string encoding,
-    // and the string property.
-    assert_eq!(count_contextual(tir.root().bodies()), 5);
+    // The string encoding and the string property; datetime constructor
+    // arguments are parsed into the typed datetimes they build.
+    assert_eq!(count_contextual(tir.root().bodies()), 2);
 }
 
 #[test]
@@ -3899,7 +3906,7 @@ fn call_arguments_prechecked_for_override_reconciliation_are_inferred_once() {
 
 #[test]
 fn inference_emits_typed_trees_carrying_node_facts() {
-    use crate::tir::texpr::{TArg, TConstRef, TExprKind, TIndexArg, TMatchPattern};
+    use crate::tir::texpr::{DatetimeLiteral, TConstRef, TExprKind, TIndexArg, TMatchPattern};
 
     let source = "type Maneuver { Impulsive(delta_v: Dimensionless), Coast }\n\
                   node burn: Maneuver = Impulsive(delta_v: 2.0);\n\
@@ -3969,10 +3976,10 @@ fn inference_emits_typed_trees_carrying_node_facts() {
         } if position.position == 1
     ));
 
-    let TExprKind::Call { args, .. } = root("when").kind() else {
-        panic!("expected a datetime call");
-    };
-    assert!(matches!(args.as_slice(), [TArg::Contextual(_)]));
+    assert!(matches!(
+        root("when").kind(),
+        TExprKind::DatetimeLiteral(DatetimeLiteral::Offset(_))
+    ));
 
     let plot = dag.plots().next().unwrap();
     let color = plot

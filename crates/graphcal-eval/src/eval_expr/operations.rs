@@ -6,18 +6,20 @@
 //! another shape is a violated invariant, reported at one place
 //! ([`Operands`]), and never an evaluation error.
 
+use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::texpr::DatetimeLiteral;
 use graphcal_compiler::tir::texpr::operators::{
     BExpr, CExpr, DExpr, EqualityOp, IExpr, OrderedOperands, QExpr, ShiftOp,
 };
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
 use crate::invariant::{Failure, Invariant};
-use crate::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
+use crate::runtime_value::{IndexAxis, KeyElement, KeyValue, RuntimeValue};
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
@@ -140,6 +142,52 @@ pub(super) fn quantity<'t>(
             super::numeric::finite_quantity(seconds, "datetime difference")
                 .map_err(|error| ctx.eval_error(error.to_string(), span))
         }
+        QExpr::Scalar { function, ref args } => {
+            let arguments = args
+                .iter()
+                .map(|arg| operands.quantity(*arg).map(FiniteQuantity::get))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result = graphcal_compiler::registry::builtins::scalar_function(function)
+                .eval(&arguments)
+                .map_err(|error| {
+                    ctx.eval_error(format!("builtin function `{function}` {error}"), span)
+                })?;
+            super::arithmetic::check_finite(result, function.as_str(), ctx, span)
+        }
+        QExpr::ComplexPart { part, arg } => super::complex::part(part, operands.complex(arg)?)
+            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+        QExpr::Abs(arg) => super::complex::real_abs(operands.quantity(arg)?)
+            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+        QExpr::Exp(arg) => super::complex::real_exp(operands.quantity(arg)?)
+            .map_err(|error| ctx.eval_error(error.to_string(), span)),
+        QExpr::FromInt(arg) => {
+            let value = operands.int(arg)?;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "explicit Int to float conversion"
+            )]
+            super::numeric::finite_quantity(value as f64, "to_float()")
+                .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+        }
+        QExpr::Coordinate(arg) => {
+            let key = operands.key(arg)?;
+            match key.element() {
+                KeyElement::Coordinate { value, .. } => Ok(value),
+                KeyElement::Finite(_) | KeyElement::Named(_) => {
+                    Err(ctx.internal_error("coord() received a non-coordinate key", arg.span()))
+                }
+            }
+        }
+        QExpr::FromDatetime { function, arg } => {
+            let epoch = operands.datetime(arg)?;
+            let result = match function {
+                DatetimeToNumericFn::Jd => epoch.to_jde_utc_days(),
+                DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
+                DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
+            };
+            super::numeric::finite_quantity(result, "datetime conversion")
+                .map_err(|error| ctx.eval_error(error.to_string(), arg.span()))
+        }
     }
 }
 
@@ -170,6 +218,51 @@ pub(super) fn int<'t>(
             .int(operand)?
             .checked_neg()
             .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
+        IExpr::FromQuantity(arg) => {
+            let value = operands.quantity(arg)?.get();
+            super::conversions::exact_f64_to_i64(value).map_err(|error| {
+                let rounding_help = if matches!(
+                    &error,
+                    super::conversions::ExactIntConversionError::NonInteger { .. }
+                ) {
+                    "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
+                } else {
+                    ""
+                };
+                ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
+            })
+        }
+        IExpr::FinPosition(arg) => {
+            let key = operands.key(arg)?;
+            let KeyElement::Finite(position) = key.element() else {
+                return Err(ctx.internal_error("to_int() received a non-Fin key", arg.span()));
+            };
+            i64::try_from(position).map_err(|_| {
+                ctx.internal_error(
+                    format!("Fin position {position} does not fit Int"),
+                    arg.span(),
+                )
+            })
+        }
+        IExpr::DatetimeField { field, arg } => {
+            let epoch = operands.datetime(arg)?;
+            let fields = super::datetime::GregorianFields::from_epoch(epoch).map_err(|error| {
+                ctx.internal_error(
+                    format!("invalid declared-scale Gregorian fields: {error}"),
+                    arg.span(),
+                )
+            })?;
+            Ok(match field {
+                DatetimeField::Year => fields.year(),
+                DatetimeField::Month => fields.month(),
+                DatetimeField::Day => fields.day(),
+                DatetimeField::Hour => fields.hour(),
+                DatetimeField::Minute => fields.minute(),
+                DatetimeField::Second => fields.second(),
+                DatetimeField::Weekday => fields.iso_weekday(),
+                DatetimeField::DayOfYear => fields.day_of_year(),
+            })
+        }
     }
 }
 
@@ -254,6 +347,24 @@ pub(super) fn complex<'t>(
             super::complex::scale_left(op, scalar, complex)
         }
         CExpr::Neg(operand) => return Ok(operands.complex(operand)?.negated()),
+        CExpr::Rectangular { re, im } => {
+            let re = operands.quantity(re)?;
+            let im = operands.quantity(im)?;
+            return Ok(ComplexValue::from_parts(re, im));
+        }
+        CExpr::Polar { magnitude, phase } => {
+            let magnitude = operands.quantity(magnitude)?;
+            let phase = operands.quantity(phase)?;
+            super::complex::polar(magnitude, phase)
+        }
+        CExpr::FromReal(arg) => {
+            return Ok(ComplexValue::from_parts(
+                operands.quantity(arg)?,
+                FiniteQuantity::ZERO,
+            ));
+        }
+        CExpr::Conjugate(arg) => return Ok(operands.complex(arg)?.conjugate()),
+        CExpr::Exp(arg) => super::complex::exp(operands.complex(arg)?),
     };
     result.map_err(|error| operands.ctx.eval_error(error.to_string(), span))
 }
@@ -282,8 +393,66 @@ pub(super) fn datetime<'t>(
             let datetime = operands.datetime(datetime)?;
             super::datetime::checked_epoch_add_seconds(datetime, seconds)
         }
+        DExpr::FromQuantity { function, arg } => {
+            let value = operands.quantity(arg)?.get();
+            return from_numeric(function, value, arg.span(), operands.ctx);
+        }
+        DExpr::FromInt { function, arg } => {
+            let value = operands.int(arg)?;
+            let value = super::numeric::exact_i64_to_f64(value).map_err(|_| {
+                operands.ctx.eval_error(
+                    format!(
+                        "{}() integer argument {value} is too large for exact conversion",
+                        function.as_str()
+                    ),
+                    arg.span(),
+                )
+            })?;
+            return from_numeric(function, value, arg.span(), operands.ctx);
+        }
+        DExpr::ToScale { conversion, arg } => {
+            return Ok(operands
+                .datetime(arg)?
+                .to_time_scale(conversion.target().to_hifitime()));
+        }
     };
     result.map_err(|error| operands.ctx.eval_error(error.to_string(), span))
+}
+
+/// The UTC datetime a numeric epoch count denotes.
+fn from_numeric(
+    function: DatetimeFromNumericFn,
+    value: f64,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<hifitime::Epoch, GraphcalError> {
+    let kind = match function {
+        DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
+        DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
+        DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
+    };
+    super::datetime::checked_epoch_from_numeric(value, kind)
+        .map_err(|error| ctx.eval_error(error.to_string(), span))
+}
+
+/// The instant a datetime literal denotes.
+pub(super) fn datetime_literal(
+    literal: &DatetimeLiteral,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<hifitime::Epoch, GraphcalError> {
+    match literal {
+        DatetimeLiteral::Offset(datetime) => Ok(super::datetime::datetime_from_offset(*datetime)),
+        DatetimeLiteral::Zoned(datetime) => Ok(super::datetime::datetime_from_zoned(datetime)),
+        DatetimeLiteral::Epoch { civil, scale } => {
+            super::datetime::epoch_from_civil_datetime(*civil, *scale).map_err(|error| {
+                ctx.internal_error(
+                    format!("validated epoch literal failed evaluation: {error}"),
+                    span,
+                )
+            })
+        }
+    }
 }
 
 /// Evaluate `k + c` on a `Fin` key: the key at position `k + c` of the wider

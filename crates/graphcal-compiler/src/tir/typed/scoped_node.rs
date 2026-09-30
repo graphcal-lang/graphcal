@@ -10,10 +10,11 @@
 
 use std::collections::BTreeSet;
 
+use crate::builtin::{AggregationFn, LinearAlgebraFn};
 use crate::dag_id::DagId;
 use crate::expression_id::ExprId;
 use crate::hir::expr::{
-    ForBinding, ForBindingIndex, FunctionRef, IndexVariantRef, LocalDef, LocalId, LocalUnit,
+    ExternFnRef, ForBinding, ForBindingIndex, IndexVariantRef, LocalDef, LocalId, LocalUnit,
     ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
 };
 use crate::registry::checked_type::CheckedType;
@@ -24,7 +25,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::FieldName;
 use crate::tir::texpr::operators::{BExpr, CExpr, DExpr, IExpr, QExpr};
 use crate::tir::texpr::{
-    ConstructorApplication, StaticPosition, TArg, TConstRef, TContextual, TExpr, TExprKind,
+    ConstructorApplication, DatetimeLiteral, StaticPosition, TConstRef, TExpr, TExprKind,
     TFieldInit, TIndexArg, TMapEntry, TMatchArm, TNodeRef, TParamBinding, visit_tnodes,
 };
 
@@ -54,9 +55,18 @@ pub enum NodeKind<'t> {
     GraphRef(Spanned<ResolvedDeclName>),
     Const(Spanned<ConstRef<'t>>),
     Local(&'t Spanned<LocalId>),
-    Call {
-        callee: &'t Spanned<FunctionRef>,
-        args: Scoped<'t, [TArg]>,
+    DatetimeLiteral(&'t DatetimeLiteral),
+    Aggregate {
+        function: AggregationFn,
+        arg: ScopedNode<'t>,
+    },
+    LinearAlgebra {
+        function: LinearAlgebraFn,
+        args: Scoped<'t, [TExpr]>,
+    },
+    Extern {
+        function: &'t ExternFnRef,
+        args: Scoped<'t, [TExpr]>,
     },
     If {
         condition: ScopedNode<'t>,
@@ -129,13 +139,6 @@ pub enum ConstRef<'t> {
 
 /// A unit expression of a node, whose terms resolve in the node's scope.
 pub type ScopedUnitExpr<'t> = Scoped<'t, ResolvedUnitExpr>;
-
-/// A function argument of a node, in the node's scope.
-#[derive(Debug, Clone, Copy)]
-pub enum ScopedArg<'t> {
-    Value(ScopedNode<'t>),
-    Contextual(&'t TContextual),
-}
 
 /// An index-access argument of a node, in the node's scope.
 #[derive(Debug, Clone, Copy)]
@@ -218,8 +221,17 @@ impl<'t> Scoped<'t, TExpr> {
                 target.span,
             )),
             TExprKind::Local(local) => NodeKind::Local(local),
-            TExprKind::Call { callee, args } => NodeKind::Call {
-                callee,
+            TExprKind::DatetimeLiteral(literal) => NodeKind::DatetimeLiteral(literal),
+            TExprKind::Aggregate { function, arg } => NodeKind::Aggregate {
+                function: *function,
+                arg: node(arg),
+            },
+            TExprKind::LinearAlgebra { function, args } => NodeKind::LinearAlgebra {
+                function: *function,
+                args: Scoped::new(scope, args.as_slice()),
+            },
+            TExprKind::Extern { function, args } => NodeKind::Extern {
+                function,
                 args: Scoped::new(scope, args.as_slice()),
             },
             TExprKind::If {
@@ -340,26 +352,6 @@ impl<'t> Scoped<'t, TExpr> {
             .into_iter()
             .map(|handle| scope.resolve(handle))
             .collect()
-    }
-}
-
-impl<'t> Scoped<'t, TArg> {
-    /// This argument, in its call's scope.
-    #[must_use]
-    pub fn view(self) -> ScopedArg<'t> {
-        match self.get() {
-            TArg::Value(value) => ScopedArg::Value(Scoped::new(self.scope(), value)),
-            TArg::Contextual(literal) => ScopedArg::Contextual(literal),
-        }
-    }
-
-    /// The source span of this argument.
-    #[must_use]
-    pub fn span(self) -> Span {
-        match self.get() {
-            TArg::Value(value) => value.span(),
-            TArg::Contextual(literal) => literal.span(),
-        }
     }
 }
 

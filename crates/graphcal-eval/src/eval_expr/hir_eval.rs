@@ -1,28 +1,19 @@
-use std::sync::Arc;
-
 use crate::runtime_value::{
     IndexAxis, IndexedValue, KeyElement, KeyValue, RuntimeValue, StructValue,
 };
-use graphcal_compiler::builtin::{
-    AggregationFn, BuiltinFn, ConversionFn, DatetimeConstructorFn, DatetimeField, DatetimeFn,
-    DatetimeFromNumericFn, DatetimeToNumericFn, KeyAggregation, ScalarFn,
-};
+use graphcal_compiler::builtin::{AggregationFn, KeyAggregation};
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::hir::{self, FunctionRef};
+use graphcal_compiler::hir;
 use graphcal_compiler::registry::checked_type::{CheckedType, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
-    ContextualLiteral, TArg, TExpr, TFieldInit, TIndexArg, TMatchArm, TMatchPattern, TParamBinding,
+    TExpr, TFieldInit, TIndexArg, TMatchArm, TMatchPattern, TParamBinding,
 };
 use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, Scoped, ScopedTree};
-use graphcal_compiler::tir::typed::scoped_node::{
-    ConstRef, NodeKind, ScopedArg, ScopedIndexArg, ScopedNode,
-};
+use graphcal_compiler::tir::typed::scoped_node::{ConstRef, NodeKind, ScopedIndexArg, ScopedNode};
 use indexmap::IndexMap;
-use miette::NamedSource;
 
 use crate::invariant::{Failure, Invariant};
 use crate::presentation_evidence::{PendingLeaf, PendingQuantityDisplay};
@@ -32,8 +23,8 @@ use crate::runtime_presentation::{
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::{
-    EvalSession, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
-    imported_binding_value, index_ref_matches_resolved, resolve_unit_scale,
+    EvalSession, RuntimeValueMap, checked_unit_scaled_value, imported_binding_value,
+    index_ref_matches_resolved, resolve_unit_scale,
 };
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
@@ -158,28 +149,6 @@ fn eval_texpr_evaluated(
     })
 }
 
-/// A function argument the callee evaluates as a value.
-fn value_arg<'t>(
-    arg: Scoped<'t, TArg>,
-    ctx: &EvalSession<'_>,
-) -> Result<ScopedNode<'t>, GraphcalError> {
-    match arg.view() {
-        ScopedArg::Value(value) => Ok(value),
-        ScopedArg::Contextual(literal) => Err(ctx.internal_error(
-            format!(
-                "contextual metadata is not an executable value: {:?}",
-                literal.id()
-            ),
-            literal.span(),
-        )),
-    }
-}
-
-/// The source span of a function argument.
-fn arg_span(arg: Scoped<'_, TArg>) -> Span {
-    arg.span()
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "exhaustive typed expression evaluation"
@@ -241,9 +210,37 @@ fn eval_texpr_inner(
             .get(local.value)
             .cloned()
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
-        NodeKind::Call { callee, args } => {
-            eval_fn_call(span, callee, args, values, local_values, ctx)
-                .map(EvaluatedRuntimeValue::plain)
+        NodeKind::DatetimeLiteral(literal) => {
+            super::operations::datetime_literal(literal, span, ctx)
+                .map(|value| plain(RuntimeValue::Datetime(value)))
+        }
+        NodeKind::Aggregate { function, arg } => {
+            let RuntimeValue::Indexed(indexed) = eval_value(arg, values, local_values, ctx)? else {
+                return Err(ctx.internal_error(
+                    format!("{}() received a non-indexed argument", function.as_str()),
+                    arg.span(),
+                ));
+            };
+            match function {
+                AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
+                AggregationFn::Value(function) => {
+                    super::aggregations::aggregate_indexed_values(function, &indexed)
+                        .map_err(|failure| ctx.failure_error(failure, span))
+                }
+            }
+            .map(plain)
+        }
+        NodeKind::LinearAlgebra { function, args } => {
+            let arguments = args
+                .iter()
+                .map(|argument| eval_value(argument, values, local_values, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            super::linear_algebra::evaluate(function, arguments, ctx)
+                .map_err(|outcome| ctx.outcome_error(outcome, span))
+                .map(plain)
+        }
+        NodeKind::Extern { function, args } => {
+            eval_extern_fn(span, function, args, values, local_values, ctx).map(plain)
         }
         NodeKind::If {
             condition,
@@ -490,178 +487,6 @@ fn apply_constructor(
         .map_err(|error| ctx.internal_error(error.to_string(), span))
 }
 
-fn expect_builtin_arity(
-    function: BuiltinFn,
-    args: Scoped<'_, [TArg]>,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<(), GraphcalError> {
-    let expected = function.entry().arity();
-    if expected.accepts(args.len()) {
-        return Ok(());
-    }
-    Err(ctx.internal_error(
-        format!(
-            "{function}() received {} argument(s) after dim-check accepted arity {expected}",
-            args.len()
-        ),
-        span,
-    ))
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "function dispatch handles all built-in call forms"
-)]
-fn eval_fn_call(
-    span: Span,
-    callee: &Spanned<FunctionRef>,
-    args: Scoped<'_, [TArg]>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let (name, epoch_scale) = match &callee.value {
-        FunctionRef::Builtin(builtin) => (builtin.function(), None),
-        FunctionRef::Epoch { scale } => (BuiltinFn::EPOCH, Some(scale.value)),
-        FunctionRef::External(ext) => {
-            return eval_extern_fn(span, ext, args, values, local_values, ctx);
-        }
-    };
-    // The single arity re-check for every built-in family; family kernels
-    // below rely on the accepted argument count.
-    expect_builtin_arity(name, args, callee.span, ctx)?;
-    // The accepted arity guarantees the first argument of every unary family.
-    let first = || {
-        args.nth(0)
-            .ok_or_else(|| ctx.internal_error(format!("{name}() received no argument"), span))
-    };
-    match name {
-        BuiltinFn::Complex(function) => {
-            let arguments = args
-                .iter()
-                .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
-                .collect::<Result<Vec<_>, _>>()?;
-            super::complex::evaluate_builtin(function, &arguments)
-                .map_err(|failure| ctx.failure_error(failure, span))
-        }
-        BuiltinFn::Aggregation(kind) => {
-            let arg = first()?;
-            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Indexed(indexed) = arg_val else {
-                return Err(ctx.internal_error(
-                    format!("{}() received a non-indexed argument", name.as_str()),
-                    arg_span(arg),
-                ));
-            };
-            match kind {
-                AggregationFn::Key(function) => eval_extremum_key(function, &indexed, span, ctx),
-                AggregationFn::Value(function) => {
-                    super::aggregations::aggregate_indexed_values(function, &indexed)
-                        .map_err(|failure| ctx.failure_error(failure, span))
-                }
-            }
-        }
-        BuiltinFn::LinearAlgebra(function) => {
-            let arguments = args
-                .iter()
-                .map(|argument| eval_value(value_arg(argument, ctx)?, values, local_values, ctx))
-                .collect::<Result<Vec<_>, _>>()?;
-            super::linear_algebra::evaluate(function, arguments, ctx)
-                .map_err(|outcome| ctx.outcome_error(outcome, span))
-        }
-        BuiltinFn::Conversion(kind) => {
-            eval_conversion_fn(kind, span, first()?, values, local_values, ctx)
-        }
-        BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
-            let first = first()?;
-            let arg = eval_value(value_arg(first, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Datetime(epoch) = arg else {
-                return Err(ctx.internal_error(
-                    format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(first),
-                ));
-            };
-            Ok(RuntimeValue::Datetime(
-                epoch.to_time_scale(conversion.target().to_hifitime()),
-            ))
-        }
-        BuiltinFn::Datetime(DatetimeFn::Constructor(kind)) => {
-            eval_datetime_constructor(kind, epoch_scale, span, args, ctx.src)
-        }
-        BuiltinFn::Datetime(DatetimeFn::Field(kind)) => {
-            let arg = first()?;
-            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Datetime(epoch) = arg_val else {
-                return Err(ctx.internal_error(
-                    format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(arg),
-                ));
-            };
-            let fields = super::datetime::GregorianFields::from_epoch(epoch).map_err(|error| {
-                ctx.internal_error(
-                    format!("invalid declared-scale Gregorian fields: {error}"),
-                    arg_span(arg),
-                )
-            })?;
-            let result = match kind {
-                DatetimeField::Year => fields.year(),
-                DatetimeField::Month => fields.month(),
-                DatetimeField::Day => fields.day(),
-                DatetimeField::Hour => fields.hour(),
-                DatetimeField::Minute => fields.minute(),
-                DatetimeField::Second => fields.second(),
-                DatetimeField::Weekday => fields.iso_weekday(),
-                DatetimeField::DayOfYear => fields.day_of_year(),
-            };
-            Ok(RuntimeValue::Int(result))
-        }
-        BuiltinFn::Datetime(DatetimeFn::FromNumeric(kind)) => {
-            let arg = first()?;
-            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let num = match arg_val {
-                RuntimeValue::Quantity(v) => v.get(),
-                RuntimeValue::Int(v) => {
-                    exact_numeric_datetime_arg(v, name.as_str(), arg_span(arg), ctx)?
-                }
-                _ => {
-                    return Err(ctx.internal_error(
-                        format!("{}() received non-numeric argument", name.as_str()),
-                        arg_span(arg),
-                    ));
-                }
-            };
-            let kind = match kind {
-                DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
-                DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
-                DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
-            };
-            super::datetime::checked_epoch_from_numeric(num, kind)
-                .map(RuntimeValue::Datetime)
-                .map_err(|error| ctx.eval_error(error.to_string(), arg_span(arg)))
-        }
-        BuiltinFn::Datetime(DatetimeFn::ToNumeric(kind)) => {
-            let arg = first()?;
-            let arg_val = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Datetime(epoch) = arg_val else {
-                return Err(ctx.internal_error(
-                    format!("{}() received non-Datetime argument", name.as_str()),
-                    arg_span(arg),
-                ));
-            };
-            let result = match kind {
-                DatetimeToNumericFn::Jd => epoch.to_jde_utc_days(),
-                DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
-                DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
-            };
-            checked_finite_quantity(result, "datetime conversion", arg_span(arg), ctx)
-        }
-        BuiltinFn::Scalar(function) => {
-            eval_builtin_fn(span, function, args, values, local_values, ctx)
-        }
-    }
-}
-
 /// Evaluate a key introduction form.
 ///
 /// `key` positions are proven in bounds by the checker; `fin_key` performs
@@ -810,202 +635,6 @@ fn named_key(
         })
 }
 
-fn eval_conversion_fn(
-    kind: ConversionFn,
-    span: Span,
-    arg: Scoped<'_, TArg>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    match kind {
-        ConversionFn::ToFloat => {
-            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Int(i) = value else {
-                return Err(
-                    ctx.internal_error("to_float() received non-Int argument", arg_span(arg))
-                );
-            };
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "explicit Int to float conversion"
-            )]
-            checked_finite_quantity(i as f64, "to_float()", arg_span(arg), ctx)
-        }
-        ConversionFn::ToInt => {
-            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            // to_int() on a Fin key exposes its position.
-            if let RuntimeValue::Key(key) = &value {
-                let KeyElement::Finite(position) = key.element() else {
-                    return Err(
-                        ctx.internal_error("to_int() received a non-Fin key", arg_span(arg))
-                    );
-                };
-                return i64::try_from(position).map(RuntimeValue::Int).map_err(|_| {
-                    ctx.internal_error(
-                        format!("Fin position {position} does not fit Int"),
-                        arg_span(arg),
-                    )
-                });
-            }
-            let f = value
-                .expect_quantity("to_int argument")
-                .map_err(|e| ctx.eval_error(e.to_string(), span))?
-                .get();
-            super::conversions::exact_f64_to_i64(f)
-                .map(RuntimeValue::Int)
-                .map_err(|error| {
-                    let rounding_help = if matches!(
-                        &error,
-                        super::conversions::ExactIntConversionError::NonInteger { .. }
-                    ) {
-                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
-                    } else {
-                        ""
-                    };
-                    ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
-                })
-        }
-        ConversionFn::Coord => {
-            let value = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            let RuntimeValue::Key(key) = value else {
-                return Err(
-                    ctx.internal_error("coord() received a non-key argument", arg_span(arg))
-                );
-            };
-            let KeyElement::Coordinate { value, .. } = key.element() else {
-                return Err(
-                    ctx.internal_error("coord() received a non-coordinate key", arg_span(arg))
-                );
-            };
-            Ok(RuntimeValue::Quantity(value))
-        }
-    }
-}
-
-fn exact_numeric_datetime_arg(
-    value: i64,
-    fn_name: &str,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<f64, GraphcalError> {
-    super::numeric::exact_i64_to_f64(value).map_err(|_| {
-        ctx.eval_error(
-            format!("{fn_name}() integer argument {value} is too large for exact conversion"),
-            span,
-        )
-    })
-}
-
-/// The contextual literal a function argument consists of, if it is one.
-const fn contextual_literal(arg: Scoped<'_, TArg>) -> Option<&ContextualLiteral> {
-    match arg.get() {
-        TArg::Contextual(literal) => Some(literal.literal()),
-        TArg::Value(_) => None,
-    }
-}
-
-fn eval_datetime_constructor(
-    kind: DatetimeConstructorFn,
-    epoch_scale: Option<TimeScale>,
-    span: Span,
-    args: Scoped<'_, [TArg]>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let args = args.iter().collect::<Vec<_>>();
-    match kind {
-        DatetimeConstructorFn::Datetime => {
-            let epoch = match args.as_slice() {
-                [arg] => {
-                    let Some(ContextualLiteral::OffsetDateTime(datetime)) =
-                        contextual_literal(*arg)
-                    else {
-                        return Err(GraphcalError::InternalError {
-                            message: "datetime() received an unparsed offset literal".to_string(),
-                            src: src.clone(),
-                            span: arg_span(*arg).into(),
-                        });
-                    };
-                    super::datetime::datetime_from_offset(*datetime)
-                }
-                [datetime_arg, timezone_arg] => {
-                    let Some(ContextualLiteral::ZonedDateTime(datetime)) =
-                        contextual_literal(*datetime_arg)
-                    else {
-                        return Err(GraphcalError::InternalError {
-                            message: "datetime() received an unresolved zoned literal".to_string(),
-                            src: src.clone(),
-                            span: arg_span(*datetime_arg).into(),
-                        });
-                    };
-                    let Some(ContextualLiteral::TimeZone(time_zone_id)) =
-                        contextual_literal(*timezone_arg)
-                    else {
-                        return Err(GraphcalError::InternalError {
-                            message: "datetime() received an unvalidated timezone argument"
-                                .to_string(),
-                            src: src.clone(),
-                            span: arg_span(*timezone_arg).into(),
-                        });
-                    };
-                    if datetime.time_zone() != time_zone_id {
-                        return Err(GraphcalError::InternalError {
-                            message: "resolved datetime timezone does not match its argument"
-                                .to_string(),
-                            src: src.clone(),
-                            span: arg_span(*timezone_arg).into(),
-                        });
-                    }
-                    super::datetime::datetime_from_zoned(datetime)
-                }
-                _ => {
-                    return Err(GraphcalError::InternalError {
-                        message: "datetime arity changed after validation".to_string(),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-                }
-            };
-            Ok(RuntimeValue::Datetime(epoch))
-        }
-        DatetimeConstructorFn::Epoch => {
-            let [arg] = args.as_slice() else {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "epoch() received {} argument(s) after dim-check accepted arity 1",
-                        args.len()
-                    ),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            };
-            let Some(ContextualLiteral::CivilDateTime(datetime)) = contextual_literal(*arg) else {
-                return Err(GraphcalError::InternalError {
-                    message: "epoch() received an unparsed civil literal".to_string(),
-                    src: src.clone(),
-                    span: arg_span(*arg).into(),
-                });
-            };
-            let Some(scale) = epoch_scale else {
-                return Err(GraphcalError::InternalError {
-                    message: "epoch() reached evaluation without a static time scale".to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            };
-            let epoch =
-                super::datetime::epoch_from_civil_datetime(*datetime, scale).map_err(|error| {
-                    GraphcalError::InternalError {
-                        message: format!("validated epoch literal failed evaluation: {error}"),
-                        src: src.clone(),
-                        span: arg_span(*arg).into(),
-                    }
-                })?;
-            Ok(RuntimeValue::Datetime(epoch))
-        }
-    }
-}
-
 /// Evaluate an extern (plugin) function call through the embedder-injected
 /// host function registry.
 ///
@@ -1019,7 +648,7 @@ fn eval_datetime_constructor(
 fn eval_extern_fn(
     span: Span,
     ext: &hir::ExternFnRef,
-    args: Scoped<'_, [TArg]>,
+    args: Scoped<'_, [TExpr]>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
@@ -1055,7 +684,7 @@ fn eval_extern_fn(
     let arguments = HostArguments::encode(
         &function.signature,
         args.iter()
-            .map(|arg| eval_value(value_arg(arg, ctx)?, values, local_values, ctx)),
+            .map(|arg| eval_value(arg, values, local_values, ctx)),
     )
     .map_err(|error| match error {
         EncodeError::Arity { expected, actual } => ctx.eval_error(
@@ -1064,7 +693,7 @@ fn eval_extern_fn(
         ),
         EncodeError::Value(error) => error,
         EncodeError::Argument { position, failure } => {
-            let span = args.nth(position).map_or(span, arg_span);
+            let span = args.nth(position).map_or(span, ScopedNode::span);
             match failure {
                 Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
                 Failure::Invariant(error) => invariant(error, span),
@@ -1086,30 +715,6 @@ fn eval_extern_fn(
         Failure::Error(error) => ctx.eval_error(error.describe(ext), span),
         Failure::Invariant(error) => invariant(error, span),
     })
-}
-
-fn eval_builtin_fn(
-    span: Span,
-    name: ScalarFn,
-    args: Scoped<'_, [TArg]>,
-    values: &RuntimeValueMap,
-    local_values: &HirLocalValueMap<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let builtin = graphcal_compiler::registry::builtins::scalar_function(name);
-    let arg_values: Vec<f64> = args
-        .iter()
-        .map(|arg| {
-            let rv = eval_value(value_arg(arg, ctx)?, values, local_values, ctx)?;
-            rv.expect_quantity("function argument")
-                .map(graphcal_compiler::finite_value::FiniteQuantity::get)
-                .map_err(|e| ctx.eval_error(e.to_string(), arg_span(arg)))
-        })
-        .collect::<Result<_, _>>()?;
-    let result = builtin
-        .eval(&arg_values)
-        .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), span))?;
-    super::arithmetic::check_finite(result, name.as_str(), ctx, span).map(RuntimeValue::Quantity)
 }
 
 /// The value of `field` of `inner_val`, the struct value `inner` evaluated

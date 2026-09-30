@@ -22,7 +22,7 @@ pub use context::EvalSession;
 pub use hir_eval::{HirLocalValueMap, eval_subtree_for_test};
 pub use hir_eval::{eval_root, eval_root_with_presentation};
 pub(in crate::eval_expr) use unit_scale::{
-    checked_finite_quantity, checked_unit_scaled_value, resolve_unit_scale, resolved_unit_scale,
+    checked_unit_scaled_value, resolve_unit_scale, resolved_unit_scale,
 };
 
 pub fn index_ref_matches_resolved(

@@ -14,18 +14,6 @@ use graphcal_compiler::tir::typed::scoped_node::ScopedUnitExpr;
 use super::numeric;
 use super::{EvalSession, RuntimeValueMap, hir_eval::eval_root};
 
-/// Build a quantity runtime value after validating that it is finite.
-pub(in crate::eval_expr) fn checked_finite_quantity(
-    value: f64,
-    context: &str,
-    span: Span,
-    ctx: &EvalSession<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_quantity(value, context)
-        .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.eval_error(err.to_string(), span))
-}
-
 fn unit_scale_error(
     context: &str,
     error: PositiveFiniteScaleError,
