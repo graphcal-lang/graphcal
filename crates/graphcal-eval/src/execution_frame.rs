@@ -5,7 +5,7 @@ use crate::domain_check::check_domain_constraint;
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::NodeUnavailable;
 use crate::execution_plan::{CallablePlan, ExecPlan, PlannedBody};
-use crate::presentation_evidence::PresentationInstanceMap;
+use crate::presentation_evidence::PendingPresentationMap;
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -37,14 +37,14 @@ pub struct ExecutionFrame<'a> {
     callable: &'a CallablePlan<'a>,
     policy: FailurePolicy,
     values: RuntimeValueMap,
-    presentations: PresentationInstanceMap,
+    presentations: PendingPresentationMap,
     errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
 /// What a finished frame computed.
 pub struct FrameOutcome {
     pub values: RuntimeValueMap,
-    pub presentations: PresentationInstanceMap,
+    pub presentations: PendingPresentationMap,
     pub errors: HashMap<ResolvedDeclName, NodeUnavailable>,
 }
 
@@ -142,7 +142,7 @@ impl<'a> ExecutionFrame<'a> {
 
     /// Presentations of the values bound so far.
     #[must_use]
-    pub const fn presentations(&self) -> &PresentationInstanceMap {
+    pub const fn presentations(&self) -> &PendingPresentationMap {
         &self.presentations
     }
 
@@ -210,7 +210,7 @@ impl<'a> ExecutionFrame<'a> {
             );
         }
         self.values.insert(key.clone(), value);
-        if !presentation.is_none() {
+        if !presentation.is_plain() {
             self.presentations.insert(key.clone(), presentation);
         }
         Ok(())
@@ -246,7 +246,7 @@ impl<'a> ExecutionFrame<'a> {
             if let Some(imported) = lookup(key) {
                 let (value, presentation) = imported.into_parts();
                 self.values.insert(key.clone(), value);
-                if !presentation.is_none() {
+                if !presentation.is_plain() {
                     self.presentations.insert(key.clone(), presentation);
                 }
             }

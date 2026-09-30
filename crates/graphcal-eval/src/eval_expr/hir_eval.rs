@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::runtime_value::{
@@ -23,7 +22,9 @@ use graphcal_compiler::tir::typed::evaluation_unit::{DeclarationBody, ScopedTree
 use indexmap::IndexMap;
 use miette::NamedSource;
 
-use crate::presentation_evidence::{PresentationInstance, PresentationInstanceMap};
+use crate::presentation_evidence::{
+    PendingLeaf, PendingPresentation, PendingPresentationMap, Presentation, ResolvedLeaf,
+};
 use crate::runtime_presentation::EvaluatedRuntimeValue;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
@@ -35,27 +36,24 @@ use super::{
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, EvaluatedRuntimeValue>;
 
-fn presentation_instance_for(
-    presentation_values: Option<&PresentationInstanceMap>,
+fn presentation_for(
+    presentation_values: Option<&PendingPresentationMap>,
     key: &ResolvedDeclName,
-) -> PresentationInstance {
+) -> PendingPresentation {
     presentation_values
         .and_then(|presentations| presentations.get(key))
-        .map_or_else(PresentationInstance::default, Clone::clone)
+        .map_or(Presentation::Plain, Clone::clone)
 }
 
-#[expect(
-    clippy::option_if_let_else,
-    reason = "a missing sparse sidecar explicitly means that this value has no call identity"
-)]
-fn take_presentation_instance(
-    presentation_values: &mut PresentationInstanceMap,
+/// The presentation `key` takes out of a finished frame; a value the frame
+/// holds no presentation for is plain.
+fn take_presentation(
+    presentation_values: &mut PendingPresentationMap,
     key: &ResolvedDeclName,
-) -> PresentationInstance {
-    match presentation_values.remove(key) {
-        Some(presentation) => presentation,
-        None => PresentationInstance::None,
-    }
+) -> PendingPresentation {
+    presentation_values
+        .remove(key)
+        .unwrap_or(Presentation::Plain)
 }
 
 /// Evaluate the root tree of an evaluation unit in the scope it was handed
@@ -78,7 +76,7 @@ pub fn eval_root<T: std::borrow::Borrow<TExpr>>(
 pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     root: &ScopedTree<'_, T>,
     values: &RuntimeValueMap,
-    presentation_values: &PresentationInstanceMap,
+    presentation_values: &PendingPresentationMap,
     session: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     eval_texpr_with_presentation(
@@ -141,7 +139,7 @@ fn eval_value(
 fn eval_texpr_with_presentation(
     expr: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: &PresentationInstanceMap,
+    presentation_values: &PendingPresentationMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -152,7 +150,7 @@ fn eval_texpr_with_presentation(
 fn eval_texpr_evaluated(
     expr: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -193,7 +191,7 @@ const fn arg_span(arg: &TArg) -> Span {
 fn eval_texpr_inner(
     expr: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -207,12 +205,15 @@ fn eval_texpr_inner(
             let scale = resolve_unit_scale(unit, values, ctx)?;
             let value = checked_unit_scaled_value(*value, scale, span, ctx)?;
             let presentation = super::presentation::scaled(unit, scale, ctx);
-            Ok(EvaluatedRuntimeValue::new(value, presentation))
+            Ok(EvaluatedRuntimeValue::new(
+                value,
+                Presentation::Uniform(PendingLeaf::Ready(presentation)),
+            ))
         }
         TExprKind::GraphRef(target) => {
             let key = ctx.resolve(&target.value);
             let value = resolve_graph_ref(&target.value, target.span, values, ctx)?;
-            let presentation = presentation_instance_for(presentation_values, &key);
+            let presentation = presentation_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
                 clone_graph_ref_value(value),
                 presentation,
@@ -222,9 +223,9 @@ fn eval_texpr_inner(
             let value = eval_const_ref(target, values, ctx)?;
             let presentation = match &target.value {
                 TConstRef::Decl(target) => {
-                    presentation_instance_for(presentation_values, &ctx.resolve(target))
+                    presentation_for(presentation_values, &ctx.resolve(target))
                 }
-                TConstRef::Builtin(_) | TConstRef::Constructor(_) => PresentationInstance::None,
+                TConstRef::Builtin(_) | TConstRef::Constructor(_) => Presentation::Plain,
             };
             Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
@@ -280,7 +281,7 @@ fn eval_texpr_inner(
             let value = eval_value(inner, values, local_values, ctx)?;
             Ok(EvaluatedRuntimeValue::new(
                 value,
-                PresentationInstance::Timezone(timezone.clone()),
+                Presentation::Uniform(PendingLeaf::Ready(ResolvedLeaf::Timezone(timezone.clone()))),
             ))
         }
         TExprKind::Field { expr: inner, field } => {
@@ -288,10 +289,10 @@ fn eval_texpr_inner(
                 eval_texpr_evaluated(inner, values, presentation_values, local_values, ctx)?;
             let (inner_val, presentation) = inner_val.into_parts();
             let value = eval_field_access(inner_val, inner, field, ctx)?;
-            let presentation = presentation
-                .project_field(&field.value)
-                .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
-            Ok(EvaluatedRuntimeValue::new(value, presentation))
+            Ok(EvaluatedRuntimeValue::new(
+                value,
+                presentation.into_field(&field.value),
+            ))
         }
         TExprKind::Construct {
             application,
@@ -1383,7 +1384,7 @@ fn eval_constructor_call(
     application: &graphcal_compiler::tir::texpr::ConstructorApplication,
     fields: &[TFieldInit],
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1391,7 +1392,6 @@ fn eval_constructor_call(
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
     let mut field_values = Vec::with_capacity(fields.len());
-    let mut field_presentations = HashMap::new();
     for field_init in fields {
         let evaluated = eval_texpr_evaluated(
             &field_init.value,
@@ -1400,7 +1400,6 @@ fn eval_constructor_call(
             local_values,
             ctx,
         )?;
-        let (val, presentation) = evaluated.into_parts();
         if application.constructor.constrains(&field_init.name)
             && let Some(field_constraints) = ctx.struct_field_constraints()
         {
@@ -1420,7 +1419,9 @@ fn eval_constructor_call(
                     field_init.value.span(),
                 )
             })?;
-            if let Err(violation) = crate::domain_check::check_domain_constraint(&val, constraint) {
+            if let Err(violation) =
+                crate::domain_check::check_domain_constraint(evaluated.value(), constraint)
+            {
                 return Err(ctx.eval_error(
                     format!(
                         "field `{constructor_name}.{}` {}",
@@ -1430,15 +1431,11 @@ fn eval_constructor_call(
                 ));
             }
         }
-        field_values.push((field_init.name.clone(), val));
-        if !presentation.is_none() {
-            field_presentations.insert(field_init.name.clone(), presentation);
-        }
+        field_values.push((field_init.name.clone(), evaluated));
     }
-    Ok(EvaluatedRuntimeValue::new(
-        apply_constructor(application, field_values, span, ctx)?,
-        PresentationInstance::fields(field_presentations),
-    ))
+    StructValue::try_from_application(application, field_values)
+        .map(EvaluatedRuntimeValue::from_struct)
+        .map_err(|error| ctx.internal_error(error.to_string(), span))
 }
 
 /// The concrete axis of `index_ref`, when it has one.
@@ -1506,7 +1503,7 @@ fn eval_map_literal(
     map_span: Span,
     entries: &[MapLiteralEntry<'_>],
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1525,8 +1522,6 @@ fn eval_map_literal(
             map_entry_key_span(first_key),
         )
     })?;
-    let mut presentations = IndexMap::new();
-
     if arity == 1 {
         let mut evaluated = IndexMap::new();
         for (key, _, value) in entries {
@@ -1545,16 +1540,9 @@ fn eval_map_literal(
                     map_span,
                 )
             })?;
-            let (value, presentation) = evaluated.into_parts();
-            if !presentation.is_none() {
-                presentations.insert(variant.clone(), presentation);
-            }
-            Ok::<_, GraphcalError>(value)
+            Ok::<_, GraphcalError>(evaluated)
         })?;
-        return Ok(EvaluatedRuntimeValue::new(
-            RuntimeValue::Indexed(result),
-            PresentationInstance::entries(presentations),
-        ));
+        return Ok(EvaluatedRuntimeValue::from_indexed(result));
     }
 
     let outer = IndexedValue::try_from_axis(axis, |key| {
@@ -1579,7 +1567,7 @@ fn eval_map_literal(
                 map_span,
             ));
         }
-        let evaluated = eval_map_literal(
+        eval_map_literal(
             element,
             map_span,
             &sub_entries,
@@ -1587,17 +1575,9 @@ fn eval_map_literal(
             presentation_values,
             local_values,
             ctx,
-        )?;
-        let (inner, presentation) = evaluated.into_parts();
-        if !presentation.is_none() {
-            presentations.insert(variant.clone(), presentation);
-        }
-        Ok::<_, GraphcalError>(inner)
+        )
     })?;
-    Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed(outer),
-        PresentationInstance::entries(presentations),
-    ))
+    Ok(EvaluatedRuntimeValue::from_indexed(outer))
 }
 
 fn eval_for_comp_bindings(
@@ -1605,7 +1585,7 @@ fn eval_for_comp_bindings(
     bindings: &[hir::expr::ForBinding],
     body: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1623,17 +1603,15 @@ fn eval_for_comp_bindings(
         .ok_or_else(|| ctx.internal_error(format!("unknown index `{idx_name}`"), error_span))?;
 
     let remaining = &bindings[1..];
-    let mut presentations = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
     let entries = IndexedValue::try_from_axis(axis, |key| {
-        let variant = key.entry_key();
         let binding_value = RuntimeValue::Key(key.clone());
         inner_locals.bind(
             binding.local.id,
             EvaluatedRuntimeValue::plain(binding_value),
         );
-        let evaluated = if remaining.is_empty() {
-            eval_texpr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
+        if remaining.is_empty() {
+            eval_texpr_evaluated(body, values, presentation_values, &inner_locals, ctx)
         } else {
             eval_for_comp_bindings(
                 element,
@@ -1643,18 +1621,10 @@ fn eval_for_comp_bindings(
                 presentation_values,
                 &inner_locals,
                 ctx,
-            )?
-        };
-        let (value, presentation) = evaluated.into_parts();
-        if !presentation.is_none() {
-            presentations.insert(variant.clone(), presentation);
+            )
         }
-        Ok::<_, GraphcalError>(value)
     })?;
-    Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed(entries),
-        PresentationInstance::entries(presentations),
-    ))
+    Ok(EvaluatedRuntimeValue::from_indexed(entries))
 }
 
 #[expect(
@@ -1666,7 +1636,7 @@ fn eval_index_access(
     inner: &TExpr,
     args: &[TIndexArg],
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1682,8 +1652,7 @@ fn eval_index_access(
                 values,
                 ctx,
             )?);
-            let presentation =
-                presentation_instance_for(presentation_values, &ctx.resolve(&target.value));
+            let presentation = presentation_for(presentation_values, &ctx.resolve(&target.value));
             (value, presentation)
         }
         _ => {
@@ -1755,9 +1724,9 @@ fn eval_index_access(
             .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
         selected_keys.push(entry_key);
     }
-    let presentation = base_presentation
-        .project_indexes(&selected_keys)
-        .map_err(|error| ctx.internal_error(error.to_string(), span))?;
+    let presentation = selected_keys
+        .iter()
+        .fold(base_presentation, Presentation::into_entry);
     Ok(EvaluatedRuntimeValue::new(
         clone_index_access_result(current),
         presentation,
@@ -1795,7 +1764,7 @@ fn eval_scan(
     val: &hir::LocalDef,
     body: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1812,38 +1781,26 @@ fn eval_scan(
     }
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
-    let (_, initial_presentation) = evaluated_init.clone().into_parts();
+    let initial_presentation = evaluated_init.presentation().clone();
     let mut accumulated = evaluated_init;
-    let mut presentations = IndexMap::new();
     let mut scan_locals = local_values.child(Vec::new());
     let result_entries = source_entries.try_map_ref(|variant, item| {
         scan_locals.bind(acc.id, accumulated.clone());
-        let item_presentation = source_presentation
-            .project_indexes_ref(std::slice::from_ref(variant))
-            .cloned()
-            .map_err(|error| ctx.internal_error(error.to_string(), source.span()))?;
         scan_locals.bind(
             val.id,
-            EvaluatedRuntimeValue::new(item.clone(), item_presentation),
+            EvaluatedRuntimeValue::new(item.clone(), source_presentation.entry(variant)),
         );
         accumulated = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?
             .with_default_presentation(&initial_presentation);
-        let (value, evidence) = accumulated.clone().into_parts();
-        if !evidence.is_none() {
-            presentations.insert(variant.clone(), evidence);
-        }
-        Ok::<_, GraphcalError>(value)
+        Ok::<_, GraphcalError>(accumulated.clone())
     })?;
-    Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed(result_entries),
-        PresentationInstance::entries(presentations),
-    ))
+    Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
 fn eval_unfold(
     expr: &TExpr,
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -1877,21 +1834,16 @@ fn eval_unfold(
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let mut previous_state = evaluated_init.clone();
-    let (init_value, init_presentation) = evaluated_init.into_parts();
-    let mut presentations = IndexMap::new();
+    let init_presentation = evaluated_init.presentation().clone();
 
     let mut unfold_locals = local_values.child(Vec::new());
     let result_entries = IndexedValue::try_from_axis(index_axis.clone(), |key| {
-        let variant = key.entry_key();
         let Some(previous_key) = key
             .position()
             .checked_sub(1)
             .and_then(|previous| KeyValue::at(index_axis.clone(), previous))
         else {
-            if !init_presentation.is_none() {
-                presentations.insert(variant.clone(), init_presentation.clone());
-            }
-            return Ok(init_value.clone());
+            return Ok(evaluated_init.clone());
         };
         unfold_locals.bind(recurrence.previous_state.id, previous_state.clone());
         unfold_locals.bind(
@@ -1905,16 +1857,9 @@ fn eval_unfold(
         previous_state =
             eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?
                 .with_default_presentation(&init_presentation);
-        let (value, evidence) = previous_state.clone().into_parts();
-        if !evidence.is_none() {
-            presentations.insert(variant.clone(), evidence);
-        }
-        Ok::<_, GraphcalError>(value)
+        Ok::<_, GraphcalError>(previous_state.clone())
     })?;
-    Ok(EvaluatedRuntimeValue::new(
-        RuntimeValue::Indexed(result_entries),
-        PresentationInstance::entries(presentations),
-    ))
+    Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
 }
 
 fn evaluated_match_field(
@@ -1923,7 +1868,7 @@ fn evaluated_match_field(
     >,
     type_name: &graphcal_compiler::resolved_name::ResolvedStructTypeName,
     scrutinee: &StructValue<RuntimeValue>,
-    presentation: &PresentationInstance,
+    presentation: &PendingPresentation,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let value = scrutinee.field(&field.value).ok_or_else(|| {
@@ -1932,11 +1877,10 @@ fn evaluated_match_field(
             field.span,
         )
     })?;
-    let evidence = presentation
-        .project_field_ref(&field.value)
-        .cloned()
-        .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
-    Ok(EvaluatedRuntimeValue::new(value.clone(), evidence))
+    Ok(EvaluatedRuntimeValue::new(
+        value.clone(),
+        presentation.field(&field.value),
+    ))
 }
 
 fn eval_match(
@@ -1944,7 +1888,7 @@ fn eval_match(
     scrutinee: &TExpr,
     arms: &[TMatchArm],
     values: &RuntimeValueMap,
-    presentation_values: Option<&PresentationInstanceMap>,
+    presentation_values: Option<&PendingPresentationMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -2034,7 +1978,7 @@ fn eval_dag_call(
     args: &[TParamBinding],
     output: &Spanned<ResolvedDeclName>,
     caller_values: &RuntimeValueMap,
-    caller_presentations: Option<&PresentationInstanceMap>,
+    caller_presentations: Option<&PendingPresentationMap>,
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<EvaluatedRuntimeValue, GraphcalError> {
@@ -2110,7 +2054,7 @@ fn eval_dag_call(
             output.span,
         )
     })?;
-    let output_presentation = take_presentation_instance(&mut dag_presentations, output_key);
+    let output_presentation = take_presentation(&mut dag_presentations, output_key);
     let presentation =
         super::presentation::resolve_frame(output_presentation, &dag_values, ctx, callable)?;
     #[cfg(test)]
@@ -2119,7 +2063,7 @@ fn eval_dag_call(
 }
 
 #[cfg(test)]
-fn record_call_retention(values: &RuntimeValueMap, presentation: &PresentationInstance) {
+fn record_call_retention(values: &RuntimeValueMap, presentation: &PendingPresentation) {
     use crate::pipeline_metrics::{Event, record_many};
     record_many(
         Event::CallFrameValueNodes,
@@ -2144,7 +2088,7 @@ fn record_call_retention(values: &RuntimeValueMap, presentation: &PresentationIn
 fn imported_runtime_value(
     key: &ResolvedDeclName,
     caller_values: &RuntimeValueMap,
-    caller_presentations: Option<&PresentationInstanceMap>,
+    caller_presentations: Option<&PendingPresentationMap>,
     ctx: &EvalContext<'_>,
 ) -> Option<EvaluatedRuntimeValue> {
     let value = imported_binding_value(key, caller_values, ctx)?;
@@ -2156,10 +2100,7 @@ fn imported_runtime_value(
     } else {
         None
     };
-    let presentation = presentation
-        .filter(|presentation| !presentation.is_none())
-        .cloned()
-        .unwrap_or(PresentationInstance::None);
+    let presentation = presentation.map_or(Presentation::Plain, Clone::clone);
     Some(EvaluatedRuntimeValue::new(value.clone(), presentation))
 }
 

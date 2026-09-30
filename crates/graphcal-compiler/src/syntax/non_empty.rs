@@ -291,6 +291,15 @@ impl<T> NonEmpty<T> {
     }
 }
 
+impl<A, B> NonEmpty<(A, B)> {
+    /// Split a sequence of pairs into two sequences of the same length.
+    #[must_use]
+    pub fn unzip(self) -> (NonEmpty<A>, NonEmpty<B>) {
+        let (left, right) = self.items.into_iter().unzip();
+        (NonEmpty { items: left }, NonEmpty { items: right })
+    }
+}
+
 impl<T> TryFrom<Vec<T>> for NonEmpty<T> {
     type Error = EmptyVecError;
 
@@ -430,6 +439,13 @@ impl<'a, T> IntoIterator for &'a NonEmptyUnique<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unzip_keeps_both_halves_in_order() {
+        let (left, right) = NonEmpty::new((1, 'a'), vec![(2, 'b'), (3, 'c')]).unzip();
+        assert_eq!(left.as_slice(), &[1, 2, 3]);
+        assert_eq!(right.as_slice(), &['a', 'b', 'c']);
+    }
 
     #[test]
     fn at_least_two_zip_exact_pairs_equal_lengths_and_returns_mismatches() {

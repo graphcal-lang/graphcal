@@ -11,7 +11,7 @@ use graphcal_compiler::tir::typed::CheckedTir;
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
 use crate::constant_pools::ConstPoolBuildError;
 use crate::eval_expr::{EvalSession, eval_root_with_presentation};
-use crate::presentation_evidence::PresentationInstanceMap;
+use crate::presentation_evidence::PendingPresentationMap;
 
 /// Evaluate the constants of `tir` with the interpreter, together with the
 /// compile-time presentation of every constant, inherited ones included.
@@ -20,12 +20,12 @@ pub(super) fn eval_const_pool(
     inherited: &ExecutionFacts,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(EvaluatedTir, PresentationInstanceMap), GraphcalError> {
+) -> Result<(EvaluatedTir, PendingPresentationMap), GraphcalError> {
     cancellation.checkpoint()?;
     let mut presentations = inherited
         .const_presentations()
         .map(|(key, evidence)| (key.clone(), evidence.clone()))
-        .collect::<PresentationInstanceMap>();
+        .collect::<PendingPresentationMap>();
     let evaluated = EvaluatedTir::evaluate(tir, inherited, |step| {
         cancellation.checkpoint()?;
         let session = EvalSession::provisional_constants(step.tir, src, cancellation.clone())
@@ -39,7 +39,7 @@ pub(super) fn eval_const_pool(
             &session,
         )?
         .into_parts();
-        if !presentation.is_none() {
+        if !presentation.is_plain() {
             presentations.insert(step.key.clone(), presentation);
         }
         Ok(value)

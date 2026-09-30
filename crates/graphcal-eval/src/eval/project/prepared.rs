@@ -159,7 +159,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value,
-                presentation: crate::presentation_evidence::PresentationInstance::None,
+                presentation: crate::presentation_evidence::Presentation::Plain,
             },
         )
     }
@@ -178,7 +178,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Int(value),
-                presentation: crate::presentation_evidence::PresentationInstance::None,
+                presentation: crate::presentation_evidence::Presentation::Plain,
             },
         )
     }
@@ -197,7 +197,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Bool(value),
-                presentation: crate::presentation_evidence::PresentationInstance::None,
+                presentation: crate::presentation_evidence::Presentation::Plain,
             },
         )
     }
@@ -232,7 +232,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Key(key),
-                presentation: crate::presentation_evidence::PresentationInstance::None,
+                presentation: crate::presentation_evidence::Presentation::Plain,
             },
         )
     }
@@ -493,17 +493,8 @@ impl PreparedProject {
                 .map_err(CompileError::from)?;
                 let diagnostics = crate::eval::display::attach_presentation(
                     &mut value,
-                    evaluation
-                        .presentation_instances
-                        .get(imported.value().key()),
-                )
-                .map_err(|error| {
-                    CompileError::Eval(GraphcalError::internal_error(
-                        error.to_string(),
-                        &self.source,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
+                    evaluation.presentations.get(imported.value().key()),
+                );
                 eval_result
                     .presentation_diagnostics
                     .extend(diagnostics.into_iter().map(|detail| {

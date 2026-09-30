@@ -31,8 +31,7 @@ use crate::eval_expr::{
 };
 use crate::execution_frame::eval_failed_node_error;
 use crate::presentation_evidence::{
-    LeafPresentationDiagnostic, PresentationDiagnostic, PresentationFailure,
-    PresentationInstanceMap,
+    LeafPresentationDiagnostic, PendingPresentationMap, PresentationDiagnostic, PresentationFailure,
 };
 use crate::runtime_value::KeyElement;
 
@@ -333,7 +332,8 @@ fn evaluate_plot(
     let EvaluatedRoot {
         values,
         errors,
-        presentations,
+        frame_presentations,
+        ..
     } = evaluated;
     // A reference to a failed declaration must report the root cause, not a
     // generic lookup failure on the missing value.
@@ -382,7 +382,7 @@ fn evaluate_plot(
             ))
         })?;
         let (data, unit_label, diagnostics) =
-            evaluate_plot_channel(channel, expr, fact, values, presentations, ctx)?;
+            evaluate_plot_channel(channel, expr, fact, values, frame_presentations, ctx)?;
 
         presentation_diagnostics.extend(diagnostics.into_iter().map(|detail| {
             PresentationDiagnostic {
@@ -476,7 +476,7 @@ fn evaluate_plot_channel(
     scoped_expr: Scoped<'_, graphcal_compiler::hir::Expr>,
     fact: &graphcal_compiler::plot_shape::PlotChannelShape,
     values: &RuntimeValueMap,
-    presentation_values: &PresentationInstanceMap,
+    presentation_values: &PendingPresentationMap,
     ctx: &EvalSession<'_>,
 ) -> Result<
     (
@@ -498,37 +498,32 @@ fn evaluate_plot_channel(
         .executable(scoped_expr)
         .and_then(|tree| eval_root_with_presentation(&tree, values, presentation_values, ctx))
         .map_err(|error| classify_plot_channel_error(channel, error))?;
-    let (runtime, presentation_instance) = evaluated.into_parts();
-    let presentation_instance =
-        crate::eval_expr::presentation::resolve(presentation_instance, values, ctx)
-            .map_err(|error| classify_plot_channel_error(channel, error))?;
+    let (runtime, presentation) = evaluated.into_parts();
+    let presentation = crate::eval_expr::presentation::resolve(presentation, values, ctx)
+        .map_err(|error| classify_plot_channel_error(channel, error))?;
     let declared_type =
         plot_declared_type(fact, ctx, expr.span).map_err(PlotEvaluationError::Fatal)?;
-    let mut presented = EvaluatedValue::new(&runtime, &declared_type)
+    let projected = EvaluatedValue::new(&runtime, &declared_type)
         .project(ctx.tir, ctx.src)
         .map_err(PlotEvaluationError::Fatal)?;
-    let mut diagnostics = attach_presentation(&mut presented, Some(&presentation_instance))
-        .map_err(|error| {
-            PlotEvaluationError::Fatal(ctx.internal_error(error.to_string(), expr.span))
-        })?;
-    let label = crate::eval::plot_data::uniform_quantity_unit_label(&presented);
-    let unit_label = match label {
-        Ok(label) if diagnostics.is_empty() => label,
-        label => {
-            if let Err(error) = label {
-                diagnostics.push(LeafPresentationDiagnostic {
-                    path: Vec::new(),
-                    failure: PresentationFailure::Projection { message: error },
-                });
+    let mut displayed = projected.clone();
+    let mut diagnostics = attach_presentation(&mut displayed, Some(&presentation));
+    // A numeric channel must use one scale: it is displayed only when every
+    // leaf displays and all share one unit. Otherwise it keeps its SI
+    // projection whole, rather than mixing converted leaves with SI leaves.
+    let (presented, unit_label) =
+        match crate::eval::plot_data::uniform_quantity_unit_label(&displayed) {
+            Ok(label) if diagnostics.is_empty() => (displayed, label),
+            label => {
+                if let Err(error) = label {
+                    diagnostics.push(LeafPresentationDiagnostic {
+                        path: Vec::new(),
+                        failure: PresentationFailure::Projection { message: error },
+                    });
+                }
+                (projected, None)
             }
-            // A numeric channel must use one scale. Fall back atomically to SI,
-            // rather than mixing successfully converted leaves with SI leaves.
-            presented = EvaluatedValue::new(&runtime, &declared_type)
-                .project(ctx.tir, ctx.src)
-                .map_err(PlotEvaluationError::Fatal)?;
-            None
-        }
-    };
+        };
     let data = crate::eval::plot_data::channel_data_from_presented_value(&runtime, &presented)
         .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
     Ok((data, unit_label, diagnostics))

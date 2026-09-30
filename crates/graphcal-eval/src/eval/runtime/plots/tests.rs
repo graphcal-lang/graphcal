@@ -34,12 +34,14 @@ fn plot_properties_preserve_cancellation_classification() {
         graphcal_compiler::cancellation::CancellationToken::unbounded(),
     );
     let values = RuntimeValueMap::new();
-    let presentations = PresentationInstanceMap::new();
+    let presentations = crate::presentation_evidence::ResolvedPresentationMap::new();
+    let frame_presentations = PendingPresentationMap::new();
     let errors = HashMap::new();
     let evaluated = EvaluatedRoot {
         values: &values,
         errors: &errors,
         presentations: &presentations,
+        frame_presentations: &frame_presentations,
     };
     assert!(evaluate_plot(unit, plot, evaluated, &ctx).is_ok());
     let cancellation = graphcal_compiler::cancellation::CancellationSource::new();

@@ -3,83 +3,79 @@
 
 use super::types::{DisplayUnit, Value, validate_display_projection};
 use crate::presentation_evidence::{
-    LeafPresentationDiagnostic, PresentationFailure, PresentationInstance, PresentationPathPart,
+    LeafPresentationDiagnostic, Presentation, PresentationFailure, PresentationPathPart,
+    ResolvedLeaf, ResolvedPresentation,
 };
 use graphcal_compiler::registry::format::format_number;
 use graphcal_compiler::registry::index::CoordinateIndexData;
-use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub(super) enum PresentationProjectionInvariant {
-    #[error("unresolved presentation computation reached final projection")]
-    Pending,
-    #[error("presentation evidence does not match its checked value shape")]
-    Shape,
-    #[error("presentation field or index is absent from its checked value")]
-    Missing,
-}
-
+/// Display `value` as `presentation` says, reporting each quantity leaf whose
+/// display failed; such a leaf keeps its SI value.
+///
+/// The presentation is read in the value's shape: a leaf presentation applies
+/// to the leaves of its kind (a unit to quantity leaves, a time zone to
+/// datetime leaves), and a field or an entry it does not describe stays plain.
 pub(super) fn attach_presentation(
     value: &mut Value,
-    evidence: Option<&PresentationInstance>,
-) -> Result<Vec<LeafPresentationDiagnostic>, PresentationProjectionInvariant> {
+    presentation: Option<&ResolvedPresentation>,
+) -> Vec<LeafPresentationDiagnostic> {
     let mut diagnostics = Vec::new();
-    if let Some(evidence) = evidence {
-        attach(value, evidence, &[], &mut diagnostics)?;
+    if let Some(presentation) = presentation {
+        attach(value, presentation, &[], &mut diagnostics);
     }
-    Ok(diagnostics)
+    diagnostics
 }
 
 fn attach(
     value: &mut Value,
-    evidence: &PresentationInstance,
+    presentation: &ResolvedPresentation,
     path: &[PresentationPathPart],
     diagnostics: &mut Vec<LeafPresentationDiagnostic>,
-) -> Result<(), PresentationProjectionInvariant> {
-    match (evidence, value) {
-        (PresentationInstance::None, _) => Ok(()),
-        (PresentationInstance::Pending(_), _) => Err(PresentationProjectionInvariant::Pending),
-        (PresentationInstance::Struct { fields: evidence }, Value::Struct { fields, .. }) => {
-            evidence.iter().try_for_each(|(key, evidence)| {
-                let value = fields
-                    .get_mut(key)
-                    .ok_or(PresentationProjectionInvariant::Missing)?;
-                let path = [path, &[PresentationPathPart::Field(key.clone())]].concat();
-                attach(value, evidence, &path, diagnostics)
-            })
+) {
+    match (presentation, value) {
+        (Presentation::Plain, _) => {}
+        (_, Value::Struct { fields, .. }) => {
+            for (name, field) in fields {
+                if let Some(presentation) = presentation.field_ref(name) {
+                    let path = [path, &[PresentationPathPart::Field(name.clone())]].concat();
+                    attach(field, presentation, &path, diagnostics);
+                }
+            }
         }
-        (PresentationInstance::Indexed { entries: evidence }, Value::Indexed { entries, .. }) => {
-            evidence.iter().try_for_each(|(key, evidence)| {
-                let value = entries
-                    .get_mut(key)
-                    .ok_or(PresentationProjectionInvariant::Missing)?;
-                let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
-                attach(value, evidence, &path, diagnostics)
-            })
+        (_, Value::Indexed { entries, .. }) => {
+            for (key, entry) in entries {
+                if let Some(presentation) = presentation.entry_ref(key) {
+                    let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
+                    attach(entry, presentation, &path, diagnostics);
+                }
+            }
         }
-        (
-            PresentationInstance::Unit { .. }
-            | PresentationInstance::Timezone(_)
-            | PresentationInstance::Failed(_),
-            Value::Indexed { entries, .. },
-        ) => entries.iter_mut().try_for_each(|(key, value)| {
-            let path = [path, &[PresentationPathPart::Index(key.clone())]].concat();
-            attach(value, evidence, &path, diagnostics)
-        }),
-        (PresentationInstance::Failed(failure), Value::Quantity { .. } | Value::Complex { .. }) => {
+        (Presentation::Uniform(leaf), value) => attach_leaf(value, leaf, path, diagnostics),
+        // A container's presentation presents no scalar leaf.
+        (Presentation::Struct(_) | Presentation::Indexed(_), _) => {}
+    }
+}
+
+fn attach_leaf(
+    value: &mut Value,
+    leaf: &ResolvedLeaf,
+    path: &[PresentationPathPart],
+    diagnostics: &mut Vec<LeafPresentationDiagnostic>,
+) {
+    match (leaf, value) {
+        (ResolvedLeaf::Failed(failure), Value::Quantity { .. } | Value::Complex { .. }) => {
             diagnostics.push(LeafPresentationDiagnostic {
                 path: path.to_vec(),
                 failure: failure.clone(),
             });
-            Ok(())
         }
         (
-            PresentationInstance::Unit { label, scale },
+            ResolvedLeaf::Unit { label, scale },
             value @ (Value::Quantity { .. } | Value::Complex { .. }),
         ) => {
-            set_display_unit(value, Some(DisplayUnit::new(label.clone(), *scale)))?;
+            set_display_unit(value, Some(DisplayUnit::new(label.clone(), *scale)));
             if let Err(error) = validate_display_projection(value) {
-                set_display_unit(value, None)?;
+                set_display_unit(value, None);
                 diagnostics.push(LeafPresentationDiagnostic {
                     path: path.to_vec(),
                     failure: PresentationFailure::Projection {
@@ -87,26 +83,18 @@ fn attach(
                     },
                 });
             }
-            Ok(())
         }
-        (PresentationInstance::Timezone(timezone), Value::Datetime { display_tz, .. }) => {
+        (ResolvedLeaf::Timezone(timezone), Value::Datetime { display_tz, .. }) => {
             *display_tz = Some(timezone.clone());
-            Ok(())
         }
-        _ => Err(PresentationProjectionInvariant::Shape),
+        // A unit presents quantity leaves and a time zone datetime leaves.
+        (ResolvedLeaf::Failed(_) | ResolvedLeaf::Unit { .. } | ResolvedLeaf::Timezone(_), _) => {}
     }
 }
 
-fn set_display_unit(
-    value: &mut Value,
-    unit: Option<DisplayUnit>,
-) -> Result<(), PresentationProjectionInvariant> {
-    match value {
-        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
-            *display_unit = unit;
-            Ok(())
-        }
-        _ => Err(PresentationProjectionInvariant::Shape),
+fn set_display_unit(value: &mut Value, unit: Option<DisplayUnit>) {
+    if let Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } = value {
+        *display_unit = unit;
     }
 }
 

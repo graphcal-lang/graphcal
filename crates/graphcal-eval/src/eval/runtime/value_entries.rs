@@ -273,8 +273,7 @@ fn project_value(
         )
     })?;
     let mut value = EvaluatedValue::new(runtime, declared_type).project(ctx.tir, ctx.src)?;
-    let notices = attach_presentation(&mut value, evaluated.presentations.get(declaration))
-        .map_err(|error| ctx.internal_error(error.to_string(), DiagnosticAnchor::WholeFile))?;
+    let notices = attach_presentation(&mut value, evaluated.presentations.get(declaration));
     let diagnostics = notices
         .into_iter()
         .map(|detail| PresentationDiagnostic {
