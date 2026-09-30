@@ -1,0 +1,184 @@
+//! Indexed values: one entry per key of a concrete axis.
+
+use graphcal_compiler::registry::checked_type::IndexTypeRef;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
+
+use super::index_axis::IndexAxis;
+
+/// An indexed value: exactly one entry of type `V` for every key of its axis,
+/// in axis order.
+///
+/// Entries are positional; keys come from the axis. The only constructors
+/// build entries by walking the axis (or by mapping an existing value), so an
+/// indexed value is never empty and can never miss, duplicate, or reorder a
+/// key.
+#[derive(Debug, Clone)]
+pub struct IndexedValue<V> {
+    axis: IndexAxis,
+    entries: NonEmpty<V>,
+}
+
+impl<V> IndexedValue<V> {
+    /// Build one entry per axis key, in axis order.
+    ///
+    /// `entry` receives each key's position and key.
+    pub fn try_from_axis<E>(
+        axis: IndexAxis,
+        mut entry: impl FnMut(usize, &IndexEntryKey) -> Result<V, E>,
+    ) -> Result<Self, E> {
+        let (first_key, rest_keys) = axis.keys().split_first();
+        let first = entry(0, first_key)?;
+        let rest = (1..)
+            .zip(rest_keys)
+            .map(|(position, key)| entry(position, key))
+            .collect::<Result<Vec<_>, E>>()?;
+        Ok(Self {
+            entries: NonEmpty::new(first, rest),
+            axis,
+        })
+    }
+
+    /// An indexed value with its entries given positionally, for tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test(axis: IndexAxis, entries: Vec<V>) -> Self {
+        assert_eq!(axis.len(), entries.len(), "one entry per axis key");
+        let entries = NonEmpty::try_from_vec(entries).unwrap();
+        Self { axis, entries }
+    }
+
+    /// An indexed value over the structural axis `Fin(entries.len())`, for
+    /// tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn finite_for_test(entries: Vec<V>) -> Self {
+        let cardinality = u64::try_from(entries.len()).unwrap();
+        let index =
+            graphcal_compiler::registry::index::FiniteIndex::try_from_u64(cardinality).unwrap();
+        let axis = IndexAxis::finite(index).unwrap();
+        let entries = NonEmpty::try_from_vec(entries).unwrap();
+        Self { axis, entries }
+    }
+
+    /// Derive a value over the same axis from each entry and its key.
+    pub fn try_map_ref<U, E>(
+        &self,
+        mut entry: impl FnMut(&IndexEntryKey, &V) -> Result<U, E>,
+    ) -> Result<IndexedValue<U>, E> {
+        IndexedValue::try_from_axis(self.axis.clone(), |position, key| {
+            entry(key, &self.entries.as_slice()[position])
+        })
+    }
+
+    /// The axis this value is indexed by.
+    #[must_use]
+    pub const fn axis(&self) -> &IndexAxis {
+        &self.axis
+    }
+
+    /// The index this value is indexed by.
+    #[must_use]
+    pub fn index(&self) -> &IndexTypeRef {
+        self.axis.index()
+    }
+
+    /// The entry for `key`, when `key` belongs to the axis.
+    #[must_use]
+    pub fn get(&self, key: &IndexEntryKey) -> Option<&V> {
+        self.axis
+            .position(key)
+            .and_then(|position| self.entries.as_slice().get(position))
+    }
+
+    /// Entries with their keys, in axis order.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
+        self.axis.keys().iter().zip(self.entries.iter())
+    }
+
+    /// Entries in axis order (at least one).
+    #[must_use]
+    pub const fn values(&self) -> &NonEmpty<V> {
+        &self.entries
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use graphcal_compiler::dag_id::DagId;
+    use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
+
+    use super::{IndexAxis, IndexedValue};
+
+    fn key(name: &str) -> IndexEntryKey {
+        IndexEntryKey::named(IndexVariantName::expect_valid(name))
+    }
+
+    fn axis() -> IndexAxis {
+        IndexAxis::named_for_test(
+            DagId::root_in_package("indexed-tests", "main"),
+            "Phase",
+            &["A", "B", "C"],
+        )
+    }
+
+    #[test]
+    fn entries_follow_the_axis_positions() {
+        let mut seen = Vec::new();
+        let indexed = IndexedValue::try_from_axis(axis(), |position, key| {
+            seen.push((position, key.clone()));
+            Ok::<_, ()>(position * 10)
+        })
+        .unwrap();
+        assert_eq!(seen, vec![(0, key("A")), (1, key("B")), (2, key("C"))]);
+        assert_eq!(indexed.values().as_slice(), &[0, 10, 20]);
+        assert_eq!(indexed.get(&key("B")), Some(&10));
+        assert!(indexed.get(&key("D")).is_none());
+        let keys = indexed
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec![key("A"), key("B"), key("C")]);
+        assert!(indexed.axis().matches(&axis()));
+        assert_eq!(indexed.index(), axis().index());
+    }
+
+    #[test]
+    fn construction_stops_at_the_first_entry_error() {
+        let mut calls = 0;
+        let error = IndexedValue::try_from_axis(axis(), |position, _| {
+            calls += 1;
+            if position == 1 {
+                Err("second")
+            } else {
+                Ok(true)
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "second");
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn map_keeps_the_axis_and_pairs_keys_with_entries() {
+        let indexed = IndexedValue::for_test(axis(), vec![1_i64, 2, 3]);
+        let mapped = indexed
+            .try_map_ref(|entry_key, value| {
+                Ok::<_, ()>(if *entry_key == key("C") {
+                    -value
+                } else {
+                    value + 1
+                })
+            })
+            .unwrap();
+        assert_eq!(mapped.values().as_slice(), &[2, 3, -3]);
+        assert!(mapped.axis().matches(indexed.axis()));
+    }
+
+    #[test]
+    fn finite_test_values_use_a_structural_axis() {
+        let indexed = IndexedValue::finite_for_test(vec!['a', 'b']);
+        assert_eq!(indexed.get(&IndexEntryKey::position(1)), Some(&'b'));
+        assert_eq!(indexed.axis().len(), 2);
+    }
+}

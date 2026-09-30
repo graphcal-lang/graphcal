@@ -6,6 +6,7 @@ use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationFailure, PresentationInstance, PresentationPathPart,
 };
 use graphcal_compiler::registry::format::format_number;
+use graphcal_compiler::registry::index::CoordinateIndexData;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -109,37 +110,22 @@ fn set_display_unit(
     }
 }
 
-fn format_coordinate_impl(
-    idx_def: &graphcal_compiler::registry::types::IndexDef,
-    position: usize,
-    exact: bool,
-) -> String {
-    idx_def.coordinate_data().map_or_else(
-        || format!("#{position}"),
-        |data| {
-            let display_value = data.coordinate_value(position) / data.display().scale.get();
-            let formatted = if exact {
-                display_value.to_string()
-            } else {
-                format_number(display_value)
-            };
-            match &data.display().label {
-                Some(label) => format!("{formatted} {label}"),
-                None => formatted,
-            }
-        },
-    )
+fn format_coordinate_impl(data: &CoordinateIndexData, position: usize, exact: bool) -> String {
+    let display_value = data.coordinate_value(position) / data.display().scale.get();
+    let formatted = if exact {
+        display_value.to_string()
+    } else {
+        format_number(display_value)
+    };
+    match &data.display().label {
+        Some(label) => format!("{formatted} {label}"),
+        None => formatted,
+    }
 }
 
-pub(super) fn format_coordinate(
-    idx_def: &graphcal_compiler::registry::types::IndexDef,
-    position: usize,
-) -> String {
-    format_coordinate_impl(idx_def, position, false)
+pub(super) fn format_coordinate(data: &CoordinateIndexData, position: usize) -> String {
+    format_coordinate_impl(data, position, false)
 }
-pub(super) fn format_coordinate_exact(
-    idx_def: &graphcal_compiler::registry::types::IndexDef,
-    position: usize,
-) -> String {
-    format_coordinate_impl(idx_def, position, true)
+pub(super) fn format_coordinate_exact(data: &CoordinateIndexData, position: usize) -> String {
+    format_coordinate_impl(data, position, true)
 }

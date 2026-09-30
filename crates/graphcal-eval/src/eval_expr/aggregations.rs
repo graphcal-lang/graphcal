@@ -1,8 +1,7 @@
-use crate::runtime_value::{RuntimeValue, RuntimeValueError};
-use graphcal_compiler::builtin::{AggregationFn, KeyAggregation, ValueAggregation};
+use crate::runtime_value::{IndexedValue, RuntimeValue, RuntimeValueError};
+use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use indexmap::IndexMap;
 use thiserror::Error;
 
 use super::numeric;
@@ -10,11 +9,6 @@ use super::numeric;
 /// Error produced by pure aggregation evaluation.
 #[derive(Debug, Error)]
 pub(super) enum AggregationError {
-    /// A completed indexed value violated the language's non-empty invariant.
-    #[error(
-        "{function}() received an empty completed Indexed value, violating the non-empty invariant"
-    )]
-    EmptyInput { function: AggregationFn },
     /// Rank checking should prevent `count()` from seeing nested indexed entries.
     #[error("count() received a multi-axis Indexed value after rank-one type checking")]
     MultiAxisCount,
@@ -33,24 +27,16 @@ impl AggregationError {
     /// Whether this error represents a violation of an invariant enforced before evaluation.
     #[must_use]
     pub(super) const fn is_internal_invariant(&self) -> bool {
-        matches!(
-            self,
-            Self::EmptyInput { .. } | Self::MultiAxisCount | Self::CountOutOfRange { .. }
-        )
+        matches!(self, Self::MultiAxisCount | Self::CountOutOfRange { .. })
     }
 }
 
 /// Evaluate an aggregation function over indexed entries.
 pub(super) fn aggregate_indexed_values(
     kind: ValueAggregation,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
 ) -> Result<RuntimeValue, AggregationError> {
-    if entries.is_empty() {
-        return Err(AggregationError::EmptyInput {
-            function: kind.into(),
-        });
-    }
-
+    let entries = indexed.values().as_slice();
     match kind {
         ValueAggregation::Sum => aggregate_sum(entries).and_then(runtime_quantity),
         ValueAggregation::Product => aggregate_product(entries).and_then(runtime_quantity),
@@ -79,35 +65,27 @@ fn runtime_quantity(value: f64) -> Result<RuntimeValue, AggregationError> {
 /// index order (entries iterate in canonical index order).
 pub(super) fn extremum_entry_key(
     kind: KeyAggregation,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
 ) -> Result<IndexEntryKey, AggregationError> {
-    if entries.is_empty() {
-        return Err(AggregationError::EmptyInput {
-            function: kind.into(),
-        });
-    }
     let context = match kind {
         KeyAggregation::Argmin => "argmin element",
         KeyAggregation::Argmax => "argmax element",
     };
-    let mut best: Option<(&IndexEntryKey, f64)> = None;
-    for (key, value) in entries {
-        let quantity = quantity_entry(value, context)?;
-        let better = match (&best, kind) {
-            (None, _) => true,
-            (Some((_, incumbent)), KeyAggregation::Argmax) => quantity > *incumbent,
-            (Some((_, incumbent)), KeyAggregation::Argmin) => quantity < *incumbent,
-        };
-        if better {
-            best = Some((key, quantity));
-        }
-    }
-    match best {
-        Some((key, _)) => Ok(key.clone()),
-        None => Err(AggregationError::EmptyInput {
-            function: kind.into(),
-        }),
-    }
+    let (first_key, rest_keys) = indexed.axis().keys().split_first();
+    let (first_value, rest_values) = indexed.values().split_first();
+    let first = (first_key, quantity_entry(first_value, context)?);
+    let (key, _) = rest_keys.iter().zip(rest_values).try_fold(
+        first,
+        |incumbent, (key, value)| -> Result<_, AggregationError> {
+            let quantity = quantity_entry(value, context)?;
+            let better = match kind {
+                KeyAggregation::Argmax => quantity > incumbent.1,
+                KeyAggregation::Argmin => quantity < incumbent.1,
+            };
+            Ok(if better { (key, quantity) } else { incumbent })
+        },
+    )?;
+    Ok(key.clone())
 }
 
 fn quantity_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, AggregationError> {
@@ -115,20 +93,18 @@ fn quantity_entry(value: &RuntimeValue, context: &'static str) -> Result<f64, Ag
     numeric::finite_quantity(quantity, context).map_err(AggregationError::from)
 }
 
-fn aggregate_sum(entries: &IndexMap<IndexEntryKey, RuntimeValue>) -> Result<f64, AggregationError> {
+fn aggregate_sum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
     let total =
         entries
-            .values()
+            .iter()
             .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
                 Ok(acc + quantity_entry(value, "sum element")?)
             })?;
     numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
 }
 
-fn aggregate_product(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<f64, AggregationError> {
-    entries.values().try_fold(1.0_f64, |product, value| {
+fn aggregate_product(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+    entries.iter().try_fold(1.0_f64, |product, value| {
         let value = quantity_entry(value, "product element")?;
         let result = product * value;
         if product != 0.0 && value != 0.0 {
@@ -139,20 +115,16 @@ fn aggregate_product(
     })
 }
 
-fn aggregate_root_sum_square(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<f64, AggregationError> {
+fn aggregate_root_sum_square(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
     let values = entries
-        .values()
+        .iter()
         .map(|value| quantity_entry(value, "rss element"))
         .collect::<Result<Vec<_>, _>>()?;
     numeric::root_sum_square(values, "rss()").map_err(AggregationError::from)
 }
 
-fn aggregate_minimum(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<f64, AggregationError> {
-    let minimum = entries.values().try_fold(
+fn aggregate_minimum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+    let minimum = entries.iter().try_fold(
         f64::INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
             Ok(acc.min(quantity_entry(value, "minimum element")?))
@@ -161,10 +133,8 @@ fn aggregate_minimum(
     numeric::computed_finite_quantity(minimum, "minimum()").map_err(AggregationError::from)
 }
 
-fn aggregate_maximum(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<f64, AggregationError> {
-    let maximum = entries.values().try_fold(
+fn aggregate_maximum(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
+    let maximum = entries.iter().try_fold(
         f64::NEG_INFINITY,
         |acc, value| -> Result<f64, AggregationError> {
             Ok(acc.max(quantity_entry(value, "maximum element")?))
@@ -173,22 +143,18 @@ fn aggregate_maximum(
     numeric::computed_finite_quantity(maximum, "maximum()").map_err(AggregationError::from)
 }
 
-fn aggregate_mean(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<f64, AggregationError> {
+fn aggregate_mean(entries: &[RuntimeValue]) -> Result<f64, AggregationError> {
     let values = entries
-        .values()
+        .iter()
         .map(|value| quantity_entry(value, "mean element"))
         .collect::<Result<Vec<_>, _>>()?;
     numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
 }
 
-fn aggregate_count(
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> Result<i64, AggregationError> {
+fn aggregate_count(entries: &[RuntimeValue]) -> Result<i64, AggregationError> {
     if entries
-        .values()
-        .any(|value| matches!(value, RuntimeValue::Indexed { .. }))
+        .iter()
+        .any(|value| matches!(value, RuntimeValue::Indexed(_)))
     {
         return Err(AggregationError::MultiAxisCount);
     }
@@ -204,38 +170,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_aggregation_rejects_empty_completed_indexed_values_as_internal() {
-        let entries = IndexMap::new();
-        for function in [
-            ValueAggregation::Sum,
-            ValueAggregation::Product,
-            ValueAggregation::Minimum,
-            ValueAggregation::Maximum,
-            ValueAggregation::Mean,
-            ValueAggregation::RootSumSquare,
-            ValueAggregation::Count,
-        ] {
-            let error = aggregate_indexed_values(function, &entries).unwrap_err();
-            assert!(matches!(
-                &error,
-                AggregationError::EmptyInput { function: found }
-                    if *found == AggregationFn::from(function)
-            ));
-            assert!(error.is_internal_invariant());
-        }
+    fn extremum_keys_prefer_the_first_of_tied_entries() {
+        let entries = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(2.0).unwrap(),
+            RuntimeValue::quantity(1.0).unwrap(),
+            RuntimeValue::quantity(3.0).unwrap(),
+            RuntimeValue::quantity(1.0).unwrap(),
+            RuntimeValue::quantity(3.0).unwrap(),
+        ]);
+        assert_eq!(
+            extremum_entry_key(KeyAggregation::Argmin, &entries).unwrap(),
+            IndexEntryKey::position(1)
+        );
+        assert_eq!(
+            extremum_entry_key(KeyAggregation::Argmax, &entries).unwrap(),
+            IndexEntryKey::position(2)
+        );
+        let single = IndexedValue::finite_for_test(vec![RuntimeValue::quantity(5.0).unwrap()]);
+        assert_eq!(
+            extremum_entry_key(KeyAggregation::Argmax, &single).unwrap(),
+            IndexEntryKey::position(0)
+        );
+        let non_quantity = IndexedValue::finite_for_test(vec![RuntimeValue::Bool(true)]);
+        assert!(matches!(
+            extremum_entry_key(KeyAggregation::Argmin, &non_quantity),
+            Err(AggregationError::ElementType(_))
+        ));
     }
 
     #[test]
     fn product_and_rss_evaluate_with_numerical_checks() {
-        let entries = IndexMap::from([
-            (
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(3.0).unwrap(),
-            ),
-            (
-                IndexEntryKey::position(1),
-                RuntimeValue::quantity(4.0).unwrap(),
-            ),
+        let entries = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(3.0).unwrap(),
+            RuntimeValue::quantity(4.0).unwrap(),
         ]);
         assert!(matches!(
             aggregate_indexed_values(ValueAggregation::Product, &entries),
@@ -246,15 +213,9 @@ mod tests {
             Ok(RuntimeValue::Quantity(value)) if value.get().to_bits() == 5.0_f64.to_bits()
         ));
 
-        let large = IndexMap::from([
-            (
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(1.0e308).unwrap(),
-            ),
-            (
-                IndexEntryKey::position(1),
-                RuntimeValue::quantity(1.0e308).unwrap(),
-            ),
+        let large = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(1.0e308).unwrap(),
+            RuntimeValue::quantity(1.0e308).unwrap(),
         ]);
         let RuntimeValue::Quantity(rss) =
             aggregate_indexed_values(ValueAggregation::RootSumSquare, &large).unwrap()
@@ -263,15 +224,9 @@ mod tests {
         };
         assert!(rss.get().is_finite());
 
-        let small = IndexMap::from([
-            (
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(1.0e-300).unwrap(),
-            ),
-            (
-                IndexEntryKey::position(1),
-                RuntimeValue::quantity(1.0e-300).unwrap(),
-            ),
+        let small = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(1.0e-300).unwrap(),
+            RuntimeValue::quantity(1.0e-300).unwrap(),
         ]);
         let RuntimeValue::Quantity(small_rss) =
             aggregate_indexed_values(ValueAggregation::RootSumSquare, &small).unwrap()
@@ -280,15 +235,9 @@ mod tests {
         };
         assert!(small_rss.get() > 0.0);
 
-        let overflowing_product = IndexMap::from([
-            (
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(f64::MAX).unwrap(),
-            ),
-            (
-                IndexEntryKey::position(1),
-                RuntimeValue::quantity(2.0).unwrap(),
-            ),
+        let overflowing_product = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(f64::MAX).unwrap(),
+            RuntimeValue::quantity(2.0).unwrap(),
         ]);
         assert!(matches!(
             aggregate_indexed_values(ValueAggregation::Product, &overflowing_product),
@@ -300,15 +249,9 @@ mod tests {
 
     #[test]
     fn mean_avoids_overflow_in_a_representable_result() {
-        let entries = IndexMap::from([
-            (
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(1.0e308).unwrap(),
-            ),
-            (
-                IndexEntryKey::position(1),
-                RuntimeValue::quantity(1.0e308).unwrap(),
-            ),
+        let entries = IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(1.0e308).unwrap(),
+            RuntimeValue::quantity(1.0e308).unwrap(),
         ]);
         let RuntimeValue::Quantity(mean) =
             aggregate_indexed_values(ValueAggregation::Mean, &entries).unwrap()
@@ -320,9 +263,9 @@ mod tests {
 
     #[test]
     fn count_accepts_non_quantity_entries_and_returns_int() {
-        let entries = IndexMap::from([
-            (IndexEntryKey::position(0), RuntimeValue::Bool(false)),
-            (IndexEntryKey::position(1), RuntimeValue::Bool(true)),
+        let entries = IndexedValue::finite_for_test(vec![
+            RuntimeValue::Bool(false),
+            RuntimeValue::Bool(true),
         ]);
         assert!(matches!(
             aggregate_indexed_values(ValueAggregation::Count, &entries),
@@ -332,17 +275,10 @@ mod tests {
 
     #[test]
     fn count_defensively_rejects_nested_indexed_entries() {
-        use graphcal_compiler::registry::checked_type::IndexTypeRef;
-        use graphcal_compiler::registry::index::FiniteIndex;
-
-        let inner = RuntimeValue::Indexed {
-            index_name: IndexTypeRef::from_finite_index(FiniteIndex::try_from_u64(1).unwrap()),
-            entries: IndexMap::from([(
-                IndexEntryKey::position(0),
-                RuntimeValue::quantity(1.0).unwrap(),
-            )]),
-        };
-        let entries = IndexMap::from([(IndexEntryKey::position(0), inner)]);
+        let inner = RuntimeValue::Indexed(IndexedValue::finite_for_test(vec![
+            RuntimeValue::quantity(1.0).unwrap(),
+        ]));
+        let entries = IndexedValue::finite_for_test(vec![inner]);
         let error = aggregate_indexed_values(ValueAggregation::Count, &entries).unwrap_err();
         assert!(matches!(&error, AggregationError::MultiAxisCount));
         assert!(error.is_internal_invariant());

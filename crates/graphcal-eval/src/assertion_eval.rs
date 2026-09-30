@@ -1,14 +1,13 @@
 //! Assertion semantics over an expression-evaluation callback, independent of frame adapters.
 
 use crate::eval::types::AssertResult;
-use crate::runtime_value::RuntimeValue;
+use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::registry::checked_type::IndexTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::tir::typed::evaluation_unit::{AssertionOperands, Scoped};
-use indexmap::IndexMap;
 
 fn evaluation_error(error: GraphcalError) -> AssertResult {
     match error {
@@ -74,12 +73,9 @@ pub fn evaluate_assert_with_expected_fail<'t>(
                 }
             };
             match bool_tree {
-                RuntimeValue::Indexed {
-                    index_name,
-                    entries,
-                } => {
-                    let inverted = invert_indexed_variants(&index_name, entries, keys.as_slice());
-                    check_indexed_assert_with_expected_fail(&inverted.0, &inverted.1, keys.as_slice())
+                RuntimeValue::Indexed(indexed) => {
+                    let inverted = invert_indexed_variants(&indexed, keys.as_slice());
+                    check_indexed_assert_with_expected_fail(&inverted, keys.as_slice())
                 }
                 RuntimeValue::Bool(_) => AssertResult::Error {
                     message:
@@ -113,57 +109,41 @@ fn expected_fail_key_matches_path(
 /// expected-fail keys, flip `Bool(true)` → `Bool(false)` and vice versa.
 /// For nested indexed values (multi-index), recurse.
 fn invert_indexed_variants(
-    index_name: &IndexTypeRef,
-    entries: IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
     keys: &[ExpectedFailKey],
-) -> (IndexTypeRef, IndexMap<IndexEntryKey, RuntimeValue>) {
-    let inverted_entries = entries
-        .into_iter()
-        .map(|(variant, value)| {
-            let new_value = match value {
-                RuntimeValue::Bool(b) => {
-                    // Single-index: check if this variant is in any key
-                    let should_invert = keys
-                        .iter()
-                        .any(|key| key.len() == 1 && key[0].matches_entry(index_name, &variant));
-                    if should_invert {
-                        RuntimeValue::Bool(!b)
-                    } else {
-                        RuntimeValue::Bool(b)
-                    }
+) -> IndexedValue<RuntimeValue> {
+    let index_name = indexed.index();
+    let inverted = indexed.try_map_ref(|variant, value| {
+        Ok::<_, std::convert::Infallible>(match value {
+            RuntimeValue::Bool(b) => {
+                // Single-index: check if this variant is in any key
+                let should_invert = keys
+                    .iter()
+                    .any(|key| key.len() == 1 && key[0].matches_entry(index_name, variant));
+                RuntimeValue::Bool(if should_invert { !b } else { *b })
+            }
+            RuntimeValue::Indexed(inner) => {
+                // Multi-index: filter keys that match the current variant at position 0,
+                // then strip the first element and recurse.
+                let sub_keys: Vec<ExpectedFailKey> = keys
+                    .iter()
+                    .filter(|key| key.len() >= 2 && key[0].matches_entry(index_name, variant))
+                    .map(|key| key[1..].to_vec())
+                    .collect();
+                if sub_keys.is_empty() {
+                    // No expected-fail keys apply to this subtree — leave as-is
+                    value.clone()
+                } else {
+                    RuntimeValue::Indexed(invert_indexed_variants(inner, &sub_keys))
                 }
-                RuntimeValue::Indexed {
-                    index_name: inner_index,
-                    entries: inner_entries,
-                } => {
-                    // Multi-index: filter keys that match the current variant at position 0,
-                    // then strip the first element and recurse.
-                    let sub_keys: Vec<ExpectedFailKey> = keys
-                        .iter()
-                        .filter(|key| key.len() >= 2 && key[0].matches_entry(index_name, &variant))
-                        .map(|key| key[1..].to_vec())
-                        .collect();
-                    if sub_keys.is_empty() {
-                        // No expected-fail keys apply to this subtree — leave as-is
-                        RuntimeValue::Indexed {
-                            index_name: inner_index,
-                            entries: inner_entries,
-                        }
-                    } else {
-                        let (idx, ents) =
-                            invert_indexed_variants(&inner_index, inner_entries, &sub_keys);
-                        RuntimeValue::Indexed {
-                            index_name: idx,
-                            entries: ents,
-                        }
-                    }
-                }
-                other => other,
-            };
-            (variant, new_value)
+            }
+            other => other.clone(),
         })
-        .collect();
-    (index_name.clone(), inverted_entries)
+    });
+    match inverted {
+        Ok(inverted) => inverted,
+        Err(never) => match never {},
+    }
 }
 
 /// Format a list of indexed paths for assertion failure messages.
@@ -216,11 +196,10 @@ fn format_indexed_paths(
 /// We reuse `collect_failing_paths` on the inverted entries, then classify each
 /// failing path as either "unexpected pass" or "unexpected fail".
 fn check_indexed_assert_with_expected_fail(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
     keys: &[ExpectedFailKey],
 ) -> AssertResult {
-    match collect_failing_paths(index_name, entries) {
+    match collect_failing_paths(indexed) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
         Ok(paths) => {
             // Classify each failing path
@@ -274,11 +253,8 @@ fn check_indexed_assert_with_expected_fail(
 ///   `failed at Mode#Boost`
 /// Multi-index failure message example:
 ///   `failed at (Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`
-fn check_indexed_assert(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
-) -> AssertResult {
-    match collect_failing_paths(index_name, entries) {
+fn check_indexed_assert(indexed: &IndexedValue<RuntimeValue>) -> AssertResult {
+    match collect_failing_paths(indexed) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
         Ok(paths) => {
             let is_multi_index = paths.iter().any(|p| p.len() > 1);
@@ -301,23 +277,20 @@ fn check_indexed_assert(
 /// Each path is a `Vec<(IndexTypeRef, VariantName)>` of index/variant pairs from outermost to innermost.
 /// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::expect_valid("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
-    index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    indexed: &IndexedValue<RuntimeValue>,
 ) -> Result<Vec<Vec<(IndexTypeRef, IndexEntryKey)>>, String> {
+    let index_name = indexed.index();
     let mut paths = Vec::new();
-    for (variant, value) in entries {
+    for (variant, value) in indexed.iter() {
         let key = (index_name.clone(), variant.clone());
         match value {
             RuntimeValue::Bool(true) => {}
             RuntimeValue::Bool(false) => {
                 paths.push(vec![key]);
             }
-            RuntimeValue::Indexed {
-                index_name: inner_index,
-                entries: inner_entries,
-            } => {
+            RuntimeValue::Indexed(inner) => {
                 // Recurse into nested dimension, prepending current variant to each path
-                for mut inner_path in collect_failing_paths(inner_index, inner_entries)? {
+                for mut inner_path in collect_failing_paths(inner)? {
                     inner_path.insert(0, key.clone());
                     paths.push(inner_path);
                 }
@@ -343,10 +316,7 @@ fn evaluate_assert_body<'t>(
             Ok(RuntimeValue::Bool(false)) => AssertResult::Fail {
                 message: "assertion evaluated to false".to_string(),
             },
-            Ok(RuntimeValue::Indexed {
-                index_name,
-                entries,
-            }) => check_indexed_assert(&index_name, &entries),
+            Ok(RuntimeValue::Indexed(indexed)) => check_indexed_assert(&indexed),
             Ok(other) => AssertResult::Error {
                 message: format!("expected Bool, got {other:?}"),
             },
@@ -431,32 +401,23 @@ fn tolerance_tree_inner(
     path: &mut Vec<(IndexTypeRef, IndexEntryKey)>,
     failures: &mut Vec<ToleranceFailure>,
 ) -> Result<RuntimeValue, String> {
-    if let RuntimeValue::Indexed {
-        index_name,
-        entries,
-    } = actual
-    {
-        let checked_entries = entries
-            .iter()
-            .map(|(variant, actual_entry)| {
-                let expected_entry = tolerance_entry_or_broadcast(expected, index_name, variant)?;
-                let tolerance_entry = tolerance_entry_or_broadcast(tolerance, index_name, variant)?;
-                path.push((index_name.clone(), variant.clone()));
-                let result = tolerance_tree_inner(
-                    actual_entry,
-                    expected_entry,
-                    tolerance_entry,
-                    path,
-                    failures,
-                );
-                path.pop();
-                Ok((variant.clone(), result?))
-            })
-            .collect::<Result<_, String>>()?;
-        return Ok(RuntimeValue::Indexed {
-            index_name: index_name.clone(),
-            entries: checked_entries,
-        });
+    if let RuntimeValue::Indexed(indexed) = actual {
+        let index_name = indexed.index();
+        let checked = indexed.try_map_ref(|variant, actual_entry| {
+            let expected_entry = tolerance_entry_or_broadcast(expected, index_name, variant)?;
+            let tolerance_entry = tolerance_entry_or_broadcast(tolerance, index_name, variant)?;
+            path.push((index_name.clone(), variant.clone()));
+            let result = tolerance_tree_inner(
+                actual_entry,
+                expected_entry,
+                tolerance_entry,
+                path,
+                failures,
+            );
+            path.pop();
+            result
+        })?;
+        return Ok(RuntimeValue::Indexed(checked));
     }
 
     let actual_val = tolerance_quantity_operand(actual, "actual")?;
@@ -494,16 +455,14 @@ fn tolerance_entry_or_broadcast<'a>(
     variant: &IndexEntryKey,
 ) -> Result<&'a RuntimeValue, String> {
     match operand {
-        RuntimeValue::Indexed {
-            index_name,
-            entries,
-        } => {
+        RuntimeValue::Indexed(indexed) => {
+            let index_name = indexed.index();
             if !index_name.matches_ref(axis) {
                 return Err(format!(
                     "tolerance assertion operand has mismatched index axes: `{axis}` vs `{index_name}`"
                 ));
             }
-            entries.get(variant).ok_or_else(|| {
+            indexed.get(variant).ok_or_else(|| {
                 format!(
                     "tolerance assertion operand is missing entry `{}`",
                     format_indexed_path_part(index_name, variant)

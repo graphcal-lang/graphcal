@@ -35,7 +35,7 @@ pub fn check_domain_constraint(
     constraint: &ResolvedDomainConstraint,
 ) -> Result<(), DomainViolation> {
     match value {
-        RuntimeValue::Indexed { entries, .. } => entries.iter().try_for_each(|(variant, entry)| {
+        RuntimeValue::Indexed(entries) => entries.iter().try_for_each(|(variant, entry)| {
             check_domain_constraint(entry, constraint).map_err(|violation| {
                 DomainViolation::new(format!("at {variant}: {}", violation.message))
             })

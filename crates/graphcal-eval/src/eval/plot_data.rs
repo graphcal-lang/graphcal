@@ -118,7 +118,7 @@ fn plot_datum_from_leaf(
         RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
             .map(PlotDatum::Datetime)
             .map_err(|error| error.to_string()),
-        RuntimeValue::Struct { .. } | RuntimeValue::Indexed { .. } => {
+        RuntimeValue::Struct { .. } | RuntimeValue::Indexed(_) => {
             Err(format!("{} cannot be plotted", rv.describe()))
         }
     }
@@ -136,18 +136,15 @@ pub(super) fn channel_data_from_runtime_with_display_unit(
     rv: &RuntimeValue,
     display_unit: Option<&DisplayUnit>,
 ) -> Result<ChannelData, String> {
-    let RuntimeValue::Indexed {
-        index_name,
-        entries,
-    } = rv
-    else {
+    let RuntimeValue::Indexed(entries) = rv else {
         return Ok(ChannelData {
             axes: Vec::new(),
             values: vec![plot_datum_from_leaf(rv, display_unit)?],
         });
     };
 
-    let entry_keys: Vec<IndexEntryKey> = entries.keys().cloned().collect();
+    let index_name = entries.index();
+    let entry_keys: Vec<IndexEntryKey> = entries.axis().keys().iter().cloned().collect();
     let mut inner_axes: Option<Vec<PlotAxis>> = None;
     let mut values = Vec::new();
     for entry in entries.values() {
@@ -183,11 +180,7 @@ pub(super) fn channel_data_from_presented_value(
     runtime: &RuntimeValue,
     presented: &Value,
 ) -> Result<ChannelData, String> {
-    let RuntimeValue::Indexed {
-        index_name,
-        entries,
-    } = runtime
-    else {
+    let RuntimeValue::Indexed(entries) = runtime else {
         let display_unit = match (runtime, presented) {
             (RuntimeValue::Quantity(_), Value::Quantity { display_unit, .. })
             | (RuntimeValue::Complex(_), Value::Complex { display_unit, .. }) => {
@@ -208,16 +201,17 @@ pub(super) fn channel_data_from_presented_value(
     else {
         return Err("checked plot presentation does not mirror indexed runtime data".to_string());
     };
+    let index_name = entries.index();
     if !index_name.matches_ref(presented_index) {
         return Err(format!(
             "checked plot presentation index `{presented_index}` does not match runtime index `{index_name}`"
         ));
     }
 
-    let entry_keys = entries.keys().cloned().collect::<Vec<_>>();
+    let entry_keys = entries.axis().keys().iter().cloned().collect::<Vec<_>>();
     let mut inner_axes: Option<Vec<PlotAxis>> = None;
     let mut values = Vec::new();
-    for (key, entry) in entries {
+    for (key, entry) in entries.iter() {
         let presented_entry = presented_entries
             .get(key)
             .ok_or_else(|| format!("checked plot presentation is missing indexed entry `{key}`"))?;
@@ -421,18 +415,16 @@ fn incompatible_axes_message(channels: &[(EncodingChannel, ChannelData)]) -> Str
 mod tests {
     use super::*;
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use indexmap::IndexMap;
 
     fn indexed(index: &str, entries: Vec<(&str, RuntimeValue)>) -> RuntimeValue {
-        RuntimeValue::indexed_with_owner(
+        let (variants, values): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
+        let axis = crate::runtime_value::IndexAxis::named_for_test(
             DagId::root_in_package("test", "main"),
-            IndexName::expect_valid(index),
-            entries
-                .into_iter()
-                .map(|(k, v)| (IndexEntryKey::named(IndexVariantName::expect_valid(k)), v))
-                .collect::<IndexMap<_, _>>(),
-        )
+            index,
+            &variants,
+        );
+        RuntimeValue::Indexed(crate::runtime_value::IndexedValue::for_test(axis, values))
     }
 
     fn numbers(field: &PlotFieldValue) -> Vec<f64> {
