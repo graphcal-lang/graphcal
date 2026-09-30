@@ -360,7 +360,7 @@ pub fn resolve_imported_constant(
     let defining = tir
         .dag_containing_declaration(target)
         .ok_or_else(|| SealError::MissingDeclaration(target.clone()))?;
-    match (binding.kind(), defining.const_expr(target).is_some()) {
+    match (binding.kind(), defining.is_constant(target)) {
         (ImportedValueKind::Runtime, false) => Ok(None),
         (ImportedValueKind::Constant, true) => consts
             .reference(target)

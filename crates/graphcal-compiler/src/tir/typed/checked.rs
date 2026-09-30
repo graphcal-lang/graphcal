@@ -337,7 +337,7 @@ impl TirRead for CheckedTir {
     }
 
     fn root(&self) -> &DagTIR {
-        self.dags.root()
+        self.dags.root().body()
     }
 
     fn dag(&self, dag_id: &DagId) -> Option<&DagTIR> {

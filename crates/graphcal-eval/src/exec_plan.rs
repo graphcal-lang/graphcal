@@ -427,7 +427,7 @@ mod tests {
         );
         let prepared = compile(&tir, &src).unwrap();
         let input = resolved_key("input");
-        assert!(tir.root().runtime_expr(&input).is_none());
+        assert!(tir.root().body_for_test().runtime_expr(&input).is_none());
         let declaration = prepared.plan().declaration(&input).unwrap();
         assert_eq!(declaration.scope().dag().dag_id(), tir.root_dag_id());
         assert!(matches!(declaration.body(), PlannedBody::Supplied));

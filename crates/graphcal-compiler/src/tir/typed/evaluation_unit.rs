@@ -217,7 +217,7 @@ impl<'t> DeclarationBody<'t> {
     /// The assertion's resolved `#[expected_fail]` configuration.
     #[must_use]
     pub fn expected_fail(self) -> Option<&'t crate::assertion_expectation::ExpectedFail> {
-        self.scope.dag().expected_fail(self.identity)
+        self.scope.dag().body().expected_fail(self.identity)
     }
 
     /// The plot this declaration is.

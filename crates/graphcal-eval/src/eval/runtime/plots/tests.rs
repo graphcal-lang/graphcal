@@ -12,6 +12,7 @@ fn root_unit<'t>(
 ) -> DeclarationBody<'t> {
     let owner = tir
         .root()
+        .body_for_test()
         .require_bound_decl_identity(
             &ScopedName::local(name.clone()),
             src,

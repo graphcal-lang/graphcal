@@ -46,7 +46,7 @@ fn resolve_source_type(
     );
     let tir = parse_and_type_resolve(&source)?;
     tir.root()
-        .semantic
+        .semantic()
         .type_defs
         .fields()
         .find(|(key, _)| {
@@ -68,7 +68,7 @@ fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedDeclType, Gr
 /// The checked type of a root declaration written as `name`, if any.
 fn root_decl_type_opt<'a>(tir: &'a CheckedTir, name: &str) -> Option<&'a ResolvedDeclType> {
     let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
-    let identity = tir.root().bound_decl_identity(&written)?;
+    let identity = tir.root().body().bound_decl_identity(&written)?;
     tir.decl_type(identity).map(CheckedDeclType::resolved)
 }
 
@@ -112,7 +112,7 @@ fn value_declaration_records_carry_their_checked_types() {
         ("n", ResolvedValueType::Bool, CheckedType::Bool),
     ] {
         let written = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid(name));
-        let identity = tir.root().bound_decl_identity(&written).unwrap();
+        let identity = tir.root().body().bound_decl_identity(&written).unwrap();
         let checked = tir.decl_type(identity).unwrap();
         assert_eq!(
             checked.resolved(),
@@ -123,7 +123,7 @@ fn value_declaration_records_carry_their_checked_types() {
         assert_eq!(tir.root().value_decl_type(identity), Some(checked));
         assert_eq!(
             tir.dag_containing_declaration(identity)
-                .map(|dag| dag.dag_id()),
+                .map(super::checked_dag::CheckedDag::dag_id),
             Some(tir.root_dag_id())
         );
     }
@@ -132,6 +132,7 @@ fn value_declaration_records_carry_their_checked_types() {
     // Assertions are declarations without a value type.
     let assertion = tir
         .root()
+        .body()
         .bound_decl_identity(&ScopedName::local(
             crate::syntax::decl_name::DeclName::expect_valid("a"),
         ))
@@ -171,7 +172,7 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
             .unwrap();
 
     let known = ScopedName::local(crate::syntax::decl_name::DeclName::expect_valid("known"));
-    match tir.root().lookup_decl_identity(&known) {
+    match tir.root().body().lookup_decl_identity(&known) {
         DeclarationIdentityLookup::Bound(identity) => {
             assert_eq!(identity.owner(), tir.root_dag_id());
             assert_eq!(identity.as_str(), "known");
@@ -185,7 +186,7 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
         crate::syntax::module_name::ModuleAliasName::expect_valid("dependency"),
         crate::syntax::decl_name::DeclName::expect_valid("missing"),
     );
-    match tir.root().lookup_decl_identity(&unknown) {
+    match tir.root().body().lookup_decl_identity(&unknown) {
         DeclarationIdentityLookup::DiagnosticProbe(probe) => {
             assert_eq!(probe.dag_id(), tir.root_dag_id());
             assert_eq!(probe.name(), &unknown);
@@ -435,7 +436,7 @@ fn dag_type_indexes_share_the_project_store_definition_handle() {
     );
     let indexed = tir
         .root()
-        .semantic
+        .semantic()
         .type_defs
         .struct_types
         .get(&name)
@@ -621,10 +622,10 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
         if shared_first {
             root.insert_shared_dag_store(&leaf).unwrap();
             assert!(
-                matches!(root.insert_dag((**body).clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
+                matches!(root.insert_dag(body.body().clone()), Err(DagRegistryError::DuplicateDag { dag_id }) if &dag_id == owner)
             );
         } else {
-            root.insert_dag((**body).clone()).unwrap();
+            root.insert_dag(body.body().clone()).unwrap();
             assert!(
                 matches!(root.insert_shared_dag_store(&leaf), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
             );

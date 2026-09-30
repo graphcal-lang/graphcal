@@ -152,15 +152,23 @@ node control: Dimensionless = probe::tick() + 1.0;
     let worker = tir
         .dag_registry()
         .values()
-        .find(|dag| dag.bound_decl_identity(&scoped_name("pending")).is_some())
+        .find(|dag| {
+            dag.body_for_test()
+                .bound_decl_identity(&scoped_name("pending"))
+                .is_some()
+        })
         .unwrap();
     let values = crate::constant_pools::RuntimeValueMap::new();
     let context = crate::eval_expr::EvalSession::checked(plan, &src, &host, cancellation);
     let runtime_expression = |dag: &graphcal_compiler::tir::typed::CheckedDag, name: &str| {
-        tir.declaration_body(dag.bound_decl_identity(&scoped_name(name)).unwrap())
-            .unwrap()
-            .runtime_expression()
-            .unwrap()
+        tir.declaration_body(
+            dag.body_for_test()
+                .bound_decl_identity(&scoped_name(name))
+                .unwrap(),
+        )
+        .unwrap()
+        .runtime_expression()
+        .unwrap()
     };
     let pending = runtime_expression(worker, "pending");
     let result = context
@@ -232,7 +240,12 @@ fn instance_trees_are_their_templates_specialized_by_the_instance_bindings() {
                   node total: Dimensionless = sum(@w::v);";
     let tir = compile_to_tir(source, "instance-trees.gcl").unwrap();
     let formula = |dag: &graphcal_compiler::tir::typed::CheckedDag| {
-        dag.value_expr(dag.bound_decl_identity(&scoped_name("v")).unwrap())
+        dag.body_for_test()
+            .value_expr(
+                dag.body_for_test()
+                    .bound_decl_identity(&scoped_name("v"))
+                    .unwrap(),
+            )
             .unwrap()
             .id()
             .clone()
@@ -240,7 +253,11 @@ fn instance_trees_are_their_templates_specialized_by_the_instance_bindings() {
     let (instances, templates): (Vec<_>, Vec<_>) = tir
         .dag_registry()
         .values()
-        .filter(|dag| dag.bound_decl_identity(&scoped_name("v")).is_some())
+        .filter(|dag| {
+            dag.body_for_test()
+                .bound_decl_identity(&scoped_name("v"))
+                .is_some()
+        })
         .partition(|dag| dag.is_semantic_instance());
     let [template] = templates.as_slice() else {
         panic!("expected one template: {templates:?}");

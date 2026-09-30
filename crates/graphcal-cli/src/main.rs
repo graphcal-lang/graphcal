@@ -889,7 +889,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
                     .dag_registry()
                     .values()
                     .filter(|dag| !dag.is_semantic_instance())
-                    .flat_map(|dag| dag.nodes())
+                    .flat_map(graphcal_compiler::tir::typed::CheckedDag::nodes)
                     .filter(|node| node.definition.todo().is_some())
                     .count();
                 if todos == 0 {

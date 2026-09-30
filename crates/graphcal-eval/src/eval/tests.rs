@@ -26,6 +26,7 @@ fn root_decl_type<'a>(
 ) -> &'a graphcal_compiler::tir::typed::CheckedDeclType {
     let identity = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name(name))
         .unwrap_or_else(|| panic!("`{name}` is not declared in the root"));
     tir.decl_type(identity)
@@ -155,13 +156,15 @@ layer overlay = { plots: [curve], title: "Overlay", width: 400.0 };
             let dag = checked.tir().root();
             let nodes = checked_nodes(dag);
             let mut ids = std::collections::HashSet::new();
-            dag.owned_expression_roots().for_each(|root| {
-                graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
-                    let id = expr.id();
-                    assert_eq!(nodes[id].0, expr.span);
-                    ids.insert(id.clone());
+            dag.body_for_test()
+                .owned_expression_roots()
+                .for_each(|root| {
+                    graphcal_compiler::hir::expr::visit_expr(root, &mut |expr| {
+                        let id = expr.id();
+                        assert_eq!(nodes[id].0, expr.span);
+                        ids.insert(id.clone());
+                    });
                 });
-            });
             assert_eq!(ids.len(), nodes.len());
             assert!(
                 ids.len() > 20,
@@ -6655,6 +6658,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name("distance"))
         .unwrap()
         .clone();
@@ -6676,6 +6680,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     )];
     let values = HashMap::from([(
         tir.root()
+            .body_for_test()
             .lookup_decl_identity(&scoped_name("action"))
             .into_bound()
             .unwrap(),
@@ -7524,6 +7529,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name("burn"))
         .unwrap()
         .clone();
@@ -7550,6 +7556,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
     let values = HashMap::from([(
         tir.root()
+            .body_for_test()
             .lookup_decl_identity(&scoped_name("series"))
             .into_bound()
             .unwrap(),
@@ -7592,6 +7599,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name("code"))
         .unwrap()
         .clone();

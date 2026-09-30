@@ -57,7 +57,7 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
         assert!(std::ptr::eq(step.tir, &raw const tir));
         assert!(std::ptr::eq(
             step.expression.get(),
-            tir.root().const_expr(step.key).unwrap()
+            tir.root().body_for_test().const_expr(step.key).unwrap()
         ));
         assert!(
             evaluated.iter().all(|done| step.visible.contains_key(done)),

@@ -805,7 +805,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
                     }
                 })
                 .collect();
-            dependencies.retain(|identity| is_bindable_nominal(dag, identity));
+            dependencies.retain(|identity| is_bindable_nominal(dag.body(), identity));
             if !dependencies.is_empty() {
                 summary.insert(owner, dependencies);
             }
@@ -851,7 +851,7 @@ pub fn check_external_value_expr_type<'t>(
 ) -> Result<crate::tir::typed::ScopedTree<'t, crate::tir::texpr::TExpr>, GraphcalError> {
     let observations = infer::hir::BodyObservations::default();
     let inferred = infer::hir::InferEnv {
-        dag: tir.root(),
+        dag: tir.root().body(),
         tir,
         registry: tir.registry(),
         src,
@@ -864,7 +864,7 @@ pub fn check_external_value_expr_type<'t>(
     )?;
     concrete_obligations::validate_concrete_type_obligations(
         &inferred,
-        tir.root(),
+        tir.root().body(),
         tir,
         src,
         expr.span,

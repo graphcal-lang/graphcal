@@ -506,6 +506,7 @@ fn nested_presentation_computation_abort_classification_is_not_contained() {
         miette::NamedSource::new("classification.gcl", std::sync::Arc::new(source.to_owned()));
     let declaration = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
     let target = requested_display_unit(&tir, declaration, &src);
@@ -546,6 +547,7 @@ fn presentation_cancellation_is_never_a_notice() {
         miette::NamedSource::new("classification.gcl", std::sync::Arc::new(source.to_owned()));
     let declaration = tir
         .root()
+        .body_for_test()
         .bound_decl_identity(&scoped_name("value"))
         .unwrap();
     let pending = requested(PendingDisplayUnit {
